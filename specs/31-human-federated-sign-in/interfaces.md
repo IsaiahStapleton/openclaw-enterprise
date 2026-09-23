@@ -12,11 +12,11 @@ Expose only configured-provider listing, trusted-origin start, and exact callbac
 
 ## Account administration
 
-See [the minimal authorized operations](architecture.md#administration-and-currentness). If an operation digest is used, it remains owner-issued, opaque, nonempty, at most 200 characters, retained unchanged, and distinct from a policy-command digest.
+See [the minimal authorized operations](architecture.md#administration-and-currentness) and [unknown-outcome handling](architecture.md#atomic-policy-and-recovery). Use expected account incarnation/version and authorized current-state inspection; no exact per-request result lookup is promised.
 
 ## Sessions and no access
 
-See [the confined same-origin handoff](architecture.md#sessions-and-no-access). Unknown identity receives no session.
+See [generic denial and administrator verification](architecture.md#sessions-and-no-access). Unknown identity receives no session.
 
 ## Enterprise profiles
 
@@ -28,4 +28,4 @@ CLI is deferred. Its [original approval and credential-custody contract](https:/
 
 ## Owner decisions
 
-Before implementation acceptance, settle routes/DTOs, fixed errors, operation encoding, finite shared quotas, byte/time/cleanup bounds, and clock assumptions. These open constants do not waive their controls.
+Before implementation acceptance, settle routes/DTOs, fixed errors, expected-version handling, finite local admission/work limits, persisted attempt caps, byte/time/cleanup bounds, and clock assumptions. These open constants do not waive their controls.

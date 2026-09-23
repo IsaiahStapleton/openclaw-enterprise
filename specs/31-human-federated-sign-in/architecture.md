@@ -49,7 +49,7 @@ composed, installed, or live-provider proof. [Editable source](request-lifecycle
    session plus required login facts. Constraints and guards prevent late
    insertion from restoring revoked access.
 5. Release the cookie only after acknowledged completion and the final expiry
-   check. Unknown identity follows the confined [no-access contract](interfaces.md#sessions-and-no-access).
+   check. Unknown identity follows the [no-access contract](interfaces.md#sessions-and-no-access).
    Failed audit or unknown commit returns no credential and permits no replay.
 
 State retains transaction lifetime and acknowledgment authority; no raw client or
@@ -112,17 +112,17 @@ the exact method, account incarnation/version, and absolute expiry. All retained
 issuers and readers recheck those values and current ownership.
 
 The minimal administrator surface is safe target read, exact GitHub attachment,
-disable, account-wide revoke, and exact operation-result lookup. Require a trusted
-origin, a current **human session**, and effective `administer` on the server-owned
+disable, and account-wide revoke. Require a trusted origin, a current **human
+session**, and effective `administer` on the server-owned
 Installation through the qualified IAM profile. A service key or explicit
 development identity cannot substitute. Accept no caller-selected Principal or
 grant. Authentication retains password hashing and provider verification.
 
-Mutations bind an operation reference/content and expected incarnation/version.
-Under original-State guards, recheck the actor's session, target, exact Principal,
-method owner, and recovery protection. Persist the complete local effect, required
-facts, and retained result in that unit. Currentness changes serialize with
-issuance and actor revocation; stale snapshots cannot restore access.
+Mutations require the expected account incarnation and `expectedVersion`.
+Under original-State guards, recheck those values, the actor's current session,
+target, exact Principal, method owner, and recovery protection. Persist the complete
+local effect and required facts in that unit. Currentness changes serialize with
+issuance and actor logout/revocation; stale snapshots cannot restore access.
 
 | Operation           | Required effect                                                                                                                                                   |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -146,14 +146,20 @@ a GitHub outage.
 The initial proposal qualifies native IAM with a bounded writer set and fixed
 Installation authority. Its [exposed deletion predicates](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/packages/occ/src/state/postgres-state.ts#L2290-L2305)
 are Namespace-scoped; this supports the bounded profile but is not a complete
-writer audit. Independently mutable IAM requires an enforceable preservation
+writer audit. Cover or exclude bootstrap/seeding, account provisioning, external
+policy writers, and every recovery-affecting write. Independently mutable IAM
+requires an enforceable preservation
 contract or activation refuses it, without fallback. Calling ordinary IAM inside
 an auth transaction does not make its separate reads transaction-bound.
 
 Preserve committed, conflict, denied, unavailable, and unknown outcomes. Failed or
-unknown COMMIT permits neither destructive compensation nor blind replay.
-Authorized exact result lookup recovers the original operation/result/revisions;
-changed content conflicts and absent evidence stays unknown. Required local facts
+unknown COMMIT permits neither destructive compensation nor automatic replay.
+Return explicit outcome-unknown; never silently refresh the expected version. A
+separately authorized, guarded read shows current account/method state, not the
+result or attribution of the original request. Unresolved transactions may require
+waiting or an unavailable response; an absent visible effect does not prove
+rollback. After inspection, the operator may deliberately issue a new action.
+Exact per-request result retrieval is outside this increment. Required local facts
 share the retention-compatible ledger and acknowledged transaction. Optional
 export and History serving cannot substitute for that persistence.
 
@@ -161,21 +167,30 @@ export and History serving cannot substitute for that persistence.
 
 These are **proposed first-profile choices**, not claims of existing support:
 
-| Surface                                                 | Profile contract / acceptance condition                                                                                                                                                                 |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Password and GitHub sessions                            | Same guarded issuer/reader, State-derived eight-hour absolute deadline, no refresh/cache/secondary storage. Expiry equality denies; cookie age follows persisted expiry.                                |
-| Account-client login, inspection, API admission, logout | Preserve through the common currentness owner; inventory and qualify every retained caller.                                                                                                             |
-| Shared-cookie/native administration                     | Preserve guarded session consumers; refuse activation for unproved combinations. OAuth attempt cookies remain host-only.                                                                                |
-| Password-account creation                               | Initial draft refuses `POST /api/auth/accounts` after activation. Safe initialization through the existing provisioning owner remains an open compatibility obligation. This is not a permanent waiver. |
-| Service keys and explicit development mode              | Preserve their existing separate behavior and explicit credential precedence; neither supplies human attachment authority or failed-login fallback.                                                     |
+| Surface                                                 | Profile contract / acceptance condition                                                                                                                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Password and GitHub sessions                            | Same guarded issuer/reader, State-derived eight-hour absolute deadline, no refresh/cache/secondary storage. Expiry equality denies; cookie age follows persisted expiry.                               |
+| Account-client login, inspection, API admission, logout | Preserve through the common currentness owner; inventory and qualify every retained caller.                                                                                                            |
+| Shared-cookie/native administration                     | Outside the initial host-only Console profile; refuse activation when enabled. Existing consumer compatibility remains open.                                                                           |
+| Password-account creation                               | Provision accounts before activation; refuse `POST /api/auth/accounts` before any user/password/IAM write once active. Safe creation remains an open compatibility obligation, not a permanent waiver. |
+| Service keys and explicit development mode              | Preserve their existing separate behavior and explicit credential precedence; neither supplies human attachment authority or failed-login fallback.                                                    |
 
-Activation must quiesce **all** serving controllers and enforce exclusion of
-incompatible binaries/configurations. In one acknowledged transition, establish
-currentness and protected recovery, invalidate unbound legacy sessions, and
-persist activation before compatible controllers resume. Preserve legitimate
-accounts/passwords/grants. Prove the actual exclusion mechanism with multiple
-controllers; a startup check alone is insufficient. No rolling-upgrade guarantee
-is proposed.
+The supported topology has **one serving controller**, one Installation, Native
+IAM, restricted-role PostgreSQL, one canonical HTTPS Console origin, and host-only
+cookies. Additional auth readers and custom IAM are outside this profile. Use existing ingress,
+deployment, and process controls to close admission, drain or terminate admitted
+work, stop every old controller, and prevent automatic restart. In one acknowledged
+maintenance transition, validate the existing account/Principal/recovery population,
+establish currentness and protected recovery, invalidate unbound legacy sessions,
+and persist activation. Preserve legitimate accounts/passwords/grants. Start only
+the selected compatible controller and configuration; check password recovery and
+guarded admission before reopening ingress.
+
+Qualify the actual installed procedure, including exclusion of old replicas and
+in-flight work. If existing controls cannot guarantee exclusion, do not activate.
+Startup checks alone are insufficient. Mixed-version serving, rolling upgrades,
+and reverting to an old binary after activation are unsupported. This profile
+requires no new controller supervisor or database version-fencing subsystem.
 
 Never-activated installations retain the existing password profile when GitHub is
 unconfigured. Once active, removing required profile configuration refuses
@@ -187,8 +202,8 @@ gaps remain visible until implementation proof or explicit scope disposition.
 ## Provider configuration and identity
 
 The first profile proposes one operator-configured github.com **OAuth App**.
-Derive immutable provider-instance identity from a versioned tuple of exact web
-origin, API origin, client ID, and application kind. Use the authenticated numeric
+Derive immutable provider-instance identity from a fixed domain-separated tuple
+of exact web origin, API origin, client ID, and application kind. Use the authenticated numeric
 GitHub user ID as the exact subject. Secret rotation and display labels preserve
 the instance; changing a trust field creates a different instance and cannot
 reinterpret persisted methods or in-flight attempts. A helper's fixed provider
@@ -206,11 +221,9 @@ owns unique association; provider proof contains no credentials or local authori
 apply to password and GitHub sessions alike. Unknown verified identities receive
 **no OCE session**.
 
-Propose a direct same-origin page showing the verified instance/subject and asking
-the person to contact an administrator. Render escaped inert text only to the
-initiating browser, with no-store and referrer protection, no third-party assets,
-and no persistent browser storage. Identity never enters URLs, logs, telemetry,
-or durable audit. Introduce no ticket or retrieval endpoint; producing another
-result requires fresh sign-in. A copied subject does not expire and proves no
-local ownership. The administrator independently confirms the intended account.
-Any later retrieval alternative requires a finite, browser-bound, one-use design.
+Return a generic denial. Provide a usable administrator procedure to verify the
+exact numeric github.com subject and independently confirm the explicitly chosen
+existing OCE account before attachment. Email, GitHub login names, and copied
+subjects alone do not establish local ownership. No handoff store or new callback
+display is required. Identity stays out of URLs, logs, telemetry, and durable audit;
+authorized management retains only the exact association it needs.

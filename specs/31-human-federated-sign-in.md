@@ -39,8 +39,9 @@ reads an **existing authorized Agent**. The actual Console path is
 Existing accounts, resource setup, explicit IAM grants, and a usable protected
 password administrator are prerequisites. IAM checks each requested operation;
 optional panels may deny without adding permissions. Unknown identities receive
-no session and a confined identity handoff for an administrator. Local disable,
-account-wide revocation, and ordinary logout remain required. A GitHub outage
+no session and a generic denial; administrators use a documented exact-subject
+verification procedure. Local disable, account-wide revocation, and ordinary
+logout remain required. A GitHub outage
 must leave independently selected password recovery usable.
 
 ## Sign-in flow
@@ -121,19 +122,23 @@ owns protocol, transport, and custody controls.
 
 ## Proposed activation and compatibility
 
-The initial profile proposes one github.com **OAuth App**, a fixed eight-hour
-absolute session lifetime without refresh, and a protected existing local
-password administrator under qualified native IAM. Eight hours is this profile's
+The initial profile proposes one serving controller, one github.com **OAuth App**,
+a fixed eight-hour absolute session lifetime without refresh, and a protected existing local
+password administrator under qualified native IAM. Use one Installation, one
+canonical HTTPS Console origin, host-only cookies, and restricted-role PostgreSQL.
+Eight hours is this profile's
 initial value, not a universal future maximum. Every retained password/GitHub
 issuer, session reader, API admission path, and logout must use the same account
 currentness checks.
 
-Activation is a maintenance transition: stop every serving controller, enforce
-exclusion of incompatible processes, then atomically establish recovery and
-currentness, invalidate unbound legacy sessions, and persist activation before
-compatible controllers resume. This forces reauthentication while preserving
-account IDs, passwords, and grants. The exclusion mechanism needs implementation
-proof; startup checks alone do not fence an already-running replica.
+Activation uses existing operator controls to close ingress, drain or terminate
+admitted work, stop every old controller, and prevent automatic restart. Then
+atomically establish recovery and currentness for existing accounts, invalidate
+unbound legacy sessions, and persist activation. Start one compatible controller
+and verify recovery and admission before reopening ingress. Preserve account IDs,
+passwords, and grants. The installed procedure must prove exclusion; startup
+checks alone are insufficient. Mixed-version serving, rolling upgrades, and
+reverting to an old binary after activation are unsupported.
 
 Before activation, absent GitHub configuration preserves the existing password
 profile. After activation, missing required profile configuration prevents startup
@@ -143,8 +148,8 @@ when password recovery must work.
 The **initial implementation draft uses pre-activation accounts** and refuses
 `POST /api/auth/accounts` after activation. Existing creator compatibility remains
 an open acceptance obligation, not an approved permanent removal. Shared-cookie
-and native-admin consumers also need the common gate; unproved combinations
-refuse activation. See the [support table](31-human-federated-sign-in/account-lifecycle.md#activation-and-supported-consumers).
+native administration and additional auth readers are outside this initial profile;
+refuse activation when enabled. Their compatibility obligations remain open. See the [support table](31-human-federated-sign-in/account-lifecycle.md#activation-and-supported-consumers).
 
 ## Implementation and acceptance
 
@@ -157,12 +162,12 @@ PostgreSQL with separate migrator and restricted application roles. Controlled
 endpoints may replace only the remote provider. Record exact source/supplier
 revisions, setup, routes, grants, results, and remaining gaps.
 
-| Boundary                | Required evidence                                                                                                                                                                                                                                                                                                |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Identity and Console    | Unchanged password/GitHub account, Principal, and grants; positive existing-Agent read; optional email; exact subject uniqueness; unknown/same-email/disabled and cross-Namespace denial; grant removal and protected-content clearing. Label administrator-based proof honestly.                                |
-| Protocol and custody    | Bound attempts, ambiguous callbacks, concurrent consumption, replay/fixation refusal, expiry/origin/return checks, shared quotas/cleanup; cancellation through body reads, byte limits, redirect refusal; no provider tokens in storage, cookies, controller or installed ingress logs, including failure paths. |
-| Transactions            | Two-controller issuance/disable/revoke and actor-revocation races; rollback, required-audit failure, unknown acknowledgment without credentials/replay/compensation; authorized exact result lookup and stale/expired stored-session logout.                                                                     |
-| Activation and recovery | Fresh/populated migration preserving identities, passwords, and grants; restart and actual incompatible-controller exclusion; rejected legacy sessions; configuration-removal refusal; every retained consumer; usable password administration during provider outage.                                           |
+| Boundary                | Required evidence                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Identity and Console    | Unchanged password/GitHub account, Principal, and grants; positive existing-Agent read; optional email; exact subject uniqueness; unknown/same-email/disabled and cross-Namespace denial; grant removal and protected-content clearing. Label administrator-based proof honestly.                                                                                  |
+| Protocol and custody    | Bound attempts, ambiguous callbacks, concurrent consumption, replay/fixation refusal, expiry/origin/return checks, finite local admission/work limits and persisted attempt/cleanup bounds; cancellation through body reads, byte limits, redirect refusal; no provider tokens in storage, cookies, controller or installed ingress logs, including failure paths. |
+| Transactions            | Concurrent issuance/disable/revoke and actor-logout/revocation races; rollback, required-audit failure, unknown acknowledgment without credentials/replay/compensation; expected-version conflicts, authorized current-state inspection with unresolved request attribution, and stale/expired stored-session logout.                                              |
+| Activation and recovery | Fresh/populated migration preserving identities, passwords, and grants; actual stop/drain/restart and incompatible-controller exclusion; rejected legacy sessions; configuration-removal refusal; every retained consumer; usable password administration during provider outage.                                                                                  |
 
 Require independent changed-SQL and complete security-boundary review, resolve
 defects, and update living references, operator guides, and source-backed flows.
@@ -191,7 +196,7 @@ physical runtime stop retain their separate owners.
 ## Design details
 
 [Architecture](31-human-federated-sign-in/architecture.md) owns the account,
-transaction, activation, and handoff contracts; [security](31-human-federated-sign-in/security.md)
+transaction, activation, and no-access contracts; [security](31-human-federated-sign-in/security.md)
 owns protocol and custody. The original [account](31-human-federated-sign-in/account-lifecycle.md),
 [interface](31-human-federated-sign-in/interfaces.md), and
 [delivery](31-human-federated-sign-in/delivery.md) paths remain as compact references.

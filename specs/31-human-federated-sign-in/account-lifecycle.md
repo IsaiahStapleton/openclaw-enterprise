@@ -9,7 +9,7 @@ See [immutable account and method ownership](architecture.md#identity-and-method
 
 ## Administration and currentness
 
-See [authorized local controls](architecture.md#administration-and-currentness) for attachment, disable, account-wide revoke, selected-session logout, and exact result lookup.
+See [authorized local controls](architecture.md#administration-and-currentness) for attachment, disable, account-wide revoke, selected-session logout, and guarded current-state inspection.
 
 ## Atomic policy and recovery
 

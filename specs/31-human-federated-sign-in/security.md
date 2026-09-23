@@ -31,8 +31,10 @@ parameters, replay, expiry, browser/provider/configuration/purpose mismatch, and
 unsafe returns. Atomically consume the matched attempt, including valid
 provider-error callbacks, and acknowledge consumption **before remote work**.
 Uncertain consumption stops exchange; consumed failures require a new start.
-Share finite start/callback quotas and pending caps across browser/provider and
-Installation, with bounded cleanup across controllers.
+For the single-controller profile, bound start/callback admission, concurrent work,
+and rate-limit key storage locally. Apply admission limits to invalid callbacks
+before remote work. Bound persisted pending attempts and cleanup work so restart
+cannot bypass storage limits. A distributed quota service is outside this profile.
 
 Exchange the code and call authenticated `/user` for the exact numeric subject,
 using only necessary identity permissions. No email enrichment is required.
@@ -53,7 +55,7 @@ or expanded repository/organization permissions. OAuth scopes cannot narrow a
 Provider access, refresh, and ID tokens remain transient controller inputs and
 are discarded after verification. Avoid unnecessary offline access. No provider
 credential reaches OCE session/account cookies, persistence, the CLI, or Agents.
-Provider tokens, OCE session credentials, and identity handoffs must not enter
+Provider tokens, OCE session credentials, and external subjects must not enter
 redirect URLs. OAuth authorization responses still use the protocol's
 code/state or error parameters.
 
@@ -66,9 +68,9 @@ controller logs, ingress/access logs, audit, or telemetry.
 Required facts use closed local account, Principal, method, operation, and
 currentness references with fixed outcomes, never an invented Agent subject.
 Exclude external subjects, email, profiles, and raw claims from durable audit and
-History. External identity details are limited to authorized management or the
-[confined no-access result](interfaces.md#sessions-and-no-access). Receipt payloads
-must meet the same privacy constraints.
+History. External identity details are limited to authorized management and the
+documented [administrator verification procedure](interfaces.md#sessions-and-no-access).
+Current-state inspection must meet the same privacy constraints.
 
 ## Future OIDC controls
 
