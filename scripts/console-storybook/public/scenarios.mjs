@@ -11,6 +11,18 @@ const readyForm = [
   { selector: "#harness-auth-method", value: "runtime" },
 ];
 const account = [{ selector: ".account-toggle", click: true }];
+const createWorkspaceFields = [
+  ...form,
+  { selector: "#agent-name", value: "Workspace seed demo" },
+  { selector: "#harness-auth-method", value: "api_key" },
+  { selector: "#harness-auth-secret", value: "sec_demo_model" },
+  {
+    selector: "#workspace-IDENTITY-md",
+    value:
+      "# IDENTITY.md - Who Am I?\n\n- **Name:** Demo Agent\n- **Creature:** Console familiar\n- **Vibe:** Calm and precise\n- **Emoji:** 🦀\n",
+  },
+  { selector: "#workspace-USER-md", value: "" },
+];
 
 // API failures are injected at the HTTP boundary. The console owns their presentation.
 export const scenarios = {
@@ -20,7 +32,7 @@ export const scenarios = {
     path: "/console/agents",
     description:
       "Browse pages, component states, and guided Agent workflows. Every preview mounts the production console modules and styles in its own frame. Reset story discards all local changes.",
-    gap: "There is no Stop button; the stop API is available and deployment resumes an Agent. General Configuration JSON editing after creation, model-Secret creation, Namespace provisioning, Preset management, and Provider setup require an API, CLI, or operator workflow. Serving health and model responses require separate runtime verification.",
+    gap: "Stop Agent requests the stopped desired state; deployment resumes an Agent. General Configuration JSON editing after creation, model-Secret creation, Namespace provisioning, Preset management, and Provider setup require an API, CLI, or operator workflow. Serving health and model responses require separate runtime verification.",
   },
   login: {
     group: "Pages/Sign in",
@@ -186,7 +198,15 @@ export const scenarios = {
     path: create,
     actions: form,
     description:
-      "Name, execution mode, native JSON, authentication, Providers, plugins, Secret bindings, and channel controls.",
+      "Name, execution mode, native JSON, authentication, Providers, plugins, Secret bindings, channel controls, and seeded workspace files.",
+  },
+  createWorkspaceFiles: {
+    group: "Pages/Create Agent",
+    name: "Workspace files",
+    path: create,
+    actions: createWorkspaceFields,
+    description:
+      "The creation form seeds AGENTS.md, SOUL.md, IDENTITY.md, and USER.md before the Agent's first deployment. Clearing a field creates an empty file.",
   },
   createEmbedded: {
     group: "Pages/Create Agent",
@@ -267,7 +287,7 @@ export const scenarios = {
   },
   draft: {
     group: "Pages/Agent detail",
-    name: "Saved draft",
+    name: "New revision",
     path: draft,
     description:
       "Editable desired configuration, masked authentication summary, deployment gate, and Agent deletion.",
@@ -344,7 +364,7 @@ export const scenarios = {
         status: 403,
       },
     ],
-    actions: [click("Deploy saved draft")],
+    actions: [click("Deploy new revision")],
     description: "A rejected deployment reports failure and re-enables the action.",
   },
   menu: {
@@ -414,7 +434,7 @@ export const scenarios = {
     group: "Components/Channels",
     name: "Not configured",
     path: `${draft}&tab=channels`,
-    description: "Configure Slack or Microsoft Teams from the supported channel cards.",
+    description: "Configure Slack from the supported channel card.",
   },
   channelsReadOnly: {
     group: "Components/Channels",
@@ -422,7 +442,7 @@ export const scenarios = {
     path: `${revision}&tab=channels`,
     deployed: true,
     slack: true,
-    description: "Admitted channel settings are immutable. Switch to the saved draft to edit.",
+    description: "Admitted channel settings are immutable. Switch to the new revision to edit.",
   },
   channelConflict: {
     group: "Components/Channels",
@@ -438,15 +458,6 @@ export const scenarios = {
     ],
     actions: [click("Edit Slack"), click("Save configuration")],
     description: "A rejected Configuration write keeps the drawer and feedback visible.",
-  },
-  teams: {
-    group: "Components/Channels",
-    name: "Microsoft Teams editor",
-    path: `${draft}&tab=channels`,
-    actions: [click("Configure Microsoft Teams")],
-    description:
-      "Teams channel settings and references. Runtime credentials remain operator-managed.",
-    gap: "The Credentials tab cannot provision or validate Teams credentials. Console deployment is blocked while Teams is enabled.",
   },
   credentials: {
     group: "Components/Credentials",
@@ -464,12 +475,38 @@ export const scenarios = {
   },
   credentialsSlack: {
     group: "Components/Credentials",
-    name: "Slack token entry",
+    name: "Slack tokens missing",
     path: `${draft}&tab=credentials`,
     slack: true,
     slackBindings: false,
     description:
-      "Password inputs store Slack tokens as Namespace Secrets and bind them to the Agent.",
+      "Both Slack token slots are empty and required before a Slack-enabled draft can deploy.",
+  },
+  credentialsSlackStored: {
+    group: "Components/Credentials",
+    name: "Slack tokens stored",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    description:
+      "Synthetic masks show existing Secret bindings. The console does not retrieve stored token values.",
+  },
+  credentialsSlackReplacement: {
+    group: "Components/Credentials",
+    name: "Slack token replacement",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    actions: [{ selector: "#runtime-slack-app-token", value: "xapp-replacement-preview" }],
+    description:
+      "Only fields with entered replacements are saved. Empty stored fields preserve their existing Secret binding.",
+  },
+  credentialsSlackPartial: {
+    group: "Components/Credentials",
+    name: "One Slack token missing",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    slackBindings: "app",
+    description:
+      "The app token is already bound and masked; the missing bot token remains empty and required.",
   },
   credentialsLocked: {
     group: "Components/Credentials",
@@ -530,7 +567,7 @@ export const scenarios = {
     path: draft,
     nativeAdmin: "stopped",
     description: "The native-admin panel reports that the Agent must be started.",
-    gap: "The console has no Stop button or dedicated Resume button. Use the stop API; deploying a new revision resumes the Agent.",
+    gap: "Deploying a new revision resumes the Agent; Console does not expose live shutdown completion evidence.",
   },
   nativeUnsupported: {
     group: "Components/Native admin",
@@ -667,15 +704,31 @@ export const scenarios = {
     emptyAgents: true,
     transport: false,
     description:
-      "Interactive walkthrough from Preset selection through draft creation, credential provisioning, and deployment admission. Worker progress is simulated; it is not a live deployment.",
+      "Interactive walkthrough from Preset selection through draft creation, credential provisioning, workspace defaults, and deployment admission. Worker progress is simulated; it is not a live deployment.",
     steps: [
       "Choose Research assistant, fill Variable: name, then Use Preset.",
-      "Review the Configuration and masked pre-existing model Secret reference; click Create Agent.",
+      "Review the Configuration, masked pre-existing model Secret reference, and four seeded workspace files; click Create Agent.",
       "Open Credentials and Provision generated runtime credentials.",
-      "Click Deploy saved draft. Inspect Deployment status and Refresh deployment to advance the simulated worker, then Refresh the page to read the active revision.",
-      "Use AgentRevision to inspect the immutable snapshot and Workspace files to inspect runtime files.",
+      "Click Deploy new revision. Inspect Deployment status and Refresh deployment to advance the simulated worker, then Refresh the page to read the active revision.",
+      "Use AgentRevision to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
     ],
     gap: "The fixture supplies a ready Namespace, Preset, and model Secret. Set those up outside the console. Verify actual serving health and a model response outside this walkthrough.",
+  },
+  createWorkspaceFlow: {
+    group: "Flows",
+    name: "Create with workspace files",
+    path: create,
+    emptyAgents: true,
+    transport: false,
+    description:
+      "Create an Agent from the no-Preset form after editing IDENTITY.md and clearing USER.md, then deploy and inspect the seeded runtime workspace files.",
+    steps: [
+      "Start without Preset, enter a demo Agent name, choose OpenAI API key, and enter the existing fixture Secret ID sec_demo_model.",
+      "Review AGENTS.md, SOUL.md, IDENTITY.md, and USER.md. Edit IDENTITY.md, leave USER.md empty, and create the Agent.",
+      "Provision generated runtime credentials, then Deploy new revision and Refresh deployment until the simulated worker succeeds. Use the page Refresh button to read the active revision.",
+      "Open Workspace files and inspect IDENTITY.md or USER.md to confirm the fixture carried the creation-time file contents into the deployed workspace.",
+    ],
+    gap: "This Storybook flow proves the UI request body and fixture readback path. It does not prove real gateway filesystem writes or serving health.",
   },
   updateFlow: {
     group: "Flows",
@@ -684,24 +737,66 @@ export const scenarios = {
     deployed: true,
     slack: true,
     description:
-      "Edit the saved draft while an admitted revision remains unchanged; deploy a new immutable revision.",
+      "Edit the new revision while an admitted revision remains unchanged; deploy a new immutable revision.",
     steps: [
       "Open Edit Slack, add CNEW123 to Slack channel IDs, then Save configuration.",
       "Select v1 in AgentRevision and open Channels: it still has the original settings.",
-      "Return to Saved draft, then Deploy saved draft.",
+      "Return to New revision, then Deploy new revision.",
       "Refresh deployment and inspect the new revision. The prior snapshot remains readable.",
       "Workspace file edits are separate: they save immediately without a new revision.",
     ],
     gap: "The detail page has no general JSON/model editor. Use the API or CLI for those draft changes. Slack policy selection is also outside the drawer; existing policies are preserved.",
   },
+  stopConfirm: {
+    group: "Components/Stop Agent",
+    name: "Confirmation",
+    path: revision,
+    deployed: true,
+    actions: [click("Stop Agent")],
+    description: "Confirm stopping the Agent or cancel without changing its requested state.",
+  },
+  stopRequested: {
+    group: "Components/Stop Agent",
+    name: "Stop requested",
+    path: revision,
+    deployed: true,
+    stopped: true,
+    description:
+      "The requested state is stopped. Deployment resumes the Agent; shutdown completion is not exposed here.",
+  },
+  stopDenied: {
+    group: "Components/Stop Agent",
+    name: "Permission denied",
+    path: revision,
+    deployed: true,
+    rules: [{ suffix: "/stop", method: "POST", status: 403 }],
+    actions: [click("Stop Agent"), { selector: ".agent-stop-dialog button.danger", click: true }],
+    description:
+      "An authorization denial keeps the Agent running and explains the required access.",
+  },
+  stopUnknown: {
+    group: "Components/Stop Agent",
+    name: "Outcome unknown",
+    path: revision,
+    deployed: true,
+    rules: [{ suffix: "/stop", method: "POST", status: 503, once: true }],
+    actions: [click("Stop Agent"), { selector: ".agent-stop-dialog button.danger", click: true }],
+    description:
+      "An uncertain stop response requires a status refresh before another stop request.",
+  },
   stopFlow: {
     group: "Flows",
-    name: "Stop an Agent — unavailable",
+    name: "Stop an Agent",
     path: revision,
     deployed: true,
     description:
-      "Inspect the deployed-Agent page to see the current lifecycle controls. No simulated Stop button has been added.",
-    gap: "The console has no Stop action. Use bodyless POST /namespaces/:namespaceId/agents/:agentId/stop with exact-Agent operate permission. A 202 queues shutdown; verify completion separately. Deployment is the resume operation and creates a new revision. Disabling a channel does not stop the Agent; deletion is destructive.",
+      "Open the Stop Agent confirmation and request the stopped desired state while preserving draft, revisions, credentials, and workspace data.",
+    steps: [
+      "Open Stop Agent and review the confirmation copy.",
+      "Confirm Stop Agent. The page reports Stop requested and keeps revision/workspace inspection available.",
+      "Return to New revision and Deploy new revision to request running again.",
+    ],
+    gap: "Stop Agent confirms OCC accepted the stopped desired state and selected revision metadata only. Verify live gateway shutdown outside Console if required. Disabling a channel does not stop the Agent; deletion is destructive.",
   },
   deleteFlow: {
     group: "Flows",

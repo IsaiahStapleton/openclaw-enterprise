@@ -24,11 +24,10 @@ Agent; it does not verify an Agent you create in the console.
    access to the model you choose. The form requires a JSON
    object. Changing modes updates untouched JSON; use **Reset template** if you
    want to replace your edits.
-4. If you need Slack or Microsoft Teams, use the channel cards and select
+4. If you need Slack, use its channel card and select
    **Dedicated**. Channel settings and their plugin entries are saved with the
    Configuration when you select **Create Agent**. You can provision Slack
-   credentials in the console after creation; Teams credentials and deployment
-   use the [operator workflow](../../guides/deploy/production-agents.md#configure-the-agent-runtime).
+   credentials in the console after creation.
 5. Choose how the Agent will authenticate to its model. Use one of the options
    below, or choose **None** to save a draft and select a method later. A draft
    without a compatible method cannot be deployed.
@@ -37,7 +36,7 @@ Agent; it does not verify an Agent you create in the console.
    field to create an empty file. The browser submits LF newlines. See
    [initial contents](../agents.md#initial-contents-at-creation) for limits.
 7. Select **Create Agent**. A successful save opens the Agent detail page on
-   **Saved draft**. No revision or workload exists yet. OCC privately stages the
+   **New revision**. No revision or workload exists yet. OCC privately stages the
    initial contents for application before the first deployment runs. After
    deployment, use the [live workspace editor](../console.md#edit-workspace-files).
    Pending inputs have no update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
@@ -99,18 +98,26 @@ stored status before explicitly retrying. Already-created Secrets remain in plac
 even when later storage or audit work fails; there is no automatic retry or
 rollback deletion.
 
-For Slack, enter the masked app and bot tokens and select **Save channel
-Secrets**. The console stores each token through the Namespace Secret API, creates
+For Slack, bound tokens appear as filled password fields using a synthetic mask.
+The browser never reads the saved token values. Focus a field to enter a
+replacement; leave it empty to keep its existing binding. Missing tokens remain
+empty and must be supplied before saving. **Save channel Secrets** requires at
+least one new value and a saved binding or new value for each token.
+
+Saving writes only the entered tokens through the Namespace Secret API, creates
 exact IAM bindings for the returned Agent `servicePrincipalId`, and saves
 gateway environment references in the Agent's Configuration `secretBindings`. It
-reuses only Roles with the required permission set. The tokens are cleared after
-submission and are never stored in local storage, URLs, or native Configuration
-values. A stored channel Secret confirms storage and binding only; it does not
+reuses only Roles with the required permission set. Unchanged tokens and their
+bindings are preserved; the mask is never submitted. Entered values clear after
+a save attempt or when leaving the tab, and bound fields return to their mask.
+Tokens are never stored in local storage, URLs, or native Configuration values. A stored channel Secret confirms storage and binding only; it does not
 prove provider acceptance, runtime readiness, or a channel connection.
 
-## Deploy a saved draft
+<span id="deploy-a-saved-draft"></span>
 
-Open the Agent's saved draft and select **Deploy saved draft** after generated transport credentials are stored, required channel Secret bindings are saved, and a harness source is selected. The console rereads the Agent and Configuration
+## Deploy a new revision
+
+Open the Agent's new revision and select **Deploy new revision** after generated transport credentials are stored, required channel Secret bindings are saved, and a harness source is selected. The console rereads the Agent and Configuration
 and requests deployment through the existing exact-Agent endpoint. A changed draft
 requires a refresh. These checks are separate reads, not an atomic compare-and-set.
 Teams-enabled drafts cannot deploy through this console path because Teams credential

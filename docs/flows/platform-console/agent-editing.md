@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-09-21
-last_updated_session: codex/01a0c76f-2534-7991-932a-345782408759
+updated: 2026-09-22
+last_updated_session: codex/01a0cc48-2eda-7fc2-a19e-096b68fccb7b
 ---
 
 # Console Agent editing and runtime requests
@@ -9,7 +9,7 @@ last_updated_session: codex/01a0c76f-2534-7991-932a-345782408759
 ## Overview
 
 Follow authorized Agent detail requests through draft editing, initial
-credentials, live workspace files, and Agent deletion. This trace starts after
+credentials, live workspace files, Agent stopping, and Agent deletion. This trace starts after
 the console selects an exact Agent and ends with a rendered API response or the
 return to the Agents list after confirmed deletion. See the
 [parent flow](../platform-console.md) for the overall sequence.
@@ -30,11 +30,15 @@ graph TD
     B --> C["Edit draft or provision credentials"]
     B --> D["Read or write workspace files"]
     B --> E["Confirm Agent deletion"]
+    B --> S["Confirm Agent stop"]
   end
   subgraph API["Controller API"]
     C --> F["Authorize exact request"]
     D --> F
     E --> G["DELETE exact Agent"]
+    S --> T["POST exact Agent stop"]
+    T -->|accepted or uncertain| U["Refresh desired state and selected revision"]
+    T -->|denied| I
     G -->|accepted or uncertain| H["Refresh exact Agent"]
     G -->|denied| I["Show access denied"]
     H -->|exists| J["Show current Agent state"]
@@ -48,20 +52,20 @@ graph TD
 
 `apps/controller/src/console/agents/detail.mjs:renderAgentDetail`
 
-The detail page reads the Agent, revision list, and either the saved draft
-Configuration or the selected AgentRevision. `revision=draft` reads the current
+The detail page reads the Agent, revision list, and either the current Configuration in **New revision** or the selected AgentRevision. `revision=draft` reads the current
 Configuration referenced by the Agent. `revision=<id>` reads that immutable
 snapshot. The Selected revision badge is derived from `activeRevisionId`; the
 newest revision and the viewed snapshot can both differ from that pointer.
-Serving status stays explicitly unavailable because these API responses provide
-no serving observation. Revision snapshots
-are read-only and do not expose rollback, edit, deploy, or live-health controls.
-Deletion applies to the Agent itself, regardless of the viewed revision or tab.
+The revision view reads persisted deployment status and startup failures; it
+does not render a live serving-health indicator. Revision snapshots are read-only and do not expose rollback, edit, deploy, or live-health controls.
+Stopping and deletion apply to the Agent itself, regardless of the viewed revision or tab.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders supported
-Slack and Microsoft Teams channel settings for the saved draft only. Slack uses
-fixed unresolved `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` environment references;
-Teams uses fixed unresolved `MSTEAMS_APP_PASSWORD`. The editor requires
+Slack channel settings in **New revision** only. Slack uses fixed unresolved
+`SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` environment references. Existing native
+Teams settings remain in Configuration JSON, with no card or editor. The
+deployment guard still refuses Teams-enabled drafts because Console credential
+readiness cannot be established for them. The Slack editor requires
 dedicated execution for enabled channels and may refuse native documents that it
 cannot round-trip, including non-Socket Slack settings, non-standard credential
 references, mixed Slack mention settings, and unsupported plugin shapes.
@@ -87,9 +91,8 @@ or provisioning; it still requires readable revision history and unchanged draft
 state before submitting deployment. API authorization and selected-driver
 compatibility checks remain authoritative.
 
-For managed authentication methods, the saved draft reads metadata from the exact Agent's `runtime-credentials`
-endpoint. The console sends masked model and Slack inputs only on explicit
-submission and clears them afterward. The response reports stored groups, not
+For managed authentication methods, the **New revision** view reads metadata from the exact Agent's `runtime-credentials`
+endpoint. The response reports stored groups, not
 provider validity or runtime health; an uncertain response requires a status
 refresh before retrying.
 
@@ -100,6 +103,20 @@ Kubernetes creates only missing whole Secrets, generates transport tokens on the
 server, and preserves existing matching groups on retry. Neither Configuration
 nor the audit event receives credential bytes. External Secret creation cannot
 be rolled back by a failed database transaction, so errors require readback.
+
+Slack fields separately derive bound state from Configuration `secretBindings`.
+Each bound field renders a synthetic password mask, never a saved Secret value.
+Focusing the field clears the mask for replacement; an empty bound field keeps
+its existing binding. The save gate requires at least one entered replacement
+and either an existing binding or replacement for both token slots.
+
+On explicit submission, the browser skips unchanged slots. For each replacement,
+`storeChannelSecret` creates or updates the Namespace Secret and
+`ensureSecretOperateBinding` grants the Agent access. The Configuration PATCH
+preserves other bindings and incorporates the written Secret references. These
+are separate writes; uncertain outcomes block another save until refresh. The
+mask never enters the write set. Entered values clear after an attempt or panel
+teardown; masks are recreated from bound metadata.
 
 ### 6. Read and replace live workspace files
 
@@ -125,7 +142,32 @@ not require a deployed gateway. The [workspace setup flow](../workspace-files.md
 owns initialization, retry, and completion cleanup; the live editor above
 becomes available after deployment.
 
-### 7. Confirm deletion and read back the Agent
+<span id="stop-agent"></span>
+
+### 7. Request a stop and read back the Agent
+
+`apps/controller/src/console/agents/stop.mjs:createAgentStop` renders the control
+composed by `apps/controller/src/console/agents/detail.mjs:renderAgentDetail`. Confirmation sends a
+bodyless `POST` to the exact Agent's `/stop` route. OCC's
+`packages/occ/src/index.ts:stopAgent` checks exact-Agent `operate`, persists the
+requested stopped state, and queues reconciliation. The response proves
+admission, not completed Compute shutdown.
+
+**Refresh stop status** reads the exact Agent again. The control displays its
+desired runtime state and selected revision without inferring live health or
+completion from a missing revision. A permission denial stays inline. A
+change to desired state or selected revision reloads the surrounding detail
+view so native-admin and workspace controls refresh too. An uncertain write
+blocks another stop until a successful read; the browser never
+retries the mutation automatically. Deployment remains the resume operation,
+admitting a new revision. The
+[stop lifecycle](../../reference/agents/deployment.md#stop-and-resume) owns worker
+shutdown and preservation of existing revisions, credentials, and state.
+
+<span id="7-confirm-deletion-and-read-back-the-agent"></span>
+<span id="7.-confirm-deletion-and-read-back-the-agent"></span>
+
+### 8. Confirm deletion and read back the Agent
 
 `apps/controller/src/console/agents/deletion.mjs:createAgentDeletion`
 
@@ -145,6 +187,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 
 ## Debugging and Verification
 
+- Stop requires exact-Agent `operate`. An accepted stop or an empty selected
+  revision does not independently prove that Compute shutdown has finished.
 - On `403`, check `delete` permission on the exact Agent; Agent `read` and
   `operate` do not authorize deletion. Use the displayed request ID when present.
 - An accepted deletion remains in progress until the exact Agent read reports
@@ -164,4 +208,10 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 
 ## Changelog
 
+- 2026-09-22 20:56: Rename the deployment-facing Console view to New revision. (01a0cc48-2eda-7fc2-a19e-096b68fccb7b - 081bccfcf3f5b114588dde1b42a0deb07f326017)
+
+- 2026-09-22 20:43: Add confirmed Console stop requests and exact Agent state refresh. (01a0cc48-2eda-7fc2-a19e-096b68fccb7b - 6adfd148a517e84ae064a8e08438b051f80820fb)
+- 2026-09-22 20:35: Trace metadata-derived Slack token masks and replacement-only Secret writes. (01a0cc48-2eda-7fc2-a19e-096b68fccb7b - 43776d25c5007e017f7d0ffdca6b06f063afcd37)
+- 2026-09-22 20:23: Align Agent editing with supported Console controls. (01a0cc48-2eda-7fc2-a19e-096b68fccb7b - 43776d25c5007e017f7d0ffdca6b06f063afcd37)
+- 2026-09-22 20:23: Remove the placeholder serving-status banner and unsupported Teams editor; retain deployment evidence and the Teams deployment guard. (01a0cc48-2eda-7fc2-a19e-096b68fccb7b - 43776d25c5007e017f7d0ffdca6b06f063afcd37) (NOT_IN_SPEC)
 - 2026-09-21 21:46: Trace Agent deletion, readback, and recovery from denied or uncertain requests. (01a0c76f-2534-7991-932a-345782408759 - b61c3cae6c35e28db4153eaee9b477e8f5637894)

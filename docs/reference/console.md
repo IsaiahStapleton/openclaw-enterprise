@@ -1,12 +1,15 @@
 # Platform console
 
 Use the browser console at `/console/` on your OCC address to sign in, choose a
-Namespace, create, deploy, and delete Agents, and edit supported Slack or Microsoft Teams
+Namespace, create, deploy, and delete Agents, and edit supported Slack
 draft settings. You can also set initial workspace contents and runtime credentials,
 read or replace supported live workspace files, and list the Agents, Providers, and Namespaces
 you can access. When the pilot is enabled, trusted operators can open an Agent's
 [native admin UI](#open-the-native-admin-ui). The console does not offer rollback,
 live runtime health, or browser chat through OCE.
+
+For a component-by-component tour, see
+[Understand the Agent detail page](../guides/console/agent-details.md).
 
 For browser deployment instructions, follow [Create and deploy Agents](console/create-and-deploy.md).
 See the [deployment guide](../guides/deploy.md) for operator procedures and
@@ -56,7 +59,7 @@ not broaden access.
 The console creates an Agent and reusable Configuration, records optional
 Agent-owned plugin selections and a harness authentication binding, stages initial
 workspace contents, and provisions transport/channel credentials. Creation leaves
-the Agent stopped and undeployed; **Deploy** starts the saved draft. Follow
+the Agent stopped and undeployed; **Deploy new revision** creates and starts a revision from the current Configuration. Follow
 [Create and deploy Agents](console/create-and-deploy.md) for the complete
 workflow, channel constraints, and recovery after partial or uncertain writes.
 Plugin selections use the same Agent create/update contract as the API: omitted
@@ -70,7 +73,7 @@ files** updates only the tab content. The surrounding Agent panels stay in place
 and browser Back/Forward restores the selected tab. Password fields are cleared
 when leaving a tab. Use **Refresh** to reload the Agent and its Configuration.
 
-An Agent detail page has the saved draft and immutable AgentRevisions. The draft
+An Agent detail page has a **New revision** view and immutable AgentRevisions. The new revision view
 reads the current Configuration and is editable only through the supported
 channel editor and harness authentication controls. Choose **Operator-managed
 credentials** for SSH embedded OpenClaw: “Configured on the runtime host; not
@@ -82,16 +85,17 @@ newest admitted revision nor the viewed snapshot must match it.
 
 Read-only AgentRevision snapshots cannot be edited, rolled back, redeployed, or
 used as a live-health check. Activation means the revision was admitted and
-selected by OCC; the console has no live gateway health API and always shows
-**Serving status unavailable**. Follow the
+selected by OCC. The console displays persisted deployment and startup evidence,
+not live gateway health. Follow the
 [deployment guide](../guides/deploy/production-agents.md#configure-the-agent-runtime) and
 [Agent deployment reference](agents/deployment.md#revisions-and-deployment) for the
 installed runtime.
 
-The Channels tab edits Slack and Microsoft Teams settings on the saved
-Configuration draft. Teams is incomplete: the console cannot deploy a
-Teams-enabled draft, and configuring it does not provide the public Bot
-Framework endpoint the integration requires. Saving patches only `values`, so
+The Channels tab edits Slack settings on the saved Configuration draft.
+Microsoft Teams has no console editor: its credentials and Bot Framework ingress
+require operator setup, and the console cannot deploy a Teams-enabled draft.
+Existing Teams settings remain visible in the native Configuration JSON.
+Saving Slack settings patches only `values`, so
 the backend retains existing `secretBindings`. An existing plugin allowlist is
 extended; an omitted allowlist stays omitted. Because a Configuration can be
 shared by multiple Agents, channel edits can affect future deployments of other
@@ -105,25 +109,38 @@ These are separate reads; a later concurrent change can still race the PATCH.
 Refresh before retrying a conflict or uncertain save. An unconfirmed PATCH shows
 **Outcome unknown**, closes the editor, and disables channel writes until
 Refresh loads current saved state. The write may have succeeded; there is no
-automatic replay. **Disable Slack** and **Disable Microsoft Teams** edit only the
-draft. They do not disable access, stop execution, or change an admitted
-revision.
+automatic replay. **Disable Slack** edits only the draft. It does not disable
+access, stop execution, or change an admitted revision.
 
 Slack editing preserves existing direct-message and channel policies, including
 pairing, open, disabled, and omitted policies. It also preserves per-channel user
 restrictions. New Slack configurations use allowlist policies. **Allowed user
 IDs** edits `allowFrom`; the existing policy determines how those entries affect
 access. The editor does not change the policy when saving channel settings. Slack Socket Mode uses fixed
-unresolved references to `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`; Microsoft
-Teams uses application ID, tenant ID, require-mention, and `MSTEAMS_APP_PASSWORD`.
-Both integrations require dedicated execution and Kubernetes runtime projection.
-Teams also requires Bot Framework ingress.
+unresolved references to `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`.
+Slack requires dedicated execution and Kubernetes runtime projection.
 
 The simple editor may reject native channel documents it cannot round-trip,
 including non-Socket Slack settings, non-standard credential references, mixed
 per-channel mention settings, or unsupported plugin shapes. Inspect unsupported
 settings in the native Configuration view and edit them through the API or
 operator workflow.
+
+## Stop and resume an Agent
+
+Open the Agent, select **Stop Agent**, and confirm after reviewing the effect on
+running work. Stop requires `operate` permission on that exact Agent. It requests
+shutdown while retaining revision history, credentials, gateway state, and
+workspace files.
+
+An accepted request means shutdown was queued. **Refresh stop status** rereads
+the Agent's desired state and selected revision; it does not probe the runtime.
+If the result is uncertain, refresh before retrying. Permission denials remain
+visible, and the console never automatically repeats a stop request.
+
+To resume, open **New revision** and select **Deploy new revision**. This creates a
+new revision. See [Stop and resume](agents/deployment.md#stop-and-resume) for the
+worker lifecycle and preservation guarantees.
 
 ## Delete an Agent
 

@@ -15,7 +15,7 @@ Once access is fixed, refresh and confirm the Namespace is `ready`.
 
 ## Deployment is blocked or has no selected revision
 
-On Kubernetes, open the Agent's **Saved draft → Credentials** and confirm that
+On Kubernetes, open the Agent's **New revision → Credentials** and confirm that
 **Transport** shows **Stored**. Check that the saved model authentication matches
 the execution mode. For an OpenAI API key, the person selecting it and the
 Agent's own identity both need `operate` on the exact platform Secret. See
@@ -38,10 +38,12 @@ GET /namespaces/:namespaceId/agents/:agentId/deployments/:revisionId
 For Kubernetes workload problems, operators can use the
 [Compute failure checks](../../reference/drivers/kubernetes-compute.md#failure-conditions).
 
-## The console says “Serving status unavailable”
+<span id="the-console-says-serving-status-unavailable"></span>
 
-The console always shows this message; it has no live gateway-health or chat
-view. **Selected revision** means the control plane selected that revision. It
+## Verify runtime health after deployment
+
+The console displays persisted deployment status; it has no live gateway-health
+or chat view. **Selected revision** means the control plane selected that revision. It
 cannot tell you whether the model still accepts the credential or can answer.
 Use [Deploy your first Agent](../first-agent.md) to verify your local setup or
 ask an operator to [verify a production workload](../deploy/production-agents.md#verify-production-workloads).
