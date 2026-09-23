@@ -851,6 +851,24 @@ function validExecutionMode(value: unknown): value is HarnessExecutionMode {
   return value === "embedded" || value === "dedicated";
 }
 
+function requireDedicatedNativeSandbox(
+  harness: Readonly<RevisionHarnessDescriptor>,
+  sandbox: SandboxDriver | undefined,
+): void {
+  if (harness.id !== "openclaw" || harness.mode !== "dedicated") {
+    return;
+  }
+  const requiredFacets: readonly SandboxFacet[] = ["networking", "filesystem", "process"];
+  if (
+    sandbox?.provisionHarness === undefined ||
+    requiredFacets.some((facet) => !sandbox.facets.includes(facet))
+  ) {
+    throw new DependencyUnavailableError(
+      "Dedicated OpenClaw requires a provisioning SandboxDriver with networking, filesystem, and process containment.",
+    );
+  }
+}
+
 function validRepositorySelector(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 }
@@ -4073,20 +4091,10 @@ export class OpenClawController {
         ),
         metadata,
       );
-      const sandboxConfiguration =
-        sandbox?.configureAgent !== undefined
-          ? frozenValues(sandbox.configureAgent(frozenValues(configuration.values)))
-          : configuration.values;
-      const admittedConfiguration = frozenValues(
-        compute.runtimeLogging === "driver"
-          ? sandboxConfiguration
-          : admitLoggingConfiguration(sandboxConfiguration, this.loggingLevel),
-      );
-      await configurationDriver.validate({ ...configuration, values: admittedConfiguration });
       if (!validExecutionMode(lockedAgent.executionMode)) {
         throw new ScopeViolationError("The persisted Agent Harness execution mode is invalid.");
       }
-      const configuredHarnessId = resolveConfiguredHarnessId(admittedConfiguration);
+      const configuredHarnessId = resolveConfiguredHarnessId(configuration.values);
       const approvedHarness = resolveHarness(configuredHarnessId, lockedAgent.executionMode);
       if (
         approvedHarness === undefined ||
@@ -4098,12 +4106,27 @@ export class OpenClawController {
       if (approvedHarness.id !== configuredHarnessId) {
         throw new ScopeViolationError("The approved Harness does not match the native runtime.");
       }
-      if (
-        (approvedHarness.id === "openclaw" && lockedAgent.executionMode !== "embedded") ||
-        (approvedHarness.id === "codex" && lockedAgent.executionMode !== "dedicated") ||
-        (approvedHarness.id !== "openclaw" && approvedHarness.id !== "codex")
-      ) {
-        throw new ScopeViolationError("The selected Harness does not support this execution mode.");
+      const revisionHarness = Object.freeze({
+        ...approvedHarness,
+        mode: lockedAgent.executionMode,
+      });
+      requireDedicatedNativeSandbox(revisionHarness, sandbox);
+      const sandboxConfiguration =
+        sandbox?.configureAgent !== undefined
+          ? frozenValues(
+              sandbox.configureAgent(frozenValues(configuration.values), revisionHarness),
+            )
+          : configuration.values;
+      const admittedConfiguration = frozenValues(
+        compute.runtimeLogging === "driver"
+          ? sandboxConfiguration
+          : admitLoggingConfiguration(sandboxConfiguration, this.loggingLevel),
+      );
+      await configurationDriver.validate({ ...configuration, values: admittedConfiguration });
+      if (resolveConfiguredHarnessId(admittedConfiguration) !== configuredHarnessId) {
+        throw new ScopeViolationError(
+          "A Sandbox Driver cannot change the selected Harness runtime.",
+        );
       }
       if (compute.validateHarnessAuth === undefined) {
         throw new DependencyUnavailableError(
@@ -4112,7 +4135,7 @@ export class OpenClawController {
       }
       try {
         compute.validateHarnessAuth(
-          { ...approvedHarness, mode: lockedAgent.executionMode },
+          revisionHarness,
           harnessAuth,
           admittedConfiguration,
           configuration.secretBindings,
@@ -4195,11 +4218,7 @@ export class OpenClawController {
           configurationKind: configuration.kind,
           configurationGeneration: configuration.generation,
           configuration: admittedConfiguration,
-          harness: {
-            id: approvedHarness.id,
-            version: approvedHarness.version,
-            mode: lockedAgent.executionMode,
-          },
+          harness: revisionHarness,
           compute: { id: compute.id, implementation: compute.implementation },
           ...(sandbox === undefined ? {} : { sandboxDriverId: sandbox.id }),
           ...(secretDriver === undefined
@@ -4915,14 +4934,18 @@ export class OpenClawController {
         : agent === undefined
           ? await this.serviceAccountHarnessAuthSnapshot(state, namespaceId, backendId, binding)
           : await this.admitHarnessAuth(state, principalId, { ...agent, harnessAuth: binding });
-    const configuration =
-      this.sandboxDriver()?.configureAgent?.(plan.configuration.values) ??
-      plan.configuration.values;
     const harness = {
-      id: resolveConfiguredHarnessId(configuration),
+      id: resolveConfiguredHarnessId(plan.configuration.values),
       version: "provisioning",
       mode: plan.executionMode,
     };
+    const sandbox = this.sandboxDriver();
+    requireDedicatedNativeSandbox(harness, sandbox);
+    const configuration =
+      sandbox?.configureAgent?.(plan.configuration.values, harness) ?? plan.configuration.values;
+    if (resolveConfiguredHarnessId(configuration) !== harness.id) {
+      throw new ScopeViolationError("A Sandbox Driver cannot change the selected Harness runtime.");
+    }
     if (compute.validateHarnessAuth === undefined) {
       throw new DependencyUnavailableError(
         "The Compute Driver cannot validate Harness authentication.",

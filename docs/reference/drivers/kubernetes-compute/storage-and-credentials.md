@@ -90,6 +90,10 @@ without credentials or additional privileges. The nested
 `agents/main/agent/codex-home` is overmounted from Pod-local `emptyDir` so
 Codex credentials remain ephemeral. The remaining private runtime home is
 also ephemeral. Persisting these directories does not persist the entire home.
+The same init container creates a node-owned mode-`0700` subdirectory on the
+Pod-local temporary `emptyDir` and mounts that subdirectory at `/tmp`. This
+preserves private temp-workspace ancestry for Gateway and Harness processes;
+the fsGroup-writable volume root is never exposed as their runtime temp root.
 
 The same nonroot initializer creates a private temporary directory in each
 Pod's `emptyDir`, mounted at `/tmp` for native safe temporary-file operations.

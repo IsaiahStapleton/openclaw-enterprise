@@ -19,9 +19,11 @@ explicitly adopted existing namespace retains its operator-selected name;
 OpenShell selection rejects it if it exceeds that Workspace limit.
 
 The optional [OpenShell Sandbox Driver](openshell-sandbox.md) is designed to
-own the dedicated Codex Harness Pod while Compute keeps the other resources.
-Stock OpenShell cannot provide required credential and workload-identity
-projections; Agent deployment with OpenShell is unsupported.
+own dedicated Codex and native OpenClaw Harness Pods while Compute keeps the
+other resources. Dedicated native OpenClaw is rejected unless the selected
+SandboxDriver provisions the Harness and declares networking, filesystem, and
+process containment. Stock OpenShell cannot provide required credential and
+workload-identity projections; Agent deployment with OpenShell remains unsupported.
 
 For detailed operator contracts, see:
 
@@ -205,6 +207,15 @@ The Agent's Harness configuration determines its execution topology:
   Service DNS and the paired node for workspace operations. Codex accepts an
   Agent-scoped model API key or a managed ChatGPT service-account credential,
   and permits `openai/` or `codex/` models.
+- **Dedicated native OpenClaw:** The Gateway and paired OpenClaw Harness run in
+  separate Pods with separate ServiceAccounts. Compute issues a node-only setup
+  credential through the Gateway and stores the resulting device identity on the
+  Harness workspace claim. The node host supervises the remote worker, which owns
+  the agent loop, model inference, and coding tools. Only the Harness receives the
+  model API key; the Gateway selects the generated `dedicated-native`
+  runtime-local profile. Explicit `openai/` models require complete API,
+  token-limit, input, reasoning, and cost metadata at the approved
+  `https://api.openai.com/v1` endpoint.
 
 Dedicated replacement opts into the [exclusive preparation contract](compute.md#production-revision-stages):
 the worker stops predecessors before starting the new Harness. This permits RWO
@@ -212,9 +223,11 @@ workspace storage and introduces deployment downtime; restore a previous
 configuration through a new revision instead of restarting its old snapshot.
 
 Enabled external channels require dedicated execution. Unsupported Harness and
-execution-mode combinations fail deployment. OpenShell is designed for
-dedicated Codex only, but stock OpenShell currently blocks that deployment;
-embedded OpenClaw is rejected as well.
+execution-mode combinations fail deployment. Dedicated native OpenClaw requires
+a full-facet provisioning SandboxDriver; the bundled implementation is
+OpenShell. Stock OpenShell currently blocks production deployment because it
+cannot preserve the required workload projections. Embedded OpenClaw is never
+delegated to OpenShell.
 
 Stopping an Agent first deletes its exact gateway route and gateway runtime,
 then removes the dedicated Harness Deployment or delegates provider-owned
@@ -226,7 +239,7 @@ and converges when the runtime objects are already absent.
 
 ### Plugin startup status
 
-Compute-owned embedded OpenClaw and dedicated Codex runtimes publish a private
+Compute-owned embedded or dedicated OpenClaw and dedicated Codex runtimes publish a private
 current-startup result after attempting requested plugins and verifying effective
 configuration. The result identifies the revision and runtime instance, with
 successful selection IDs and safe `PLUGIN_INSTALL_FAILED` or

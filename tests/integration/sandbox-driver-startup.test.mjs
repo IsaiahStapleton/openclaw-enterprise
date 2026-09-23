@@ -260,6 +260,113 @@ test("startup requires protected OpenShell transport or an explicit NetworkPolic
   await assert.rejects(load(slow), /requestTimeoutMs must be between 1000 and 30000 ms/);
 });
 
+test("OpenShell configures only the selected dedicated Harness runtime", () => {
+  const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
+    id: "openshell-sandbox",
+    implementation: "openshell",
+  });
+  const configuration = {
+    agents: { defaults: { model: "openai/gpt-5" } },
+  };
+  assert.deepEqual(
+    driver.configureAgent(configuration, {
+      id: "openclaw",
+      version: "1.0.0",
+      mode: "dedicated",
+    }),
+    configuration,
+  );
+
+  const codex = driver.configureAgent(configuration, {
+    id: "codex",
+    version: "1.0.0",
+    mode: "dedicated",
+  });
+  assert.equal(codex.plugins.entries.codex.config.appServer.sandbox, "danger-full-access");
+  assert.throws(
+    () =>
+      driver.configureAgent(configuration, {
+        id: "openclaw",
+        version: "1.0.0",
+        mode: "embedded",
+      }),
+    /supports only dedicated Harness revisions/,
+  );
+});
+
+test("OpenShell provisions native OpenClaw without exposing an inbound Harness service", async () => {
+  const requests = [];
+  const gatewayClient = workspaceGatewayClient();
+  gatewayClient.createSandbox = async (request) => {
+    requests.push(request);
+    return {
+      name: request.name,
+      labels: request.labels,
+      serviceUrls: {},
+    };
+  };
+  const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
+    id: "openshell-sandbox",
+    implementation: "openshell",
+    gatewayClient,
+  });
+  const context = namespaceContext();
+  const revisionId = "rev_00000000-0000-4000-8000-000000000001";
+  const revision = {
+    id: revisionId,
+    namespaceId: context.namespace.id,
+    agentId: "agt_00000000-0000-4000-8000-000000000001",
+    harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+    sandboxDriverId: driver.id,
+  };
+  const labels = {
+    "app.kubernetes.io/managed-by": "openclaw-enterprise",
+    "openclaw.dev/agent": revision.agentId,
+    "openclaw.dev/revision": revision.id,
+    "openclaw.dev/workload-role": "agent",
+  };
+  const command = ["/usr/bin/tini", "-s", "--", "node", "-e", "worker-entrypoint"];
+  const sandbox = await driver.provisionHarness({
+    ...context,
+    revision,
+    requirements: {
+      loginMode: "api_key",
+      image: "openclaw-runtime@sha256:synthetic",
+      command,
+      serviceAccountName: "agent-native-openclaw",
+      serviceAccountToken: {
+        audience: "openclaw-enterprise",
+        expirationSeconds: 900,
+        mountPath: "/var/run/secrets/openclaw-enterprise",
+        path: "token",
+        readOnly: true,
+      },
+      workspaceMounts: [
+        {
+          claimName: "harness-workspace-native-openclaw",
+          subPath: "workspace",
+          mountPath: "/home/node/workspace",
+          readOnly: false,
+        },
+        {
+          claimName: "harness-workspace-native-openclaw",
+          subPath: "workspace-node-native-openclaw",
+          mountPath: "/home/node/.openclaw-node",
+          readOnly: false,
+        },
+      ],
+      environment: [{ name: "TMPDIR", value: "/tmp/openclaw-native-worker" }],
+      labels,
+    },
+  });
+
+  assert.equal(sandbox.revisionId, revisionId);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].serviceExposures, []);
+  assert.deepEqual(requests[0].spec.command, command);
+  assert.deepEqual(requests[0].labels, labels);
+});
+
 test("OpenShell Namespace lifecycle creates, adopts, and deletes its exact operator Workspace", async () => {
   const gatewayClient = workspaceGatewayClient();
   const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {

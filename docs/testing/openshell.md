@@ -90,6 +90,7 @@ OpenShell prerequisites, and export the lane environment before
 
 ```sh
 export OCC_TEST_OPENSHELL_SECRET_PROJECTION=1
+export OCC_TEST_OPENSHELL_HARNESS=openclaw
 node scripts/ci/prepare.mjs \
   --lane openshell \
   --state "$RUNNER_TEMP/state/openshell.json" \
@@ -141,6 +142,12 @@ scenario also requires exact workload identity claims, approved mounts and
 privileges, denied secret exposure, allowed and denied tool egress, replacement,
 and cleanup. It separately checks the OpenClaw Control Plane (OCC) Agent Service
 selector. Missing prerequisites fail rather than skip.
+
+`OCC_TEST_OPENSHELL_HARNESS` defaults to `codex`. Select `openclaw` to verify
+that the native Harness requests no inbound OpenShell service exposure and
+completes a real model turn through its outbound enrolled-worker connection.
+`./scripts/k3d test --harness openclaw` selects this case. The browser demo is
+not available for this verification-only topology.
 
 Use an OCE runtime image built from the OpenClaw source commit pinned by
 `deploy/runtime/Dockerfile`. The test requires the workspace-node
@@ -235,11 +242,12 @@ scoped environment file for this suite.
 | `OCC_TEST_OPENSHELL_K3D_REAL`             | Set to `1` to explicitly opt into the real OpenShell integration.                                                                                   |
 | `OCC_TEST_OPENSHELL_SECRET_PROJECTION`    | `0` selects stock fail-closed proof; `1` selects the verification-only v0.1.0 compatibility proof with exposed-route and real model-turn checks.    |
 | `OPENAI_API_KEY`                          | Existing authorized provider credential, registered as a credential source for the required real model turn.                                        |
+| `OCC_TEST_OPENSHELL_HARNESS`              | `codex` (default) selects the app-server proof; `openclaw` selects the dedicated native worker without an inbound Harness exposure.                 |
 | `OCC_TEST_OPENAI_MODEL`                   | Authorized provider model; defaults to `gpt-6-astra`.                                                                                               |
 | `OCC_TEST_KUBERNETES_KUBECONFIG`          | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                                                                  |
 | `OCC_TEST_KUBERNETES_CONTEXT`             | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                        |
 | `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`       | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.                                      |
-| `OCC_TEST_KUBERNETES_AGENT_IMAGE`         | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted.                                    |
+| `OCC_TEST_KUBERNETES_AGENT_IMAGE`         | Imported immutable Harness image; Codex and runtime-image fallbacks are accepted. The native selector uses the OpenClaw source image.               |
 | `OCC_TEST_DATABASE_URL`                   | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                                                            |
 | `OCC_TEST_OPENSHELL_HELM`                 | Helm binary used to install the namespace-scoped OpenShell gateway.                                                                                 |
 | `OCC_TEST_OPENSHELL_HELM_CHART`           | OpenShell Helm chart path or chart archive.                                                                                                         |

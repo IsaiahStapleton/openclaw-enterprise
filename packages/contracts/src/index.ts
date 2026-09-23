@@ -1067,6 +1067,7 @@ export interface SandboxDriver extends Driver {
   readonly facets: readonly SandboxFacet[];
   configureAgent?(
     configuration: Readonly<OpenClawConfigurationDocument>,
+    harness: Readonly<RevisionHarnessDescriptor>,
   ): OpenClawConfigurationDocument;
   ensureNamespace?(context: SandboxNamespaceContext): Promise<void>;
   provisionHarness?(context: SandboxHarnessContext): Promise<SandboxResourceRef>;

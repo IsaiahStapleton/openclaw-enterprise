@@ -890,8 +890,24 @@ test("Harness admission rejects conflicting selections, mode mismatches, and una
     resolveApprovedProductionHarness,
   );
   assert.deepEqual(embedded.harness, { ...DEVELOPMENT_HARNESS_DESCRIPTOR, mode: "embedded" });
+  await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: openclawConfiguration.id,
+    executionMode: "dedicated",
+  });
+  const dedicatedNative = await controller.deployAgent(
+    administrator,
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedProductionHarness,
+  );
+  assert.deepEqual(dedicatedNative.harness, {
+    ...DEVELOPMENT_HARNESS_DESCRIPTOR,
+    mode: "dedicated",
+  });
   assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), [
     embedded,
+    dedicatedNative,
   ]);
 
   assert.throws(

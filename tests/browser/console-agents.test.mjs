@@ -2950,11 +2950,12 @@ test("Agent creation preserves unrelated edited JSON across model changes and re
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Template edits", { ready: true });
-  const { page } = await newPage(t, fixture);
+  const { page, artifacts } = await newPage(t, fixture);
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
+  const mode = page.getByLabel("Execution mode");
   const harness = page.getByLabel("Harness", { exact: true });
   await openAdvancedSettings(page);
   const configuration = page.getByLabel("Configuration JSON");
@@ -2972,11 +2973,24 @@ test("Agent creation preserves unrelated edited JSON across model changes and re
   assert.ok(dedicatedTemplate.plugins.entries.codex);
 
   await harness.selectOption("openclaw");
+
+  const nativeDedicatedTemplate = JSON.parse(await configuration.inputValue());
+  assert.equal(await mode.inputValue(), "dedicated");
+  assert.equal(nativeDedicatedTemplate.agents.defaults.model, "openai/gpt-5.1");
+  assert.equal(nativeDedicatedTemplate.plugins?.entries?.codex, undefined);
+  assert.equal(nativeDedicatedTemplate.models.providers.openai.models[0].cost.input, 0);
+  await page.screenshot({
+    path: join(artifacts, "agent-create-native-harness.png"),
+    fullPage: true,
+  });
+
+  await mode.selectOption("embedded");
+  assert.equal(await harness.inputValue(), "openclaw");
+
   const embeddedTemplate = JSON.parse(await configuration.inputValue());
   assert.equal(embeddedTemplate.agents.defaults.model, "openai/gpt-5.1");
-  assert.deepEqual(embeddedTemplate.models.providers.openai.models, [
-    { id: "gpt-5.1", name: "gpt-5.1" },
-  ]);
+  assert.equal(embeddedTemplate.models.providers.openai.models[0].id, "gpt-5.1");
+  assert.equal(embeddedTemplate.models.providers.openai.models[0].name, "gpt-5.1");
   assert.equal(embeddedTemplate.plugins?.entries?.codex, undefined);
 
   const custom = nativeValues("manual-edit");

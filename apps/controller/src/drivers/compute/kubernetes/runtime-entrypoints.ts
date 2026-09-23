@@ -1567,6 +1567,7 @@ function probeOpenClawAuthenticationFailureCode() {
         HOME: directory,
         OPENCLAW_STATE_DIR: directory + "/state",
         OPENCLAW_CONFIG_PATH: configPath,
+        NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE,
         [credentialEnvironment]: process.env[credentialEnvironment],
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -1620,7 +1621,9 @@ function publishImageTree(source, destination, required) {
 
 function initializeRuntimeAssets() {
   publishImageTree("/app/skills", runtimeAssetsDirectory + "/bundled-skills", true);
+  publishImageTree("/app/custodian-skills", runtimeAssetsDirectory + "/custodian-skills", false);
   publishImageTree("/app/plugin-skills", runtimeAssetsDirectory + "/plugin-skills", false);
+  process.env.OPENCLAW_BUNDLED_SKILLS_DIR = runtimeAssetsDirectory + "/bundled-skills";
 }
 
 function publishAgentPluginSkillPath() {
@@ -1657,6 +1660,34 @@ function forwardTermination(child) {
   process.on("SIGINT", () => forward("SIGINT"));
 }
 
+function configureNativeWorkerProfile() {
+  const deviceId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
+  const profileId = process.env.OPENCLAW_NATIVE_WORKER_PROFILE;
+  if (profileId === undefined || deviceId === undefined) return;
+  if (!/^[a-f0-9]{64}$/u.test(deviceId) || !profileId) {
+    throw new Error("Dedicated OpenClaw worker placement configuration is invalid.");
+  }
+  const config = readOpenClawConfig();
+  const cloudWorkers = isPlainObject(config.cloudWorkers) ? config.cloudWorkers : {};
+  const profiles = isPlainObject(cloudWorkers.profiles) ? cloudWorkers.profiles : {};
+  if (profiles[profileId] !== undefined) {
+    throw new Error("Dedicated OpenClaw worker profile conflicts with admitted configuration.");
+  }
+  writeOpenClawConfig({
+    ...config,
+    cloudWorkers: {
+      ...cloudWorkers,
+      profiles: {
+        ...profiles,
+        [profileId]: {
+          provider: "device",
+          settings: { device: deviceId, inference: "runtime-local" },
+        },
+      },
+    },
+  });
+}
+
 const openClawAuthenticationFailureCode =
   process.env.OPENCLAW_HARNESS_PROBE_CONFIG === undefined
     ? undefined
@@ -1673,6 +1704,7 @@ if (process.env.OPENCLAW_WORKSPACE_DIR !== undefined) {
 delete process.env.OPENCLAW_LOG_LEVEL;
 const pluginRuntime = readGatewayPluginRuntime();
 (async () => {
+configureNativeWorkerProfile();
 const peerStatus =
   pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)
     ? await waitForPeerPluginRuntimeStatus()
@@ -1690,7 +1722,11 @@ if (peerStatus !== undefined) {
 }
 publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
 const workspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
-if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
+if (
+  workspaceNodeId !== undefined ||
+  process.env.APP_SERVER_URL !== undefined ||
+  process.env.OPENCLAW_NATIVE_WORKER_PROFILE !== undefined
+) {
   const config = readOpenClawConfig();
   // The first pairing records its command grant before a node ID is available.
   const commands = ((config.gateway ??= {}).nodes ??= {}).commands ??= {};
@@ -1726,8 +1762,11 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
     const skillRoots = [
       remoteRoot + "/skills", remoteRoot + "/.agents/skills",
       "/home/node/.openclaw/skills", "/home/node/.openclaw/plugin-skills",
+      "/home/node/.openclaw/agents/*/agent/workshop-skills",
+      "/home/node/.openclaw/worktree-sources/empty/*/workspace",
       "/home/node/.agents/skills", "/home/node/openclaw-runtime-assets/bundled-skills",
-      "/home/node/openclaw-runtime-assets/plugin-skills",
+      "/home/node/openclaw-runtime-assets/custodian-skills",
+      "/home/node/openclaw-runtime-assets/plugin-skills", "/app/extensions/*/skills",
     ];
     const nodes = fileConfig.nodes ??= {};
     if (nodes[workspaceNodeId] === undefined && nodes["*"] === undefined) {
@@ -2126,6 +2165,122 @@ function stop(signal) {
 process.on("SIGTERM", () => stop("SIGTERM"));
 process.on("SIGINT", () => stop("SIGINT"));
 for (const slot of processes) start(slot);
+`;
+
+export const NATIVE_WORKER_ENTRYPOINT = String.raw`
+const { join } = require("node:path");
+const { chmodSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
+const { spawn } = require("node:child_process");
+${WORKSPACE_ASSET_HELPERS}
+
+function publishRuntimeFailure() {}
+${OPENCLAW_AUTH_PROBE_HELPERS}
+
+const inferenceConfig = process.env.OPENCLAW_NATIVE_INFERENCE_CONFIG;
+const inferenceConfigPath = process.env.OPENCLAW_NATIVE_INFERENCE_CONFIG_PATH;
+const state = process.env.OPENCLAW_NODE_STATE_DIR;
+const setupCode = process.env.OPENCLAW_NODE_SETUP_CODE;
+const temporary = process.env.TMPDIR;
+if (
+  !inferenceConfig ||
+  !inferenceConfigPath ||
+  !state ||
+  !setupCode ||
+  !temporary
+) {
+  throw new Error("Dedicated OpenClaw worker configuration is invalid.");
+}
+mkdirSync(temporary, { recursive: true, mode: 0o700 });
+chmodSync(temporary, 0o700);
+initializeRuntimeAssets();
+const authenticationFailureCode = probeOpenClawAuthenticationFailureCode();
+if (authenticationFailureCode !== undefined) {
+  holdFailedAuthentication("model-probe", authenticationFailureCode);
+} else {
+mkdirSync(state, { recursive: true });
+const workerConfigPath = join(state, "openclaw.json");
+writeFileSync(inferenceConfigPath, inferenceConfig, { mode: 0o600 });
+writeFileSync(workerConfigPath, JSON.stringify({
+  agents: { defaults: { workspace: "/home/node/workspace" } },
+  plugins: {
+    allow: ["file-transfer"],
+    slots: { memory: "none" },
+    entries: { "file-transfer": { enabled: true } },
+  },
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      capacity: 1,
+      isolation: "none",
+      nativeInferenceConfig: inferenceConfigPath,
+    },
+    skills: { enabled: false },
+  },
+}), { mode: 0o600 });
+delete process.env.OPENCLAW_NATIVE_INFERENCE_CONFIG;
+delete process.env.OPENCLAW_HARNESS_PROBE_CONFIG;
+const nodeEnv = {
+  ...process.env,
+  OPENCLAW_STATE_DIR: state,
+  OPENCLAW_CONFIG_PATH: workerConfigPath,
+};
+if (process.env.OPENCLAW_NODE_CA_PEM) {
+  const caPath = join(state, "gateway-ca.pem");
+  writeFileSync(caPath, process.env.OPENCLAW_NODE_CA_PEM, { mode: 0o600 });
+  nodeEnv.NODE_EXTRA_CA_CERTS = caPath;
+}
+const child = spawn(
+  process.execPath,
+  [
+    "/app/openclaw.mjs",
+    "node",
+    "run",
+    "--pair-if-needed",
+    setupCode,
+    "--display-name",
+    "OpenClaw Enterprise native worker",
+    "--session-host",
+  ],
+  { stdio: "inherit", env: nodeEnv },
+);
+let terminating = false;
+const stop = (signal) => {
+  if (terminating) return;
+  terminating = true;
+  child.kill(signal);
+  setTimeout(() => child.kill("SIGKILL"), 8_000).unref();
+};
+process.on("SIGTERM", () => stop("SIGTERM"));
+process.on("SIGINT", () => stop("SIGINT"));
+child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
+}
+`;
+
+export const NATIVE_WORKER_READINESS_ENTRYPOINT = String.raw`
+const { join } = require("node:path");
+const { spawnSync } = require("node:child_process");
+const state = process.env.OPENCLAW_NODE_STATE_DIR;
+if (!state) process.exit(1);
+const identity = spawnSync(
+  process.execPath,
+  ["/app/openclaw.mjs", "node", "identity", "--json"],
+  {
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: state,
+      OPENCLAW_CONFIG_PATH: join(state, "openclaw.json"),
+    },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2_000,
+  },
+);
+if (identity.status !== 0) process.exit(1);
+try {
+  process.exit(/^[a-f0-9]{64}$/u.test(JSON.parse(identity.stdout).deviceId) ? 0 : 1);
+} catch {
+  process.exit(1);
+}
 `;
 
 // Check native readiness over Pod loopback: kubelet's node source can also be

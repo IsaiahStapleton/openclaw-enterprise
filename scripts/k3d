@@ -8,31 +8,37 @@ cd "$repo_root"
 
 usage() {
   cat <<'EOF'
-usage: ./scripts/k3d [demo|test|info|reset|down|help]
+usage: ./scripts/k3d [demo|test|info|reset|down|help] [--harness codex|openclaw]
        ./scripts/k3d get <field>
        ./scripts/k3d copy <field>
 
 Commands:
-  demo  Create a dedicated Codex Agent, verify a real model turn, and serve
+  demo  Create a dedicated Agent, verify a real model turn, and serve
         its Control UI and the OCC console on loopback until interrupted. This
         is the default command.
-  test  Prepare or reuse an owned k3d environment and run the dedicated Codex
-        gateway-routing integration case.
+  test  Prepare or reuse an owned k3d environment and run the selected
+        dedicated Harness integration case.
   get   Print one non-sensitive prepared value. Fields: openclaw-control-ui,
         occ-console, occ-username, namespace, namespace-id, agent-id,
         kubeconfig, context.
   copy  Copy one prepared value to the clipboard without printing it.
-        Fields: openclaw-password, occ-password.
+        Fields: openclaw-password, occ-password. Without --harness, selects the
+        single active demo.
   info  Show the selected engine, local state, and available non-secret values
         without printing passwords.
   reset Remove test namespaces and replace the test database while preserving
         the PostgreSQL service, k3d cluster, and imported images.
   down  Remove only the cluster, images, and PostgreSQL resources recorded in
-        this helper's owned state.
+        this helper's owned state. Without --harness, removes all known Harness
+        environments.
   help  Show this help.
 
 The helper detects a running Podman API socket or Docker daemon. Set
 OCC_K3D_CONTAINER_ENGINE=podman or docker to select one explicitly.
+--harness defaults to codex. Select openclaw for the dedicated native worker
+test through OpenShell; the browser demo currently supports codex only.
+The openclaw choice prepares the OpenShell lane and builds ../openclaw by
+default; override it with the absolute OCC_K3D_OPENCLAW_SOURCE path.
 demo prompts for OPENAI_API_KEY when it is not already set. test requires the
 variable explicitly; reset does not require it.
 OCC_TEST_OPENAI_MODEL defaults to gpt-6-astra.
@@ -133,6 +139,47 @@ select_engine() {
   esac
 }
 
+harness="codex"
+harness_explicit="false"
+positional=()
+positional_count=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --harness)
+      [ "$#" -ge 2 ] || fail "--harness requires codex or openclaw"
+      harness="$2"
+      harness_explicit="true"
+      shift 2
+      ;;
+    --harness=*)
+      harness="${1#--harness=}"
+      harness_explicit="true"
+      shift
+      ;;
+    *)
+      positional+=("$1")
+      positional_count=$((positional_count + 1))
+      shift
+      ;;
+  esac
+done
+case "$harness" in
+  codex | openclaw) ;;
+  *) fail "--harness must be codex or openclaw" ;;
+esac
+if [ "$harness" = "openclaw" ]; then
+  prepared_lane="openshell"
+  integration_file="tests/integration/sandbox-driver-openshell-k3d-real.test.mjs"
+else
+  prepared_lane="gateway-routing"
+  integration_file="tests/integration/harness-topology-k3d-routing-real.test.mjs"
+fi
+if [ "$positional_count" -eq 0 ]; then
+  set --
+else
+  set -- "${positional[@]}"
+fi
+
 value_field=""
 case "${1:-demo}" in
   demo) action="demo" ;;
@@ -166,6 +213,10 @@ case "${1:-demo}" in
     ;;
 esac
 
+if [ "$action" = "demo" ] && [ "$harness" = "openclaw" ]; then
+  fail "the OpenShell-native browser demo is not implemented yet; run './scripts/k3d test --harness openclaw' for the isolated real model-turn proof"
+fi
+
 [ "$action" != demo ] || prompt_openai_api_key
 
 for command in node k3d kubectl; do
@@ -190,7 +241,47 @@ unset OCC_TEST_KUBERNETES_CODEX_IMAGE
 unset OCC_TEST_PRODUCTION_CONTROLLER_IMAGE
 
 state_base="${XDG_STATE_HOME:-${HOME}/.local/state}"
-state_dir="${OCC_K3D_STATE_DIR:-$state_base/openclaw-enterprise/k3d-$engine-codex}"
+if [ -z "${OCC_K3D_STATE_DIR:-}" ] && [ "$harness_explicit" = "false" ] && [ "$action" = "down" ]; then
+  found_state="false"
+  for candidate_harness in codex openclaw; do
+    candidate_state_dir="$state_base/openclaw-enterprise/k3d-$engine-$candidate_harness"
+    if [ -f "$candidate_state_dir/state.json" ] || [ -f "$candidate_state_dir/demo.json" ]; then
+      found_state="true"
+      "$script_dir/k3d" down --harness "$candidate_harness"
+    fi
+  done
+  if [ "$found_state" = "false" ]; then
+    echo "$engine_label-backed k3d environments are already down."
+  fi
+  exit 0
+fi
+
+if [ -z "${OCC_K3D_STATE_DIR:-}" ] && [ "$harness_explicit" = "false" ] && [ "$action" = "copy" ]; then
+  active_demo_harness=""
+  copy_demo_key="consolePassword"
+  [ "$value_field" != openclaw-password ] || copy_demo_key="gatewayPassword"
+  for candidate_harness in codex openclaw; do
+    candidate_demo="$state_base/openclaw-enterprise/k3d-$engine-$candidate_harness/demo.json"
+    if [ -s "$candidate_demo" ] && node -e '
+      const { readFileSync } = require("node:fs");
+      const state = JSON.parse(readFileSync(process.argv[1], "utf8"));
+      const field = process.argv[2];
+      if (typeof state[field] !== "string" || state[field].length === 0) process.exit(1);
+      const processId = Number(state.processId);
+      if (!Number.isSafeInteger(processId) || processId <= 0) process.exit(1);
+      try { process.kill(processId, 0); } catch { process.exit(1); }
+    ' "$candidate_demo" "$copy_demo_key"; then
+      [ -z "$active_demo_harness" ] ||
+        fail "multiple active k3d demos have passwords; pass --harness codex or --harness openclaw"
+      active_demo_harness="$candidate_harness"
+    fi
+  done
+  if [ -n "$active_demo_harness" ]; then
+    harness="$active_demo_harness"
+  fi
+fi
+
+state_dir="${OCC_K3D_STATE_DIR:-$state_base/openclaw-enterprise/k3d-$engine-$harness}"
 case "$state_dir" in
   /*) ;;
   *) fail "OCC_K3D_STATE_DIR must be absolute" ;;
@@ -228,7 +319,7 @@ validate_prepared_environment() {
   node -e '
     const { readFileSync } = require("node:fs");
     const { resolve } = require("node:path");
-    const [statePath, environmentPath, repositoryRoot] = process.argv.slice(1);
+    const [statePath, environmentPath, repositoryRoot, expectedLane] = process.argv.slice(1);
     const state = JSON.parse(readFileSync(statePath, "utf8"));
     const reject = (message) => {
       console.error(`k3d: ${message}`);
@@ -242,7 +333,7 @@ validate_prepared_environment() {
     ) {
       reject("prepared state belongs to another repository checkout");
     }
-    if (state.lane !== "gateway-routing") reject("prepared state is not for gateway routing");
+    if (state.lane !== expectedLane) reject(`prepared state is not for ${expectedLane}`);
     if (!state.prefix?.startsWith("openclaw-ci-") || !Array.isArray(state.resources)) {
       reject("prepared state has invalid ownership metadata");
     }
@@ -275,7 +366,7 @@ validate_prepared_environment() {
     ) {
       reject("prepared environment does not select the owned k3d cluster");
     }
-  ' "$state_file" "$env_file" "$repo_root"
+  ' "$state_file" "$env_file" "$repo_root" "$prepared_lane"
 }
 
 release_lifecycle_lock() {
@@ -518,15 +609,15 @@ if [ "$action" = "reset" ]; then
   if [ ! -f "$state_file" ] || [ ! -f "$env_file" ] || [ ! -f "$ready_file" ]; then
     fail "prepared state is unavailable; run './scripts/k3d' first"
   fi
-  [ "$(load_state_lane)" = gateway-routing ] ||
-    fail "prepared state predates workspace routing; run './scripts/k3d down' before retrying"
+  [ "$(load_state_lane)" = "$prepared_lane" ] ||
+    fail "prepared state is not for the selected Harness; run './scripts/k3d down --harness $harness' before retrying"
   validate_prepared_environment
   load_environment
   rm -f "$ready_file"
   info "Removing test namespaces from the owned k3d cluster."
   while IFS= read -r namespace; do
     case "$namespace" in
-      oce-production-* | oce-ns-* | openclaw-ci-seccomp-*)
+      oce-production-* | oce-openshell-* | oce-ns-* | oce-??????????????? | oce-???????????????-gateway | openclaw-ci-seccomp-*)
         "$kubectl_bin" \
           --kubeconfig "$OCC_TEST_KUBERNETES_KUBECONFIG" \
           --context "$OCC_TEST_KUBERNETES_CONTEXT" \
@@ -553,6 +644,17 @@ fi
 
 [ -n "${OPENAI_API_KEY:-}" ] || fail "OPENAI_API_KEY is required for the real model turn"
 
+openclaw_source_commit=""
+if [ "$harness" = "openclaw" ]; then
+  openclaw_source="${OCC_K3D_OPENCLAW_SOURCE:-$repo_root/../openclaw}"
+  [ -f "$openclaw_source/Dockerfile" ] ||
+    fail "OCC_K3D_OPENCLAW_SOURCE must select an OpenClaw source checkout"
+  openclaw_source_commit="$(git -C "$openclaw_source" rev-parse HEAD)" ||
+    fail "OpenClaw source revision is unavailable"
+  export OCC_K3D_OPENCLAW_SOURCE="$openclaw_source"
+  export OCC_K3D_OPENCLAW_COMMIT="$openclaw_source_commit"
+fi
+
 NODE_BASE_IMAGE="$(sed -n 's/^ARG NODE_BASE_IMAGE=//p' deploy/runtime/Dockerfile | head -1)"
 export NODE_BASE_IMAGE
 [ -n "$NODE_BASE_IMAGE" ] || fail "deploy/runtime/Dockerfile does not declare NODE_BASE_IMAGE"
@@ -563,13 +665,13 @@ if [ ! -f "$state_file" ]; then
     "$container_bin" pull "$NODE_BASE_IMAGE"
   fi
   node scripts/ci/prepare.mjs \
-    --lane gateway-routing \
+    --lane "$prepared_lane" \
     --state "$state_file" \
     --github-env "$env_file"
   info "Creating and migrating the isolated Kubernetes test database."
   node scripts/ci/prepare.mjs \
-    --lane gateway-routing \
-    --file tests/integration/harness-topology-k3d-routing-real.test.mjs \
+    --lane "$prepared_lane" \
+    --file "$integration_file" \
     --state "$state_file" \
     --github-env "$env_file"
   touch "$ready_file"
@@ -577,8 +679,8 @@ elif [ -f "$reset_file" ] && [ ! -f "$ready_file" ]; then
   info "Creating and migrating a fresh isolated Kubernetes test database."
   : > "$env_file"
   node scripts/ci/prepare.mjs \
-    --lane gateway-routing \
-    --file tests/integration/harness-topology-k3d-routing-real.test.mjs \
+    --lane "$prepared_lane" \
+    --file "$integration_file" \
     --state "$state_file" \
     --github-env "$env_file"
   touch "$ready_file"
@@ -586,13 +688,17 @@ elif [ -f "$reset_file" ] && [ ! -f "$ready_file" ]; then
 elif [ ! -f "$env_file" ] || [ ! -f "$ready_file" ]; then
   fail "preparation state is incomplete; run './scripts/k3d down' before retrying"
 else
-  [ "$(load_state_lane)" = gateway-routing ] ||
-    fail "prepared state predates workspace routing; run './scripts/k3d down' before retrying"
+  [ "$(load_state_lane)" = "$prepared_lane" ] ||
+    fail "prepared state is not for the selected Harness; run './scripts/k3d down --harness $harness' before retrying"
   info "Reusing the prepared cluster, PostgreSQL database, and runtime images."
 fi
 
 validate_prepared_environment
 load_environment
+
+if [ -n "$openclaw_source_commit" ] && [ "${OCC_K3D_OPENCLAW_COMMIT:-}" != "$openclaw_source_commit" ]; then
+  fail "prepared native OpenClaw image belongs to another source revision; run './scripts/k3d down --harness openclaw'"
+fi
 
 [ -n "${OCC_TEST_PRODUCTION_CONTROLLER_IMAGE:-}" ] ||
   fail "prepared state predates the in-cluster OCC API; run './scripts/k3d down' before retrying"
@@ -601,15 +707,25 @@ if [ "$action" = "demo" ]; then
   remove_stale_demo_state restart
   printf '{"processId":"%s"}\n' "$$" > "$demo_file"
   export OCC_K3D_DEMO_STATE="$demo_file"
+  export OCC_K3D_HARNESS="$harness"
   node scripts/k3d-demo.mjs
   exit 0
 fi
 
-info "Running the dedicated Codex gateway-routing integration case."
-node \
-  --test \
-  --test-name-pattern='production dedicated Codex consumes Envoy-routed workspace files through OCC' \
-  tests/integration/harness-topology-k3d-routing-real.test.mjs
-
-echo "Dedicated Codex gateway-routing integration passed."
+if [ "$harness" = "openclaw" ]; then
+  info "Running the dedicated native OpenClaw integration through OpenShell."
+  export OCC_TEST_OPENSHELL_SECRET_PROJECTION=1
+  export OCC_TEST_OPENSHELL_HARNESS=openclaw
+  node \
+    --test \
+    tests/integration/sandbox-driver-openshell-k3d-real.test.mjs
+  echo "Dedicated native OpenClaw with OpenShell integration passed."
+else
+  info "Running the dedicated Codex gateway-routing integration case."
+  node \
+    --test \
+    --test-name-pattern='production dedicated Codex consumes Envoy-routed workspace files through OCC' \
+    tests/integration/harness-topology-k3d-routing-real.test.mjs
+  echo "Dedicated Codex gateway-routing integration passed."
+fi
 echo "Clean the prepared environment with: ./scripts/k3d down"

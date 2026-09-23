@@ -8,8 +8,8 @@ last_updated_session: 01a0e441-02f9-70b2-ad45-0a1a5049954a
 
 ## Overview
 
-The Kubernetes Compute Driver delegates a dedicated Codex Harness to the
-selected OpenShell Sandbox Driver. One deployment-paired OpenShell Gateway uses
+The Kubernetes Compute Driver delegates dedicated Codex and native OpenClaw
+Harnesses to the selected OpenShell Sandbox Driver. One deployment-paired OpenShell Gateway uses
 an explicitly configured workspace mode. Operator mode is implemented: for each
 OCC Namespace, the Driver labels the Kubernetes namespace, reconciles rendered
 workspace-chart resources, and creates or adopts an OpenShell Workspace with
@@ -58,13 +58,17 @@ graph TD
   G -- "no" --> H["<b>Create Sandbox</b><br/>Providers and exposure"]
   H --> I{"<b>Native projections</b><br/>Supported?"}
   I -- "no: stock v0.1.0" --> R
-  I -. "verification bridge" .-> J["<b>Sandbox ready</b><br/>App-server route"]
+  I -. "verification bridge" .-> V{"<b>Harness</b><br/>Selected runtime"}
+  V -- "Codex" --> J["<b>Sandbox ready</b><br/>App-server route"]
   J --> K["<b>Verify route</b><br/>Protected 401"]
   K --> L["<b>Run model turn</b><br/>Sandbox loopback"]
+  V -- "OpenClaw" --> T["<b>Sandbox ready</b><br/>No inbound exposure"]
+  T --> U["<b>Run model turn</b><br/>Outbound enrolled worker"]
   J --> M["<b>Wait for Harness</b><br/>Compute readiness"]
   M --> S{"<b>Attachment status</b><br/>All ready?"}
   S -- "failed, withheld, revoked" --> R
   S -- "ready" --> N["<b>Delete Sandbox</b><br/>Revision cleanup"]
+  T --> M
   N --> O["<b>Delete Workspace</b><br/>Namespace cleanup"]
   O --> P["<b>Delete Namespace</b><br/>Compute cleanup"]
 
@@ -73,8 +77,8 @@ graph TD
   classDef gate fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
   classDef blocked fill:#F3F4F6,stroke:#98A2AE,color:#44505F,stroke-width:1px
   class A,B,F state
-  class D,E,Q,H,J,K,L,M,N,O,P operation
-  class C,G,I,S gate
+  class D,E,Q,H,J,K,L,M,N,O,P,T,U operation
+  class C,G,I,S,V gate
   class X,R blocked
   linkStyle default stroke:#8B949E,stroke-width:1px
 ```
@@ -177,7 +181,7 @@ immutable revision to OpenShell instead of creating the Deployment itself.
 
 `apps/controller/src/drivers/sandbox/openshell.ts:provisionHarness`
 
-OpenShell accepts only dedicated Codex revisions pinned to the selected Driver.
+OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the selected Driver.
 It builds filesystem, process, and network policy plus Kubernetes driver config.
 Network TLS, enforcement, and access spellings must be own keys in the Driver's
 allowlists before they are converted to the exact `v0.1.0` protobuf enums.
@@ -185,7 +189,7 @@ It rejects inherited object names and the old `passthrough` TLS spelling,
 which v0.1.0 defines as an automatic inspection alias; use `skip` instead. Each network policy also requires at
 least one executable path and sends those binary identities with its endpoints.
 
-The regular Codex requirements still contain the Secret-backed
+The regular Harness requirements still contain the Secret-backed
 `APP_SERVER_TOKEN`. `environment` rejects it before any gateway mutation, so the
 candidate revision remains inactive. Requests without such entries continue.
 `sandboxProviders` appends each attachment to the static `providers` list and
@@ -208,11 +212,12 @@ not use this compatibility configuration.
 
 The client sends the stable Sandbox name, labels, annotations, spec, and a
 `workspace_scope` containing the Namespace Workspace. It also sends the
-revision's UUID as `request_id` and an unnamed `service_exposures` entry for the
-literal `APP_SERVER_PORT`. OpenShell registers the endpoint during Create and
-returns its URL in `service_urls`; replaying the same Create request returns the
-same result. The Driver requires a valid route for the unnamed exposure before
-it returns the stable Sandbox reference. A Sandbox that predates the replayable
+revision's UUID as `request_id`. Codex includes an unnamed `service_exposures`
+entry for the literal `APP_SERVER_PORT`; OpenShell registers that endpoint
+during Create and returns its URL in `service_urls`. Native OpenClaw supplies no
+service exposure because its enrolled worker connects outbound to the Gateway,
+and the Driver rejects an unexpected returned URL. Replaying the same Create
+request returns the same result. A Sandbox that predates the replayable Codex
 request fails explicitly rather than receiving a separate post-create mutation.
 Stock `v0.1.0` still lacks the exact projected identity and volume support
 required by the request, including the immutable plugin-runtime ConfigMap
@@ -291,6 +296,9 @@ Kubernetes Compute delete the Kubernetes namespace.
   `--pair-if-needed` and `--commands` options required by the test.
 - `OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
   identifies the current fail-closed boundary.
+- Set `OCC_TEST_OPENSHELL_HARNESS=openclaw` to replace the Codex route and
+  loopback checks with a native worker model turn through its outbound Gateway
+  connection and verification that no inbound Harness service exists.
 
 ## Related docs
 
@@ -309,6 +317,7 @@ Kubernetes Compute delete the Kubernetes namespace.
 - 2026-09-28 00:34: Restored Compose defaults and explicit Kubernetes-only startup. (01a0e441-02f9-70b2-ad45-0a1a5049954a - 201f31d511464133f06e0526bb5545ed1cb27e25)
 
 - 2026-09-26 14:29: Documented the shared `openshell` Backend, credential-source attachments in Sandbox creation, attachment readiness before activation, and the app-server token as the first remaining stock blocker. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 849b2b24111fe237b12da5be1d4b411d3146cefb)
+- 2026-09-25 20:28: Added full-facet native OpenClaw provisioning, its outbound-only Harness connection, and the selectable real model-turn proof. (authoring-run/aeb3824d-50c3-4438-8684-4f7d993c09d6 - a940efa1cf7deff44f14407851827c8049926ec9)
 - 2026-09-25 12:23: Documented the selectable Compose control plane while preserving the operator Workspace lifecycle and Kubernetes-only default. (authoring-run/a81f3e71-1c8e-4692-8e2e-d462ddacc10b - 64ab72aed5c4926e4a2080ade91d785e531801a2)
 - 2026-09-25 09:50: Updated the verified source, images, wire fixture, and Helm value mapping for OpenShell v0.1.0, preserved stock Secret-projection rejection, and kept Envoy on the disposable cluster's one-node fixture selector. (authoring-run/acf300be-0710-4283-ae22-5f088cac0b54 - 64ab72aed5c4926e4a2080ade91d785e531801a2)
 - 2026-09-24 16:34: Restricted the unauthenticated development Gateway to the OCE worker and OpenShell supervisor callback path, with tenant egress limited to supervisor Pods. (authoring-run/285e1867-ba73-4a0f-ae7a-e6f6bf79d5d4 - 7019738b86395a211e5b999a433f0ffaef101cdd)

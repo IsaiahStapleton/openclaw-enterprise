@@ -22,6 +22,7 @@ import {
   createOpenShellKubernetesFixture,
   createOpenShellServiceLoopbackLookup,
   openShellAgentName,
+  openShellGatewayName,
   openshellHash as hash,
 } from "../helpers/openshell-kubernetes-real.mjs";
 import {
@@ -136,6 +137,7 @@ const {
   assertGatewayBootstrapPolicies,
   assertNoSecretBytes,
   requestCodexTurnFromOpenShellHarnessPod,
+  startGatewayPortForward,
 } = fixture;
 
 async function createScopedController(context, identifier, platformNamespace, kubeconfig) {
@@ -294,6 +296,40 @@ function nativeCodexConfiguration(gatewayAuth) {
     allow: ["read", "write", "edit", "exec"],
     fs: { workspaceOnly: true },
   };
+  return configuration;
+}
+
+function nativeOpenClawConfiguration(gatewayAuth) {
+  const configuration = createHarnessConfiguration("openclaw", providerModel);
+  configuration.models.providers.openai.models[0].input = ["text", "image"];
+  configuration.secrets = {
+    providers: {
+      model: {
+        source: "env",
+        allowlist: ["OPENAI_API_KEY"],
+      },
+    },
+  };
+  configuration.models.providers.openai.apiKey = {
+    source: "env",
+    provider: "model",
+    id: "OPENAI_API_KEY",
+  };
+  if (gatewayAuth !== undefined) {
+    configuration.gateway = {
+      ...configuration.gateway,
+      auth: {
+        ...gatewayAuth.auth,
+        password: {
+          source: "env",
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_PASSWORD",
+        },
+      },
+      allowRealIpFallback: gatewayAuth.allowRealIpFallback,
+      trustedProxies: gatewayAuth.trustedProxies,
+    };
+  }
   return configuration;
 }
 
@@ -1463,13 +1499,13 @@ function createIntegrationSandboxDriverFactory(
       capability: "sandbox",
       implementation: selection.implementation,
       facets: Object.freeze(["networking", "filesystem", "process"]),
-      configureAgent(configuration) {
+      configureAgent(configuration, harness) {
         // Configuration admission performs no gateway I/O.
         return new OpenShellSandboxDriver(selection.configuration, {
           id: selection.id,
           implementation: "openshell",
           backend: backendFor(undefined),
-        }).configureAgent(configuration);
+        }).configureAgent(configuration, harness);
       },
       async ensureNamespace(context) {
         try {
@@ -1653,7 +1689,7 @@ function withFirstPrepareRevisionFailureDiagnostic(computeDriver) {
 
 async function prepareProductionInstallation(
   context,
-  { expectUnsupportedProjection = false } = {},
+  { expectUnsupportedProjection = false, harnessId = "codex" } = {},
 ) {
   const kubeconfig = await validateOpenShellPrerequisites();
   const identifier = randomUUID();
@@ -1985,7 +2021,10 @@ async function prepareProductionInstallation(
 
   const agentConfiguration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
-    values: nativeCodexConfiguration(workspaceGateway.nativeOptions.gatewayAuth),
+    values:
+      harnessId === "openclaw"
+        ? nativeOpenClawConfiguration(workspaceGateway.nativeOptions.gatewayAuth)
+        : nativeCodexConfiguration(workspaceGateway.nativeOptions.gatewayAuth),
   });
   assert.equal(agentConfiguration.status, 201, JSON.stringify(agentConfiguration.error));
   const agent = await request("POST", `/namespaces/${namespaceId}/agents`, {
@@ -2028,11 +2067,20 @@ async function prepareProductionInstallation(
   );
   assert.equal(deployed.status, 202, JSON.stringify(deployed.error));
   assert.equal(deployed.data.harness.mode, "dedicated");
-  assert.equal(
-    deployed.data.configuration.plugins.entries.codex.config.appServer.sandbox,
-    "danger-full-access",
-    "OCC must freeze OpenShell-selected Codex revisions with the inner sandbox disabled.",
-  );
+  assert.equal(deployed.data.harness.id, harnessId);
+  if (harnessId === "codex") {
+    assert.equal(
+      deployed.data.configuration.plugins.entries.codex.config.appServer.sandbox,
+      "danger-full-access",
+      "OCC must freeze OpenShell-selected Codex revisions with the inner sandbox disabled.",
+    );
+  } else {
+    assert.equal(
+      deployed.data.configuration.plugins?.entries?.codex,
+      undefined,
+      "OpenShell must not inject Codex configuration into a native OpenClaw revision.",
+    );
+  }
 
   assert.deepEqual(deployed.data.harnessAuth, agent.data.harnessAuth);
   if (expectUnsupportedProjection) {
@@ -2098,7 +2146,9 @@ async function prepareProductionInstallation(
     "OpenShell integration: provider Harness ready; checking ownership and mounts.\n",
   );
   await assertProviderOwnedHarness(placement, deployed.data, sandbox, harnessPod);
-  assertBridgedWorkspaceMounts(harnessPod);
+  if (harnessId === "codex") {
+    assertBridgedWorkspaceMounts(harnessPod);
+  }
   await assertBridgedServicePrincipalToken(
     placement,
     harnessPod,
@@ -2121,13 +2171,15 @@ async function prepareProductionInstallation(
       pod.metadata.labels?.["openclaw.dev/agent"] === agent.data.id,
   );
   assert.equal(gatewayPods.length, 1, "the Compute-owned Agent gateway must still be separate.");
-  const agentService = await resource("service", agentServiceName, placement);
-  assert.deepEqual(agentService.spec.selector, {
-    "openclaw.dev/agent": agent.data.id,
-    "openclaw.dev/namespace": namespaceId,
-    "openclaw.dev/revision": deployed.data.id,
-    "openclaw.dev/workload-role": "agent",
-  });
+  if (harnessId === "codex") {
+    const agentService = await resource("service", agentServiceName, placement);
+    assert.deepEqual(agentService.spec.selector, {
+      "openclaw.dev/agent": agent.data.id,
+      "openclaw.dev/namespace": namespaceId,
+      "openclaw.dev/revision": deployed.data.id,
+      "openclaw.dev/workload-role": "agent",
+    });
+  }
   return {
     request,
     placement,
@@ -2136,9 +2188,45 @@ async function prepareProductionInstallation(
     revision: deployed.data,
     harnessPod,
     sandbox,
+    gatewayPlacement,
+    gatewayPod: gatewayPods[0],
     harnessServiceUrl: createSandboxDriver.harnessServiceUrls.get(deployed.data.id),
     appServerToken: transport.appServerToken,
   };
+}
+
+async function requestNativeOpenClawTurn(context, topology) {
+  const passwordSecret = await resource(
+    "secret",
+    `gateway-password-${hash(topology.agent.id)}`,
+    topology.gatewayPlacement,
+  );
+  const gatewayPassword = Buffer.from(passwordSecret.data["gateway-password"], "base64").toString();
+  const forwarding = await startGatewayPortForward(
+    topology.gatewayPlacement,
+    openShellGatewayName(topology.agent.id),
+  );
+  context.after(() => forwarding.stop());
+  const nonce = `OCC-OPENSHELL-NATIVE-${randomUUID()}`;
+  const response = await fetch(`${forwarding.url}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${gatewayPassword}`,
+      "content-type": "application/json",
+      "x-openclaw-session-key": `openshell-native-${randomUUID()}`,
+    },
+    body: JSON.stringify({
+      model: "openclaw/default",
+      stream: false,
+      messages: [{ role: "user", content: `Reply with exactly ${nonce}.` }],
+    }),
+    signal: AbortSignal.timeout(180_000),
+  });
+  const body = await response.text();
+  assert.equal(body.includes(process.env.OPENAI_API_KEY), false);
+  assert.equal(body.includes(gatewayPassword), false);
+  assert.equal(response.status, 200, body);
+  assert.match(JSON.parse(body).choices?.[0]?.message?.content ?? "", new RegExp(nonce));
 }
 
 async function assertOpenShellToolFilesystemAndNetworkEnforcement(topology) {
@@ -2393,6 +2481,12 @@ assert.match(
   /^(?:0|1)$/,
   "OCC_TEST_OPENSHELL_SECRET_PROJECTION must be 0 or 1.",
 );
+const selectedHarness = process.env.OCC_TEST_OPENSHELL_HARNESS ?? "codex";
+assert.match(
+  selectedHarness,
+  /^(?:codex|openclaw)$/,
+  "OCC_TEST_OPENSHELL_HARNESS must be codex or openclaw.",
+);
 
 test(
   "OpenShell enforces the selected Secret projection contract",
@@ -2400,12 +2494,27 @@ test(
   async (context) => {
     if (secretProjectionMode === "1") {
       process.stderr.write("OpenShell integration: selected positive projection proof.\n");
-      const topology = await prepareProductionInstallation(context);
+      const topology = await prepareProductionInstallation(context, {
+        harnessId: selectedHarness,
+      });
       assert.equal(
         topology.harnessPod.spec.serviceAccountName,
         openShellAgentName(topology.agent.id),
       );
       assert.ok(topology.sandbox.metadata.name);
+      if (selectedHarness === "openclaw") {
+        assert.equal(
+          topology.harnessServiceUrl,
+          undefined,
+          "native OpenClaw must not request an inbound OpenShell service exposure.",
+        );
+        process.stderr.write(
+          "OpenShell integration: starting a real native worker model turn through Gateway.\n",
+        );
+        await requestNativeOpenClawTurn(context, topology);
+        await assertEmbeddedOpenShellFailsClosed(topology);
+        return;
+      }
       process.stderr.write(
         "OpenShell integration: checking create-time service exposure authentication boundary.\n",
       );

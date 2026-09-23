@@ -7,7 +7,8 @@ activates admitted Agent revisions. It runs separately from the OpenClaw Control
 Driver. The default development Docker Compute Driver creates one Docker
 network per Namespace. It rejects the Harness authentication required by the
 public deployment API and cannot deploy Agents. Select Kubernetes to deploy
-Agents locally; it supports embedded OpenClaw and dedicated Codex. Reviewed
+Agents locally; it supports embedded OpenClaw, dedicated Codex, and dedicated
+native OpenClaw when a full-facet provisioning SandboxDriver is selected. Reviewed
 bundled or installed Drivers can reconcile their supported operations in both
 development and production. See the [deployment guide](../guides/deploy.md).
 

@@ -12,11 +12,16 @@ const execute = promisify(execFile);
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const preparedPrefix = "openclaw-ci-test";
 
-function preparedState(root = repositoryRoot, version = 1, owner = preparedPrefix) {
+function preparedState(
+  root = repositoryRoot,
+  version = 1,
+  owner = preparedPrefix,
+  lane = "gateway-routing",
+) {
   return {
     version,
     repositoryRoot: root,
-    lane: "gateway-routing",
+    lane,
     prefix: preparedPrefix,
     resources: [
       {
@@ -50,17 +55,22 @@ async function runLauncher(
     foreignState = false,
     stateVersion = 1,
     resourceOwner = "openclaw-ci-test",
+    preparedHarness,
+    ambiguousDemo = false,
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), `oce-k3d-${engine}-launcher-`));
   context.after(() => rm(root, { recursive: true, force: true }));
   const bin = join(root, "bin");
-  const state = join(root, "state", "openclaw-enterprise", `k3d-${engine}-codex`);
+  const action = args[0];
+  const harnessOption = args.indexOf("--harness");
+  const selectedHarness = harnessOption === -1 ? "codex" : args[harnessOption + 1];
+  const stateHarness = preparedHarness ?? selectedHarness;
+  const state = join(root, "state", "openclaw-enterprise", `k3d-${engine}-${stateHarness}`);
   const invocation = join(root, "node-invocation.json");
   const prepareCount = join(root, "prepare-count");
   const clipboard = join(root, "clipboard");
   await mkdir(bin);
-  const action = args[0];
 
   const command = async (name, source) => {
     const path = join(bin, name);
@@ -68,6 +78,7 @@ async function runLauncher(
     await chmod(path, 0o700);
   };
   await command("uname", `#!/bin/sh\nprintf '${platform}\\n'\n`);
+  await command("git", `#!/bin/sh\nprintf '${"a".repeat(40)}\\n'\n`);
   await command(clipboardCommand, `#!/bin/sh\n/usr/bin/tee '${clipboard}' >/dev/null\n`);
 
   let expectedDockerHost = "";
@@ -131,28 +142,33 @@ exit 91
     `#!/bin/sh
 if [ "$1" = -e ]; then exec '${process.execPath}' "$@"; fi
 if printf '%s' "$*" | grep -q 'scripts/ci/prepare.mjs'; then
-  printf '%s' "$*" | grep -q -- '--lane gateway-routing' || exit 93
+  printf '%s' "$*" | grep -q -- '--lane ${selectedHarness === "openclaw" ? "openshell" : "gateway-routing"}' || exit 93
   [ -z "$OCC_TEST_KUBERNETES_GATEWAY_IMAGE" ] || exit 92
   [ -z "$OCC_TEST_KUBERNETES_AGENT_IMAGE" ] || exit 92
   [ -z "$OCC_TEST_KUBERNETES_RUNTIME_IMAGE" ] || exit 92
   [ -z "$OCC_TEST_KUBERNETES_CODEX_IMAGE" ] || exit 92
   [ -z "$OCC_TEST_PRODUCTION_CONTROLLER_IMAGE" ] || exit 92
   [ -n "$NODE_BASE_IMAGE" ] || exit 94
+  [ '${selectedHarness}' != openclaw ] || [ "$OCC_K3D_OPENCLAW_SOURCE" = '${join(root, "openclaw-source")}' ] || exit 95
+  [ '${selectedHarness}' != openclaw ] || [ "$OCC_K3D_OPENCLAW_COMMIT" = '${"a".repeat(40)}' ] || exit 96
   count="$(cat '${prepareCount}' 2>/dev/null || printf '0')"
   count="$((count + 1))"
   printf '%s\\n' "$count" > '${prepareCount}'
   mkdir -p '${state}'
-  printf '%s\\n' '${JSON.stringify(preparedState())}' > '${join(state, "state.json")}'
+  printf '%s\\n' '${JSON.stringify(preparedState(repositoryRoot, 1, preparedPrefix, selectedHarness === "openclaw" ? "openshell" : "gateway-routing"))}' > '${join(state, "state.json")}'
   printf '%s\n' \
     'OCC_TEST_PRODUCTION_CONTROLLER_IMAGE=localhost/controller@sha256:${"e".repeat(64)}' \
     'OCC_TEST_KUBERNETES_KUBECONFIG=/private/demo/kubeconfig' \
     'OCC_TEST_KUBERNETES_CONTEXT=k3d-demo' > '${join(state, "env")}'
+  if [ -n "$OCC_K3D_OPENCLAW_COMMIT" ]; then
+    printf 'OCC_K3D_OPENCLAW_COMMIT=%s\n' "$OCC_K3D_OPENCLAW_COMMIT" >> '${join(state, "env")}'
+  fi
   exit 0
 fi
 if printf '%s' "$*" | grep -q 'scripts/ci/reset-k3d-model.mjs'; then exit 0; fi
 if printf '%s' "$*" | grep -q 'scripts/ci/cleanup.mjs'; then rm -f '${join(state, "state.json")}'; exit 0; fi
 node_args="$*"
-/usr/bin/env -i PATH=/usr/bin:/bin INVOCATION='${invocation}' NODE_ARGS="$node_args" DOCKER_HOST="\${DOCKER_HOST:-}" OCC_DOCKER_BIN="$OCC_DOCKER_BIN" PODMAN_COMPOSE_PROVIDER="\${PODMAN_COMPOSE_PROVIDER:-}" OCC_K3D_DEMO_STATE="\${OCC_K3D_DEMO_STATE:-}" /bin/sh -c 'printf "{\\"args\\":\\"%s\\",\\"dockerHost\\":\\"%s\\",\\"containerBin\\":\\"%s\\",\\"composeProvider\\":\\"%s\\",\\"demoState\\":\\"%s\\"}\\n" "$NODE_ARGS" "$DOCKER_HOST" "$OCC_DOCKER_BIN" "$PODMAN_COMPOSE_PROVIDER" "$OCC_K3D_DEMO_STATE" > "$INVOCATION"'
+/usr/bin/env -i PATH=/usr/bin:/bin INVOCATION='${invocation}' NODE_ARGS="$node_args" DOCKER_HOST="\${DOCKER_HOST:-}" OCC_DOCKER_BIN="$OCC_DOCKER_BIN" PODMAN_COMPOSE_PROVIDER="\${PODMAN_COMPOSE_PROVIDER:-}" OCC_K3D_DEMO_STATE="\${OCC_K3D_DEMO_STATE:-}" OCC_K3D_HARNESS="\${OCC_K3D_HARNESS:-}" OPENSHELL_PROJECTION="\${OCC_TEST_OPENSHELL_SECRET_PROJECTION:-}" OPENSHELL_HARNESS="\${OCC_TEST_OPENSHELL_HARNESS:-}" /bin/sh -c 'printf "{\\"args\\":\\"%s\\",\\"dockerHost\\":\\"%s\\",\\"containerBin\\":\\"%s\\",\\"composeProvider\\":\\"%s\\",\\"demoState\\":\\"%s\\",\\"harness\\":\\"%s\\",\\"openShellProjection\\":\\"%s\\",\\"openShellHarness\\":\\"%s\\"}\\n" "$NODE_ARGS" "$DOCKER_HOST" "$OCC_DOCKER_BIN" "$PODMAN_COMPOSE_PROVIDER" "$OCC_K3D_DEMO_STATE" "$OCC_K3D_HARNESS" "$OPENSHELL_PROJECTION" "$OPENSHELL_HARNESS" > "$INVOCATION"'
 `,
   );
 
@@ -173,6 +189,7 @@ node_args="$*"
           foreignState ? join(root, "another-checkout") : repositoryRoot,
           stateVersion,
           resourceOwner,
+          stateHarness === "openclaw" ? "openshell" : "gateway-routing",
         ),
       )}\n`,
     );
@@ -196,6 +213,24 @@ node_args="$*"
           processId: String(process.pid),
         })}\n`,
       );
+      if (ambiguousDemo) {
+        const otherHarness = stateHarness === "openclaw" ? "codex" : "openclaw";
+        const otherState = join(
+          root,
+          "state",
+          "openclaw-enterprise",
+          `k3d-${engine}-${otherHarness}`,
+        );
+        await mkdir(otherState, { recursive: true });
+        await writeFile(
+          join(otherState, "demo.json"),
+          `${JSON.stringify({
+            consolePassword: "other-development-password",
+            gatewayPassword: "other-gateway-development-password",
+            processId: String(process.pid),
+          })}\n`,
+        );
+      }
     } else if (staleDemo) {
       await writeFile(join(state, "demo.json"), '{"processId":"999999999"}\n');
     }
@@ -204,6 +239,10 @@ node_args="$*"
       await symlink(`${process.pid}:demo`, join(state, "lifecycle.lock"));
     }
   }
+
+  const openclawSource = join(root, "openclaw-source");
+  await mkdir(openclawSource);
+  await writeFile(join(openclawSource, "Dockerfile"), "FROM scratch\n");
 
   const { stdout } = await execute("scripts/k3d", args, {
     env: {
@@ -215,6 +254,7 @@ node_args="$*"
       OCC_TEST_KUBERNETES_RUNTIME_IMAGE: "localhost/stale-runtime@sha256:" + "c".repeat(64),
       OCC_TEST_KUBERNETES_CODEX_IMAGE: "localhost/stale-codex@sha256:" + "d".repeat(64),
       OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: "localhost/stale-controller@sha256:" + "e".repeat(64),
+      OCC_K3D_OPENCLAW_SOURCE: openclawSource,
       XDG_STATE_HOME: join(root, "state"),
       PATH: clipboardCommand === "pbcopy" ? `${bin}:/usr/bin:/bin` : `${bin}:/bin`,
     },
@@ -239,24 +279,49 @@ node_args="$*"
 
   const recorded = JSON.parse(await readFile(invocation, "utf8"));
   if (action === "test") {
-    assert.match(recorded.args, /--test-name-pattern=production dedicated Codex consumes Envoy/);
-    assert.match(recorded.args, /tests\/integration\/harness-topology-k3d-routing-real\.test\.mjs/);
+    if (selectedHarness === "openclaw") {
+      assert.match(
+        recorded.args,
+        /tests\/integration\/sandbox-driver-openshell-k3d-real\.test\.mjs/,
+      );
+      assert.equal(recorded.openShellProjection, "1");
+      assert.equal(recorded.openShellHarness, "openclaw");
+    } else {
+      assert.match(recorded.args, /--test-name-pattern=production dedicated Codex consumes Envoy/);
+      assert.match(
+        recorded.args,
+        /tests\/integration\/harness-topology-k3d-routing-real\.test\.mjs/,
+      );
+    }
     assert.equal(recorded.demoState, "");
   } else {
     assert.equal(recorded.args, "scripts/k3d-demo.mjs");
     assert.equal(recorded.demoState, join(state, "demo.json"));
+    assert.equal(recorded.harness, selectedHarness);
   }
   assert.equal(recorded.dockerHost, expectedDockerHost);
   assert.equal(recorded.containerBin, join(bin, engine));
   assert.equal(recorded.composeProvider, engine === "podman" ? join(bin, "podman-compose") : "");
   assert.match(stdout, new RegExp(`\\[k3d:${engine}\\]`));
   if (action === "test") {
-    assert.match(stdout, /Dedicated Codex gateway-routing integration passed\./);
+    assert.match(
+      stdout,
+      selectedHarness === "openclaw"
+        ? /Dedicated native OpenClaw with OpenShell integration passed\./
+        : /Dedicated Codex gateway-routing integration passed\./,
+    );
   }
 }
 
 test("k3d defaults to the foreground OpenClaw and OCC console demo", (context) =>
   runLauncher(context, "docker"));
+
+test("k3d demo rejects native OpenClaw until the OpenShell browser path exists", async (context) => {
+  await assert.rejects(
+    runLauncher(context, "docker", ["demo", "--harness", "openclaw"]),
+    /OpenShell-native browser demo is not implemented yet/,
+  );
+});
 
 test("k3d fails immediately without a model credential in non-interactive use", async (context) => {
   await assert.rejects(
@@ -280,6 +345,13 @@ test("k3d reset removes a stale demo marker", async (context) => {
 
 test("k3d down removes a stale demo marker", async (context) => {
   await runLauncher(context, "docker", ["down"], { staleDemo: true });
+});
+
+test("k3d down discovers native OpenClaw state without a Harness flag", async (context) => {
+  const output = await runLauncher(context, "docker", ["down"], {
+    preparedHarness: "openclaw",
+  });
+  assert.match(output, /environment removed/);
 });
 
 test("k3d serializes demo, test, reset, and down against an active lifecycle owner", async (context) => {
@@ -338,6 +410,27 @@ test("k3d copy sends sensitive values only to the clipboard", async (context) =>
   assert.doesNotMatch(gatewayPassword.stdout, /gateway-development-password/);
 });
 
+test("k3d password copy discovers an active native OpenClaw demo without a Harness flag", async (context) => {
+  const gatewayPassword = await runLauncher(context, "docker", ["copy", "openclaw-password"], {
+    preparedHarness: "openclaw",
+  });
+  assert.equal(gatewayPassword.stdout, "Copied openclaw-password to the clipboard.\n");
+  assert.equal(gatewayPassword.clipboard, "gateway-development-password");
+
+  const consolePassword = await runLauncher(context, "docker", ["copy", "occ-password"], {
+    preparedHarness: "openclaw",
+  });
+  assert.equal(consolePassword.stdout, "Copied occ-password to the clipboard.\n");
+  assert.equal(consolePassword.clipboard, "development-password");
+});
+
+test("k3d copy requires a Harness flag when multiple demos are active", async (context) => {
+  await assert.rejects(
+    runLauncher(context, "docker", ["copy", "occ-password"], { ambiguousDemo: true }),
+    /multiple active k3d demos have passwords/,
+  );
+});
+
 test("k3d copy supports a Linux Wayland clipboard", async (context) => {
   const password = await runLauncher(context, "docker", ["copy", "occ-password"], {
     platform: "Linux",
@@ -381,6 +474,16 @@ for (const engine of ["podman", "docker"]) {
   test(`${engine} k3d launcher selects the dedicated Codex routing integration`, (context) =>
     runLauncher(context, engine, ["test"]));
 }
+
+test("k3d test selects the dedicated native OpenClaw integration", (context) =>
+  runLauncher(context, "podman", ["test", "--harness", "openclaw"]));
+
+test("k3d rejects an unsupported Harness option", async (context) => {
+  await assert.rejects(
+    runLauncher(context, "docker", ["demo", "--harness", "other"]),
+    /--harness must be codex or openclaw/,
+  );
+});
 
 test("Linux Podman uses its native API socket", (context) =>
   runLauncher(context, "podman", ["test"], { platform: "Linux" }));

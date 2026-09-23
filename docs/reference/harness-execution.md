@@ -1,9 +1,9 @@
 # Harness execution
 
 A Harness calls the model and runs tools for an Agent. OpenClaw Enterprise supports
-two: OpenClaw runs inside the Agent's gateway; Codex runs in a separate
-workload connected to that gateway. You choose an execution mode on the Agent
-and a compatible model and Harness in its Configuration.
+OpenClaw either inside the Agent's gateway or as a dedicated native worker,
+and Codex as a dedicated runtime. You choose an execution mode on the Agent and
+a compatible model and Harness in its Configuration.
 
 This page explains supported combinations, model authentication, and what a
 replacement can interrupt. For the infrastructure choices, see
@@ -15,6 +15,7 @@ response, follow [Deploy your first Agent](../guides/first-agent.md).
 | Harness  | Agent execution mode | Workloads                                                        |
 | -------- | -------------------- | ---------------------------------------------------------------- |
 | OpenClaw | `embedded`           | One Agent-owned gateway executes the built-in Harness.           |
+| OpenClaw | `dedicated`          | An Agent-owned gateway connects to a paired dedicated Harness.   |
 | Codex    | `dedicated`          | An Agent-owned gateway connects to a separate dedicated Harness. |
 
 Agent creation defaults to `embedded`; an update preserves the existing mode
@@ -85,13 +86,14 @@ queue guarantees.
 The Agent's [harnessAuth binding](agents.md#harness-authentication) is the sole
 model-auth selector. Kubernetes supports these combinations:
 
-| Binding                        | Topology          | Credential consumer                                                                                               |
-| ------------------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `api_key` with an OCC Secret   | Embedded OpenClaw | Combined gateway/Harness receives `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, selected by its native model provider. |
-| `api_key` with an OCC Secret   | Dedicated Codex   | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
-| `codex_pat` with an OCC Secret | Dedicated Codex   | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
-| `chatgpt_service_account`      | Dedicated Codex   | Only Codex receives the account token and forced workspace.                                                       |
-| `credential_source`            | Dedicated Codex   | Codex receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.          |
+| Binding                        | Topology           | Credential consumer                                                                                               |
+| ------------------------------ | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `api_key` with an OCC Secret   | Embedded OpenClaw  | Combined gateway/Harness receives `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, selected by its native model provider. |
+| `api_key` with an OCC Secret   | Dedicated OpenClaw | Only the native Harness receives `OPENAI_API_KEY`.                                                                |
+| `api_key` with an OCC Secret   | Dedicated Codex    | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
+| `codex_pat` with an OCC Secret | Dedicated Codex    | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
+| `chatgpt_service_account`      | Dedicated Codex    | Only Codex receives the account token and forced workspace.                                                       |
+| `credential_source`            | Dedicated Harness  | The Harness receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.    |
 
 Kubernetes workload rendering prepares one explicit login mode and exact Secret
 projections. The selected Sandbox consumes the same already-rendered workload
@@ -119,8 +121,8 @@ remain separate. A dedicated gateway receives no model credential. Model auth
 cannot be supplied through Configuration `secretBindings` or the initial runtime
 credential API; those own gateway credentials and transport/channel setup.
 
-Kubernetes embedded OpenClaw performs one bounded native model probe in the actual gateway
-startup, for both initial and replacement deployments. Embedded activation uses
+Kubernetes OpenClaw performs one bounded native model probe in the process that
+owns model access, for both initial and replacement deployments. Embedded activation uses
 the shared gateway's `Recreate` strategy: cutover can stop the working gateway
 before the replacement validates its credentials. Invalid credentials or a
 provider failure leave the replacement unready and the Agent unavailable until
@@ -179,9 +181,16 @@ metadata instead of trusting payload fields.
 ## Isolation and activation
 
 Each deployed Agent owns its gateway. Embedded execution keeps the Harness in
-that gateway; dedicated execution keeps the Harness separate and authenticates
-the exact gateway-to-Harness connection. Credentials, workload identity, storage,
-and permitted transport depend on the selected Driver and admitted topology.
+that gateway. Dedicated Codex uses a separate Harness Pod. Dedicated OpenClaw
+uses a SandboxDriver-provisioned Harness Pod. The OpenClaw Harness enrolls as a paired node through the routed Gateway, supervises the worker,
+and executes inference plus `exec`, `process`, `read`, `write`, `edit`, and
+`apply_patch` in its own environment. The Gateway retains session admission,
+effective tool policy, authoritative transcripts, and streamed event collection.
+The Gateway container cannot read the model credential or mount the node state;
+the worker receives no gateway service-principal token. Provider failure and a
+missing or disconnected worker fail the runtime-local turn without Gateway
+inference fallback. Credentials, workload identity, storage, and permitted
+transport depend on the selected Driver and admitted topology.
 The [Kubernetes security reference](security.md) defines its concrete credential
 exceptions and enforcement limitations; Docker has its own narrower boundaries.
 
@@ -210,14 +219,18 @@ upstream restriction is documented in
 
 ## Optional sandbox provisioning
 
-The current optional SandboxDriver contract declares supported `networking`,
-`filesystem`, and `process` facets. Startup requires bundled Kubernetes Compute
-when a sandbox is selected. Compute retains platform ownership, identity, gateway,
-and routing; a capable selected SandboxDriver can provision the dedicated Harness.
+The SandboxDriver contract declares supported `networking`, `filesystem`, and
+`process` facets. Startup requires bundled Kubernetes Compute when a sandbox is
+selected. Compute retains platform ownership, identity, gateway, and routing;
+a capable selected SandboxDriver can provision the dedicated Harness. Dedicated
+native OpenClaw requires that provisioning hook and all three facets, and fails
+admission when no qualifying SandboxDriver is selected.
 
-The bundled OpenShell implementation supports dedicated Codex. It configures
+The bundled OpenShell implementation supports dedicated Codex and native
+OpenClaw. It configures
 Codex for external containment instead of nested internal sandboxing. Its
-paired Credential Gateway supplies the model key. The upstream gateway must still
+paired Credential Gateway supplies the model key, and native OpenClaw retains
+its admitted configuration. The upstream gateway must still
 support the app-server token Secret reference and projected workload identity
 required by the admitted workload. Stock OpenShell incompatibilities
 fail explicitly; test bridges do not establish turnkey production support.

@@ -28,8 +28,9 @@ Presets and edited Configuration JSON retain their settings.
 3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
    **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
    **Codex** and also offers **OpenClaw**; Anthropic currently offers only
-   **OpenClaw**. **Execution mode** follows the harness: Dedicated for Codex,
-   Embedded for OpenClaw.
+   **OpenClaw**. Codex requires **Dedicated** execution. OpenAI with OpenClaw
+   supports **Dedicated** or **Embedded** execution; Anthropic OpenClaw uses
+   **Embedded** execution.
    With OpenAI and Codex, choose **OpenAI API key** or **Service Accounts** under
    **Authentication method**. OpenClaw uses the selected provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
@@ -46,9 +47,10 @@ Presets and edited Configuration JSON retain their settings.
    **Reset template** replaces them.
 5. Optional: under **Repository access**, select up to 16 repositories approved
    for this Namespace. Select one authorization level shared by every chosen
-   repository. Kubernetes supports Codex (Dedicated) or OpenClaw (Embedded),
-   without a Sandbox Driver. Use Codex for Slack. Leave repositories unselected
-   for an Agent without repository access.
+   repository. Kubernetes supports Codex (Dedicated), OpenClaw (Dedicated), or
+   OpenClaw (Embedded), without a Sandbox Driver. Use Codex when this Agent also
+   needs Slack. Leave every repository unselected for an ordinary Agent without
+   repository access.
 
 6. If you need Slack, use OpenAI with the **Codex** harness and its channel card.
    Each token menu selects a readable Namespace Secret or **Create new Secret...**.

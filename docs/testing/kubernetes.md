@@ -140,9 +140,10 @@ the PostgreSQL service, cluster, and imported images:
 ./scripts/k3d reset
 ```
 
-Reset deletes only `oce-production-*`, `oce-ns-*`, and
-`openclaw-ci-seccomp-*` Namespaces from the helper-owned cluster. It drops and
-recreates only the database recorded in the helper's private state.
+Reset deletes only known test Namespace shapes, including `oce-production-*`,
+`oce-openshell-*`, managed opaque tenant and Gateway names, `oce-ns-*`, and
+`openclaw-ci-seccomp-*`, from the helper-owned cluster. It drops and recreates
+only the database recorded in the helper's private state.
 
 The default command starts the OCC API in Kubernetes, creates a dedicated Codex
 Agent, and completes a model turn. It serves the OpenClaw Control UI at
@@ -172,13 +173,19 @@ files directly:
 ./scripts/k3d copy occ-password
 ```
 
-`info` reports the engine, state directory, status, connection values, password
-copy commands, and host/container processes. `get` prints a selected non-sensitive
-value; run `./scripts/k3d help` for fields. `copy` sends either password to the
-clipboard with `pbcopy`, `wl-copy`, or `xclip`, never to standard output. The OCC console's Workspace files panel uses
-the same private Envoy route exercised by the focused gateway-routing
-integration. Demo fields become available after the foreground command reports
-readiness. Cluster fields remain available while its prepared state exists.
+`info` reports the selected engine, state directory, preparation status, demo
+status, non-secret connection values, password copy commands, and the live
+host/container processes outside Kubernetes. `get` prints only a selected
+non-sensitive value for shell composition; run
+`./scripts/k3d help` for its available fields. `copy` sends
+`openclaw-password` or `occ-password` directly to the clipboard with `pbcopy`,
+`wl-copy`, or `xclip` and prints only a confirmation; it never writes the
+selected value to standard output. Without `--harness`, `copy` selects the one
+active demo. If both Harness demos are active, pass `--harness codex` or
+`--harness openclaw`. The OCC console's Workspace files panel uses the same
+private Envoy route exercised by the focused gateway-routing integration. Demo
+fields become available after the foreground command reports readiness. Cluster
+fields remain available while its prepared state exists.
 
 To run the dedicated Codex gateway-routing integration instead:
 
@@ -190,12 +197,30 @@ The test proves model turns, OCC workspace access through Envoy, routing
 credential enforcement and rotation, certificate renewal, Pod replacement, and
 workspace retention. It does not cover credential recovery or embedded OpenClaw.
 
+Run the focused dedicated native OpenClaw-with-OpenShell real-model-turn case with:
+
+```sh
+./scripts/k3d test --harness openclaw
+```
+
+This selection prepares the pinned OpenShell lane, builds the sibling
+`../openclaw` checkout, and records its commit with the prepared environment.
+Set `OCC_K3D_OPENCLAW_SOURCE` to another absolute source checkout. Codex and
+native OpenClaw use separate helper-owned state.
+
+The case uses the verification-only pre.7 credential bridge, verifies that the
+provider-owned native Harness has no inbound service exposure, and completes a
+real model turn through the enrolled worker's outbound Gateway connection. See
+[OpenShell testing](openshell.md) for the compatibility boundary.
+
 Remove only resources recorded in the helper's owned state when finished:
 
 ```sh
 ./scripts/k3d down
 ```
 
+Without `--harness`, this removes both helper-owned Harness environments when
+they exist. Pass `--harness codex` or `--harness openclaw` to remove only one.
 If preparation fails, run the same cleanup command before retrying. The helper
 does not use or modify the default kubeconfig, active context, the development
 database on port 55432, or unrelated container-engine resources.
