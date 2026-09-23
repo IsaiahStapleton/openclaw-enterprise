@@ -16,10 +16,11 @@ and real Agent flow before promoting a capability to supported.
 
 ## Plugin policies
 
-**Today** means accepted and emitted by the current OCE translator. **Translation**
-means the harness already exposes the needed policy control. **Integration**
-means existing hooks/approval transport can enforce it with additional wiring
-and metadata. **Runtime work** means a general capability or policy semantics
+**Today** means accepted and emitted at the reviewed OCE snapshot above.
+The implementation tracking below records later work without changing that
+baseline. **Translation** means the harness already exposes the needed policy
+control. **Integration** means existing hooks/approval transport can enforce it
+with additional wiring and metadata. **Runtime work** means a general capability or policy semantics
 still need implementation. All three future categories remain unsupported in
 OCE until integrated and verified.
 
@@ -69,27 +70,41 @@ argument schema or from the model provider.
 
 ## Implement easier policies first
 
+| Slice                                                   | Implementation                                                                                                                                                                                                                                | Status                                          |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Generic native per-tool enablement                      | [OCE #312](https://github.com/openclaw/openclaw-enterprise/pull/312): translate trusted pinned catalog tool identities into native denies, preserving operator restrictions. Diffs remains the only admitted entry.                           | Draft, unmerged; real deployment proof pending. |
+| Native per-tool `always`/`never` and default precedence | [OCE #313](https://github.com/openclaw/openclaw-enterprise/pull/313), stacked on #312: apply explicit tool mode before plugin default, deny unspecified siblings, and keep explicit disablement, install failure, and native denies terminal. | Draft, unmerged; real deployment proof pending. |
+
+Implementation source revisions: #312 `21c77bee`; #313 `d47d7df6`.
+Both use the same generic translator; adding an admitted native plugin requires
+verified package and tool metadata, not a plugin-specific policy branch.
+
 The ordering below is proposed; it does not select a new configuration or
 storage contract. Finish and verify each supported slice before enabling it.
 
 1. **Finish Codex every-call translation.** Complete the existing PR path and
    verify the effective Agent thread preserves its app approval mode/reviewer.
-2. **Add exact per-tool enablement for both drivers.** Reuse native filters and
-   app tool settings. Both OCE catalogs currently return `tools:null`; establish
-   exact tool-to-plugin/app identities first. Keep `enabled:false` terminal,
-   while allowing future explicit exceptions to an enabled plugin's `never`
-   default. Preserve existing native deny rules.
-3. **Add per-tool Codex approval translation and OC human prompting.** Codex
+2. **Finish exact per-tool enablement for both drivers.** Native ownership is
+   established in draft #312 through the trusted pinned catalog's complete tool
+   names. Its policy algorithm applies to every admitted entry and rejects
+   ambiguous native denies. The public catalog stays `tools:null` until truthful
+   action classifications are available. Codex still needs exact tool-to-app
+   identities before translating its native tool settings.
+3. **Finish native per-tool `always`/`never` overrides.** Draft #313 reuses
+   those identities to distinguish a plugin's default denial from explicit disablement. An
+   allowed tool exception must leave unspecified sibling tools denied; plugin
+   or tool `enabled:false`, installation failure, and native denies remain terminal.
+4. **Add per-tool Codex approval translation and OC human prompting.** Codex
    has native controls; OC has reusable approval delivery and wait/resolve APIs.
    OC needs trusted ownership and approval bound to the exact executed call.
    This is integration work, not a new human-approval system.
-4. **Add write/destructive category policies.** Require reliable annotations
+5. **Add write/destructive category policies.** Require reliable annotations
    and conservative handling of unknown values. Preserve tool override →
    stricter applicable category → plugin default precedence. Native OC manifest
    `sideEffecting` does not establish destructive/read-only classification;
    names and missing flags cannot fill that gap. Codex category booleans alone
    cannot express every OCE category mode; compile effective per-tool settings.
-5. **Add native OC annotation-driven `auto` and automatic review.** Separate
+6. **Add native OC annotation-driven `auto` and automatic review.** Separate
    trigger/remembered-grant semantics from reviewer choice. Extend the existing
    hardened reviewer with a native-tool input and prompt; its current inputs are
    shell and board-widget requests. Retain strict parsing, bounded inputs,
