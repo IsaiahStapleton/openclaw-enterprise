@@ -51,12 +51,14 @@ in either mode. The positive scenario uses a test-only operator Job to stage the
 exact Secret values, plugin-runtime files, and projected workload token in
 revision-specific PVC subpaths before OpenShell starts the provider-owned
 Harness. The Driver asks OpenShell to expose the app-server port in the original
-Sandbox Create request, and the test performs the real model turn through the
-returned gateway-routed WebSocket URL. The scenario also requires exact workload
-identity claims, approved mounts and privileges, denied secret exposure, allowed
-and denied tool egress, replacement, and cleanup. It separately checks the OCC
-Agent Service selector; that Service is not the path used for the exposed model
-turn. Missing prerequisites fail rather than skip.
+Sandbox Create request. The test confirms that the returned route reaches the
+protected Codex app server and that pre.7 strips its bearer authorization, so the
+upgrade fails with `401` instead of weakening app-server authentication. It then
+runs the real model turn over the authenticated Pod-loopback endpoint. The
+scenario also requires exact workload identity claims, approved mounts and
+privileges, denied secret exposure, allowed and denied tool egress, replacement,
+and cleanup. It separately checks the OpenClaw Control Plane (OCC) Agent Service
+selector. Missing prerequisites fail rather than skip.
 
 ### Test bridge and upstream prerequisite
 
@@ -70,7 +72,11 @@ Positive mode bridges those shapes only inside this test. Its bootstrap Job
 mounts the production Secret references, immutable `runtime.json` and
 `config.toml` ConfigMap entries, and an audience-bound ServiceAccount token. It
 copies them into private PVC subpaths, and the compatibility request mounts
-those paths read-only in the Sandbox. Production still rejects the original
+those paths read-only in the Sandbox. OpenShell pre.7 also removes the
+`Authorization` header before forwarding an exposed service request, while the
+Codex app server accepts only bearer authorization. The integration therefore
+proves exposed-route reachability and app-server rejection separately from its
+authenticated in-Sandbox model turn. Production still rejects the original
 requirements. See the
 [production contract](../reference/drivers/openshell-sandbox.md#current-upstream-preconditions)
 and the [pre.5 experiment handoff](openshell-pre5-local-experiment.md).
@@ -90,7 +96,7 @@ scoped environment file for this suite.
 | Variable                               | Requirement or default                                                                                                                              |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OCC_TEST_OPENSHELL_K3D_REAL`          | Set to `1` to explicitly opt into the real OpenShell integration.                                                                                   |
-| `OCC_TEST_OPENSHELL_SECRET_PROJECTION` | `0` selects stock fail-closed proof; `1` selects the verification-only pre.7 compatibility proof with a gateway-routed real model turn.             |
+| `OCC_TEST_OPENSHELL_SECRET_PROJECTION` | `0` selects stock fail-closed proof; `1` selects the verification-only pre.7 compatibility proof with exposed-route and real model-turn checks.     |
 | `OPENAI_API_KEY`                       | Existing authorized provider credential for the required real model turn.                                                                           |
 | `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-6-astra`.                                                                                               |
 | `OCC_TEST_KUBERNETES_KUBECONFIG`       | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                                                                  |

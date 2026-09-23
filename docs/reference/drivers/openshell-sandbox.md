@@ -183,11 +183,12 @@ so retries receive the same service URL. The Driver accepts only an HTTP or HTTP
 origin, rewrites its port to the configured gateway endpoint for local
 port-forwards, and requires a valid route before provisioning succeeds.
 
-The positive integration uses that route for its authenticated model turn. This
-proves gateway routing, but does not make its Secret and identity bridge a
-supported deployment path or replace Compute's Agent Service. A Sandbox without
-a replayable Create receipt must be removed; the Driver does not mutate it with
-a later `ExposeService` call.
+OpenShell pre.7 strips `Authorization` before proxying, while Codex accepts only
+bearer authorization. The positive integration therefore expects the protected
+app server's `401` through this route and runs its real model turn on Pod
+loopback. It does not treat the test bridge as supported or replace Compute's
+Agent Service. A Sandbox without a replayable Create receipt must be removed;
+the Driver does not mutate it with a later `ExposeService` call.
 
 ## Kubernetes and admission requirements
 
@@ -239,6 +240,8 @@ require upstream OpenShell to satisfy all of these conditions:
   supported workaround.
 - OpenShell gateway authentication must be bound to the trusted caller and the
   requested Sandbox or Pod identity.
+- OpenShell service routing must securely carry Codex bearer authorization
+  without exposing gateway credentials. Stock pre.7 strips it before proxying.
 
 If any of these conditions are unavailable, OpenShell-selected deployments must
 fail closed instead of launching an unsandboxed or incorrectly credentialed

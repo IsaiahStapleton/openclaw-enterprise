@@ -1,7 +1,9 @@
 import { defaultAgentModel } from "../../apps/controller/src/console/agents/starter-model.mjs";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -128,7 +130,6 @@ const {
   assertGatewayBootstrapPolicies,
   assertNoSecretBytes,
   requestCodexTurnFromOpenShellHarnessPod,
-  requestCodexTurnFromOpenShellService,
 } = fixture;
 
 async function createScopedController(context, identifier, platformNamespace, kubeconfig) {
@@ -1622,16 +1623,29 @@ async function assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology) 
   const retiredSandboxName = `os-${hash(topology.revision.id, 16)}`;
   // The revision becomes active before the worker finishes retiring its predecessor. Observe the
   // provider resources themselves so the assertion stays at the supported lifecycle boundary.
-  const activeService = await resource(
-    "service",
-    openShellAgentName(topology.agent.id),
-    topology.placement,
-  );
-  assert.deepEqual(activeService.spec.selector, {
+  const expectedActiveSelector = {
     "openclaw.dev/agent": topology.agent.id,
     "openclaw.dev/revision": redeployed.data.id,
     "openclaw.dev/workload-role": "agent",
-  });
+  };
+  const activeService = await waitFor(
+    `Agent Service routing to replacement revision ${redeployed.data.id}`,
+    async () => {
+      const observed = await resource(
+        "service",
+        openShellAgentName(topology.agent.id),
+        topology.placement,
+      );
+      return Object.keys(observed.spec.selector ?? {}).length ===
+        Object.keys(expectedActiveSelector).length &&
+        Object.entries(expectedActiveSelector).every(
+          ([name, value]) => observed.spec.selector?.[name] === value,
+        )
+        ? observed
+        : undefined;
+    },
+  );
+  assert.deepEqual(activeService.spec.selector, expectedActiveSelector);
   const sandboxes = await waitFor(
     `retired OpenShell Sandbox ${retiredSandboxName} deletion`,
     async () => {
@@ -1700,6 +1714,35 @@ async function assertEmbeddedOpenShellFailsClosed(topology) {
   );
 }
 
+async function observeExposedCodexAuthenticationBoundary(serviceUrl, appServerToken) {
+  const url = new URL(serviceUrl);
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  return await new Promise((resolve, reject) => {
+    const upgrade = request(url, {
+      headers: {
+        authorization: `Bearer ${appServerToken}`,
+        connection: "Upgrade",
+        upgrade: "websocket",
+        "sec-websocket-key": randomBytes(16).toString("base64"),
+        "sec-websocket-version": "13",
+      },
+    });
+    upgrade.setTimeout(2_000, () => {
+      upgrade.destroy(new Error("OpenShell exposed Codex authentication probe timed out."));
+    });
+    upgrade.on("response", (response) => {
+      response.resume();
+      resolve(response.statusCode);
+    });
+    upgrade.on("upgrade", (response, socket) => {
+      socket.destroy();
+      resolve(response.statusCode);
+    });
+    upgrade.on("error", reject);
+    upgrade.end();
+  });
+}
+
 const secretProjectionMode = process.env.OCC_TEST_OPENSHELL_SECRET_PROJECTION ?? "0";
 assert.match(
   secretProjectionMode,
@@ -1720,27 +1763,33 @@ test(
       );
       assert.ok(topology.sandbox.metadata.name);
       process.stderr.write(
-        "OpenShell integration: starting authenticated real in-Sandbox model turn.\n",
+        "OpenShell integration: checking create-time service exposure authentication boundary.\n",
       );
       assert.match(topology.harnessServiceUrl, /^https?:\/\//);
-      // Prove the create-time endpoint routes through the OpenShell gateway before relying on it
-      // for the authenticated WebSocket model turn. The app server may reject plain HTTP.
+      // OpenShell pre.7 consumes gateway Authorization and strips it before proxying. A 401 from
+      // the protected Codex endpoint proves the route reaches the real app server without weakening
+      // its bearer-token requirement or mistaking an arbitrary non-5xx gateway response for success.
       await waitFor("OpenShell create-time Harness service exposure", async () => {
         try {
-          const response = await fetch(topology.harnessServiceUrl, {
-            headers: { authorization: `Bearer ${topology.appServerToken}` },
-            signal: AbortSignal.timeout(2_000),
-          });
-          return response.status < 500 ? true : undefined;
+          return (await observeExposedCodexAuthenticationBoundary(
+            topology.harnessServiceUrl,
+            topology.appServerToken,
+          )) === 401
+            ? true
+            : undefined;
         } catch {
           return undefined;
         }
       });
+      process.stderr.write(
+        "OpenShell integration: create-time route reached protected Harness; starting authenticated real in-Sandbox model turn.\n",
+      );
       const nonce = `OCC-OPENSHELL-${randomUUID()}`;
-      const modelTurn = await requestCodexTurnFromOpenShellService({
-        appServerUrl: topology.harnessServiceUrl.replace(/^http/, "ws"),
-        appServerToken: topology.appServerToken,
+      const modelTurn = await requestCodexTurnFromOpenShellHarnessPod({
+        namespace: topology.placement,
+        harnessPod: topology.harnessPod.metadata.name,
         providerModel,
+        appServerTokenPath: `${credentialMountPath}/app-server-token`,
         prompt: `Reply with exactly ${nonce}.`,
       });
       assert.match(modelTurn.assistant, new RegExp(nonce));

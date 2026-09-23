@@ -843,18 +843,14 @@ export function createOpenShellKubernetesFixture({
     providerModel,
     prompt,
     appServerUrl,
-    appServerToken,
     appServerTokenPath,
-    localEnvironment,
   }) {
     const script = String.raw`
       const appServerUrl = ${JSON.stringify(appServerUrl)} ?? process.env.APP_SERVER_URL;
       const appServerToken = ${
-        appServerToken !== undefined
-          ? JSON.stringify(appServerToken)
-          : appServerTokenPath === undefined
-            ? "process.env.APP_SERVER_TOKEN"
-            : `require("node:fs").readFileSync(${JSON.stringify(appServerTokenPath)}, "utf8")`
+        appServerTokenPath === undefined
+          ? "process.env.APP_SERVER_TOKEN"
+          : `require("node:fs").readFileSync(${JSON.stringify(appServerTokenPath)}, "utf8")`
       };
       const timeout = setTimeout(() => fail(new Error("Codex harness turn timed out")), 300000);
       const pending = new Map();
@@ -935,14 +931,6 @@ export function createOpenShellKubernetesFixture({
         if (!finished) fail(new Error("Codex harness connection closed before completion"));
       });
     `;
-    if (pod === undefined) {
-      const { stdout } = await execute(process.execPath, ["-e", script], {
-        env: { ...process.env, ...localEnvironment },
-        maxBuffer: 32 * 1024 * 1024,
-        timeout: 360_000,
-      });
-      return JSON.parse(stdout);
-    }
     const containerArguments = container === undefined ? [] : ["--container", container];
     return JSON.parse(
       await kubectl(
@@ -957,22 +945,6 @@ export function createOpenShellKubernetesFixture({
         script,
       ),
     );
-  }
-
-  async function requestCodexTurnFromOpenShellService({
-    appServerUrl,
-    appServerToken,
-    providerModel,
-    prompt,
-  }) {
-    return requestCodexTurnFromPod({
-      providerModel,
-      prompt,
-      localEnvironment: {
-        APP_SERVER_URL: appServerUrl,
-        APP_SERVER_TOKEN: appServerToken,
-      },
-    });
   }
 
   async function requestCodexTurnFromGatewayPod({ namespace, gatewayPod, providerModel, prompt }) {
@@ -1025,7 +997,6 @@ export function createOpenShellKubernetesFixture({
     assertNoSecretBytes,
     requestCodexTurnFromGatewayPod,
     requestCodexTurnFromOpenShellHarnessPod,
-    requestCodexTurnFromOpenShellService,
     startGatewayPortForward,
   };
 }
