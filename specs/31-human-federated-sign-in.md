@@ -13,8 +13,7 @@ existing private-key consumer. OCC reads the authenticated user's numeric ID,
 then discards the returned access and refresh tokens. App permissions govern
 those tokens; sign-in grants no OCE repository access. Changing the client ID
 requires explicit administrator enrollment under the new provider instance.
-See the current [authentication reference](../docs/reference/authentication.md)
-for setup.
+See [the implementation's setup reference](https://github.com/openclaw/openclaw-enterprise/blob/feat/github-human-sign-in-20260922/docs/reference/authentication.md#github-sign-in-for-existing-accounts).
 
 ## Problem and decision
 
