@@ -784,7 +784,7 @@ test("codex seccomp preparation fails closed for unverified Codex versions and f
         execFile,
         codexVersion: "0.153.0",
       }),
-    /reviewed Codex versions: 0\.152\.1, 0\.154\.0/,
+    /reviewed Codex versions: 0\.152\.1, 0\.154\.0, 0\.156\.0/,
   );
   await assert.rejects(
     () =>
@@ -884,7 +884,7 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
         cluster,
         image: immutableImage,
         // The current runtime must still reject unrelated setup failures before node writes.
-        codexVersion: "0.154.0",
+        codexVersion: "0.156.0",
         execFile: execFileForRuntimeDefaultFailure((command, args) => {
           const commandText = `${command} ${args.join(" ")}`;
           assert.match(commandText, /--namespace/);
@@ -921,7 +921,7 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
         image: immutableImage,
         execFile: execFileForRuntimeDefaultFailure((command, args) => {
           const error = new Error(`${command} ${args.join(" ")} failed: version mismatch`);
-          error.stderr = "Codex version mismatch: expected 0.152.1, got 0.153.0";
+          error.stderr = "Codex version mismatch: expected 0.156.0, got 0.152.1";
           error.stdout = "";
           error.exitCode = 64;
           error.timedOut = false;
