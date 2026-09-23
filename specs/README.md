@@ -43,6 +43,10 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Coordinated production image upgrades](36-coordinated-image-upgrade.md) — Proposed;
+replace the controller and runtime image pair, then redeploy the baseline running
+Agent fleet concurrently through OCC.
+
 [Native OpenClaw plugin tool policies](35-native-plugin-tool-policy.md) — Proposed;
 enforce Agent plugin policies through a managed native policy plugin and existing
 approval transport.
