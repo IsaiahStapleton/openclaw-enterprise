@@ -43,6 +43,9 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Agent access](36-agent-access.md) — Proposed; administrator-managed enrollment,
+explicit human grants and withdrawal for trusted full native administration.
+
 [Native OpenClaw plugin tool policies](35-native-plugin-tool-policy.md) — Proposed;
 enforce Agent plugin policies through a managed native policy plugin and existing
 approval transport.

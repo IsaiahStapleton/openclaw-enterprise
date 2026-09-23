@@ -12,21 +12,21 @@ Connect enrollment, grants and withdrawal for ordinary local users on embedded O
 | Administrator | Only Installation administrators enroll, provision, grant and revoke.                                                                                    |
 | Recipient     | Namespace `read` for discovery, exact-Agent `read` and `administer`. No default Installation, Configuration, Secret, deployment or sibling-Agent rights. |
 
-Later selected outcomes retain restricted conversation/invocation/content access, named teams, Slack/Teams identity mapping and user-grant/integration use. Protected Git/model traffic must fully close within 30 seconds after renewal loss, with selected stricter five-second profiles. Browser closure proves neither. Self-withdrawal, delegation, self-service creation and SCIM are later increments. Process termination is later hardening.
+This current-runtime checkpoint complements the [broader RBAC proposal](https://github.com/openclaw/openclaw-enterprise/pull/245). Restricted conversation/invocation/content access, named teams, Slack/Teams identity mapping and user-grant/integration use remain selected later outcomes. Protected Git/model traffic must fully close within 30 seconds after renewal loss, with selected stricter five-second profiles. Browser closure proves neither. Self-withdrawal, delegation, self-service creation and SCIM are later increments. Process termination is later hardening.
 
 Independent `specs/37-openshell-runtime.md` remains optional. OCE retains human/repository authority and credential custody. OpenShell provides runtime/network/provider enforcement through existing IAM/resource, Compute/Sandbox and credential boundaries. Components do not prove a shipped path.
 
 ## Contract
 
-**Setup.** Enable the disabled-by-default [native pilot](31-agent-native-admin-ui.md#contract) with compatible gateway, private routing, wildcard Agent DNS/TLS and explicit shared-cookie domain. Enabling it grants nothing.
+**Setup.** Enable the disabled-by-default [native pilot](31-agent-native-admin-ui.md#contract) with compatible gateway, private routing, wildcard Agent DNS/TLS and explicit shared-cookie domain. Enabling it grants nothing. [Console defaults](../apps/controller/src/console/agents/create.mjs#L40) enable Control UI; [native admission](../apps/controller/src/gateway/native-admin.ts#L84) still requires the exact browser origin, trusted-proxy identity and admin device auto-approval.
 
 **Interfaces.** Existing [POST /api/auth/accounts](../docs/reference/api.md#post-apiauthaccounts) requires `email`, `password`, `roleId` and optional `name`, returning a human `principalId`. Explicit zero-grant enrollment must extend route/helper/validator without administrator defaults. Its wire shape remains unselected.
 
 Existing [Namespace IAM operations](../docs/reference/api.md#iam) create/list/get/delete immutable roles and access-bindings under `/namespaces/{namespaceId}/iam`. Their [writer](../packages/occ/src/state/postgres-state.ts#L2336-L2367) admits Namespace ServicePrincipals, excluding humans, and [target schema](../packages/contracts/src/api/common.ts#L237-L244) excludes Namespace. Extend these owners for existing humans and exact Namespace targets. SQL already represents these grants.
 
-**Illustrative, unexecuted journey.** Administrator enrolls Alice without grants, provisions personal/shared Agents and assigns the table's permissions using her returned Principal ID. Alice signs in locally, discovers both and selects **Open native admin UI**. Bob receives discovery and shared access only. Sibling access is refused. Denied Configuration/revision reads cannot prevent launch or justify broader grants.
+**Illustrative, unexecuted journey.** Administrator enrolls Alice without grants, provisions personal/shared Agents and assigns the table's permissions using her returned Principal ID. Alice signs in locally, discovers both and selects **Open native admin UI**. Bob receives discovery and shared access only. Sibling access is refused. Preserve the [independent launcher](../apps/controller/src/console/agents/detail.mjs#L268): denied Configuration/revision reads cannot prevent launch or justify broader grants.
 
-Human Principals and Agent ServicePrincipals remain distinct. IAM/State compose in OCC's browser admission/proxy API process. Compute resolves Kubernetes Agents through private Envoy. Reuse [origin/key custody](31-agent-native-admin-ui.md#proxy-native-identity-and-permissions), policy reload and persistence/audit. Add no services, tables, leases or account authorities. Dashed joins are proposed/optional.
+Human Principals and Agent ServicePrincipals remain distinct. IAM/State compose in OCC's browser admission/proxy API process. Compute resolves Kubernetes Agents through private Envoy. Reuse [origin checks and server-side transport-key custody](31-agent-native-admin-ui.md#proxy-native-identity-and-permissions): Envoy supplies `occ-workspace-files`; native trusted-proxy authentication grants `operator.admin` without a native gateway token. Retain policy reload and persistence/audit. Add no services, tables, leases or account authorities. Dashed joins are proposed/optional.
 
 ```mermaid
 ---
@@ -74,7 +74,7 @@ Current tools and authorized administrator/service-key paths remain supported. U
 
 1. Adopt this RFC atop authentication/IAM, merged [policy administration](https://github.com/openclaw/openclaw-enterprise/pull/260), State/audit, discovery and proxy.
 2. Receive enrollment/recovery and human grants in parallel through existing owners, selectively reusing accepted components. Before exposure, account/State owners resolve the sole implementation choice: atomic participation versus narrow recovery with an authorized result consumer.
-3. Connect console, then qualify two-user use. Component evidence and [historical native delivery](31-agent-native-admin-ui.md#changelog) do not prove these joins, installed/live-provider or release readiness.
+3. Connect enrollment/access controls in Console, preserving its independent launcher and configuration editor, then qualify two-user use. Component evidence and [historical native delivery](31-agent-native-admin-ui.md#changelog) do not prove these joins, installed/live-provider or release readiness.
 
 ## Verification
 
