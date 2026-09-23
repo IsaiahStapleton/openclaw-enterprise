@@ -31,6 +31,9 @@ export function createGrantResolver({ config, gatewayOrigin, selectedBinding }: 
         canonicalApiHost: "github.com",
         apiHost: new URL(gatewayOrigin).hostname,
         repository: config.repository,
+        ...(selectedBinding?.pushRefAllowlist === undefined
+          ? {}
+          : { pushRefAllowlist: selectedBinding.pushRefAllowlist }),
       }),
     });
   }

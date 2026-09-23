@@ -100,9 +100,14 @@ repository IDs and canonical names must be unique.
 
 The resolved grant fingerprint covers provider/App/installation identity,
 repository identity, maximum duration, Namespace, its complete allowed-profile
-set and the selected profile. The service independently resolves and compares
+set, optional push-ref policy and selected profile. The service independently resolves and compares
 that fingerprint before admission. A changed policy cannot preserve an older
 grant merely by keeping the same reference.
+
+Each Namespace policy may set an optional
+[`pushRefAllowlist`](repository-credentials/push-ref-guardrail.md) to prevent
+accidental native Git pushes outside selected branches. This is not server-side
+branch authorization.
 
 The selected Driver configuration supplies `controlSocket`,
 `sessionDurationSeconds` and `publicCaPath`; it contains no App key. See

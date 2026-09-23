@@ -157,7 +157,10 @@ selects an admitted binding from the effective HTTPS host and repository path.
 `OCE_REPOSITORY_REF=application` selects among bindings for the same repository;
 it does not override the network destination. Concurrent commands can use
 different bindings without changing shared selection state. Local Git settings,
-identity, hooks and aliases keep their normal behavior. See
+identity, hooks and aliases keep their normal behavior. To prevent accidental
+branch pushes, configure the optional
+[push-ref guardrail](../reference/repository-credentials/push-ref-guardrail.md).
+See
 [native routing limits](../reference/repository-credentials.md#client-routing-and-limits)
 for configuration overrides and credential retention.
 

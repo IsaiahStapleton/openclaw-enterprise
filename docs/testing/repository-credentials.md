@@ -48,6 +48,11 @@ require explicit security review: identify the authority, caller, scope and
 protecting negative test. Never substitute wildcard allowances. The [guard regression test](../../tests/conformance/repository-credentials-source-boundary.test.mjs)
 adds forbidden capabilities to a disposable copy of the real source tree.
 
+The native hook dispatcher can inspect Git configuration and executable hooks,
+read Git's hook input and delegate ordinary hooks. It has no direct credential-file
+reader or network sender. The detached client includes the pure private
+client-contract validator; negative checks protect these specific I/O boundaries.
+
 This is an accidental-regression guard for reviewed source. It does not perform
 whole-program dataflow analysis, prove that allowed owners handle secrets
 correctly, or sandbox malicious code. It does not replace capability design,
