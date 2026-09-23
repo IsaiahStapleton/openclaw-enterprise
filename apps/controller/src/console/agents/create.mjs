@@ -1,7 +1,7 @@
 import { element, button } from "../dom.mjs";
 import { WORKSPACE_DEFAULTS, WORKSPACE_DEFAULTS_ID } from "../workspace-defaults.mjs";
 import { harnessAuthDescription } from "./harness-auth.mjs";
-import { secretIdForBinding } from "./credentials.mjs";
+import { createRepositoryFields } from "./repositories.mjs";
 import { ensureSecretOperateBinding } from "./secret-access.mjs";
 import { createPresetFields } from "./presets.mjs";
 import { renderChannels } from "../channels.mjs";
@@ -654,6 +654,7 @@ function renderAgentForm(context, rendered) {
   );
   let pending = false;
   let outcomeUnknown = false;
+  let rejectedAgentAttempt;
   let savedSecret;
   let savedConfiguration;
   let savedAgent;
@@ -679,6 +680,74 @@ function renderAgentForm(context, rendered) {
   const retryCapabilityDiscovery = button("Retry capability check", () => {
     void loadInstallationCapabilities();
   });
+  const recoveryMessage = element("p", { className: "muted" });
+  const requireRepositoryReload = () => {
+    rejectedAgentAttempt = { kind: "repository-scoped", repositoryPolicy: "reload-required" };
+  };
+  const repositoryRetryLocked = () =>
+    rejectedAgentAttempt?.kind === "repository-scoped" &&
+    rejectedAgentAttempt.repositoryPolicy !== "current";
+  const requiresRepositories = () => rejectedAgentAttempt?.kind === "repository-scoped";
+  const reloadRepositories = button("Reload repository choices", async () => {
+    if (rejectedAgentAttempt?.kind !== "repository-scoped") {
+      return;
+    }
+    pending = true;
+    rejectedAgentAttempt = { kind: "repository-scoped", repositoryPolicy: "reloading" };
+    updateControls();
+    feedback.textContent = "";
+    try {
+      const outcome = await repositories.reload();
+      switch (outcome.kind) {
+        case "obsolete":
+        case "expired":
+          return;
+        case "success":
+          rejectedAgentAttempt = { kind: "repository-scoped", repositoryPolicy: "current" };
+          recovery.hidden = false;
+          recoveryMessage.textContent =
+            "Select at least one current repository and an authorization level to retry this Agent. To continue without repository access, start a new draft; the saved Configuration will remain available.";
+          savedStatus.textContent = `Repository choices reloaded. Configuration ${savedConfiguration.id} remains saved and will be reused if you retry Agent creation.`;
+          return;
+        case "denied":
+          requireRepositoryReload();
+          recovery.hidden = false;
+          feedback.textContent = `Repository choices could not be reloaded because Agent creation is denied. Configuration ${savedConfiguration.id} remains saved. Retry the reload or start a new draft.`;
+          return;
+        case "conflict":
+          requireRepositoryReload();
+          recovery.hidden = false;
+          feedback.textContent = `Repository choices could not be reloaded because this Namespace no longer accepts new Agents. Configuration ${savedConfiguration.id} remains saved. Start a new draft only after the Namespace can accept Agents again.`;
+          return;
+        case "unavailable":
+          requireRepositoryReload();
+          recovery.hidden = false;
+          feedback.textContent = `Repository choices could not be reloaded. Configuration ${savedConfiguration.id} remains saved. Retry the reload or start a new draft.`;
+          return;
+      }
+    } finally {
+      if (context.isCurrent()) {
+        pending = false;
+        updateControls();
+      }
+    }
+  });
+  const startNewDraft = button("Start a new draft", () => {
+    if (
+      window.confirm(
+        `Configuration ${savedConfiguration.id} will remain saved. Start a new Agent draft?`,
+      )
+    ) {
+      renderCreateAgent(context);
+    }
+  });
+  const recovery = element(
+    "section",
+    { className: "agent-card", hidden: true, "aria-labelledby": "create-recovery-title" },
+    element("h2", { id: "create-recovery-title" }, "Recover from a rejected Agent save"),
+    recoveryMessage,
+    element("div", { className: "form-actions" }, reloadRepositories, startNewDraft),
+  );
   const actions = element(
     "div",
     { className: "form-actions" },
@@ -688,6 +757,7 @@ function renderAgentForm(context, rendered) {
     submit,
   );
   const channelEditor = element("div", { className: "create-channels" });
+  let repositories;
   const form = element(
     "form",
     { id: formId, className: "agent-form agent-card" },
@@ -700,6 +770,13 @@ function renderAgentForm(context, rendered) {
       mode,
       "Set by the harness: Codex uses Dedicated execution; OpenClaw uses Embedded execution. Slack requires Codex.",
     ),
+    (repositories = createRepositoryFields(context, (changed) => {
+      if (changed) {
+        edited = true;
+      }
+      feedback.textContent = "";
+      updateControls();
+    })).section,
     field(
       "Configuration JSON",
       configuration,
@@ -752,9 +829,20 @@ function renderAgentForm(context, rendered) {
     });
   }
   async function grantConfigurationSecretAccess(agent, secrets) {
+    const bindings = Object.values(savedConfiguration.secretBindings ?? {});
     const seen = new Set();
     for (const secret of secrets) {
-      if (secret.namespaceId !== namespaceId || seen.has(secret.id)) {
+      if (
+        secret.namespaceId !== namespaceId ||
+        seen.has(secret.id) ||
+        !bindings.some(
+          (binding) =>
+            binding?.source?.kind === "secret" &&
+            binding.source.namespaceId === namespaceId &&
+            binding.source.id === secret.id &&
+            binding.delivery?.type === "env",
+        )
+      ) {
         continue;
       }
       seen.add(secret.id);
@@ -763,18 +851,6 @@ function renderAgentForm(context, rendered) {
       }
       await ensureSecretOperateBinding(context, agent, secret);
     }
-  }
-  function retainReferencedStagedSecrets(nextSecretBindings, changedSecrets = []) {
-    const referencedSecretIds = new Set(
-      Object.values(nextSecretBindings ?? {})
-        .map((binding) => secretIdForBinding(binding))
-        .filter((id) => id !== null),
-    );
-    const merged = new Map(stagedChannelSecrets.map((secret) => [secret.id, secret]));
-    for (const secret of changedSecrets) {
-      merged.set(secret.id, secret);
-    }
-    return [...merged.values()].filter((secret) => referencedSecretIds.has(secret.id));
   }
   function renderChannelEditor() {
     const values = parseObject(configuration);
@@ -825,10 +901,7 @@ function renderAgentForm(context, rendered) {
         if (options.secretBindings !== undefined) {
           secretBindings.value = JSON.stringify(options.secretBindings, null, 2);
           secretBindings.setCustomValidity("");
-          stagedChannelSecrets = retainReferencedStagedSecrets(
-            options.secretBindings,
-            options.changedSecrets,
-          );
+          stagedChannelSecrets = [...stagedChannelSecrets, ...(options.changedSecrets ?? [])];
         }
         configuration.setCustomValidity("");
         setTimeout(() => {
@@ -850,7 +923,9 @@ function renderAgentForm(context, rendered) {
     updateControls();
   }
   const shouldProvision = () =>
-    mode.value === "dedicated" && provisionableExecutionModes.has(mode.value);
+    mode.value === "dedicated" &&
+    provisionableExecutionModes.has(mode.value) &&
+    !repositories.draftOnly();
   const updateControls = () => {
     const saved = Boolean(savedConfiguration || savedAgent || provisioningAttempt);
     for (const node of form.querySelectorAll("button, input, select, textarea")) {
@@ -942,7 +1017,21 @@ function renderAgentForm(context, rendered) {
       loadModels.disabled ||= modelsLoading || Boolean(savedSecret) || !apiKey.value.trim();
       enterModel.disabled ||= modelsLoading || Boolean(savedConfiguration);
     }
+    reloadRepositories.disabled = pending || outcomeUnknown;
+    startNewDraft.disabled = pending || outcomeUnknown;
+    repositories.setDisabled(
+      pending ||
+        outcomeUnknown ||
+        Boolean(savedAgent) ||
+        Boolean(provisioningAttempt) ||
+        repositoryRetryLocked(),
+    );
     submit.disabled =
+      (!savedAgent &&
+        (repositoryRetryLocked() ||
+          (requiresRepositories() && !repositories.hasValidSelection()) ||
+          !repositories.isSettled() ||
+          repositories.blocksCreate())) ||
       pending ||
       outcomeUnknown ||
       modelsLoading ||
@@ -1070,6 +1159,7 @@ function renderAgentForm(context, rendered) {
       pending ||
       outcomeUnknown ||
       provisioningAttempt ||
+      (!savedAgent && repositoryRetryLocked()) ||
       !capabilityDiscoveryDone ||
       !form.reportValidity()
     ) {
@@ -1079,6 +1169,9 @@ function renderAgentForm(context, rendered) {
     const desiredPlugins = parseObject(plugins, true);
     const bindings = parseObject(secretBindings, true);
     if (values === undefined || desiredPlugins === undefined || bindings === undefined) {
+      return;
+    }
+    if (!savedAgent && !repositories.validate({ required: requiresRepositories() })) {
       return;
     }
     if (!model.value.trim()) {
@@ -1133,6 +1226,7 @@ function renderAgentForm(context, rendered) {
         "Channels require Dedicated execution. Select OpenAI with the Codex harness or disable configured channels before creating the Agent.";
       return;
     }
+    const repositoryBindings = repositories.bindings();
     const body = {
       name: name.value.trim(),
       executionMode: mode.value,
@@ -1140,6 +1234,7 @@ function renderAgentForm(context, rendered) {
         workspaceInputs.map(([filename, input]) => [filename, input.value]),
       ),
       workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
+      ...(repositoryBindings.length ? { repositoryBindings } : {}),
       ...(Object.keys(desiredPlugins).length ? { plugins: desiredPlugins } : {}),
       ...(agent.providerId ? { providerId: agent.providerId } : {}),
     };
@@ -1210,7 +1305,7 @@ function renderAgentForm(context, rendered) {
       if (savedSecret) {
         await ensureSecretOperateBinding(context, savedAgent, savedSecret);
       }
-      await grantConfigurationSecretAccess(savedAgent, retainReferencedStagedSecrets(bindings));
+      await grantConfigurationSecretAccess(savedAgent, stagedChannelSecrets);
       if (context.isCurrent()) {
         context.navigate(`agents/${savedAgent.id}?revision=draft`);
       }
@@ -1228,6 +1323,23 @@ function renderAgentForm(context, rendered) {
           ? "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
           : message(error, mutationStarted);
       outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
+      const knownRejection = [400, 403, 404, 409, 429].includes(error.status);
+      if (!savedAgent && savedConfiguration && knownRejection) {
+        if (repositoryBindings.length) {
+          requireRepositoryReload();
+        } else {
+          rejectedAgentAttempt = { kind: "ordinary" };
+        }
+        if (rejectedAgentAttempt.kind === "repository-scoped") {
+          recoveryMessage.textContent = `Repository-scoped Agent creation returned a known rejection. Configuration ${savedConfiguration.id} remains saved. Reload current repository choices to refresh policy before retrying, or start a new draft. Starting a new draft does not delete this Configuration.`;
+          recovery.hidden = false;
+        } else {
+          recovery.hidden = true;
+        }
+      } else if (outcomeUnknown) {
+        rejectedAgentAttempt = undefined;
+        recovery.hidden = true;
+      }
       feedback.textContent = detail + (error.requestId ? ` Request ID: ${error.requestId}` : "");
     } finally {
       if (context.isCurrent()) {
@@ -1247,6 +1359,7 @@ function renderAgentForm(context, rendered) {
     channelEditor,
     savedStatus,
     feedback,
+    recovery,
     actions,
   );
 }

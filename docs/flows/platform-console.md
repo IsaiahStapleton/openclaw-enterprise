@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-23
-last_updated_session: 01a0cce9-23e3-7072-aa3f-a2e26d2dbf11
+last_updated_session: "public-pr/295"
 ---
 
 # Platform console request flow
@@ -57,8 +57,8 @@ graph TD
     F -->|Providers and Installation admin| H["Project loaded Provider IDs and types"]
     S1 -->|create| S2["POST stores Namespace Secret immediately"]
     S2 --> S3
-    E1 -->|ordinary draft| M1["POST creates Configuration with staged bindings"]
-    E1 -->|supported Dedicated runtime| M3["POST queues provisioning with inline Configuration"]
+    E1 -->|draft or optional discovery outage| M1["POST creates Configuration with staged bindings"]
+    E1 -->|supported Dedicated and successful discovery| M3["POST queues provisioning with inline Configuration"]
     M3 --> M4["Worker creates resources, grants and first deployment"]
     M1 -->|returned Configuration ID| M["POST creates Agent draft only"]
     M --> M2["Console grants Agent use of selected Secrets"]
@@ -71,6 +71,7 @@ graph TD
     G --> I["Accept only current navigation response"]
     H --> I
     M2 --> I
+    M4 --> I
     N --> I
     O --> I
     P -->|accepted or uncertain| Q["Show status and refresh exact Agent"]
@@ -159,11 +160,10 @@ Credential hints link to the token console and show expected prefixes.
 
 Presets fix saved credential providers and reject cross-provider JSON before
 writes. Saved service account tokens lock Codex; operator-managed credentials
-lock OpenClaw across provider changes. These choices do not discover Installation
-Providers; that navigation item is hidden. The [creation reference](../reference/console/create-and-deploy.md)
+lock OpenClaw across provider changes. Installation Provider discovery is hidden. The [creation reference](../reference/console/create-and-deploy.md)
 owns permissions and partial-save recovery.
 
-The form starts with editable native JSON, optional plugins, and no model.
+The form starts with native JSON, optional plugins, and no model.
 `POST /namespaces/:namespaceId/agents/models` reaches
 `OpenClawController.discoverAgentModels`, which authorizes Namespace Agent creation
 and calls Compute outside a state transaction. `compute/model-discovery.ts` uses
@@ -181,10 +181,15 @@ the starter unchanged. [OCE native admin access](agent-native-admin.md) still
 requires isolated HTTPS origins. [Agent editing](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
 traces Slack Secret selection/creation. **Apply channel settings** copies values
 and bindings into the form; cancellation discards selections but retains Secrets
-already created in the Namespace.
+already created in the Namespace. Pending grants accumulate across drawer applications.
 
-For supported Dedicated runtimes, submission sends the inline Configuration and
-ordinary Secret references to the [provisioning API](agent-provisioning.md).
+`GET /namespaces/:namespaceId/agents/repository-options` discovers approved choices.
+The Console submits opaque references and an explicit common profile. Only
+`503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh draft without bindings;
+it never enables provisioning. Other failures block submission until retry succeeds.
+
+For supported Dedicated runtimes with successful repository discovery, submission
+sends the inline Configuration, selected repository bindings and ordinary Secret references to the [provisioning API](agent-provisioning.md).
 Console polls the accepted job before an Agent exists, then opens the returned
 Agent revision. The worker creates resources and exact Secret grants before
 admitting deployment; Console does not duplicate those grants.
@@ -198,7 +203,8 @@ outside Agent/Configuration; [workspace setup](workspace-files.md) applies them
 before execution.
 
 `create.mjs:grantConfigurationSecretAccess` grants the returned Agent exact
-Secret `operate` through separate Namespace IAM writes. Failure preserves the
+Secret `operate` through separate Namespace IAM writes. Only final same-Namespace
+`env` bindings receive grants; superseded selections receive none. Failure preserves the
 Agent and enables **Retry credential access**, which rereads exact grants without
 duplicating resources; the saved Agent link permits manual recovery. Failed Agent
 writes retain the Configuration ID and lock JSON/Harness; explicit retries reuse
@@ -320,6 +326,10 @@ refreshes and inspects the Agent and revision history.
 - 2026-09-23 18:48: Keep saved API-key and PAT Presets bound to their provider before Configuration or Agent writes. (01a0cf27-71c6-7042-8357-74d1811a2ef8 - 4da114ac7b11f926d4b774b8d32a09fa136135eb)
 
 - 2026-09-23 18:35: Reconcile provider credential creation with staged Slack Secret grants and shared retry recovery. (authoring-run/2516b0a6-7a82-4268-a586-d821679b2a78 - ae092fc7c13aad4c637b0238ae2f41ecb2b03219)
+
+- 2026-09-23 20:21: Integrate repository selections with asynchronous provisioning and preserve draft-only discovery recovery. (public-pr/295 - 8bd367636aff766d484b4e684d42f6b4419c9e4e)
+
+- 2026-09-23 19:39: Trace pending Slack grants across drawer applications and reconciliation with final saved bindings. (public-pr/295 - 7f6d9107dcb23ff1ad093c4914c89a0210169d20)
 - 2026-09-23 19:09: Trace image-baked OCC revision metadata and OCE sidebar branding. (01a0cfaa-2b68-7e61-b8ff-a7eb82f1edc5 - 150ec08f059cebc4897b839d8318f7b1e3aba0e3)
 
 - 2026-09-23 11:20: Distinguished worker-owned first-time provisioning and Secret grants from ordinary Console draft creation. (01a0cc7f-028b-7803-acf5-803c3d799d75 - f2dd1d3f)

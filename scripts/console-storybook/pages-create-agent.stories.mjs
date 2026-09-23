@@ -26,6 +26,42 @@ export const CreateUnsupportedProvisioning = {
 };
 export const CreateWorkspaceFiles = { ...story("createWorkspaceFiles"), name: "Workspace files" };
 export const CreateEmbedded = { ...story("createEmbedded"), name: "OpenAI with OpenClaw harness" };
+export const RepositorySelection = {
+  ...story("createRepositoriesSelected"),
+  name: "Approved repositories and shared access",
+};
+export const RepositoryContributor = {
+  ...story("createRepositoriesContributor"),
+  name: "Contributor access and write limits",
+};
+export const RepositoryCollaborator = {
+  ...story("createRepositoriesCollaborator"),
+  name: "Collaborator access and write limits",
+};
+export const RepositoryEmpty = {
+  ...story("createRepositoriesEmpty"),
+  name: "No approved repositories",
+};
+export const RepositoryLoading = {
+  ...story("createRepositoriesLoading"),
+  name: "Repository discovery pending",
+};
+export const RepositoryUnavailable = {
+  ...story("createRepositoriesUnavailable"),
+  name: "Optional repository service unavailable",
+};
+export const RepositoryDenied = {
+  ...story("createRepositoriesDenied"),
+  name: "Repository discovery denied",
+};
+export const RepositoryAmbiguous = {
+  ...story("createRepositoriesAmbiguous"),
+  name: "Repository authorization unverified",
+};
+export const RepositoryRecovery = {
+  ...story("createRepositoriesRecovery"),
+  name: "Reselect repositories after rejection",
+};
 export const CreatePreset = { ...story("createPreset"), name: "Preset variables" };
 export const CreateBoundCredentialPreset = {
   ...story("createBoundCredentialPreset"),

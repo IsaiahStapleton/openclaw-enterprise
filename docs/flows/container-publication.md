@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-22
-last_updated_session: codex/01a0c70f-8a8f-7c62-ac81-ee1a3e99f48b
+updated: 2026-09-23
+last_updated_session: public-pr/295
 ---
 
 # Container publication flow
@@ -56,6 +56,18 @@ permission or protected-environment credentials.
 registers ARM64 QEMU support and asks Buildx for `linux/amd64,linux/arm64`, with
 provenance disabled, in a single OCI archive. The approved Node base index must
 provide both platforms. The controller and runtime use their existing recipes.
+`deploy/runtime/Dockerfile:openclaw-source` downloads the pinned public OpenClaw
+source archive, rejects a SHA-256 mismatch, installs its frozen dependency graph,
+and follows the upstream Docker build and production-dependency assembly with
+Codex and Slack selected. Plugin-local dependencies retain their own versions.
+Missing package-root dependencies are linked from those plugin installations so
+shared compiled chunks resolve them; existing core versions remain unchanged.
+The runtime stage verifies the assembled runtime archive checksum before extraction and
+retains `/opt/oce/runtime/provenance.json`; this archive is not an npm package.
+Matching bundled plugins replace
+independently installed plugin packages; the Dedicated Codex executable remains
+separately pinned. See the [runtime recipe](../../deploy/runtime/README.md) for
+source identity and installed-image checks.
 After OCI export, the job prunes only its dedicated Buildx builder's cache so
 the cache and unpacked smoke images do not exhaust the runner's disk together.
 
@@ -128,6 +140,10 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-23 20:39: Link missing plugin dependencies for shared compiled runtime chunks without replacing core versions. (public-pr/295 - cf486a31)
+
+- 2026-09-23 19:47: Build the runtime from verified public source with matching bundled plugins and retained runtime archive provenance. (public-pr/295 - 7f6d9107)
 
 - 2026-09-22 03:04: Use manual dispatch without an independent approval or linkage comment (codex/01a0c70f-8a8f-7c62-ac81-ee1a3e99f48b - 149ac0fe)
 

@@ -11,6 +11,9 @@ const readyForm = [
   { selector: "#provider-api-key", value: "storybook-model-api-key" },
   { selector: "#agent-model", value: "openai-story-model" },
 ];
+const repositoryForm = [...readyForm, { selector: "#agent-name", value: "Repository assistant" }];
+const repositoryOptionsPath =
+  "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/repository-options";
 const account = [{ selector: ".account-toggle", click: true }];
 const createSlackBotSecret = [
   { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
@@ -294,6 +297,115 @@ export const scenarios = {
     description:
       "OpenClaw remains available for OpenAI with an API key. It uses Embedded execution and disables unsupported channel editing.",
   },
+  createRepositoriesSelected: {
+    group: "Pages/Create Agent",
+    name: "Approved repositories and shared access",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: "#repository-application", click: true },
+      { selector: "#repository-handbook", click: true },
+      { selector: "#repository-profile-git-read", click: true },
+    ],
+    description:
+      "Two approved repositories share Reader access to code, issues, pull requests, and checks. The real form offers only their common levels and requires an explicit choice.",
+    gap: "An operator supplies Namespace approvals, GitHub App configuration, credential service, compatible runtime images, and network policy. Repository grants do not change Harness filesystem or approval policy.",
+  },
+  createRepositoriesContributor: {
+    group: "Pages/Create Agent",
+    name: "Contributor access and write limits",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: "#repository-application", click: true },
+      { selector: "#repository-profile-git-write", click: true },
+    ],
+    description:
+      "Contributor adds code pushes, pull requests, and PR discussion without granting ordinary issue management. The selected write level shows token and branch-policy limits.",
+  },
+  createRepositoriesCollaborator: {
+    group: "Pages/Create Agent",
+    name: "Collaborator access and write limits",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: "#repository-application", click: true },
+      { selector: "#repository-profile-git-full", click: true },
+    ],
+    description:
+      "Collaborator also creates and manages issues. GraphQL can permit merges and branch changes within the installation token grant; the Git push allowlist does not constrain GraphQL.",
+  },
+  createRepositoriesEmpty: {
+    group: "Pages/Create Agent",
+    name: "No approved repositories",
+    path: create,
+    actions: repositoryForm,
+    repositoryOptions: [],
+    description: "Successful empty discovery permits an ordinary Agent without repository access.",
+  },
+  createRepositoriesLoading: {
+    group: "Pages/Create Agent",
+    name: "Repository discovery pending",
+    path: create,
+    actions: form,
+    rules: [{ path: repositoryOptionsPath, hold: true }],
+    description: "Creation waits for repository discovery. Reset to replay the pending read.",
+  },
+  createRepositoriesUnavailable: {
+    group: "Pages/Create Agent",
+    name: "Optional repository service unavailable",
+    path: create,
+    actions: repositoryForm,
+    rules: [
+      {
+        path: repositoryOptionsPath,
+        status: 503,
+        code: "REPOSITORY_OPTIONS_UNAVAILABLE",
+      },
+    ],
+    description:
+      "The endpoint-specific optional-unavailability response permits an ordinary Agent. The preview does not establish real authorization.",
+  },
+  createRepositoriesDenied: {
+    group: "Pages/Create Agent",
+    name: "Repository discovery denied",
+    path: create,
+    actions: repositoryForm,
+    rules: [{ path: repositoryOptionsPath, status: 403 }],
+    description: "Denied Agent-create authorization blocks both Configuration and Agent writes.",
+  },
+  createRepositoriesAmbiguous: {
+    group: "Pages/Create Agent",
+    name: "Repository authorization unverified",
+    path: create,
+    actions: repositoryForm,
+    rules: [{ path: repositoryOptionsPath, status: 503 }],
+    description:
+      "A generic dependency failure cannot establish authorization. The form blocks creation and offers retry.",
+  },
+  createRepositoriesRecovery: {
+    group: "Pages/Create Agent",
+    name: "Reselect repositories after rejection",
+    path: create,
+    unsupportedProvisioning: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents",
+        method: "POST",
+        status: 409,
+        once: true,
+      },
+    ],
+    actions: [
+      ...repositoryForm,
+      { selector: "#repository-application", click: true },
+      { selector: "#repository-profile-git-write", click: true },
+      click("Create Agent"),
+      click("Reload repository choices"),
+    ],
+    description:
+      "A rejected save retains its Configuration. Reload clears stale choices; retry requires a current repository and access level. Starting a new draft explicitly leaves repository-scoped recovery.",
+  },
   createPreset: {
     group: "Pages/Create Agent",
     name: "Preset variables",
@@ -513,6 +625,25 @@ export const scenarios = {
     deployed: true,
     description:
       "Immutable Configuration snapshot, revision navigation, and persisted deployment status. This does not establish live serving health.",
+  },
+  repositoryDraft: {
+    group: "Pages/Agent detail",
+    name: "Repository access in new revision",
+    path: draft,
+    repositoryBindings: [
+      { repositoryRef: "application", profile: "git-write" },
+      { repositoryRef: "handbook", profile: "git-read" },
+    ],
+    description: "The new revision names Contributor and Reader access and shows write limits.",
+  },
+  repositoryAdmitted: {
+    group: "Pages/Agent detail",
+    name: "Repository access in admitted revision",
+    path: revision,
+    deployed: true,
+    repositoryBindings: [{ repositoryRef: "application", profile: "git-full" }],
+    description:
+      "The admitted snapshot names Collaborator access and retains the write-limit notice. This fixture does not establish provider authorization or runtime execution.",
   },
   deploymentPending: {
     group: "Pages/Agent detail",
