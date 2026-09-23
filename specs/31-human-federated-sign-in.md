@@ -6,6 +6,16 @@
 
 **Status:** Draft. [Implementation PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305) is available for review. Deployment and live GitHub verification remain open.
 
+**2026-09-23 amendment:** Use the same GitHub App registration for sign-in and
+repository integration. This supersedes the OAuth-App-only choice below.
+Sign-in uses the App's client ID and client secret; repository access keeps its
+existing private-key consumer. OCC reads the authenticated user's numeric ID,
+then discards the returned access and refresh tokens. App permissions govern
+those tokens; sign-in grants no OCE repository access. Changing the client ID
+requires explicit administrator enrollment under the new provider instance.
+See the current [authentication reference](../docs/reference/authentication.md)
+for setup.
+
 ## Problem and decision
 
 Let an existing OpenClaw Enterprise (OCE) user sign in with GitHub and keep the
