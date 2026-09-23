@@ -1,6 +1,13 @@
 import { spawnSync } from "node:child_process";
 import type { RuntimeRepositoryBinding, RuntimeRepositoryManifest } from "./manifest.ts";
 
+function gitRepositoryPath(value: string): string | undefined {
+  const path = value.replace(/\/+$/, "");
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(path) && !path.includes("..")
+    ? path.toLowerCase()
+    : undefined;
+}
+
 function selectBinding(
   matches: readonly RuntimeRepositoryBinding[],
   pinned?: RuntimeRepositoryBinding,
@@ -23,19 +30,15 @@ export function selectGitCredential(
   fields: ReadonlyMap<string, string>,
   pinned?: RuntimeRepositoryBinding,
 ): RuntimeRepositoryBinding {
-  const path = fields.get("path") ?? "";
-  if (
-    fields.get("protocol") !== "https" ||
-    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(path) ||
-    path.includes("..")
-  ) {
+  const path = gitRepositoryPath(fields.get("path") ?? "");
+  if (fields.get("protocol") !== "https" || path === undefined) {
     throw new Error("repository-not-admitted");
   }
   const matches = manifest.bindings.filter(({ client }) => {
     const repository = client.repository.toLowerCase();
     return (
       fields.get("host") === new URL(client.gatewayOrigin).host &&
-      [repository, `${repository}.git`].includes(path.toLowerCase())
+      [repository, `${repository}.git`].includes(path)
     );
   });
   const selected = selectBinding(matches, pinned);
@@ -71,7 +74,7 @@ function gitPushDestinations(
 ): readonly RuntimeRepositoryBinding[] {
   if (
     !destination.startsWith("https://") ||
-    /[\s\\%?#@]/.test(destination) ||
+    /[\s\\%?#]/.test(destination) ||
     destination.includes("..")
   ) {
     return [];
@@ -82,7 +85,10 @@ function gitPushDestinations(
   } catch {
     return [];
   }
-  const path = url.pathname.slice(1).toLowerCase();
+  const path = gitRepositoryPath(url.pathname.slice(1));
+  if (url.password || path === undefined) {
+    return [];
+  }
   return manifest.bindings.filter(({ client }) => {
     const repository = client.repository.toLowerCase();
     return (
@@ -105,7 +111,15 @@ export function selectGitPushDestination(
   pinned?: RuntimeRepositoryBinding,
 ): RuntimeRepositoryBinding | undefined {
   const matches = gitPushDestinations(manifest, destination);
-  return matches.length === 0 ? undefined : selectBinding(matches, pinned);
+  if (matches.length === 0) {
+    return undefined;
+  }
+  const selected = selectBinding(matches, pinned);
+  const username = new URL(destination).username;
+  if (username && username !== selected.client.gitUsername) {
+    throw new Error("repository-not-admitted");
+  }
+  return selected;
 }
 
 /** Ask native Git for effective remotes only when gh has no explicit target. */

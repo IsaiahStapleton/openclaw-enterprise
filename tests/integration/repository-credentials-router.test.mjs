@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cp, readFile, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { createNativeClientMaterial } from "../fixtures/repository-credentials/clients.mjs";
@@ -15,7 +15,10 @@ import {
   inheritedRepositoryBinding,
   readRuntimeRepositoryManifest,
 } from "../../apps/controller/src/drivers/repo/github/credentials/client/manifest.ts";
-import { selectGhRepository } from "../../apps/controller/src/drivers/repo/github/credentials/client/targets.ts";
+import {
+  selectGhRepository,
+  selectGitPushDestination,
+} from "../../apps/controller/src/drivers/repo/github/credentials/client/targets.ts";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const opened = (
@@ -157,6 +160,23 @@ test("native pre-push uses the exact pinned binding and actual destination", asy
   assert.equal(denied.code, 1);
   assert.equal(denied.stderr, "repository-push-ref-not-allowed\n");
   assert.equal((await invoke({ OCE_REPOSITORY_REF: "permitted" })).code, 0);
+  // URL usernames constrain the selected endpoint; they cannot choose a grant.
+  const namedDestination = restricted.client.gitRemote.replace(
+    "https://",
+    "https://gateway-session@",
+  );
+  assert.notEqual((await invoke({}, namedDestination)).code, 0);
+  assert.equal((await invoke({ OCE_REPOSITORY_REF: "restricted" }, namedDestination)).code, 1);
+  assert.equal((await invoke({ OCE_REPOSITORY_REF: "permitted" }, namedDestination)).code, 0);
+  assert.notEqual(
+    (
+      await invoke(
+        { OCE_REPOSITORY_REF: "permitted" },
+        namedDestination.replace("gateway-session@", "other@"),
+      )
+    ).code,
+    0,
+  );
   const selected = material.manifest.bindings.find(
     ({ repositoryRef }) => repositoryRef === "permitted",
   );
@@ -186,6 +206,42 @@ test("native pre-push uses the exact pinned binding and actual destination", asy
   const malformed = await invoke({ OCE_REPOSITORY_REF: "permitted" });
   assert.equal(malformed.code, 1);
   assert.equal(malformed.stderr, "repository-pre-push-guard-failed\n");
+});
+
+test("push destination normalization retains exact repository and host boundaries", async (t) => {
+  const selected = opened("boundaries");
+  selected.client.pushRefAllowlist = ["refs/heads/agent/*"];
+  const material = await createNativeClientMaterial(t, [
+    { opened: selected, repositoryRef: "project" },
+  ]);
+  const manifest = await readRuntimeRepositoryManifest(material.root);
+  const binding = manifest.bindings[0];
+  for (const destination of [
+    "https://github.com/EXAMPLE/PROJECT/",
+    "https://github.com/example/project.git/",
+    "https://gateway-session@credentials.example.test/example/project.git/",
+  ]) {
+    assert.equal(selectGitPushDestination(manifest, destination), binding);
+  }
+  for (const destination of [
+    "https://github.com.example.test/example/project.git",
+    "https://credentials.example.test:444/example/project.git",
+    "https://credentials.example.test/example/project.git/extra",
+    "https://credentials.example.test/example/project.git-extra",
+    "https://credentials.example.test/example/project.git.git",
+    "https://credentials.example.test/elsewhere/project.git",
+    "https://credentials.example.test/example//project.git",
+  ]) {
+    assert.equal(selectGitPushDestination(manifest, destination), undefined);
+  }
+  assert.throws(
+    () =>
+      selectGitPushDestination(
+        manifest,
+        "https://other@credentials.example.test/example/project.git/",
+      ),
+    /repository-not-admitted/,
+  );
 });
 
 test("delegating an ordinary hook back to the managed dispatcher fails without recursion", async (t) => {
@@ -224,6 +280,43 @@ test("delegating an ordinary hook back to the managed dispatcher fails without r
   );
   assert.equal(result.code, 1);
   assert.match(result.stderr, /repository-pre-push-guard-failed/);
+});
+
+test("managed hooks preserve initialization and delegate template transaction hooks", async (t) => {
+  const selected = opened("initialization");
+  selected.client.pushRefAllowlist = [];
+  const material = await createNativeClientMaterial(t, [
+    { opened: selected, repositoryRef: "project" },
+  ]);
+  const root = await temporaryDirectory(t);
+  const template = join(root, "template");
+  await mkdir(join(template, "hooks"), { recursive: true });
+  await writeFile(
+    join(template, "hooks/reference-transaction"),
+    '#!/bin/sh\nprintf "%s\\n" "$1" >> "$INIT_HOOK_MARKER"\n',
+    { mode: 0o755 },
+  );
+  for (const [index, args] of [[], ["-b", "main"]].entries()) {
+    const ordinary = join(root, `ordinary-${index}`);
+    const managed = join(root, `managed-${index}`);
+    const expected = join(root, `expected-${index}`);
+    const actual = join(root, `actual-${index}`);
+    await writeFile(expected, "");
+    await writeFile(actual, "");
+    // Compare native transactions across Git versions: 2.55 invokes the hook
+    // before HEAD exists, and the managed dispatcher must delegate it too.
+    await run("/usr/bin/git", ["init", "--template=" + template, ...args, ordinary], {
+      env: cleanEnvironment({ INIT_HOOK_MARKER: expected }),
+    });
+    await run("/usr/bin/git", ["init", "--template=" + template, ...args, managed], {
+      env: environment(material, { INIT_HOOK_MARKER: actual }),
+    });
+    assert.equal(await readFile(actual, "utf8"), await readFile(expected, "utf8"));
+    assert.equal(
+      await readFile(join(managed, ".git/HEAD"), "utf8"),
+      await readFile(join(ordinary, ".git/HEAD"), "utf8"),
+    );
+  }
 });
 
 test("managed hooks preserve Git's default push-to-checkout behavior", async (t) => {

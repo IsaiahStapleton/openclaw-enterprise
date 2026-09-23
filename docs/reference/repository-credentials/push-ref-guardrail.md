@@ -25,12 +25,16 @@ it does not add token permissions or change GraphQL access.
 - Creation, deletion and force updates use the same destination-ref check.
   Tags are not branch refs and are denied. One disallowed ref rejects the
   entire push before ref updates; discovery and authentication may already occur.
+- Native HTTPS destinations retain the check with or without `.git`, trailing
+  slashes, or the configured Git username. Host and repository matching remains
+  exact; a username cannot select among duplicate repository bindings.
 - Entries are sorted and deduplicated into the admitted grant fingerprint.
   There is no separate entry-count or per-entry byte cap; the complete serialized
   client metadata must fit its existing 16 KiB limit.
 
 The generated Git configuration selects image-owned hooks. Ordinary hooks in the
 repository's common Git directory still run, including for linked worktrees.
+Repository initialization works before the initial `HEAD` exists.
 Standalone sessions with this policy require the emitted client from
 `pnpm credentials:build`.
 

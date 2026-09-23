@@ -143,6 +143,29 @@ function defaultPushToCheckout(args: readonly string[]): number {
   return 0;
 }
 
+async function commonDirectory(): Promise<string> {
+  if (process.env.GIT_COMMON_DIR) {
+    return resolve(process.env.GIT_COMMON_DIR);
+  }
+  if (process.env.GIT_DIR) {
+    try {
+      await access(join(process.env.GIT_DIR, "commondir"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      // During init Git supplies GIT_DIR before HEAD exists. A linked worktree
+      // has a commondir file and must still resolve its shared hook directory.
+      return resolve(process.env.GIT_DIR);
+    }
+  }
+  const output = gitOutput(["rev-parse", "--path-format=absolute", "--git-common-dir"])!;
+  if (!output.endsWith("\n")) {
+    throw new Error("repository-hook-inspection-failed");
+  }
+  return output.slice(0, -1);
+}
+
 /** Image-owned dispatch preserves Git's ordinary hooks in the common directory. */
 async function run(): Promise<number> {
   const [name, ...args] = process.argv.slice(2);
@@ -160,9 +183,8 @@ async function run(): Promise<number> {
       return 1;
     }
   }
-  const commonOutput = gitOutput(["rev-parse", "--path-format=absolute", "--git-common-dir"])!;
-  const common = commonOutput.slice(0, -1);
-  if (!commonOutput.endsWith("\n") || !isAbsolute(common) || /[\r\n\0]/.test(common)) {
+  const common = await commonDirectory();
+  if (!isAbsolute(common) || /[\r\n\0]/.test(common)) {
     throw new Error("repository-hook-inspection-failed");
   }
   const hook = join(common, "hooks", name);

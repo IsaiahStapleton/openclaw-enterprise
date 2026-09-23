@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
 updated: "2026-09-23"
-last_updated_session: "48c7cd3a-4677-44e0-b710-c39ada9d4f48"
+last_updated_session: "authoring-run/fca0cd1e-2248-4139-aae8-d12423b5667e"
 ---
 
 # Agent repository credential flow
@@ -217,10 +217,14 @@ See the [routing limits](../reference/repository-credentials.md#client-routing-a
 For a binding with `pushRefAllowlist`, the preparer selects image-owned hooks.
 `apps/controller/src/drivers/repo/github/credentials/client/hook-dispatch.ts:checkPush`
 matches the actual push destination and binding, then checks every destination
-ref from Git's pre-push input. A denied ref stops the whole push before ref
+ref from Git's pre-push input. Destination matching normalizes trailing slashes
+and checks a supplied username after selecting the binding, preserving duplicate
+grant ambiguity. A denied ref stops the whole push before ref
 updates, though discovery may already have contacted the service. The dispatcher
 then passes the original arguments and input to the repository's ordinary hook.
-Other hooks also resolve through Git's common directory. Custom hook paths and
+Other hooks also resolve through Git's common directory. `commonDirectory` uses
+Git's supplied directory environment during initialization before `HEAD` exists;
+linked worktrees still resolve their shared directory through Git. Custom hook paths and
 API writes remain outside this [best-effort guardrail](../reference/repository-credentials/push-ref-guardrail.md).
 
 `apps/controller/src/drivers/repo/github/credentials/client/router.ts:routeRepositoryClient`
@@ -321,6 +325,8 @@ State/worker, real-client, installed/runtime and live-provider checks.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-23 08:16: Trace accompanying initialization-safe hook delegation and equivalent native HTTPS destination matching. (authoring-run/fca0cd1e-2248-4139-aae8-d12423b5667e - 45c4cf5584b631c9ae5018c56a579d4bafa79ca5)
 
 - 2026-09-23 04:15: Trace the accompanying optional push-ref guardrail and ordinary hook delegation. (48c7cd3a-4677-44e0-b710-c39ada9d4f48 - cbf1851308a2db398820ae9e1000f57837703ace)
 

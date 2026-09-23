@@ -88,7 +88,12 @@ test("generated native configuration selects exact endpoint authority through st
       0o600,
     );
   }
-  for (const path of ["example/project", "EXAMPLE/PrOjEcT.git", "example/project.git"]) {
+  for (const path of [
+    "example/project",
+    "EXAMPLE/PrOjEcT.git",
+    "example/project.git",
+    "example/project.git/",
+  ]) {
     const result = await git(material.root, ["credential", "fill"], protocol(path));
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout.includes(`password=${opened.bearer}\n`), true);
@@ -559,10 +564,12 @@ test(
       "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + pushedArguments + "'\ncat > '" + pushedInput + "'\n",
       { mode: 0o755 },
     );
+    await invoke(["-C", checkout, "commit", "--allow-empty", "-m", "Ordinary checkout commit"]);
+    assert.equal(await readFile(marker, "utf8"), "called\n");
     const linked = join(work, "linked");
     await invoke(["-C", checkout, "worktree", "add", "--detach", linked]);
     await invoke(["-C", linked, "commit", "--allow-empty", "-m", "Linked worktree commit"]);
-    assert.equal(await readFile(marker, "utf8"), "called\n");
+    assert.equal(await readFile(marker, "utf8"), "called\ncalled\n");
     const head = (await invoke(["-C", linked, "rev-parse", "HEAD"])).stdout.trim();
     await invoke(["-C", linked, "push", "origin", "HEAD:refs/heads/exact"]);
     assert.equal(await guarded.git.ref("refs/heads/exact"), head);
@@ -576,6 +583,29 @@ test(
     );
     await invoke(["-C", linked, "push", "origin", "+HEAD:refs/heads/agent/one"]);
     assert.equal(await guarded.git.ref("refs/heads/agent/one"), head);
+    // Equivalent native HTTPS spellings retain the same allowlist decision.
+    for (const [index, destination] of [
+      "https://github.com/fixture/repository.git/",
+      "https://github.com/fixture/repository/",
+      "https://gateway-session@localhost/fixture/repository.git",
+      "https://gateway-session@localhost/fixture/repository.git/",
+    ].entries()) {
+      const ref = `refs/heads/agent/spelling-${index}`;
+      await invoke(["-C", linked, "push", destination, "HEAD:" + ref]);
+      assert.equal(await guarded.git.ref(ref), head);
+      const before = await snapshot();
+      const trace = guarded.git.trace.length;
+      const denied = await invoke(["-C", linked, "push", destination, "HEAD:refs/heads/main"], {
+        allowFailure: true,
+      });
+      assert.notEqual(denied.code, 0);
+      assert.match(denied.stderr, /repository-push-ref-not-allowed/);
+      assert.equal(await snapshot(), before);
+      assert.equal(
+        guarded.git.trace.slice(trace).some(({ path }) => path.endsWith("/git-receive-pack")),
+        false,
+      );
+    }
     for (const refs of [
       ["HEAD:refs/heads/agent/mixed", "HEAD:refs/heads/main"],
       ["HEAD:refs/tags/v1"],
