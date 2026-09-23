@@ -93,6 +93,8 @@ const reviewedImports = {
     "node:fs/promises": ["open", "stat"],
   },
   "drivers/repo/github/credentials/registry.ts": { "node:crypto": ["createHash"] },
+  // Standalone grants hash only nonsecret configuration/profile policy, never key material.
+  "drivers/repo/github/credentials/grants.ts": { "node:crypto": ["createHash"] },
   "drivers/repo/github/driver.ts": {
     "@openclaw-enterprise/occ": ["DependencyUnavailableError", "ScopeViolationError"],
   },

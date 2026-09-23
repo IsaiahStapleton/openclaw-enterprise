@@ -4,6 +4,7 @@ import type {
   RepositoryBindingRequest,
 } from "@openclaw-enterprise/contracts";
 import type { GitHubProfile } from "./types.ts";
+import { githubCapabilityPolicy, permissionsForProfile } from "./profiles.ts";
 import { normalizePushRefAllowlist } from "../../credentials/client-contracts.ts";
 
 export const GITHUB_REPOSITORY_REGISTRY_MAX_BYTES = 256 * 1024;
@@ -204,6 +205,8 @@ export function resolveGitHubRepositoryBinding(
           ? {}
           : { pushRefAllowlist: policy.pushRefAllowlist }),
         profile: selectedProfile,
+        permissions: permissionsForProfile(selectedProfile),
+        capabilityPolicy: githubCapabilityPolicy,
       }),
     )
     .digest("hex");

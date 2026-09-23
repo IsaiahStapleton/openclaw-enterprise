@@ -114,11 +114,11 @@ for prerequisites, commands and proof limits.
 ## What the controlled service tests prove
 
 The Git upstream runs the actual `git-http-backend` against a disposable bare
-repository. The `git-write` case proves clone, fetch, branch checkout and push,
-with assertions on remote refs. The `git-read` case proves the read operations,
-rejects push and API requests before token acquisition or upstream access, and
-checks that a denied push leaves remote refs unchanged. API and combined
-workflow coverage selects `git-full`.
+repository. Contributor (`git-write`) coverage exercises clone, fetch, branch
+checkout, push and PR work. Reader (`git-read`) coverage admits reads, rejects
+push and REST writes before token acquisition or upstream access, and checks
+that a denied push leaves remote refs unchanged. Collaborator (`git-full`)
+adds ordinary issue management.
 A fault case drops the response after receive-pack finishes and checks that the
 service sends the push once while the remote ref records the accepted commit.
 
@@ -129,6 +129,13 @@ paginated comments and issues using native repository-ID links and opaque issue
 cursors, individual comment operations and native GraphQL PR
 creation. It checks bodyless deletion and unchanged human text. Unknown routes
 and lost mutation responses exercise denial and no-replay behavior.
+
+The access-level cases send requests through the real TLS listener, acquisition
+and forwarding path. They cover exact permission maps, rejection of an older
+grant through the private control API, bounded README/diff replies and
+possible-write/no-replay accounting for Reader GraphQL. The controlled upstream
+models GitHub responses; it does not establish live GitHub authorization or
+installed-Agent qualification.
 
 The alternate adapter uses a nonnumeric repository ID, nested repository path,
 different native authentication and permissions, short access expiry, and a

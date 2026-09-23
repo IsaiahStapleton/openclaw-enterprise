@@ -327,6 +327,10 @@
                         "label": "Credential Lifecycle"
                       },
                       {
+                        "page": "reference/repository-credentials/access-levels",
+                        "label": "Access Levels"
+                      },
+                      {
                         "page": "reference/repository-credentials/push-ref-guardrail",
                         "label": "Push Guardrail"
                       }

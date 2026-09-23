@@ -517,4 +517,43 @@ test("gh selection retains private configuration and exact pins without suppress
   });
   assert.notEqual(rejected.code, 0);
   assert.equal(rejected.stderr, "unsupported-client-command\n");
+
+  // Rejection happens before private material is read or a native child starts.
+  // These forms could change hosts, select an implicit branch, launch a browser,
+  // mutate beyond the supported surface, or trigger gh's push/fork workflow.
+  for (const args of [
+    ["auth", "login"],
+    ["extension", "exec", "anything"],
+    ["repo", "fork"],
+    ["repo", "view", "https://github.com/example/project"],
+    ["repo", "view", "example/project", "example/other"],
+    ["repo", "view", "-R", "example/project"],
+    ["issue", "list", "--hostname", "other.example"],
+    ["issue", "list", "--limit", "0"],
+    ["pr", "list", "--search", "repo:example/other"],
+    ["pr", "view", "https://github.com/example/other/pull/1"],
+    ["pr", "checks"],
+    ["pr", "diff", "some-branch"],
+    ["pr", "view", "1", "--web"],
+    ["pr", "view", "1", "-R", "example/project", "--repo", "example/other"],
+    ["pr", "comment", "1", "--editor"],
+    ["issue", "comment", "1", "--edit-last", "--body", "changed"],
+    ["pr", "create", "--head", "other:branch"],
+    ["pr", "create", "--fill"],
+  ]) {
+    const denied = await run(process.execPath, [router, "gh", ...args], {
+      env: cleanEnvironment(),
+      allowFailure: true,
+    });
+    assert.equal(denied.code, 1, JSON.stringify(args));
+    assert.equal(denied.stdout, "");
+    assert.equal(denied.stderr, "unsupported-client-command\n", JSON.stringify(args));
+  }
+
+  const viewed = parseGhInvocation(["repo", "view", "github.com/example/other"]);
+  assert.equal(selectGhRepository(manifest, viewed.target.value).sessionId, "second");
+  assert.throws(
+    () => selectGhRepository(manifest, viewed.target.value, manifest.bindings[0]),
+    /conflicting-repository-selection/,
+  );
 });

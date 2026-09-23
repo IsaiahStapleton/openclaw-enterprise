@@ -47,6 +47,12 @@ test("canonical registry fingerprints bind exact authority and the selected Name
   assert.equal(binding.grant.repositoryId, "34567");
   assert.equal(registry.repositories[0].repository, "example/application");
   assert.match(binding.grant.grantId, /^sha256:[a-f0-9]{64}$/);
+  // Frozen pre-access-level digest for this same registry/default profile. Deploying
+  // broader permission or capability semantics must invalidate the old admission.
+  assert.notEqual(
+    binding.grant.grantId,
+    "sha256:fec4c807b7dbb4a2611d8201ba72d118addd28bdda270761216cc6ca7cb204f0",
+  );
 
   // Input mutation, JSON property ordering, and policy list ordering cannot change a snapshot.
   input.repositories[0].namespaces[0].profiles.pop();
