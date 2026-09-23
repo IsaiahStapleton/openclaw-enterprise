@@ -141,7 +141,7 @@ func (r *runner) importRuntime(ctx context.Context, s *developmentState) (string
 
 // The local profile trusts only Pod loopback; first-agent verifies model access
 // with the separate loopback password. Routed installations supply Envoy source CIDRs.
-func writeInstallation(s *developmentState, reference string) error {
+func writeInstallation(s *developmentState, reference string, openShell *openShellDevelopmentAssets) error {
 	auth := map[string]any{"mode": "kubeconfig", "kubeconfigPath": "/run/openclaw-development/kubeconfig", "context": "k3d-" + s.Cluster}
 	resources := map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "256Mi"}, "limits": map[string]string{"cpu": "2", "memory": "2Gi"}}
 	config := map[string]any{
@@ -159,9 +159,61 @@ func writeInstallation(s *developmentState, reference string) error {
 			}},
 		},
 	}
+	if s.SandboxDriver == "openshell" {
+		if openShell == nil {
+			return fmt.Errorf("OpenShell development assets are required")
+		}
+		config["drivers"].(map[string]any)["sandbox"] = openShellInstallationConfiguration(s, openShell.workspaceResources)
+	}
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		return err
 	}
 	return exclusiveWrite(filepath.Join(s.directory, "installation.yaml"), data, 0644)
+}
+
+func openShellInstallationConfiguration(s *developmentState, workspaceResources []any) map[string]any {
+	gatewayLabels := map[string]string{
+		"app.kubernetes.io/name":     "openshell",
+		"app.kubernetes.io/instance": openShellGatewayService,
+	}
+	return map[string]any{
+		"id": "sandbox-openshell-development",
+		"configuration": map[string]any{
+			"gateway": map[string]any{
+				"endpoint":      fmt.Sprintf("http://k3d-%s-server-0:%d", s.Cluster, openShellNodePort),
+				"workspaceMode": "operator",
+				"operatorNamespaceLabels": map[string]string{
+					openShellOperatorNamespaceLabel: openShellOperatorNamespaceValue,
+				},
+				"operatorWorkspaceResources": workspaceResources,
+				"networkPolicyResources": []any{
+					map[string]any{
+						"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+						"metadata": map[string]string{"name": "allow-openshell-sandbox-callback"},
+						"spec": map[string]any{
+							"podSelector": map[string]any{}, "policyTypes": []string{"Egress"},
+							"egress": []any{map[string]any{"to": []any{map[string]any{
+								"namespaceSelector": map[string]any{"matchLabels": map[string]string{"kubernetes.io/metadata.name": openShellGatewayNamespace}},
+								"podSelector":       map[string]any{"matchLabels": gatewayLabels},
+							}}, "ports": []any{map[string]any{"protocol": "TCP", "port": 8080}}}},
+						},
+					},
+				},
+			},
+			"kubernetes": map[string]any{
+				"runtimeClassName": openShellRuntimeClass,
+				"serviceAccount":   map[string]string{"mode": "gatewayConfigured"},
+				"sandboxDataMount": map[string]any{"subPath": "workspace", "mountPath": "/sandbox/enterprise", "readOnly": false},
+			},
+			"policy": map[string]any{
+				"process": map[string]string{"runAsUser": "1000", "runAsGroup": "1000"},
+				"networkPolicies": []any{
+					map[string]any{"name": "source-control", "endpoints": []any{map[string]any{"host": "github.com", "ports": []int{443}, "tls": "skip"}}, "binaries": []any{map[string]string{"path": "/usr/bin/git"}}},
+					map[string]any{"name": "model-provider", "endpoints": []any{map[string]any{"host": "api.openai.com", "ports": []int{443}, "tls": "skip"}}, "binaries": []any{map[string]string{"path": "/app/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"}}},
+				},
+			},
+			"sandboxNamePrefix": "os",
+		},
+	}
 }

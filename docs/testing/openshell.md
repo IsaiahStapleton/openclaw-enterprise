@@ -85,6 +85,36 @@ Local `sandbox-driver-startup`, `controller-lifecycle`, and
 `postgres-platform-state` integration tests cover driver selection, revision
 lifecycle, and persistence. They do not exercise these real OpenShell tools.
 
+### Development profile
+
+The opt-in development-profile integration runs OCC in real Compose, creates
+the owned k3d cluster through `occ dev up`, installs the checksum-pinned
+OpenShell assets, and verifies the bootstrap Namespace, RuntimeClass, Agent
+Sandbox API, deployment Gateway, operator label, workspace ServiceAccount, and
+the actual matching Workspace through the Gateway API. It then creates another
+OCC Namespace and verifies that the Driver applies the same ServiceAccount and
+creates its matching Workspace without another Helm release:
+
+```sh
+OCC_TEST_DEV_UP_OPENSHELL_REAL=1 \
+  node --test tests/integration/dev-up-openshell-k3d-real.test.mjs
+```
+
+The Driver, rather than a per-Namespace Helm release, applies the rendered
+workspace-chart resources before creating the Workspace. The case requires an
+executable checkout-local `bin/occ`, Docker with Compose,
+k3d, kubectl, Helm, and network access to the pinned sources and images. Set
+`OCC_TEST_DEV_UP_CONTAINER_ENGINE=podman` to select a prepared Podman engine.
+It creates unique project, cluster, state, PostgreSQL, API, and Kubernetes port
+names and removes only those resources. Missing selected prerequisites fail.
+
+This case proves development orchestration, the two real charts, Driver-owned
+operator resource reconciliation, and Gateway Workspace creation. It does not
+create an Agent or Sandbox. The
+`OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` real Sandbox Driver case remains the
+Agent-level proof that the ordinary dedicated Codex workflow rejects unsupported
+Secret projection without creating a Sandbox or Agent Pod.
+
 ## OpenShell test environment
 
 [`sandbox-driver-openshell-k3d-real.test.mjs`](../../tests/integration/sandbox-driver-openshell-k3d-real.test.mjs)

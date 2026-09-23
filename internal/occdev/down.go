@@ -13,8 +13,15 @@ import (
 // Down stops the selected Docker stack or the recorded Kubernetes stack.
 func Down(ctx context.Context, opts Options) error {
 	r := newRunner(opts)
+	sandbox := r.setting("OCC_DEVELOPMENT_SANDBOX_DRIVER", "none")
+	if sandbox != "none" && sandbox != "openshell" {
+		return fmt.Errorf("OCC_DEVELOPMENT_SANDBOX_DRIVER must be none or openshell")
+	}
 	switch driver := r.setting("OCC_DEVELOPMENT_COMPUTE_DRIVER", "docker"); driver {
 	case "docker":
+		if sandbox != "none" {
+			return fmt.Errorf("OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell requires OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes")
+		}
 		if err := r.selectEngine(ctx, r.setting("OCC_DEVELOPMENT_CONTAINER_ENGINE", "auto")); err != nil {
 			return err
 		}

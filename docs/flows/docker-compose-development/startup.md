@@ -17,7 +17,9 @@ implementation, so native project names, profiles, and override files keep
 their normal precedence. This trace covers the default
 `OCC_DEVELOPMENT_COMPUTE_DRIVER=docker` path. Selecting `kubernetes` dispatches
 to the [local Kubernetes development profile](../../guides/deploy/local-kubernetes-development.md),
-which keeps OCC in Compose and uses k3d for Compute.
+which keeps OCC in Compose and uses k3d for Compute. That profile accepts
+`OCC_DEVELOPMENT_SANDBOX_DRIVER=none` or `openshell`; OpenShell is rejected
+with Docker Compute.
 
 The Docker Compute path first probes a running Docker Engine and the JSON
 configuration capability required from Docker Compose. If that probe fails, it
@@ -180,14 +182,17 @@ project configuration.
 `internal/occdev/up.go:Up`, `internal/occdev/up.go:waitCompleted`,
 `internal/occdev/kubernetes.go:writeKubeconfigs`,
 `internal/occdev/kubernetes.go:importRuntime`,
-`internal/occdev/kubernetes.go:writeInstallation`.
+`internal/occdev/kubernetes.go:writeInstallation`,
+`internal/occdev/openshell.go:prepareOpenShell`.
 
 Compose starts PostgreSQL, migration, and bootstrap. The lifecycle waits for
 successful migration and bootstrap exits before creating the dedicated k3d
-cluster on the Compose network. k3d resolves the latest K3s patch in the 1.35
-family, which matches the supported Kubernetes minimum. The cluster API binds
-host loopback; creation leaves the default kubeconfig and current context
-unchanged.
+cluster on the Compose network. The default Sandbox profile resolves the latest
+K3s patch in the 1.35 family, which matches the supported Kubernetes minimum.
+The OpenShell profile instead pins its tested K3s image and mounts a generated
+Pod Security Admission configuration that exempts only the
+`openshell-sandbox` RuntimeClass. The cluster API binds host loopback; creation
+leaves the default kubeconfig and current context unchanged.
 
 The host kubeconfig remains owner-readable. The container kubeconfig uses the
 cluster's internal load-balancer hostname with TLS verification. The lifecycle
@@ -201,6 +206,15 @@ The container configuration and kubeconfig are individually readable by
 non-root containers, behind the private host directory, and mounted read-only
 into the API and Kubernetes worker. Neither service receives the engine socket.
 
+For OpenShell, the host also verifies and prepares the pinned Gateway and
+workspace Helm charts, Agent Sandbox manifest, RuntimeClass, controller, and
+immutable Gateway images. It imports those images into k3d, installs the
+Gateway in `openshell-system` with `workspaceMode: operator`, and adds the
+Sandbox Driver, explicit operator mode, operator namespace label, and rendered
+workspace-chart resources to the Installation configuration.
+Optional absolute-path overrides must select both charts together. Chart and
+manifest overrides do not relax the selected image or cluster pins.
+
 ### 14. Prove readiness and clean up the owned Kubernetes profile
 
 `internal/occdev/up.go:waitReady`, `internal/occdev/up.go:copyAndVerifyKey`,
@@ -210,18 +224,30 @@ into the API and Kubernetes worker. Neither service receives the engine socket.
 The lifecycle starts the API and Kubernetes worker, waits for API health and
 worker readiness, copies bootstrap output to a private temporary file, and
 uses `occclient` to read the Installation. Its ID must match the bootstrap
-response before the final key file is written exclusively and readiness is
-reported. This hands an initialized profile to the operator; it does not prove
-Agent deployment or a model turn.
+response before the final key file is written exclusively.
+
+With OpenShell selected, the worker then creates the bootstrap Kubernetes
+Namespace through the regular Compute workflow. The Sandbox Driver applies the
+operator label and rendered workspace-chart resources, reaches the deployment
+Gateway over its fixed NodePort, and creates the exact owned Workspace. Startup
+reports readiness only after the Namespace becomes ready. The NodePort is
+reachable from the Compose worker through the shared private engine network and
+is not published to the host.
+This proves namespace infrastructure and Workspace creation; it does not prove
+Agent deployment or a model turn. The regular dedicated Codex path still
+rejects its required Secret-backed environment before creating an OpenShell
+Sandbox.
 
 On failure, startup attempts resource cleanup. Explicit Kubernetes shutdown
 validates the marker, state, and Compose snapshot before using the recorded
 engine endpoint. Cleanup stops the API and worker before deleting the named
 k3d cluster and Compose project volumes. It continues cleanup after individual
 errors and retains state when any cleanup step fails. Complete cleanup removes
-the state directory and its helper-owned key; an external `--key-output` file
-remains operator-owned.
+the state directory and its helper-owned key. A successfully returned external
+`--key-output` file remains operator-owned; startup removes a newly written
+external key if a later OpenShell readiness step fails.
 
 ## Related
 
 - [Return to the parent flow](../docker-compose-development.md).
+- [OpenShell Sandbox provisioning](../openshell-sandbox-provisioning.md).

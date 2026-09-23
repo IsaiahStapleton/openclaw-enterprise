@@ -680,14 +680,7 @@ function channelProxy(value: unknown): { address: string; port: number } {
 
 export function kubernetesNamespaceName(namespaceId: string): string {
   const id = required(namespaceId, "Platform Namespace ID");
-  const slug =
-    id
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 46)
-      .replace(/-+$/g, "") || "ns";
-  return `oce-${slug}-${sha256Hex(id, 12)}`;
+  return `oce-${sha256Hex(id, 15)}`;
 }
 
 export function kubernetesGatewayNamespaceName(namespaceId: string): string {

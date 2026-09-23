@@ -60,6 +60,43 @@ instead; startup fails if that explicit image is missing. The helper imports
 that image into k3d and records its resolved digest in the generated Installation
 configuration.
 
+### Start the OpenShell fail-closed profile
+
+Add the OpenShell Sandbox Driver when you need to exercise its supported
+fail-closed Agent path:
+
+```bash
+OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes \
+OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell \
+  ./bin/occ dev up
+```
+
+This profile also requires Helm and network access for its first start. It uses
+the repository-pinned OpenShell `v0.1.0-pre.5` source and Agent Sandbox release,
+verifies their checksums, imports immutable OpenShell images, and installs one
+Gateway in `openshell-system` with operator workspace mode. It installs the
+project's workspace chart by rendering its namespace resources into the trusted
+Installation configuration; the Sandbox Driver applies them to each OCC
+Namespace during reconciliation. To use reviewed local assets instead, set both
+`OCC_DEVELOPMENT_OPENSHELL_HELM_CHART` and
+`OCC_DEVELOPMENT_OPENSHELL_WORKSPACE_HELM_CHART`, plus
+`OCC_DEVELOPMENT_OPENSHELL_AGENT_SANDBOX_MANIFEST` to absolute paths.
+
+The Sandbox Driver labels each Kubernetes namespace for operator mode, applies
+the rendered chart's ServiceAccount, Role, RoleBinding, and NetworkPolicy, then
+creates an OpenShell Workspace with that same physical name. It does not report
+the OCC Namespace as ready unless exact Workspace ownership is present. The
+Gateway's fixed NodePort is reachable only through the development Compose
+network and owned k3d node; it is not published on a host interface.
+
+Stock OpenShell cannot preserve the Secret-backed environment, plugin runtime,
+or projected workload identity required by a dedicated Codex Agent. A deployment
+must therefore fail with the documented unsupported-projection error before an
+OpenShell Sandbox or Agent Pod is created. This profile does not enable the
+test-only compatibility bridge and cannot run a model turn. New OCC Namespaces
+receive the same rendered workspace-chart resources through the Driver and use
+the same deployment Gateway.
+
 State and credentials are written to the private
 `/tmp/openclaw-development` directory by default. Set the absolute
 `OCC_DEVELOPMENT_STATE_DIRECTORY` before both startup and cleanup to use
@@ -104,6 +141,31 @@ deploy an Agent or run a model. The API and worker use the same generated
 Installation configuration, so Agent deployments use Kubernetes Compute. To
 deploy your own Agent and get a model response, continue with [Deploy your
 first Agent](../first-agent.md).
+
+For the OpenShell profile, also verify the selected RuntimeClass, Agent Sandbox
+API, deployment Gateway, operator label, and workspace ServiceAccount. Replace
+`<namespace>` with the single Kubernetes namespace carrying the
+`openclaw.dev/namespace` label:
+
+```bash
+kubectl --kubeconfig /tmp/openclaw-development/kubeconfig \
+  --context <context-printed-by-startup> get runtimeclass openshell-sandbox
+kubectl --kubeconfig /tmp/openclaw-development/kubeconfig \
+  --context <context-printed-by-startup> get crd sandboxes.agents.x-k8s.io
+kubectl --kubeconfig /tmp/openclaw-development/kubeconfig \
+  --context <context-printed-by-startup> -n openshell-system get service openshell-gateway
+kubectl --kubeconfig /tmp/openclaw-development/kubeconfig \
+  --context <context-printed-by-startup> get namespace <namespace> \
+  -o jsonpath='{.metadata.labels.openshell\.ai/openclaw-workspace}{"\n"}'
+kubectl --kubeconfig /tmp/openclaw-development/kubeconfig \
+  --context <context-printed-by-startup> -n <namespace> get serviceaccount openshell-sandbox
+```
+
+Expect the label command to print `true`. These resources and a ready OCC
+Namespace prove OpenShell infrastructure startup. The selected real dev-up test
+also queries the Gateway for the corresponding Workspace. The exact
+Secret-projection rejection, with no Sandbox or Agent Pod, is the supported
+Agent-level result.
 
 ## Configure workspace storage on single-node k3d
 
@@ -222,6 +284,11 @@ and the recorded state directory explicitly. For the default state directory:
 OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev down
 ```
 
+The OpenShell startup output includes
+`OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell` in its cleanup command. Cleanup reads
+the recorded profile, so retaining that selector documents the stack being
+removed but does not broaden its ownership.
+
 `./bin/occ dev down` defaults to Docker Compute even when Kubernetes state exists.
 For explicitly selected Kubernetes mode, it reads the private recorded state
 and removes only the named `occ-dev-*` cluster and its Compose project, deletes
@@ -236,7 +303,8 @@ operator-owned; remove that local copy separately.
 ## Limits
 
 Development startup readiness does not prove Agent deployment, model execution,
-provider authentication, or dedicated Codex WebSocket execution. Those checks
+provider authentication, or dedicated Codex WebSocket execution. OpenShell
+startup deliberately proves only its infrastructure and fail-closed boundary. Other checks
 require the real-cluster procedures, approved digest-pinned runtime images, and
 existing authorized credentials described in the
 [Kubernetes testing guide](../../testing/kubernetes.md).

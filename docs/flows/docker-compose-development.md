@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-09-17
-last_updated_session: authoring-run/b044b43c-e713-4006-93a0-c129cdf5578e
+updated: 2026-09-23
+last_updated_session: authoring-run/dc7a0b75-945c-4091-8600-eb919ad138dd
 ---
 
 # Compose development flow
@@ -13,6 +13,10 @@ The `scripts/dev-up` entry point selects the same profile. Docker Compute is
 selected by default. Setting `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes` keeps
 OCC in Compose but dispatches Compute to the
 [local k3d profile](../guides/deploy/local-kubernetes-development.md).
+That profile can select the OpenShell Sandbox Driver for its supported
+fail-closed path. It prepares pinned OpenShell infrastructure and installs the
+deployment Gateway, then gives the Sandbox Driver rendered workspace-chart
+resources to reconcile before reporting readiness.
 Both profiles perform host preflight, select Docker Engine or Podman, prepare
 runtime images, start Compose, and wait for PostgreSQL migration, Installation
 bootstrap, API health, and worker readiness. Startup proves authenticated
@@ -30,7 +34,7 @@ selected Kubernetes Compute Driver and the
 - Trigger: `./bin/occ dev up [--key-output PATH] [-- COMPOSE_GLOBAL_OPTIONS...]`
   from the repository root, followed by authenticated Namespace operations.
 - Source: `scripts/dev-up:require_command`, `internal/occdev/up.go:Up`, and
-  `internal/occdev/down.go:Down`.
+  `internal/occdev/openshell.go:prepareOpenShell`.
 - Assumptions: Docker Engine with Compose, or Podman with `podman-compose`;
   Bash, curl, Python 3, and `yq` v4 for the Docker profile; writable PostgreSQL
   and Configuration volumes; loopback API publication; executable `bin/occ`
@@ -51,7 +55,13 @@ graph TD
   KPre --> KConfig["Validate Compose and claim<br/>private state with snapshot"]
   KConfig --> KStart["Bootstrap OCC and create<br/>the owned k3d cluster"]
   KStart --> KReady["Import runtime and start<br/>API and Kubernetes worker"]
-  KReady --> KProof["Prove authenticated<br/>Installation access"]
+  KReady --> KSandbox{"Sandbox profile"}
+  KSandbox -->|none| KProof
+  KSandbox -->|OpenShell| KOpenShell["Install pinned Agent Sandbox, RuntimeClass,<br/>Gateway, and render workspace resources"]
+  KOpenShell --> KWorkspace["Driver applies workspace resources and creates<br/>the default Namespace's owned Workspace"]
+  KWorkspace --> KFailClosed["Default Namespace ready;<br/>Agent projection remains fail closed"]
+  KFailClosed --> KProof
+  KProof["Prove authenticated<br/>Installation access"]
   KProof --> KDown["./bin/occ dev down reuses<br/>recorded endpoint and project"]
   KStart -->|failure| KRollback["Roll back owned resources<br/>retain state if cleanup fails"]
   KReady -->|failure| KRollback
@@ -117,6 +127,22 @@ their platform deletion workflows; follow [safe development shutdown](../guides/
 follows profile selection, the private Compose snapshot, k3d creation, runtime
 import, authenticated readiness, and cleanup through the recorded engine.
 
+### 5. Prepare the optional OpenShell development profile
+
+`internal/occdev/openshell.go:prepareOpenShell`,
+`apps/controller/src/drivers/sandbox/openshell.ts:ensureNamespace`
+
+The OpenShell selection pins its K3s node, AdmissionConfiguration, RuntimeClass,
+Agent Sandbox controller, Gateway and workspace charts, and three OpenShell
+images. The host installs one Gateway in `openshell-system` with operator
+workspace mode. The worker creates the owned bootstrap Kubernetes Namespace
+through the regular Compute workflow. The host renders the workspace chart into
+the Installation configuration, and the Sandbox Driver applies its resources
+and operator label before creating the corresponding Gateway Workspace. The
+Gateway NodePort is reachable only over the shared Compose network. Startup
+waits until the OCC Namespace becomes ready. A dedicated Codex deployment still
+rejects unsupported Secret projection before OpenShell creates a Sandbox.
+
 ## Debugging and Verification
 
 - `./scripts/dev-up` should show PostgreSQL readiness, migration completion,
@@ -127,6 +153,13 @@ import, authenticated readiness, and cleanup through the recorded engine.
 - With `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes`, startup should instead
   report Kubernetes Compute, a private kubeconfig, and the disposable k3d
   context; it does not mount the engine socket into the Kubernetes worker.
+- With `OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell`, startup should also report
+  OpenShell, one ready `openshell-system/openshell-gateway` Service, the
+  `openshell-sandbox` RuntimeClass, the Agent Sandbox CRD, and workspace
+  resources in the bootstrap Namespace. The selected real dev-up case also
+  reads the owned Workspace through the Gateway API. This proves infrastructure
+  readiness, not a model turn. The expected Agent result is the explicit
+  unsupported `secretKeyRef` projection failure with no Sandbox or Agent Pod.
 - Docker Compute on Podman startup verification should show Podman as the
   selected engine, mount only its reported API socket into the worker, and
   complete the same authenticated Installation proof without a `docker` alias.
@@ -158,6 +191,12 @@ import, authenticated readiness, and cleanup through the recorded engine.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-23 01:52: Moved workspace-chart reconciliation from a bootstrap-only Helm release into the operator-mode Sandbox Driver Namespace lifecycle. (authoring-run/dc7a0b75-945c-4091-8600-eb919ad138dd - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
+
+- 2026-09-23 01:11: Documented the deployment Gateway, operator Workspace creation, and bootstrap workspace chart in the OpenShell development profile. (authoring-run/955359e5-5631-48e4-acc1-a5e32b9ade00 - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
+
+- 2026-09-22 18:36: Added the optional OpenShell Kubernetes development profile, namespace-local Helm readiness, and the supported fail-closed Agent boundary. (authoring-run/e7b89de2-9e58-4849-b078-791560cc5d58 - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
 
 - 2026-09-17 17:42: Pin Kubernetes development to the supported 1.35 family and emit only runtime settings accepted by the current Kubernetes Compute Driver schema. (authoring-run/b044b43c-e713-4006-93a0-c129cdf5578e - 9310d5b025e84f885e4f7facae2e2906b50d58f8)
 

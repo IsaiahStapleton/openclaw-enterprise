@@ -107,8 +107,8 @@ export function createOpenShellInstallationConfiguration({
     id: "sandbox-openshell-kubernetes",
     configuration: {
       gateway: {
+        workspaceMode: "operator",
         endpoint: "http://127.0.0.1:1",
-        workspace: "default",
         readiness: {
           serviceName: "openshell-gateway",
           podSelector: { "app.kubernetes.io/name": "openshell" },
@@ -530,6 +530,13 @@ export function createOpenShellKubernetesFixture({
   }
 
   async function installOpenShellGateway(namespace, { sandboxServiceAccountName } = {}) {
+    await kubectl(
+      "label",
+      "namespace",
+      namespace,
+      "openshell.ai/openclaw-workspace=true",
+      "--overwrite",
+    );
     await applyOpenShellGatewayNetworkPolicies(namespace);
     await ensureOpenShellJwtSecret(namespace);
     const values = [
@@ -537,6 +544,8 @@ export function createOpenShellKubernetesFixture({
       "--set=pkiInitJob.enabled=false",
       "--set=server.disableTls=true",
       "--set=server.auth.allowUnauthenticatedUsers=true",
+      "--set-string=server.drivers.kubernetes.workspaceMode=operator",
+      "--set-string=server.drivers.kubernetes.operatorNamespaceLabel=openshell.ai/openclaw-workspace=true",
       "--set=podSecurityContext.seccompProfile.type=RuntimeDefault",
       "--set=supervisor.sandboxRuntime.networkPolicyEnforced=true",
       `--set-string=server.defaultRuntimeClassName=${openShellRuntimeClass}`,

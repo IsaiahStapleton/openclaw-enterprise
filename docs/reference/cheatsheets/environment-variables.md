@@ -82,6 +82,7 @@ These settings belong to the checkout's development stack. See
 for supported engines, images, and security restrictions.
 
 - `OCC_DEVELOPMENT_COMPUTE_DRIVER` — `docker` (default) or `kubernetes`; only the Kubernetes quickstart can deploy Agents.
+- `OCC_DEVELOPMENT_SANDBOX_DRIVER` — `none` (default) or `openshell`; OpenShell requires Kubernetes Compute and proves only the supported fail-closed Agent path.
 - `OCC_DEVELOPMENT_CONTAINER_ENGINE` — `auto` (default), `docker`, or `podman`.
 - `OPENCLAW_DEV_PORT` — Published API port on host loopback; default: `3000`.
 - `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` — Compose bridge allowed to reach the development API.
@@ -97,6 +98,9 @@ for supported engines, images, and security restrictions.
 - `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` — Kubernetes profile startup timeout; default: `300` seconds per wait.
 - `OCC_DEVELOPMENT_KUBERNETES_API_PORT` — Local Kubernetes API port; default: `6443`.
 - `OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT` — Disposable cluster disk-pressure threshold; default: `5`.
+- `OCC_DEVELOPMENT_OPENSHELL_HELM_CHART` — Optional absolute OpenShell Gateway chart directory or archive; set it together with the workspace chart override.
+- `OCC_DEVELOPMENT_OPENSHELL_WORKSPACE_HELM_CHART` — Optional absolute OpenShell workspace chart directory or archive; set it together with the Gateway chart override.
+- `OCC_DEVELOPMENT_OPENSHELL_AGENT_SANDBOX_MANIFEST` — Optional absolute Agent Sandbox manifest; otherwise the helper downloads its checksum-verified pinned manifest.
 - `OCC_CONTAINER_ENGINE_SOCKET` — Podman API socket; the development helper supplies it automatically.
 - `DOCKER_HOST`, `DOCKER_CONTEXT` — Docker endpoint or named context; an explicit context takes precedence. The Kubernetes profile requires a local `unix:///` socket and records the selected endpoint.
 - `CONTAINER_CONNECTION`, `CONTAINER_HOST` — Podman's connection selection; preserved during Docker-profile cleanup when Podman is the engine.

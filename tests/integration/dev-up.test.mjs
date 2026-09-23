@@ -611,6 +611,10 @@ const server = http.createServer((request, response) => {
     if (${JSON.stringify(scenario)} === "readiness-blocked") response.writeHead(503);
     response.end("{}"); return;
   }
+  if (request.url === "/namespaces/namespace_fixture" && authorized) {
+    response.end(JSON.stringify({ data: { id: "namespace_fixture", name: "default", status: "ready" }, meta: { requestId: "req_fixture" } }));
+    return;
+  }
   if (request.url !== "/installation" || !authorized || ${JSON.stringify(scenario)} === "api-unauthorized") {
     response.writeHead(401);
     response.end(JSON.stringify({ error: { code: "UNAUTHENTICATED", message: "A valid service API key is required." }, meta: { requestId: "req_fixture" } }));
@@ -730,6 +734,113 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   const repeated = runDevDown(fixture.env);
   assert.notEqual(repeated.status, 0);
   assert.match(repeated.stderr, /no such file or directory/);
+});
+
+test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before reporting readiness", async (t) => {
+  const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
+
+  // Exercise the supported lifecycle boundary: dev-up installs the deployment
+  // Gateway, then gives the Driver the rendered chart resources it reconciles.
+  const result = fixture.start();
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Sandbox Driver: openshell/);
+  assert.match(
+    result.stdout,
+    /Installing the deployment OpenShell gateway in Namespace openshell-system/,
+  );
+  assert.doesNotMatch(result.stdout, /Installing OpenShell workspace resources/);
+  const directory = fixture.env.OCC_DEVELOPMENT_STATE_DIRECTORY;
+  const state = JSON.parse(await readFile(join(directory, "state.json"), "utf8"));
+  assert.equal(state.sandboxDriver, "openshell");
+  const configuration = await readFile(join(directory, "installation.yaml"), "utf8");
+  assert.match(configuration, /id: sandbox-openshell-development/);
+  assert.match(configuration, /endpoint: http:\/\/k3d-occ-dev-owned-server-0:30051/);
+  assert.match(configuration, /workspaceMode: operator/);
+  assert.match(configuration, /operatorWorkspaceResources:/);
+  assert.match(configuration, /kind: ServiceAccount/);
+  assert.doesNotMatch(configuration, /namespace: openclaw-workspace-template/);
+  assert.match(configuration, /operatorNamespaceLabels:/);
+  assert.match(configuration, /openshell\.ai\/openclaw-workspace: "true"/);
+  assert.doesNotMatch(configuration, /workspace: default/);
+
+  // The selected profile must use only the pinned cluster and OpenShell assets;
+  // readiness cannot be reported after a partial or mutable installation.
+  const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  const clusterCreate = commands.find(
+    ({ command, args }) => command === "k3d" && args[0] === "cluster" && args[1] === "create",
+  );
+  assert.match(
+    clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
+    /rancher\/k3s:v1\.36\.4-k3s1@sha256:/,
+  );
+  assert.ok(clusterCreate.args.includes("--volume"));
+  assert.ok(
+    commands.some(
+      ({ command, args }) =>
+        command === "kubectl" &&
+        args[0] === "rollout" &&
+        args.includes("deployment/agent-sandbox-controller"),
+    ),
+  );
+  assert.equal(
+    commands.filter(
+      ({ command, args }) => command === "k3d" && args[0] === "image" && args[1] === "import",
+    ).length,
+    4,
+    "OpenShell startup imports its three pinned images and the OCC runtime image",
+  );
+  const helmInstalls = commands.filter(
+    ({ command, args }) => command === "helm" && args[0] === "upgrade",
+  );
+  assert.equal(helmInstalls.length, 1);
+  const gatewayInstall = helmInstalls.find(({ args }) => args[2] === "openshell-gateway");
+  assert.ok(gatewayInstall.args.includes("--namespace"));
+  assert.ok(gatewayInstall.args.includes("openshell-system"));
+  assert.ok(gatewayInstall.args.includes("--set=image.pullPolicy=Never"));
+  assert.ok(gatewayInstall.args.includes("--set=sandboxRuntime.image.pullPolicy=Never"));
+  assert.ok(gatewayInstall.args.includes("--set=supervisor.image.pullPolicy=Never"));
+  assert.ok(gatewayInstall.args.includes("--set=workspaceResources.enabled=false"));
+  assert.ok(
+    gatewayInstall.args.includes("--set-string=server.drivers.kubernetes.workspaceMode=operator"),
+  );
+  assert.ok(
+    gatewayInstall.args.includes(
+      "--set-string=server.drivers.kubernetes.operatorNamespaceLabel=openshell.ai/openclaw-workspace=true",
+    ),
+  );
+  assert.ok(gatewayInstall.args.includes("--set=service.type=NodePort"));
+  assert.ok(gatewayInstall.args.includes("--set=service.nodePort=30051"));
+  const workspaceTemplate = commands.find(
+    ({ command, args }) => command === "helm" && args[0] === "template",
+  );
+  assert.ok(workspaceTemplate);
+  assert.ok(workspaceTemplate.args.includes("openshell-workspace"));
+  assert.ok(
+    workspaceTemplate.args.includes(
+      "--set-string=gateway.serviceAccount.namespace=openshell-system",
+    ),
+  );
+
+  const cleaned = runDevDown(fixture.env);
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+  await assert.rejects(stat(directory), { code: "ENOENT" });
+});
+
+test("dev-up rejects OpenShell when Kubernetes Compute is not selected", async (t) => {
+  const fixture = await createFixture(t);
+  const result = runDevUp([], {
+    ...fixture.env,
+    OCC_DEVELOPMENT_SANDBOX_DRIVER: "openshell",
+  });
+
+  assert.equal(result.status, 2);
+  assert.match(
+    result.stderr,
+    /OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell requires OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes/,
+  );
+  assert.equal((await readJsonLines(fixture.dockerLog)).length, 0);
 });
 
 for (const driver of ["docker", ""]) {

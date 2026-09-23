@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const stateMarker = "openclaw-enterprise-development-v2\n"
+const stateMarker = "openclaw-enterprise-development-v3\n"
 
 var clusterName = regexp.MustCompile(`^occ-dev-[a-z0-9][a-z0-9-]*$`)
 var projectName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -18,6 +18,7 @@ type developmentState struct {
 	Version         int    `json:"version"`
 	Repository      string `json:"repository"`
 	ComputeDriver   string `json:"computeDriver"`
+	SandboxDriver   string `json:"sandboxDriver"`
 	ContainerEngine string `json:"containerEngine"`
 	ComposeProject  string `json:"composeProject"`
 	Cluster         string `json:"cluster"`
@@ -116,7 +117,7 @@ func readState(directory string) (*developmentState, error) {
 	if err := json.Unmarshal(data, &state, json.RejectUnknownMembers(true)); err != nil {
 		return nil, fmt.Errorf("invalid development state: %w", err)
 	}
-	if !filepath.IsAbs(state.Repository) || state.Version != 2 || state.ComputeDriver != "kubernetes" || (state.ContainerEngine != "docker" && state.ContainerEngine != "podman") || !projectName.MatchString(state.ComposeProject) || !clusterName.MatchString(state.Cluster) || !strings.HasPrefix(state.DockerHost, "unix:///") || !filepath.IsAbs(state.KeyPath) {
+	if !filepath.IsAbs(state.Repository) || state.Version != 3 || state.ComputeDriver != "kubernetes" || (state.SandboxDriver != "none" && state.SandboxDriver != "openshell") || (state.ContainerEngine != "docker" && state.ContainerEngine != "podman") || !projectName.MatchString(state.ComposeProject) || !clusterName.MatchString(state.Cluster) || !strings.HasPrefix(state.DockerHost, "unix:///") || !filepath.IsAbs(state.KeyPath) {
 		return nil, fmt.Errorf("unsupported development state")
 	}
 	if state.KeyOwned && state.KeyPath != filepath.Join(directory, "initial-admin-service-key.json") {
