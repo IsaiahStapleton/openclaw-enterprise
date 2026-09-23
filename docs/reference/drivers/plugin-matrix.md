@@ -6,6 +6,10 @@ policy. This is a source snapshot of OpenClaw Enterprise (OCE), with the commit
 and review date below. The [PluginDriver reference](plugin.md) owns Driver
 selection and native limits; [Agent plugins](../agent-plugins.md) owns API semantics.
 
+For harness capabilities beyond current translation and the proposed iteration
+order, see the [policy translation plan](../../../apps/controller/src/drivers/plugin/policy-support.md)
+beside the translator.
+
 The [local docs preview](../../local-preview.md) adds search, category/status
 filters, and expandable evidence. A status filter matches either Driver's cell.
 GitHub shows the generated table with caveats and pinned source/test links.
