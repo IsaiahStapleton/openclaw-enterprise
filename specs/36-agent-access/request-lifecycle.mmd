@@ -1,0 +1,34 @@
+---
+config:
+  fontSize: 14
+  theme: base
+  themeVariables:
+    fontSize: 14px
+  sequence:
+    fontSize: 14px
+    wrap: false
+    diagramMarginY: 0
+    mirrorActors: true
+    useMaxWidth: false
+    actorMargin: 24
+    width: 145
+    height: 28
+    messageMargin: 4
+    noteMargin: 4
+    boxMargin: 4
+    actorFontSize: 14
+    messageFontSize: 14
+    noteFontSize: 14
+---
+sequenceDiagram
+  participant H as People
+  participant C as OCC API / IAM
+  participant S as Original State
+  H->>C: Admin enrolls / assigns
+  C->>S: Settle + audit
+  S-->>C: Outcome
+  Note over H,S: Unknown: authorized lookup, no replay.
+  H->>C: Open assigned Agent
+  H->>C: Admin revokes
+  C->>S: Commit revoke + audit
+  Note over H,S: Committed revoke: deny + close within 30s. Bob continues.

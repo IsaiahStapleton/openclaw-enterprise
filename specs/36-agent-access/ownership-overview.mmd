@@ -1,0 +1,29 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontSize: 14px
+  flowchart:
+    htmlLabels: true
+    nodeSpacing: 12
+    rankSpacing: 18
+    padding: 6
+---
+flowchart LR
+  H["<b>People</b><br/>Admin / recipient"]
+  C["<b>OCC API</b><br/>Auth, IAM, proxy"]
+  S["<b>Original State</b><br/>PostgreSQL / audit"]
+  R["<b>Agent workload</b><br/>Private Envoy"]
+  O["<b>OpenShell</b><br/>Compute runtime option"]
+  H -.->|Assign| C
+  C -->|Policy| S
+  C -->|Proxy| R
+  O -.->|Confines| R
+  classDef human fill:#eee9f4,stroke:#8f80a1,color:#26212e
+  classDef control fill:#e7edf5,stroke:#8595aa,color:#202b38
+  classDef runtime fill:#e5efed,stroke:#809c94,color:#22362f
+  classDef pending fill:#f0f0f0,stroke:#999,stroke-dasharray:4 3,color:#333
+  class H human
+  class C,S control
+  class R runtime
+  class O pending
