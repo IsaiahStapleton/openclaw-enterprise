@@ -3122,6 +3122,12 @@ test(
   async (context) => {
     const fixture = await setup(context);
     const owner = await fixture.agent("stop-prepare-race");
+    // Other Namespaces share this worker's queue. Their durable stop work must
+    // drain without changing this candidate's preparation gate or observations.
+    const foreign = await setup(context);
+    const foreignOwner = await foreign.agent("stop-prepare-foreign");
+    const foreignRevision = await foreign.revision(foreignOwner, 1);
+    const foreignStop = await foreign.requestStop(foreignOwner);
     const candidate = await fixture.revision(owner, 1);
     let releasePreparation;
     const preparationReleased = new Promise((resolve) => {
@@ -3132,12 +3138,17 @@ test(
     await fixture.start({
       ...fixture.compute,
       async prepareRevision(revision) {
-        preparationStarted = true;
-        await preparationReleased;
+        if (revision.namespaceId === fixture.namespace.id) {
+          preparationStarted = true;
+          await preparationReleased;
+        }
         return fixture.compute.prepareRevision(revision);
       },
       async stopRevision(revision) {
-        stoppedRevisions.push(revision.id);
+        if (revision.namespaceId === fixture.namespace.id) {
+          stoppedRevisions.push(revision.id);
+        }
+        return fixture.compute.stopRevision(revision);
       },
     });
     await waitFor("revision preparation to start", async () =>
@@ -3148,6 +3159,8 @@ test(
     releasePreparation();
     await fixture.work(candidate, "succeeded");
     await fixture.work(stop, "succeeded");
+    await foreign.work(foreignRevision, "succeeded");
+    await foreign.work(foreignStop, "succeeded");
 
     const stopped = await fixture.state.read((view) =>
       view.agents.findAgent(fixture.namespace.id, owner.id),
