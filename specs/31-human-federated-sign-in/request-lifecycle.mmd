@@ -12,64 +12,45 @@ config:
     noteBkgColor: "#F7F1E5"
     noteBorderColor: "#B3A078"
   sequence:
-    mirrorActors: false
+    mirrorActors: true
     useMaxWidth: true
     actorMargin: 24
-    width: 132
-    messageMargin: 22
-    noteMargin: 12
+    width: 120
+    messageMargin: 20
+    noteMargin: 10
 ---
 sequenceDiagram
-  actor Browser as Person / browser
-  box OCC controller owners
-    participant Auth as Authentication<br/>Better Auth mechanics
-    participant State as Account + State<br/>PostgreSQL unit
-    participant IAM as IAM / resource API
+  actor Browser
+  box OCC controller
+    participant Auth as Auth / Better Auth
+    participant State as State / PostgreSQL
+    participant IAM as Native IAM
   end
-  participant GitHub as github.com
-  Note over Browser,GitHub: Proposed flow · requests solid, replies dashed
-  Browser->>Auth: Trusted-origin start
-  Auth->>State: Reserve bound attempt, at most ten minutes
-  State-->>Auth: Reservation acknowledged
-  Auth-->>Browser: Authorization URL and browser binding
-  Browser->>GitHub: Sign in
-  GitHub-->>Browser: Exact callback with code / state
-  Browser->>Auth: Bound callback
-  Auth->>State: Match and atomically consume once
-  alt Invalid or uncertain consumption
-    State-->>Auth: No accepted consumption
-    Auth-->>Browser: No exchange or session, new start
-  else Consumption acknowledged
-    State-->>Auth: Consumed attempt
-    Note over Auth,GitHub: Remote work outside account / policy locks
-    Auth->>GitHub: Bounded code exchange, then authenticated /user
-    GitHub-->>Auth: Token and numeric identity
-    Auth->>Auth: Verify identity, discard provider tokens
-    Auth->>State: Exact instance / subject, guarded issuance
-    Note over Auth,State: Recheck method, Principal, active account and currentness
-    alt Unknown / disabled / stale identity
-      State-->>Auth: Deny issuance
-      Auth-->>Browser: No session, generic denial
-    else Admitted current account
-      State->>State: Insert fresh session and required facts
-      alt Failed or unknown commit
-        State-->>Auth: No acknowledged session
-        Auth-->>Browser: No credential and no blind replay
-      else Commit acknowledged
-        State-->>Auth: Session and State-authoritative expiry
-        Auth->>Auth: Final expiry check, derive cookie age
-        Auth-->>Browser: Ordinary OCE cookie if unexpired
-      end
-    end
+  participant GitHub
+  Note over Browser,GitHub: Prerequisite: administrator enrolled this GitHub identity
+  Browser->>Auth: Start GitHub login
+  Auth->>State: Save browser-bound attempt (5 minutes)
+  State-->>Auth: Commit confirmed
+  Auth-->>Browser: GitHub URL + attempt cookie
+  Browser->>GitHub: Sign in and authorize
+  GitHub-->>Browser: Redirect with code and state
+  Browser->>Auth: Callback + attempt cookie
+  Auth->>State: Validate and consume attempt once
+  State-->>Auth: Commit confirmed
+  Note over Auth,State: Invalid or uncertain consumption stops here
+  Auth->>GitHub: Exchange code, then read /user
+  GitHub-->>Auth: Token and numeric user ID
+  Auth->>Auth: Discard provider token
+  Auth->>State: Resolve enrollment, check account, save session + audit
+  alt Session committed
+    State-->>Auth: Session + expiry
+    Auth-->>Browser: Session cookie, return to Console
+  else Login refused or commit uncertain
+    Auth-->>Browser: Generic failure, no session cookie
   end
-  Note over Browser,IAM: Later request · only a current session proceeds
-  Browser->>Auth: Console session, Namespace list, existing Agent GET
-  Auth->>State: Admit current stored session
-  State-->>Auth: Current account / Principal or denial
-  alt Current session
-    Auth->>IAM: Authorize exact requested resource
-    IAM-->>Auth: Allowed result or permission denial
-    Auth-->>Browser: Console result within existing grants
-  else Admission denied
-    Auth-->>Browser: Clear protected content, sign-in required
-  end
+  Browser->>Auth: Read an existing Agent
+  Auth->>State: Check stored session and account
+  State-->>Auth: Current local Principal, or deny
+  Auth->>IAM: Authorize exact Agent read if session valid
+  IAM-->>Auth: Allow or deny
+  Auth-->>Browser: Agent data or access denied
