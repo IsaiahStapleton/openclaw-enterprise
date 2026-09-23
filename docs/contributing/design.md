@@ -7,6 +7,8 @@ before treating a planned capability as available.
 
 ## Find the right source
 
+- [Readable code](readable-code.md) explains functions, values, composition,
+  and state ownership through an illustrative TypeScript example.
 - [Driver development](driver-development.md) collects the base contracts for
   extending infrastructure behavior. For supported products and setup, use
   [Integrations](../guides/integrations/README.md).
