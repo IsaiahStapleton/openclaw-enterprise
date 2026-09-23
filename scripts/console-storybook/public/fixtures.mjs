@@ -119,6 +119,9 @@ export function installFixture(scenario, evidence) {
     servicePrincipalId: "identity_demo_agent",
     createdAt,
     activeRevisionId: scenario.deployed ? "rev_00000000-0000-4000-8000-000000000001" : null,
+    ...(scenario.repositoryBindings
+      ? { repositoryBindings: structuredClone(scenario.repositoryBindings) }
+      : {}),
   };
   agents.set(agent.id, agent);
   credentials.set(agent.id, { transportConfigured: scenario.transport !== false });
@@ -139,6 +142,23 @@ export function installFixture(scenario, evidence) {
       harness: { id: "codex", version: "demo", mode: owner.executionMode },
       compute: { id: "kubernetes-demo", implementation: "kubernetes" },
       servicePrincipalId: owner.servicePrincipalId,
+      ...(owner.repositoryBindings?.length
+        ? {
+            repositoryCredentials: {
+              driver: { id: "github-demo", implementation: "github" },
+              deadlineWallMs: Date.parse(createdAt) + 3600000,
+              bindings: owner.repositoryBindings.map((binding) => ({
+                ...binding,
+                providerId: "github-demo",
+                grant: {
+                  providerInstanceId: "github-demo",
+                  repositoryId: `demo-${binding.repositoryRef}`,
+                  grantId: `demo-${binding.repositoryRef}-${binding.profile}`,
+                },
+              })),
+            },
+          }
+        : {}),
     };
   }
   if (scenario.deployed) {
@@ -200,12 +220,17 @@ export function installFixture(scenario, evidence) {
       },
     },
   };
-  const response = (data, status = 200) =>
+  const response = (data, status = 200, errorCode) =>
     new Response(
-      JSON.stringify({ data, meta: { requestId: "req_00000000-0000-4000-8000-000000000001" } }),
+      JSON.stringify({
+        ...(errorCode
+          ? { error: { code: errorCode, message: "The selected preview simulates this failure." } }
+          : { data }),
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+      }),
       { status, headers: { "content-type": "application/json" } },
     );
-  const error = (status) => response(null, status);
+  const error = (status, code) => response(null, status, code);
   window.fetch = async (input, options = {}) => {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     const path = url.pathname;
@@ -233,7 +258,7 @@ export function installFixture(scenario, evidence) {
           }
         });
       }
-      return error(rule.status);
+      return error(rule.status, rule.code);
     }
     const body = options.body ? JSON.parse(options.body) : {};
     if (path === "/api/auth/session") {
@@ -271,6 +296,22 @@ export function installFixture(scenario, evidence) {
       }
       if (resource === "service-accounts" && method === "GET") {
         return response(accounts);
+      }
+      if (resource === "agents/repository-options" && method === "GET") {
+        return response(
+          scenario.repositoryOptions ?? [
+            {
+              repositoryRef: "application",
+              displayName: "example/application",
+              allowedProfiles: ["git-read", "git-write", "git-full"],
+            },
+            {
+              repositoryRef: "handbook",
+              displayName: "example/handbook",
+              allowedProfiles: ["git-read"],
+            },
+          ],
+        );
       }
       if (resource === "presets" && method === "GET") {
         return response(scenario.emptyPresets ? [] : [preset]);

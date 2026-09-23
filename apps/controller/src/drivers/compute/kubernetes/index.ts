@@ -1236,20 +1236,30 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
-  validateRepositoryCredentials(
-    harness: RevisionHarnessDescriptor,
-    sandboxDriverId?: string,
-  ): void {
+  validateRepositoryCredentialSupport(sandboxDriverId?: string): void {
     if (
       this.options.runtime === undefined ||
       this.options.network.repositoryCredentials === undefined ||
-      harness.id !== "openclaw" ||
-      harness.mode !== "embedded" ||
       sandboxDriverId !== undefined ||
       this.sandboxDriver !== undefined
     ) {
       throw new ConfigurationFailure(
-        "Repository credentials require a configured embedded OpenClaw Kubernetes runtime without a SandboxDriver.",
+        "Repository credentials require a configured Kubernetes runtime and credential endpoint without a SandboxDriver.",
+      );
+    }
+  }
+
+  validateRepositoryCredentials(
+    harness: RevisionHarnessDescriptor,
+    sandboxDriverId?: string,
+  ): void {
+    this.validateRepositoryCredentialSupport(sandboxDriverId);
+    if (!(
+      (harness.id === "openclaw" && harness.mode === "embedded") ||
+      (harness.id === "codex" && harness.mode === "dedicated")
+    )) {
+      throw new ConfigurationFailure(
+        "Repository credentials require an embedded OpenClaw or dedicated Codex Kubernetes runtime.",
       );
     }
   }
@@ -1926,8 +1936,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("AgentRevision Configuration ownership is invalid.");
     }
     const materialInput = this.repositoryMaterialInput(revision, context);
+    const repositoryConsumer =
+      materialInput === undefined ? undefined : this.repositoryConsumer(revision);
     const nativeConfiguration =
-      materialInput === undefined
+      repositoryConsumer?.role !== "gateway"
         ? revision.configuration
         : repositoryNativeConfiguration(revision.configuration);
     const admittedNativeConfiguration =
@@ -2035,6 +2047,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
         pluginStatusContainer,
         expectedWarnings,
       );
+      if (
+        status !== undefined &&
+        repositoryMaterial !== undefined &&
+        !(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))
+      ) {
+        return incomplete();
+      }
       if (status !== undefined) {
         await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace, true);
       }
@@ -2255,7 +2274,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             pluginRuntime,
             [],
             workspaceSetup,
-            repositoryMaterial,
+            repositoryConsumer?.role === "gateway" ? repositoryMaterial : undefined,
           ),
           gatewayOwnership,
           gatewayNamespace,
@@ -2361,6 +2380,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         pluginRuntime,
         [],
         workspaceSetup,
+        repositoryConsumer?.role === "agent" ? repositoryMaterial : undefined,
       );
       if (node !== undefined) {
         this.addWorkspaceNode(agentDeployment, node.name, node.ca, revision);
@@ -2398,6 +2418,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (!this.deploymentReady(deployment)) {
         return incomplete();
       }
+      if (repositoryMaterial !== undefined) {
+        if (!(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))) {
+          return incomplete();
+        }
+        await this.cleanupRepositoryMaterial(revision, namespace, repositoryMaterial);
+      }
       for (const policy of this.pluginStatusNetworkPolicies(revision, namespace)) {
         await this.reconcile(policy, gatewayOwnership, policy.metadata.namespace);
       }
@@ -2411,7 +2437,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
           : incomplete();
       }
       if (existingGatewayRevisionId !== undefined && existingGatewayRevisionId !== revision.id) {
-        return (await this.workspaceNodeReady(revision, namespace)) ? agentReadiness : incomplete();
+        if (!(await this.workspaceNodeReady(revision, namespace))) {
+          return incomplete();
+        }
+        return repositoryMaterial !== undefined &&
+          !(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))
+          ? incomplete()
+          : agentReadiness;
       }
       const pluginWarnings = agentReadiness.warnings ?? [];
       await this.reconcile(
@@ -2441,7 +2473,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
           return incomplete();
         }
       }
-      return (await this.workspaceNodeReady(revision, namespace)) ? agentReadiness : incomplete();
+      if (!(await this.workspaceNodeReady(revision, namespace))) {
+        return incomplete();
+      }
+      // Gateway plugin and node observations may outlive the material readiness observation.
+      if (
+        repositoryMaterial !== undefined &&
+        !(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))
+      ) {
+        return incomplete();
+      }
+      return agentReadiness;
     } catch (error) {
       const failures = [error];
       if (launchPrepared) {
@@ -2460,8 +2502,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   async activateRevision(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void> {
     const materialInput = this.repositoryMaterialInput(revision, context);
+    const repositoryConsumer =
+      materialInput === undefined ? undefined : this.repositoryConsumer(revision);
     const nativeConfiguration =
-      materialInput === undefined
+      repositoryConsumer?.role !== "gateway"
         ? revision.configuration
         : repositoryNativeConfiguration(revision.configuration);
     const admittedNativeConfiguration =
@@ -2527,16 +2571,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       ) {
         throw new ConfigurationFailure("Refusing stale AgentRevision gateway activation.");
       }
-      const material =
-        materialInput === undefined
-          ? undefined
-          : await (await this.repositoryMaterialStore(namespace)).prepare(revision, materialInput);
-      if (material?.kind === "missing") {
-        throw new DependencyUnavailableError(
-          "Repository credential material is unavailable for activation.",
-        );
-      }
-      const repositoryMaterial = material?.spec;
+      const repositoryMaterial = await this.prepareRepositoryMaterialForActivation(
+        revision,
+        namespace,
+        materialInput,
+      );
       if (
         currentRevisionId !== revision.id ||
         annotations[REPOSITORY_MATERIAL_GENERATION] !== repositoryMaterial?.generation
@@ -2614,6 +2653,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       return;
     }
+    const repositoryMaterial = await this.prepareRepositoryMaterialForActivation(
+      revision,
+      namespace,
+      materialInput,
+    );
     const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
     const configuration = this.gatewayConfiguration(
       admittedRevision,
@@ -2627,36 +2671,69 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new Error("The exact AgentRevision workspace node is not enrolled.");
     }
-    const agentDeployment = this.deployment(
-      revisionName,
-      { ...ownership, revisionId: revision.id },
-      namespace,
-      this.options.images.agent,
-      agentName,
-      "agent",
-      {},
-      configuration.loggingLevel,
-      undefined,
-      false,
-      undefined,
-      harnessAuth,
-      [],
-      [],
-      pluginRuntime,
-      [],
-      workspaceSetup,
-    );
+    const renderAgentDeployment = (environment: Readonly<Record<string, string>>) =>
+      this.deployment(
+        revisionName,
+        { ...ownership, revisionId: revision.id },
+        namespace,
+        this.options.images.agent,
+        agentName,
+        "agent",
+        environment,
+        configuration.loggingLevel,
+        undefined,
+        false,
+        undefined,
+        harnessAuth,
+        [],
+        [],
+        pluginRuntime,
+        [],
+        workspaceSetup,
+        repositoryMaterial,
+      );
     if (sandboxDriver?.provisionHarness === undefined) {
-      const deployment = await this.getOwned("Deployment", revisionName, namespace, {
+      let deployment = await this.getOwned("Deployment", revisionName, namespace, {
         ...ownership,
         revisionId: revision.id,
       });
+      if (
+        deployment !== undefined &&
+        repositoryMaterial !== undefined &&
+        deployment.metadata.annotations?.[REPOSITORY_MATERIAL_GENERATION] !==
+          repositoryMaterial.generation
+      ) {
+        const launch = await this.lifecycle.beforeWorkloadStart(revision);
+        try {
+          const replacement = renderAgentDeployment(launch.environment);
+          const node = await this.prepareWorkspaceNode(revision, namespace);
+          if (node !== undefined) {
+            this.addWorkspaceNode(replacement, node.name, node.ca, revision);
+          }
+          await this.reconcile(replacement, { ...ownership, revisionId: revision.id }, namespace);
+        } catch (error) {
+          await this.lifecycle.beforeWorkloadStop(revision, { cleanup: true });
+          throw error;
+        }
+        deployment = await this.getOwned("Deployment", revisionName, namespace, {
+          ...ownership,
+          revisionId: revision.id,
+        });
+      }
       if (deployment === undefined || !this.deploymentReady(deployment)) {
         throw new Error("The exact AgentRevision workload is not ready.");
       }
+      if (repositoryMaterial !== undefined) {
+        if (!(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))) {
+          throw new DependencyUnavailableError(
+            "The exact repository credential runtime generation is not ready.",
+          );
+        }
+        await this.cleanupRepositoryMaterial(revision, namespace, repositoryMaterial);
+      }
     } else {
       const requirements = this.harnessRequirementsFromDeployment(
-        agentDeployment,
+        renderAgentDeployment({}),
         harnessAuth.loginMode,
       );
       if (!(await this.providerHarnessReady(revision, namespace, requirements.labels))) {
@@ -2900,7 +2977,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     await this.retireWorkspaceNode(revision, namespace);
     await this.removeRetiredGateway(revision, namespace);
     if (revision.repositoryCredentials !== undefined) {
-      await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
+      await this.waitForRevisionPodsToTerminate(
+        revision,
+        namespace,
+        this.repositoryConsumer(revision).role,
+      );
       await this.removeRepositoryMaterial(revision, namespace);
     }
   }
@@ -3399,11 +3480,41 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return spec;
   }
 
+  private repositoryConsumer(revision: AgentRevision) {
+    const owner = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+    const suffix = sha256Hex(revision.agentId, 12);
+    if (revision.harness.mode === "embedded") {
+      return { role: "gateway" as const, name: `gateway-${suffix}`, owner };
+    }
+    return {
+      role: "agent" as const,
+      name: `agent-${suffix}-rev-${sha256Hex(revision.id, 12)}`,
+      owner: { ...owner, servicePrincipalId: revision.servicePrincipalId, revisionId: revision.id },
+    };
+  }
+
   private async repositoryMaterialStore(namespace: string): Promise<RepositoryMaterialStore> {
     const clients = await this.clients();
     return new RepositoryMaterialStore(namespace, clients.core, (operation, options) =>
       this.request(operation, options),
     );
+  }
+
+  private async prepareRepositoryMaterialForActivation(
+    revision: AgentRevision,
+    namespace: string,
+    input: RepositoryMaterialSpec | undefined,
+  ): Promise<ResolvedRepositoryMaterialSpec | undefined> {
+    if (input === undefined) {
+      return undefined;
+    }
+    const material = await (await this.repositoryMaterialStore(namespace)).prepare(revision, input);
+    if (material.kind === "missing") {
+      throw new DependencyUnavailableError(
+        "Repository credential material is unavailable for activation.",
+      );
+    }
+    return material.spec;
   }
 
   private async repositoryMaterialReferences(
@@ -3477,26 +3588,24 @@ export class KubernetesComputeDriver implements ComputeDriver {
     namespace: string,
     material: ResolvedRepositoryMaterialSpec,
   ): Promise<boolean> {
-    const owner = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const gateway = await this.getOwned(
-      "Deployment",
-      `gateway-${sha256Hex(revision.agentId, 12)}`,
-      namespace,
-      owner,
-    );
-    const template = asRecord(gateway?.spec?.template);
+    const consumer = this.repositoryConsumer(revision);
+    const deployment = await this.getOwned("Deployment", consumer.name, namespace, consumer.owner);
+    const template = asRecord(deployment?.spec?.template);
     const templateMetadata = asRecord(template?.metadata);
     if (
-      gateway === undefined ||
-      !this.deploymentReady(gateway) ||
+      deployment === undefined ||
+      !this.deploymentReady(deployment) ||
+      asRecord(templateMetadata?.labels)?.["openclaw.dev/revision"] !== revision.id ||
+      asRecord(templateMetadata?.labels)?.["openclaw.dev/workload-role"] !== consumer.role ||
+      deployment.metadata.annotations?.[REPOSITORY_MATERIAL_GENERATION] !== material.generation ||
       asRecord(templateMetadata?.annotations)?.[REPOSITORY_MATERIAL_GENERATION] !==
         material.generation
     ) {
       return false;
     }
     const labels = {
-      ...this.ownershipMetadata({ ...owner, revisionId: revision.id }).labels,
-      "openclaw.dev/workload-role": "gateway",
+      ...this.ownershipMetadata({ ...consumer.owner, revisionId: revision.id }).labels,
+      "openclaw.dev/workload-role": consumer.role,
     };
     const clients = await this.clients();
     const pods = completeKubernetesList(
@@ -3523,7 +3632,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         ready += 1;
       }
     }
-    return ready >= Number(gateway.spec?.replicas);
+    return ready >= Number(deployment.spec?.replicas);
   }
 
   private async cleanupRepositoryMaterial(
@@ -6562,24 +6671,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
         ports: [{ protocol: "TCP", port: 443 }],
       },
     ];
+    const repositoryEgress =
+      revision.repositoryCredentials === undefined
+        ? []
+        : [
+            {
+              to: [this.peer(this.options.network.repositoryCredentials!)],
+              ports: [{ protocol: "TCP", port: this.options.network.repositoryCredentials!.port }],
+            },
+          ];
     if (revision.harness.mode === "embedded") {
       return [
         policy("allow-agent-runtime", {
           podSelector: gateway,
           policyTypes: ["Egress"],
-          egress: [
-            ...modelEgress,
-            ...(revision.repositoryCredentials === undefined
-              ? []
-              : [
-                  {
-                    to: [this.peer(this.options.network.repositoryCredentials!)],
-                    ports: [
-                      { protocol: "TCP", port: this.options.network.repositoryCredentials!.port },
-                    ],
-                  },
-                ]),
-          ],
+          egress: [...modelEgress, ...repositoryEgress],
         }),
         ...statusPolicies,
       ];
@@ -6605,7 +6711,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             ports: transport,
           },
         ],
-        egress: modelEgress,
+        egress: [...modelEgress, ...repositoryEgress],
       }),
       ...statusPolicies,
     ];
@@ -7122,19 +7228,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
     }
     if (repositoryMaterial !== undefined) {
-      if (role !== "gateway" || !embedded || runtime === undefined) {
+      if ((role === "gateway" && !embedded) || runtime === undefined) {
         throw new ConfigurationFailure(
-          "Repository credential material requires the embedded Agent gateway.",
+          "Repository credential material requires the Agent's Harness workload.",
         );
       }
       const delivery = repositoryMaterialDeployment(repositoryMaterial, image);
       volumes.push(...delivery.volumes);
       volumeMounts.push(...delivery.volumeMounts);
-      initContainers.push(delivery.initContainer);
-      variables.push({
-        name: "PATH",
-        value: `${REPOSITORY_CLIENT_BIN}:/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
-      });
+      initContainers.push(...delivery.initContainers);
+      if (embedded) {
+        variables.push({
+          name: "PATH",
+          value: `${REPOSITORY_CLIENT_BIN}:/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+        });
+      }
     }
     if (projected !== undefined) {
       volumes.push({
@@ -7273,8 +7381,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           { name: "HOME", value: "/home/node" },
           {
             name: "PATH",
-            value:
-              "/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            value: `${repositoryMaterial === undefined ? "" : `${REPOSITORY_CLIENT_BIN}:`}/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
           },
           { name: "APP_SERVER_PORT", value: String(AGENT_TRANSPORT_PORT) },
         );

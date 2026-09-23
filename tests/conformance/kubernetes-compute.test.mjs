@@ -107,6 +107,58 @@ function options(overrides = {}) {
   };
 }
 
+test("repository capability admits only configured Compute-owned native topologies", () => {
+  const configured = options({
+    runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
+    network: {
+      ...options().network,
+      repositoryCredentials: {
+        namespace: "repository-service",
+        podLabels: { app: "repository" },
+        port: 8443,
+      },
+    },
+  });
+  const driver = new KubernetesComputeDriver(configured);
+  for (const [id, mode] of [
+    ["openclaw", "embedded"],
+    ["codex", "dedicated"],
+  ]) {
+    const harness = { id, mode, version: "1.0.0" };
+    assert.doesNotThrow(() => driver.validateRepositoryCredentials(harness));
+    assert.throws(
+      () => driver.validateRepositoryCredentials(harness, "selected-sandbox"),
+      /without a SandboxDriver/,
+    );
+    assert.throws(() =>
+      new KubernetesComputeDriver({
+        ...configured,
+        runtime: undefined,
+      }).validateRepositoryCredentials(harness),
+    );
+    assert.throws(() =>
+      new KubernetesComputeDriver({
+        ...configured,
+        network: options().network,
+      }).validateRepositoryCredentials(harness),
+    );
+    const sandboxDriver = { id: "sandbox", implementation: "sandbox", capability: "sandbox" };
+    assert.throws(() =>
+      new KubernetesComputeDriver(configured, { sandboxDriver }).validateRepositoryCredentials(
+        harness,
+      ),
+    );
+  }
+  for (const [id, mode] of [
+    ["codex", "embedded"],
+    ["openclaw", "dedicated"],
+    ["unknown", "dedicated"],
+    ["codex", "unknown"],
+  ]) {
+    assert.throws(() => driver.validateRepositoryCredentials({ id, mode, version: "1.0.0" }));
+  }
+});
+
 function digest(value, length = 12) {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
