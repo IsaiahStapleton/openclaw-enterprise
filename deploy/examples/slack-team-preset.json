@@ -1,0 +1,189 @@
+{
+  "name": "slack-team",
+  "template": {
+    "variables": {
+      "name": {
+        "type": "string",
+        "description": "Unique Agent name"
+      },
+      "namespaceId": {
+        "type": "string",
+        "description": "The Namespace containing this Preset and all three Secrets"
+      },
+      "model": {
+        "type": "string",
+        "description": "A model supported by your installed Codex runtime and credential, without a provider prefix"
+      },
+      "modelSecretId": {
+        "type": "string",
+        "description": "Existing model API-key Secret ID, never the key itself"
+      },
+      "slackAppSecretId": {
+        "type": "string",
+        "description": "Existing Slack Socket Mode app-token Secret ID"
+      },
+      "slackBotSecretId": {
+        "type": "string",
+        "description": "Existing Slack bot-token Secret ID"
+      },
+      "slackOwnerId": {
+        "type": "string",
+        "description": "Slack user ID of the team agent's owner"
+      },
+      "slackChannelId": {
+        "type": "string",
+        "description": "Slack channel ID where the bot is already invited"
+      },
+      "timezone": {
+        "type": "string",
+        "description": "IANA timezone for the Agent",
+        "default": "UTC"
+      }
+    },
+    "agent": {
+      "name": "{{ vars.name }}",
+      "executionMode": "dedicated",
+      "providerId": null,
+      "harnessAuth": {
+        "method": "api_key",
+        "source": {
+          "kind": "secret",
+          "namespaceId": "{{ vars.namespaceId }}",
+          "id": "{{ vars.modelSecretId }}"
+        }
+      }
+    },
+    "configuration": {
+      "values": {
+        "gateway": {
+          "mode": "local",
+          "bind": "lan",
+          "controlUi": {
+            "enabled": false
+          },
+          "auth": {
+            "mode": "token",
+            "token": "${OPENCLAW_GATEWAY_TOKEN}"
+          },
+          "http": {
+            "endpoints": {
+              "chatCompletions": {
+                "enabled": true
+              }
+            }
+          }
+        },
+        "agents": {
+          "defaults": {
+            "model": "codex/{{ vars.model }}",
+            "models": {
+              "codex/{{ vars.model }}": {
+                "agentRuntime": {
+                  "id": "codex"
+                }
+              }
+            },
+            "userTimezone": "{{ vars.timezone }}",
+            "typingMode": "never"
+          }
+        },
+        "models": {
+          "providers": {
+            "codex": {
+              "baseUrl": "http://127.0.0.1:9",
+              "api": "openai-responses",
+              "models": [
+                {
+                  "id": "{{ vars.model }}",
+                  "name": "{{ vars.model }}"
+                }
+              ]
+            }
+          }
+        },
+        "session": {
+          "dmScope": "per-channel-peer"
+        },
+        "messages": {
+          "ackReactionScope": "off",
+          "statusReactions": {
+            "enabled": false
+          },
+          "suppressToolErrors": true
+        },
+        "commands": {
+          "ownerAllowFrom": ["slack:{{ vars.slackOwnerId }}"]
+        },
+        "channels": {
+          "slack": {
+            "enabled": true,
+            "mode": "socket",
+            "appToken": {
+              "source": "env",
+              "provider": "default",
+              "id": "SLACK_APP_TOKEN"
+            },
+            "botToken": {
+              "source": "env",
+              "provider": "default",
+              "id": "SLACK_BOT_TOKEN"
+            },
+            "allowBots": false,
+            "dmPolicy": "disabled",
+            "allowFrom": ["{{ vars.slackOwnerId }}"],
+            "groupPolicy": "allowlist",
+            "requireMention": true,
+            "replyToModeByChatType": {
+              "channel": "all",
+              "direct": "all"
+            },
+            "channels": {
+              "{{ vars.slackChannelId }}": {
+                "requireMention": true,
+                "users": ["{{ vars.slackOwnerId }}"]
+              }
+            }
+          }
+        },
+        "plugins": {
+          "allow": ["codex", "slack"],
+          "entries": {
+            "slack": {
+              "enabled": true
+            },
+            "codex": {
+              "enabled": true,
+              "config": {
+                "appServer": {
+                  "mode": "guardian",
+                  "approvalPolicy": "on-request",
+                  "sandbox": "read-only",
+                  "requestTimeoutMs": 240000,
+                  "transport": "websocket",
+                  "url": "${APP_SERVER_URL}",
+                  "authToken": "${APP_SERVER_TOKEN}"
+                }
+              }
+            }
+          }
+        }
+      },
+      "secretBindings": {
+        "SLACK_APP_TOKEN": {
+          "source": {
+            "kind": "secret",
+            "namespaceId": "{{ vars.namespaceId }}",
+            "id": "{{ vars.slackAppSecretId }}"
+          }
+        },
+        "SLACK_BOT_TOKEN": {
+          "source": {
+            "kind": "secret",
+            "namespaceId": "{{ vars.namespaceId }}",
+            "id": "{{ vars.slackBotSecretId }}"
+          }
+        }
+      }
+    }
+  }
+}
