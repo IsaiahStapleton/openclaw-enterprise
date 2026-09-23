@@ -81,8 +81,14 @@ function binding() {
   return { namespace, agent };
 }
 
-function credentialFixture({ secrets = {}, deployments = [] } = {}) {
-  const driver = createKubernetesComputeDriver(options());
+function credentialFixture({
+  secrets = {},
+  deployments = [],
+  claims = {},
+  runtime = true,
+  namespaceReadStatus = 200,
+} = {}) {
+  const driver = createKubernetesComputeDriver(options(runtime ? {} : { runtime: undefined }));
   const namespaceName = kubernetesNamespaceName(namespace.id);
   const namespaceObject = {
     ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: namespace.id }),
@@ -95,12 +101,32 @@ function credentialFixture({ secrets = {}, deployments = [] } = {}) {
     async listNamespace(request) {
       calls.push({ kind: "listNamespace", request: structuredClone(request) });
       assert.equal(request.labelSelector, `openclaw.dev/namespace=${namespace.id}`);
-      return { items: [structuredClone(namespaceObject)] };
+      return { items: namespaceReadStatus === 404 ? [] : [structuredClone(namespaceObject)] };
     },
     async readNamespace(request) {
       calls.push({ kind: "readNamespace", request: structuredClone(request) });
       assert.equal(request.name, namespaceName);
+      if (namespaceReadStatus !== 200) {
+        throw httpError(namespaceReadStatus);
+      }
       return structuredClone(namespaceObject);
+    },
+    async readNamespacedPersistentVolumeClaim(request) {
+      calls.push({ kind: "readClaim", name: request.name });
+      assert.equal(request.namespace, namespaceName);
+      const claim = claims[request.name];
+      if (claim === undefined) {
+        throw httpError(404);
+      }
+      return structuredClone(claim);
+    },
+    async deleteNamespacedPersistentVolumeClaim(request) {
+      const claim = claims[request.name];
+      assert.equal(request.namespace, namespaceName);
+      assert.equal(request.body?.preconditions?.uid, claim.metadata.uid);
+      calls.push({ kind: "deleteClaim", name: request.name });
+      delete claims[request.name];
+      return {};
     },
     async readNamespacedSecret(request) {
       calls.push({ kind: "readSecret", name: request.name });
@@ -207,11 +233,75 @@ test("mocked Kubernetes client deletes every owned Agent runtime credential Secr
   assert.equal(fixture.deleted.length, 1);
 });
 
-test("Kubernetes credential deletion is a no-op without a configured runtime backend", async () => {
-  const driver = createKubernetesComputeDriver(options({ runtime: undefined }));
+for (const runtime of [true, false]) {
+  test(`Agent deletion removes owned claims after transport loss with runtime ${runtime ? "configured" : "disabled"}`, async () => {
+    const first = credentialFixture();
+    const ownership = { namespaceId: namespace.id, agentId: agent.id };
+    const owned = [
+      first.driver.sharedWorkspaceClaim(agent.id, ownership, first.namespaceName),
+      ...(runtime
+        ? [first.driver.gatewayPrivateStateClaim(agent.id, ownership, first.namespaceName)]
+        : []),
+    ];
+    const claims = Object.fromEntries(
+      owned.map((claim) => {
+        claim.metadata.uid = `${claim.metadata.name}-uid`;
+        return [claim.metadata.name, claim];
+      }),
+    );
+    const fixture = credentialFixture({ claims, runtime });
 
-  // Fixture-only Drivers cannot provision runtime Secrets, so teardown has nothing to delete.
-  await driver.deleteAgentRuntimeCredentials(binding());
+    // Recovery cannot depend on the transport Secret surviving earlier teardown.
+    await fixture.driver.deleteAgentRuntimeCredentials(binding());
+    assert.deepEqual(Object.keys(claims), []);
+    assert.deepEqual(
+      fixture.calls
+        .filter(({ kind }) => kind === "deleteClaim")
+        .map(({ name }) => name)
+        .sort(),
+      owned.map(({ metadata }) => metadata.name).sort(),
+    );
+    await fixture.driver.deleteAgentRuntimeCredentials(binding());
+    assert.equal(fixture.calls.filter(({ kind }) => kind === "deleteClaim").length, owned.length);
+  });
+}
+
+test("draft Agent cleanup tolerates absent compute Namespace without bypassing scope or backend denial", async () => {
+  const absent = credentialFixture({ runtime: false, namespaceReadStatus: 404 });
+
+  // A draft Agent can be deleted before Namespace provisioning creates any workload storage.
+  await absent.driver.deleteAgentRuntimeCredentials(binding());
+  assert.deepEqual(
+    absent.calls.map(({ kind }) => kind),
+    ["listNamespace", "readNamespace"],
+  );
+
+  const wrongBinding = credentialFixture({ runtime: false, namespaceReadStatus: 404 });
+  await assert.rejects(
+    wrongBinding.driver.deleteAgentRuntimeCredentials({
+      namespace,
+      agent: { ...agent, namespaceId: "another-namespace" },
+    }),
+    ResourceConflictError,
+  );
+  assert.deepEqual(wrongBinding.calls, []);
+
+  const denied = credentialFixture({ runtime: false, namespaceReadStatus: 403 });
+  await assert.rejects(
+    denied.driver.deleteAgentRuntimeCredentials(binding()),
+    /backend is not authorized/,
+  );
+  assert.deepEqual(
+    denied.calls.map(({ kind }) => kind),
+    ["listNamespace", "readNamespace"],
+  );
+
+  // Cleanup absence does not authorize credential operations against a missing Namespace.
+  const credential = credentialFixture({ namespaceReadStatus: 404 });
+  await assert.rejects(
+    credential.driver.getAgentRuntimeCredentialStatus(binding()),
+    /namespace is unavailable/,
+  );
 });
 
 test("mocked Kubernetes client preflights the transport Secret before initial create", async () => {
