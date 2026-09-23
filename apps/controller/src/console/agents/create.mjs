@@ -1,5 +1,6 @@
 import { element, button } from "../dom.mjs";
 import { WORKSPACE_DEFAULTS, WORKSPACE_DEFAULTS_ID } from "../workspace-defaults.mjs";
+import { ensureSecretOperateBinding } from "./credentials.mjs";
 import { createHarnessAuthFields } from "./harness-auth.mjs";
 import { createPresetFields } from "./presets.mjs";
 import { defaultAgentModel } from "./starter-model.mjs";
@@ -222,6 +223,7 @@ function renderAgentForm(context, rendered) {
   let pending = false;
   let outcomeUnknown = false;
   let savedConfiguration;
+  let stagedChannelSecrets = [];
   const feedback = element("p", { className: "error", role: "alert" });
   const savedStatus = element("p", { className: "hint", role: "status" });
   const submit = element(
@@ -257,7 +259,7 @@ function renderAgentForm(context, rendered) {
     field(
       "Configuration JSON",
       configuration,
-      "Starter template applied. Edit the sample model and settings before saving. After creation, use the Agent Credentials tab for transport and Slack credentials.",
+      "Starter template applied. Edit the sample model and settings before saving. Slack token Secrets can be selected or created from the channel editor.",
     ),
     reset,
     field(
@@ -305,6 +307,19 @@ function renderAgentForm(context, rendered) {
       );
     });
   }
+  async function grantConfigurationSecretAccess(agent, secrets) {
+    const seen = new Set();
+    for (const secret of secrets) {
+      if (secret.namespaceId !== namespaceId || seen.has(secret.id)) {
+        continue;
+      }
+      seen.add(secret.id);
+      if (!context.isCurrent()) {
+        throw new Error("This view has changed. Reopen Agent creation before binding Secrets.");
+      }
+      await ensureSecretOperateBinding(context, agent, secret);
+    }
+  }
   function renderChannelEditor() {
     const values = parseObject(configuration);
     if (values === undefined) {
@@ -322,27 +337,40 @@ function renderAgentForm(context, rendered) {
       );
       return;
     }
+    const parsedSecretBindings = parseObject(secretBindings) ?? {};
     const channels = renderChannels({
       values,
       executionMode: mode.value,
       readOnly: Boolean(savedConfiguration),
+      drawerContext: {
+        namespaceId,
+        request,
+        agentName: () => name.value,
+        secretBindings: parsedSecretBindings,
+      },
       copy: {
         editableDescription:
           "Stage Slack settings into this Configuration JSON. They are saved when you create the Agent.",
         drawerNotice:
-          "Channel settings apply to this form’s Configuration JSON. After creation, use the Agent Credentials tab for Slack credentials.",
-        drawerFootnote: "These settings are not persisted until you create the Agent.",
+          "Channel and Secret binding settings apply to this form’s Configuration JSON.",
+        drawerFootnote:
+          "Channel settings and selected bindings are not persisted until you create the Agent. Secrets created from the modal are stored immediately in the Namespace.",
         saveLabel: "Apply channel settings",
         readOnlyDescription:
           "This saved initial Configuration is fixed for this create form. Retrying Agent creation will reuse these channel settings.",
         readOnlyCardMessage: "This saved initial Configuration cannot be edited from this form.",
       },
-      onSave: async (updatedValues) => {
+      onSave: async (updatedValues, options = {}) => {
         if (!context.isCurrent() || pending || outcomeUnknown || savedConfiguration) {
           throw new Error("This view has changed. Reopen Agent creation before applying channels.");
         }
         edited = true;
         configuration.value = JSON.stringify(updatedValues, null, 2);
+        if (options.secretBindings !== undefined) {
+          secretBindings.value = JSON.stringify(options.secretBindings, null, 2);
+          secretBindings.setCustomValidity("");
+          stagedChannelSecrets = options.changedSecrets ?? [];
+        }
         configuration.setCustomValidity("");
         setTimeout(() => {
           if (context.isCurrent()) {
@@ -462,6 +490,26 @@ function renderAgentForm(context, rendered) {
         method: "POST",
         body: { ...body, configurationId: savedConfiguration.id },
       });
+      try {
+        await grantConfigurationSecretAccess(created, stagedChannelSecrets);
+      } catch (error) {
+        if (!context.isCurrent()) {
+          return;
+        }
+        if (error.status === 401) {
+          context.onExpired();
+          return;
+        }
+        const target = `agents/${created.id}?revision=draft&tab=credentials`;
+        outcomeUnknown = true;
+        feedback.replaceChildren(
+          "Agent created, but Secret access grants could not be confirmed. ",
+          link("Open Agent Credentials", target, context),
+          " to inspect saved bindings, then ask a Namespace administrator to grant this Agent access to the saved Secret.",
+          error.requestId ? ` Request ID: ${error.requestId}` : "",
+        );
+        return;
+      }
       if (context.isCurrent()) {
         context.navigate(`agents/${created.id}?revision=draft`);
       }

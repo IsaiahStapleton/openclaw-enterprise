@@ -1,7 +1,7 @@
 import { element, button } from "../dom.mjs";
 import { namespacePath } from "./list.mjs";
 
-const SLACK_SECRET_BINDINGS = [
+export const SLACK_SECRET_BINDINGS = [
   { key: "SLACK_APP_TOKEN", label: "Slack app token", secretName: "Slack app token" },
   { key: "SLACK_BOT_TOKEN", label: "Slack bot token", secretName: "Slack bot token" },
 ];
@@ -27,7 +27,7 @@ function servicePrincipalId(agent) {
     : null;
 }
 
-function secretIdForBinding(binding) {
+export function secretIdForBinding(binding) {
   const source = binding?.source;
   return source?.kind === "secret" &&
     typeof source.namespaceId === "string" &&
@@ -36,7 +36,7 @@ function secretIdForBinding(binding) {
     : null;
 }
 
-function secretBinding(secret) {
+export function secretBinding(secret) {
   return {
     source: secret.ref,
     delivery: { type: "env" },
@@ -139,7 +139,7 @@ async function secretOperateRole(context) {
   });
 }
 
-async function ensureSecretOperateBinding(context, agent, secret) {
+export async function ensureSecretOperateBinding(context, agent, secret) {
   const principal = servicePrincipalId(agent);
   if (principal === null) {
     throw new Error("The API did not return this Agent's service principal.");
