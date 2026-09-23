@@ -12,7 +12,7 @@ Expose only configured-provider listing, trusted-origin start, and exact callbac
 
 ## Account administration
 
-See [the minimal authorized operations](architecture.md#administration-and-currentness) and [unknown-outcome handling](architecture.md#atomic-policy-and-recovery). Use expected account incarnation/version and authorized current-state inspection; no exact per-request result lookup is promised.
+See [the minimal authorized operations](architecture.md#administration-and-currentness) and [unknown-outcome handling](architecture.md#atomic-policy-and-recovery). Address the immutable local `userId`, require `expectedVersion` for mutations, and use authorized current-state inspection; no exact per-request result lookup is promised.
 
 ## Sessions and no access
 

@@ -8,12 +8,12 @@ and IAM authorizes resource use. These boundaries do not require new services.
 
 ## Components and dependencies
 
-| Owner                        | Reuse and proposed responsibility                                                                                                                    |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Better Auth / Authentication | Existing password verification, token generation, signed cookies, and provider request/parsing machinery; curated OCE endpoints control admission.   |
-| Account / original State     | Existing user, method, session, and verification storage; add one currentness authority and guarded attempt, administration, and session operations. |
-| Selected IAM                 | Exact Principal lookup and per-resource decisions; attachment changes no policy.                                                                     |
-| Console                      | Existing session, Namespace, and Agent APIs; clear protected content when admission expires.                                                         |
+| Owner                        | Reuse and proposed responsibility                                                                                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Better Auth / Authentication | Existing password verification, token generation, signed cookies, and provider request/parsing machinery; curated OCE endpoints control admission.  |
+| Account / original State     | Existing user, method, and session stores; add State-owned currentness and bounded attempt rows with guarded administration and session operations. |
+| Selected IAM                 | Exact Principal lookup and per-resource decisions; attachment changes no policy.                                                                    |
+| Console                      | Existing session, Namespace, and Agent APIs; clear protected content when admission expires.                                                        |
 
 Provider proof is a controller-private value, not a caller-manufactured authority
 object. It carries the verified instance/subject and optional safe profile, never
@@ -37,8 +37,8 @@ arrows mean replies; they do not classify implementation. State and PostgreSQL a
 shown together as the original persistence owner. Source checks do not establish
 composed, installed, or live-provider proof. [Editable source](request-lifecycle.mmd).
 
-1. Reserve the [bound attempt](security.md#protocol-validation) in existing
-   verification storage and acknowledge persistence before redirecting.
+1. Reserve the [bound attempt](security.md#protocol-validation) in State-owned
+   bounded attempt rows and acknowledge persistence before redirecting.
 2. Match and atomically consume it, including valid provider-error callbacks.
    Uncertain consumption stops remote exchange. A consumed failure needs a fresh
    start.
@@ -82,7 +82,7 @@ At pinned main `311bc23`, the following are source facts, not federation proof:
 | Exact source                                                                                                                                                                                                                                                                                                                                 | Consequence                                                                                 |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | [Auth and production composition](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/apps/controller/src/composition/production.ts#L79-L97)                                                                                                                                                       | Better Auth exists; the guarded Account/State join must be connected.                       |
-| [Existing auth tables](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/packages/occ/src/state/postgres-schema.ts#L974-L1069)                                                                                                                                                                   | Reuse storage; sessions do not yet carry method/incarnation/version binding.                |
+| [Existing auth tables](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/packages/occ/src/state/postgres-schema.ts#L974-L1069)                                                                                                                                                                   | Reuse storage; sessions do not yet carry exact method and currentness binding.              |
 | [State transaction](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/packages/occ/src/state/postgres-state.ts#L896-L909) and [audit append](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/packages/occ/src/state/postgres-state.ts#L2406-L2429) | Auth writes must join this original unit and its acknowledgment boundary.                   |
 | [Password-account creation](https://github.com/openclaw/openclaw-enterprise/blob/311bc23012d0fd269483168b865adf79df630542/apps/controller/src/index.ts#L3502-L3558)                                                                                                                                                                          | Separate auth/IAM writes with compensation are unsuitable for the new attachment operation. |
 
@@ -105,11 +105,18 @@ an association with a new method ID; broad repair is outside this increment.
 
 ## Administration and currentness
 
-Use one account-security record: UUID incarnation, positive safe-integer version,
-and active/disabled state. Preserve non-reusable deleted tombstones. Missing,
-orphaned, provisioning, deleted, or disabled state denies admission. Sessions bind
-the exact method, account incarnation/version, and absolute expiry. All retained
-issuers and readers recheck those values and current ownership.
+Use the exact immutable existing user and Principal IDs, immutable method IDs,
+positive safe-integer account and method versions, and active/disabled state.
+Missing, orphaned, unenrolled, or disabled state denies admission. Sessions bind
+the exact user and method, account and method versions, and absolute expiry.
+All retained issuers and readers recheck those values, the exact Principal, and
+current ownership.
+
+The initial closed-writer profile excludes account creation after activation,
+deletion/recreation, reassociation, and ID reuse. It requires no separate UUID
+incarnation or tombstone mechanism. Before admitting deletion, ID reuse, or broader
+lifecycle support, qualify a separate non-reuse/incarnation contract that prevents
+stale methods, proofs, and sessions from identifying a replacement account.
 
 The minimal administrator surface is safe target read, exact GitHub attachment,
 disable, and account-wide revoke. Require a trusted origin, a current **human
@@ -118,10 +125,10 @@ Installation through the qualified IAM profile. A service key or explicit
 development identity cannot substitute. Accept no caller-selected Principal or
 grant. Authentication retains password hashing and provider verification.
 
-Mutations require the expected account incarnation and `expectedVersion`.
-Under original-State guards, recheck those values, the actor's current session,
-target, exact Principal, method owner, and recovery protection. Persist the complete
-local effect and required facts in that unit. Currentness changes serialize with
+Management addresses the immutable local `userId`; mutations require
+`expectedVersion`. Under original-State guards, recheck the target ID and version,
+the actor's current session, exact Principal, method owner, and recovery protection.
+Persist the complete local effect and required facts in that unit. Currentness changes serialize with
 issuance and actor logout/revocation; stale snapshots cannot restore access.
 
 | Operation           | Required effect                                                                                                                                                   |
@@ -179,8 +186,10 @@ The supported topology has **one serving controller**, one Installation, Native
 IAM, restricted-role PostgreSQL, one canonical HTTPS Console origin, and host-only
 cookies. Additional auth readers and custom IAM are outside this profile. Use existing ingress,
 deployment, and process controls to close admission, drain or terminate admitted
-work, stop every old controller, and prevent automatic restart. In one acknowledged
-maintenance transition, validate the existing account/Principal/recovery population,
+work, stop every old controller, and prevent automatic restart. Validate static
+authentication settings and reject unsupported profile settings before activation.
+In one acknowledged maintenance transition, validate the existing
+account/Principal/recovery population,
 establish currentness and protected recovery, invalidate unbound legacy sessions,
 and persist activation. Preserve legitimate accounts/passwords/grants. Start only
 the selected compatible controller and configuration; check password recovery and
@@ -209,7 +218,12 @@ the instance; changing a trust field creates a different instance and cannot
 reinterpret persisted methods or in-flight attempts. A helper's fixed provider
 name is insufficient.
 
-Secrets come from absolute mounted file paths and remain in controller custody.
+The first profile reads `OCC_AUTH_GITHUB_CLIENT_SECRET` from protected controller
+environment configuration, consistent with `OCC_AUTH_SECRET`. Qualify protected
+injection and controller-only custody in the installed deployment. No mounted-file
+loader is required or claimed. Secrets must not enter URLs, logs, browser-visible
+data, or persisted provider-token fields; provider tokens remain transient under
+the [custody contract](security.md#session-and-credential-custody).
 Validate the public origin, exact callback, and allowed HTTPS endpoint origins;
 HTTP is limited to explicitly selected loopback fixtures. Browsers cannot supply
 issuers or endpoints. The [account owner](#identity-and-method-ownership)
