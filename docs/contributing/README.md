@@ -9,8 +9,9 @@ To use or administer an installation, start with [Getting Started](../README.md)
 
 - [Design](design.md) separates the current architecture, approved target, and
   source-backed implementation guides.
-- [Readable code](readable-code.md) explains functions, values, composition,
-  and state ownership through one example.
+- [Design philosophy](design-philosophy.md) guides interface, ownership, and
+  lifecycle decisions; [Readable code](readable-code.md) works through the
+  practical choices with one example.
 - [Repository layout](../layout.md) shows who owns each directory and where to
   put code, tests, and documentation.
 - [Driver development](driver-development.md) links the base interfaces for

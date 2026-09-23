@@ -544,6 +544,10 @@
                     "label": "Overview"
                   },
                   {
+                    "page": "contributing/design-philosophy",
+                    "label": "Design Philosophy"
+                  },
+                  {
                     "page": "contributing/readable-code",
                     "label": "Readable Code"
                   },

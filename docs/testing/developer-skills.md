@@ -4,6 +4,7 @@ Use the repository-local skills for the relevant development task:
 
 | Task                             | Skill                                                                                                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Assess a design or refactor      | [design-review](../../.agents/skills/design-review/SKILL.md) traces callers, interfaces, state ownership, and evidence to recommend scoped improvements.           |
 | Develop a repository change      | [local-dev](../../.agents/skills/local-dev/SKILL.md) requires proportional verification and flow docs for non-trivial runtime changes.                             |
 | Write or review technical docs   | [technical-writing](../../.agents/skills/technical-writing/SKILL.md) covers source-backed prose, runnable instructions, page selection, and specification clarity. |
 | Write or audit tests             | [test-audit](../../.agents/skills/test-audit/SKILL.md) checks observable behavior, credible regressions, distinct coverage, and production seams.                  |
@@ -17,6 +18,12 @@ Testing setup and real-runtime requirements remain owned by the
 [testing guides](README.md). Each skill describes its scope and prerequisites.
 
 ## Provenance and updates
+
+`design-review` is maintained in this repository. The
+[design philosophy](../contributing/design-philosophy.md) owns its rationale;
+[Readable code](../contributing/readable-code.md) owns the examples. Keep the skill
+focused on the review procedure. When changing it, check those references and
+try a bounded review task against real source and callers.
 
 `technical-writing` adapts Docy's `references/core/main.md` (document lifecycle
 and universal technical writing), `references/ref/developer-docs.md`,
