@@ -221,25 +221,18 @@ test(
       first.git.trace.slice(beforeMixed).some(({ path }) => path.endsWith("/git-receive-pack")),
       false,
     );
-    await fixture.tool(
-      pod,
-      "gh",
-      [
-        "pr",
-        "create",
-        "--head",
-        "native-feature",
-        "--base",
-        "main",
-        "--title",
-        "Platform fixture",
-        "--body",
-        "Repository platform proof",
-      ],
-      { cwd: firstCheckout },
+    // Collaborator can create ordinary issues; the Contributor Agent below
+    // opens the single PR retained by the restart and no-replay assertions.
+    const issue = JSON.parse(
+      await fixture.tool(
+        pod,
+        "gh",
+        ["api", `repos/${first.repository}/issues`, "-X", "POST", "-f", "title=Collaborator issue"],
+        { cwd: firstCheckout },
+      ),
     );
-    assert.equal([...first.github.pulls.values()].filter(({ native }) => native).length, 1);
-    assert.equal(second.github.pulls.size, 0);
+    assert.equal(first.github.issues.get(issue.number)?.title, "Collaborator issue");
+    assert.equal(second.github.issues.size, 0);
 
     // A different admitted binding cannot upgrade this read-only repository.
     const secondBefore = second.git.trace.length;
@@ -303,6 +296,8 @@ test(
       "Contributor can open pull requests",
     ]);
     assert.ok([...first.github.pulls.values()].some((pull) => pull.title === "Contributor PR"));
+    assert.equal([...first.github.pulls.values()].filter(({ native }) => native).length, 1);
+    assert.equal(second.github.pulls.size, 0);
     const writerTrace = first.github.trace.length;
     await fixture.tool(
       writerPod,
