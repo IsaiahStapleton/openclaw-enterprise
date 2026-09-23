@@ -732,6 +732,24 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   assert.match(repeated.stderr, /no such file or directory/);
 });
 
+test("Kubernetes dev-up forwards an explicit K3s image to k3d", async (t) => {
+  const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
+  const result = fixture.start();
+  assert.equal(result.status, 0, result.stderr);
+  const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  const clusterCreate = commands.find(
+    (entry) => entry.command === "k3d" && entry.args[0] === "cluster" && entry.args[1] === "create",
+  );
+  assert.ok(clusterCreate);
+  assert.equal(
+    clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
+    "rancher/k3s:v1.35.8-k3s1",
+  );
+  const cleaned = runDevDown(fixture.env);
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
 for (const driver of ["docker", ""]) {
   test(`dev-down preserves Kubernetes state when Compute selector is ${driver || "default"}`, async (t) => {
     const fixture = await createFixture(t);

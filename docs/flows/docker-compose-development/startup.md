@@ -180,8 +180,10 @@ project configuration.
 
 Compose starts PostgreSQL, migration, and bootstrap. The lifecycle waits for
 successful migration and bootstrap exits before creating the dedicated k3d
-cluster on the Compose network. k3d resolves the latest K3s patch in the 1.35
-family, which matches the supported Kubernetes minimum. The cluster API binds
+cluster on the Compose network. `OCC_DEVELOPMENT_K3S_IMAGE` selects its node
+image; the default `+v1.35` asks k3d to resolve the latest K3s patch in the 1.35
+family. An explicit image bypasses that channel lookup, allowing startup when
+`update.k3s.io` is unreachable. The cluster API binds
 host loopback; creation leaves the default kubeconfig and current context
 unchanged.
 

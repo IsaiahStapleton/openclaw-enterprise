@@ -54,6 +54,15 @@ remain schedulable on constrained workstations. Set
 `OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT` to an integer from 1
 through 20 to override it; production Kubernetes settings are unaffected.
 
+If k3d fails while fetching `https://update.k3s.io/v1-release/channels`, select
+an explicit K3s node image with `OCC_DEVELOPMENT_K3S_IMAGE`. For example, use
+`rancher/k3s:v1.35.8-k3s1` after pulling it into the selected engine. See the
+[development settings](../../reference/settings/development.md#required-development-controller-environment)
+for the supported Kubernetes minimum. Run the recorded cleanup command if the
+failed attempt retained state, then retry `occ dev up` with the image export.
+This setting selects the Kubernetes node image; `OCC_KUBERNETES_RUNTIME_IMAGE`
+selects the Agent runtime imported into that cluster.
+
 The default runtime image is built from `deploy/runtime/Dockerfile`. Set
 `OCC_KUBERNETES_RUNTIME_IMAGE` to an existing local image reference to use it
 instead; startup fails if that explicit image is missing. The helper imports

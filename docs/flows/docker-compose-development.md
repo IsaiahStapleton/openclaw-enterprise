@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-09-17
-last_updated_session: authoring-run/b044b43c-e713-4006-93a0-c129cdf5578e
+updated: 2026-09-23
+last_updated_session: pr-337
 ---
 
 # Compose development flow
@@ -158,6 +158,8 @@ import, authenticated readiness, and cleanup through the recorded engine.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-23 20:46: Allow an explicit K3s node image for local startup when channel discovery is unavailable; retain the default 1.35 channel. (pr-337 - 8adfd86e96a10a9d06761bc78e385eafd6bf2760)
 
 - 2026-09-17 17:42: Pin Kubernetes development to the supported 1.35 family and emit only runtime settings accepted by the current Kubernetes Compute Driver schema. (authoring-run/b044b43c-e713-4006-93a0-c129cdf5578e - 9310d5b025e84f885e4f7facae2e2906b50d58f8)
 
