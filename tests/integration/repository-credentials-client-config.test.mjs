@@ -588,7 +588,7 @@ test(
         allowFailure: true,
       });
       assert.notEqual(result.code, 0);
-      assert.match(result.stderr, /repository-pre-push-guard-failed/);
+      assert.match(result.stderr, /repository-push-ref-not-allowed/);
       assert.equal(await snapshot(), before);
       assert.equal(
         guarded.git.trace.slice(trace).some(({ path }) => path.endsWith("/git-receive-pack")),
@@ -605,7 +605,7 @@ test(
       { allowFailure: true },
     );
     assert.notEqual(denied.code, 0);
-    assert.match(denied.stderr, /repository-pre-push-guard-failed/);
+    assert.match(denied.stderr, /repository-push-ref-not-allowed/);
     await invoke([
       "-C",
       linked,

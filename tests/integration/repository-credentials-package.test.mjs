@@ -336,7 +336,7 @@ test(
       assert.equal((await invokeHook("refs/heads/agent/allowed")).status, 0);
       const deniedPush = await invokeHook("refs/heads/main");
       assert.equal(deniedPush.status, 1);
-      assert.match(deniedPush.stderr, /repository-pre-push-guard-failed/);
+      assert.match(deniedPush.stderr, /repository-push-ref-not-allowed/);
       // An unsupported command must reach the router's public error boundary;
       // a missing router or import cannot satisfy this detached-entrypoint check.
       const rejected = invoke("router.js", ["git", "status"]);

@@ -40,9 +40,9 @@ function setting(name: string): string | undefined {
   return output.slice(0, -1) || undefined;
 }
 
-async function checkPush(destination: string, input: Buffer): Promise<void> {
+async function checkPush(destination: string, input: Buffer): Promise<boolean> {
   if (!destination.startsWith("https://")) {
-    return;
+    return true;
   }
   const directory = setting("session");
   let manifest: RuntimeRepositoryManifest;
@@ -70,7 +70,7 @@ async function checkPush(destination: string, input: Buffer): Promise<void> {
   }
   // An unrelated destination must not be rejected by an inherited pin.
   if (!hasGitPushDestination(manifest, destination)) {
-    return;
+    return true;
   }
   if (!directory) {
     if (manifest.generation !== expectedGeneration) {
@@ -80,7 +80,7 @@ async function checkPush(destination: string, input: Buffer): Promise<void> {
   }
   const binding = selectGitPushDestination(manifest, destination, pinned);
   if (!binding || binding.client.pushRefAllowlist === undefined) {
-    return;
+    return true;
   }
   requireCurrentBinding(binding);
   const lines = input.toString("utf8").split("\n");
@@ -93,12 +93,15 @@ async function checkPush(destination: string, input: Buffer): Promise<void> {
       fields.length !== 4 ||
       !fields[0] ||
       !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(fields[1] ?? "") ||
-      !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(fields[3] ?? "") ||
-      !allowsPushRef(binding.client.pushRefAllowlist, fields[2] ?? "")
+      !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(fields[3] ?? "")
     ) {
-      throw new Error("repository-push-ref-not-allowed");
+      throw new Error("invalid-pre-push-input");
+    }
+    if (!allowsPushRef(binding.client.pushRefAllowlist, fields[2] ?? "")) {
+      return false;
     }
   }
+  return true;
 }
 
 async function readPushInput(): Promise<Buffer> {
@@ -152,7 +155,10 @@ async function run(): Promise<number> {
       throw new Error("invalid-pre-push-input");
     }
     input = await readPushInput();
-    await checkPush(args[1]!, input);
+    if (!(await checkPush(args[1]!, input))) {
+      process.stderr.write("repository-push-ref-not-allowed\n");
+      return 1;
+    }
   }
   const commonOutput = gitOutput(["rev-parse", "--path-format=absolute", "--git-common-dir"])!;
   const common = commonOutput.slice(0, -1);

@@ -42,6 +42,8 @@ merges are outside it. A custom `core.hooksPath` replaces the managed directory;
 custom hooks must explicitly chain the image dispatcher to retain the check.
 Use GitHub repository rules for server-side controls.
 
-If Git reports `repository-pre-push-guard-failed`, check the destination branch,
-selected binding and session, then any chained hook. Do not retry an uncertain
-remote mutation without inspecting its result.
+`repository-push-ref-not-allowed` means at least one destination is outside the
+allowlist. Choose an allowed branch. `repository-pre-push-guard-failed` means the
+guard could not safely check the push; inspect the selected binding, session and
+hook configuration. Neither result forwards ref updates. Do not retry an
+uncertain remote mutation without inspecting its result.

@@ -150,8 +150,12 @@ test("native pre-push uses the exact pinned binding and actual destination", asy
         allowFailure: true,
       },
     );
-  assert.notEqual((await invoke()).code, 0);
-  assert.notEqual((await invoke({ OCE_REPOSITORY_REF: "restricted" })).code, 0);
+  const ambiguous = await invoke();
+  assert.notEqual(ambiguous.code, 0);
+  assert.equal(ambiguous.stderr, "repository-pre-push-guard-failed\n");
+  const denied = await invoke({ OCE_REPOSITORY_REF: "restricted" });
+  assert.equal(denied.code, 1);
+  assert.equal(denied.stderr, "repository-push-ref-not-allowed\n");
   assert.equal((await invoke({ OCE_REPOSITORY_REF: "permitted" })).code, 0);
   const selected = material.manifest.bindings.find(
     ({ repositoryRef }) => repositoryRef === "permitted",
@@ -177,6 +181,11 @@ test("native pre-push uses the exact pinned binding and actual destination", asy
     (await invoke({ OCE_REPOSITORY_REF: "restricted" }, "/unmanaged/local/repository")).code,
     0,
   );
+  // Invalid hook input is an inspection failure, not an ordinary policy denial.
+  await writeFile(inputFile, "malformed input\n");
+  const malformed = await invoke({ OCE_REPOSITORY_REF: "permitted" });
+  assert.equal(malformed.code, 1);
+  assert.equal(malformed.stderr, "repository-pre-push-guard-failed\n");
 });
 
 test("delegating an ordinary hook back to the managed dispatcher fails without recursion", async (t) => {
