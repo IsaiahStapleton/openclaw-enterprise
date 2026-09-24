@@ -22,6 +22,7 @@ import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture, providerFixtures } from "../helpers/console-app.mjs";
+import { createConsoleRepositoryLaunchFixture } from "../helpers/console-repository-launch.mjs";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
@@ -1035,6 +1036,221 @@ test("Agent repository access preserves inheritance, custom overrides, and expli
     .getByText("This repository is no longer available. Remove it or retry discovery.")
     .waitFor();
 });
+
+test("Agent deployment requires a reload after repository access changes", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "application",
+      repositoryId: "1600",
+      repository: "example/application",
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+    },
+  ]);
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Repository deploy review",
+    nativeValues("repository-deploy-review"),
+    { harnessAuth: { method: "runtime" } },
+  );
+  const path = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  const initial = await fixture.request("PATCH", path, {
+    body: {
+      configurationId: agent.configurationId,
+      repositoryBindings: [{ repositoryRef: "application", profile: "git-read" }],
+    },
+  });
+  assert.equal(initial.status, 200);
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(
+    page,
+    fixture,
+    `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft`,
+  );
+  const deploy = page.getByRole("button", { name: "Deploy new revision" });
+  await page.getByText("application · Read-only", { exact: true }).waitFor();
+  assert.equal(await deploy.isEnabled(), true);
+
+  // A second operator changes effective access after this draft was loaded.
+  const bindingChange = await fixture.request("PATCH", path, {
+    body: {
+      configurationId: agent.configurationId,
+      repositoryBindings: [{ repositoryRef: "application", profile: "git-full" }],
+    },
+  });
+  assert.equal(bindingChange.status, 200);
+  const staleMessage = "Repository access changed. Reload this draft before deploying.";
+  const staleOutcome = Promise.race([
+    page
+      .getByText(staleMessage, { exact: true })
+      .waitFor()
+      .then(() => "blocked"),
+    page
+      .waitForRequest(
+        (request) => request.method() === "POST" && request.url().endsWith(`${path}/deploy`),
+      )
+      .then(() => "deployed"),
+  ]);
+  await deploy.click();
+  assert.equal(await staleOutcome, "blocked", "stale access must not be deployed");
+  assert.equal(await deploy.isDisabled(), true);
+  assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
+
+  await page.reload();
+  await page.getByText("application · Contributor", { exact: true }).waitFor();
+  assert.equal(await deploy.isEnabled(), true);
+  // Intent can change even when the resolved permissions stay the same.
+  const intentChange = await fixture.request("PATCH", path, {
+    body: {
+      configurationId: agent.configurationId,
+      repositoryAccess: {
+        defaultProfile: "git-full",
+        repositories: [{ repositoryRef: "application" }],
+      },
+    },
+  });
+  assert.equal(intentChange.status, 200);
+  assert.deepEqual(intentChange.data.repositoryBindings, bindingChange.data.repositoryBindings);
+  await deploy.click();
+  await page.getByText(staleMessage, { exact: true }).waitFor();
+  assert.equal(await deploy.isDisabled(), true);
+  assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
+
+  await page.reload();
+  await page.getByText("application · Contributor", { exact: true }).waitFor();
+  assert.equal(await deploy.isEnabled(), true);
+});
+
+test("Agent deployment reports preflight errors and requires reload for changed draft state", async (t) => {
+  const { fixture, namespace } = await createRuntimeAuthFixture(t, "Deployment preflight");
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Deployment preflight",
+    nativeValues("before-preflight"),
+    { harnessAuth: { method: "runtime" } },
+  );
+  const path = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(
+    page,
+    fixture,
+    `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft`,
+  );
+  const deploy = page.getByRole("button", { name: "Deploy new revision" });
+  await page.getByText("Configured on the runtime host", { exact: false }).waitFor();
+  await page.route(`${fixture.origin}${path}`, (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "DEPENDENCY_UNAVAILABLE", message: "Read unavailable" },
+      }),
+    }),
+  );
+  await deploy.click();
+  await page
+    .getByText("Service unavailable. The read could not be completed. Please retry.")
+    .waitFor();
+  assert.equal(await deploy.isEnabled(), true);
+  assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
+  await page.unroute(`${fixture.origin}${path}`);
+
+  // Changes to Configuration and authentication each require a fresh review.
+  await fixture.updateConfiguration(namespace.id, agent.configurationId, nativeValues("changed"));
+  await deploy.click();
+  const stale = "Configuration or authentication changed. Reload this draft before deploying.";
+  await page.getByText(stale, { exact: true }).waitFor();
+  assert.equal(await deploy.isDisabled(), true);
+  assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
+  await page.reload();
+  await page.getByText(/generation 2/).waitFor();
+  assert.equal(await deploy.isEnabled(), true);
+  const authChange = await fixture.request("PATCH", path, {
+    body: { configurationId: agent.configurationId, harnessAuth: null },
+  });
+  assert.equal(authChange.status, 200);
+  await deploy.click();
+  await page.getByText(stale, { exact: true }).waitFor();
+  assert.equal(await deploy.isDisabled(), true);
+  assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
+});
+
+for (const tab of ["configuration", "repositories"]) {
+  test(`Agent deployment keeps ${tab} edits unavailable until the request finishes`, async (t) => {
+    const { fixture, namespace, modelSecret, grantModelAccess } =
+      await createConsoleRepositoryLaunchFixture(t);
+    const configuration = await fixture.createConfiguration(
+      namespace.id,
+      createHarnessConfiguration("codex", "gpt-5.1"),
+    );
+    const created = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
+      body: {
+        name: `Deploying from ${tab}`,
+        configurationId: configuration.id,
+        executionMode: "dedicated",
+        harnessAuth: { method: "api_key", source: modelSecret.ref },
+      },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const agent = created.data;
+    await grantModelAccess(agent);
+    const path = `/namespaces/${namespace.id}/agents/${agent.id}`;
+    const provisioned = await fixture.request("POST", `${path}/runtime-credentials`, {
+      headers: { origin: fixture.origin },
+      body: {},
+    });
+    assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
+    const { page } = await newPage(t, fixture);
+    await login(
+      page,
+      fixture,
+      `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft&tab=${tab}`,
+    );
+    const edit =
+      tab === "configuration"
+        ? page.getByRole("button", { name: "Edit Configuration", exact: true })
+        : page.getByRole("button", { name: "Add example/application", exact: true });
+    await edit.waitFor();
+    const deploy = page.getByRole("button", { name: "Deploy new revision" });
+    assert.equal(await deploy.isEnabled(), true);
+    const preflightStarted = Promise.withResolvers();
+    const releasePreflight = Promise.withResolvers();
+    const deployCommitted = Promise.withResolvers();
+    const releaseResponse = Promise.withResolvers();
+    t.after(() => releasePreflight.resolve());
+    t.after(() => releaseResponse.resolve());
+    await page.route(`${fixture.origin}${path}`, async (route) => {
+      if (route.request().method() === "GET") {
+        preflightStarted.resolve();
+        await releasePreflight.promise;
+      }
+      await route.continue();
+    });
+    await page.route(`${fixture.origin}${path}/deploy`, async (route) => {
+      const response = await route.fetch();
+      deployCommitted.resolve({ status: response.status(), body: await response.json() });
+      await releaseResponse.promise;
+      await route.fulfill({ response });
+    });
+    const admitted = page.waitForResponse(
+      (response) =>
+        response.url() === `${fixture.origin}${path}/deploy` &&
+        response.request().method() === "POST",
+    );
+    await deploy.click();
+    await preflightStarted.promise;
+    // Edits made during an admitted deployment would otherwise block its revision navigation.
+    await assert.rejects(edit.click({ timeout: 500 }), /Timeout/);
+    releasePreflight.resolve();
+    const committed = await deployCommitted.promise;
+    assert.equal(committed.status, 202, JSON.stringify(committed.body));
+    await assert.rejects(edit.click({ timeout: 500 }), /Timeout/);
+    releaseResponse.resolve();
+    assert.equal((await admitted).status(), 202);
+    await page.waitForURL(/revision=rev_/);
+  });
+}
 
 test("Agent repository editor distinguishes stale, rejected, and uncertain saves", async (t) => {
   const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [

@@ -176,6 +176,7 @@ export async function renderAgentDetail(context) {
     "workspace",
   ];
   let selectedTab = tabsForSelection.includes(tab) ? tab : "configuration";
+  let deployInFlight = false;
   const target = (revision = selected, tab = selectedTab) =>
     `agents/${agentId}?revision=${encodeURIComponent(revision)}&tab=${tab}`;
   const change = (revision, tab) => {
@@ -220,8 +221,8 @@ export async function renderAgentDetail(context) {
   function draftEditorBlocksNavigation() {
     return (
       selected === "draft" &&
-      ["configuration", "repositories"].includes(selectedTab) &&
-      draftEditorNavigationBlock
+      (deployInFlight ||
+        (["configuration", "repositories"].includes(selectedTab) && draftEditorNavigationBlock))
     );
   }
   function trackRevisionControl(control) {
@@ -409,6 +410,8 @@ export async function renderAgentDetail(context) {
     const executionMode = draft ? agent.executionMode : snapshot.harness.mode;
     let deploy;
     let deployPending = false;
+    let deployReloadMessage = "";
+    let deployFeedback = "";
     let deployStatus;
     const draftEditorState = {
       dirty: false,
@@ -441,6 +444,7 @@ export async function renderAgentDetail(context) {
       const editedSubject = selectedTab === "repositories" ? "repository access" : "Configuration";
       deploy.disabled =
         deployPending ||
+        Boolean(deployReloadMessage) ||
         draftEditorState.dirty ||
         draftEditorState.saving ||
         draftEditorState.outcomeUnknown ||
@@ -449,7 +453,9 @@ export async function renderAgentDetail(context) {
         revisionResult.status !== "fulfilled" ||
         (!runtimeAuth && !credentials?.canDeploy());
       if (!deployPending) {
-        if (draftEditorState.outcomeUnknown) {
+        if (deployReloadMessage) {
+          deployStatus.textContent = deployReloadMessage;
+        } else if (draftEditorState.outcomeUnknown) {
           deployStatus.textContent = `Refresh this draft before deploying because the last ${editedSubject} save outcome is unknown.`;
         } else if (draftEditorState.reloadRequired) {
           deployStatus.textContent = "Reload this draft before deploying.";
@@ -457,6 +463,8 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent = `Wait for ${editedSubject} save to finish before deploying.`;
         } else if (draftEditorState.dirty) {
           deployStatus.textContent = `Save or cancel ${editedSubject} edits before deploying.`;
+        } else if (deployFeedback) {
+          deployStatus.textContent = deployFeedback;
         } else if (revisionResult.status !== "fulfilled") {
           deployStatus.textContent =
             "Revision history is required before deploying this new revision.";
@@ -475,6 +483,10 @@ export async function renderAgentDetail(context) {
       deploy = button("Deploy new revision", async () => {
         deploy.disabled = true;
         deployPending = true;
+        deployFeedback = "";
+        deployInFlight = true;
+        content.toggleAttribute("inert", true);
+        updateNavigationControls();
         deployStatus.textContent = "Checking Configuration…";
         let submitted = false;
         try {
@@ -493,19 +505,31 @@ export async function renderAgentDetail(context) {
             JSON.stringify(freshAgent.harnessAuth) !== JSON.stringify(agent.harnessAuth) ||
             freshConfig.generation !== snapshot.generation
           ) {
-            deployStatus.textContent = "The Configuration changed. Refresh before deploying.";
+            deployReloadMessage =
+              "Configuration or authentication changed. Reload this draft before deploying.";
             return;
           }
+          if (
+            JSON.stringify(freshAgent.repositoryAccess) !==
+              JSON.stringify(agent.repositoryAccess) ||
+            JSON.stringify(freshAgent.repositoryBindings) !==
+              JSON.stringify(agent.repositoryBindings)
+          ) {
+            deployReloadMessage = "Repository access changed. Reload this draft before deploying.";
+            return;
+          }
+          // TODO: require an expected Agent version at deployment admission; a change
+          // after this preflight can still race with the POST.
           const credentialBlockReason = runtimeCredentialBlockReason(freshConfig.values);
           if (credentialBlockReason !== null) {
-            deployStatus.textContent = credentialBlockReason;
+            deployFeedback = credentialBlockReason;
             return;
           }
           if (
             !runtimeAuth &&
             !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values, freshConfig)
           ) {
-            deployStatus.textContent =
+            deployFeedback =
               "Runtime credential metadata changed. Refresh status before deploying.";
             return;
           }
@@ -513,6 +537,9 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent = "Requesting deployment…";
           const revision = await request(`${path}/deploy`, { method: "POST" });
           if (context.isCurrent()) {
+            deployInFlight = false;
+            content.toggleAttribute("inert", false);
+            updateNavigationControls();
             change(revision.id, "workspace");
           }
         } catch (error) {
@@ -523,12 +550,16 @@ export async function renderAgentDetail(context) {
             context.onExpired();
             return;
           }
-          deployStatus.textContent = message(error, submitted);
+          deployFeedback = message(error, submitted);
+          deployStatus.textContent = deployFeedback;
           if (!submitted || [400, 403, 404, 409, 429].includes(error.status)) {
             deployPending = false;
           }
         } finally {
           if (context.isCurrent()) {
+            deployInFlight = false;
+            content.toggleAttribute("inert", false);
+            updateNavigationControls();
             if (!submitted) {
               deployPending = false;
             }
