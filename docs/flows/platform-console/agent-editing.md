@@ -151,14 +151,17 @@ Secret grant is written for the staged channel selection.
 After the PATCH succeeds,
 `apps/controller/src/console/agents/credentials.mjs:ensureSecretOperateBinding` grants the Agent's service
 principal access to the final selected Secrets through the Namespace IAM API.
-Grants and Configuration updates are separate writes. If the grant write fails,
-the Configuration remains saved. The detail view drops its cached snapshot so
-Agent Credentials rereads the saved bindings for inspection, then reports that a
-Namespace administrator must grant the Agent access to the saved Secret. It does
-not retry the rejected operation as a fresh channel save. Newly created Secrets remain Namespace-owned even when the drawer is
-cancelled or a later save fails. The preflight reads do not prevent a later concurrent write.
-An interrupted or unavailable PATCH reply keeps the result unknown and blocks
-another channel write until Refresh. Draft channel disablement changes only
+Grants and Configuration updates are separate writes. While either is pending,
+the detail view blocks deployment and Agent tab or revision navigation. If the
+grant write fails, the Configuration remains saved. The operator reloads the
+draft and inspects the saved bindings in Agent Credentials; a Namespace
+administrator may need to grant the Agent access to the saved Secret. The editor
+does not retry the rejected operation as a fresh channel save. Newly created Secrets
+remain Namespace-owned even when the drawer is cancelled or a later save fails.
+The preflight reads do not prevent a later concurrent write. An interrupted or
+unavailable PATCH reply keeps the result unknown and blocks deployment, navigation,
+and another channel write until the operator explicitly reloads the draft. Reloading
+does not prove that a delayed write has settled. Draft channel disablement changes only
 Configuration values; it does not stop a running Agent. The
 [console reference](../../reference/console.md#inspect-detail-revisions-and-channel-drafts)
 describes the supported edits and their deployment boundaries.

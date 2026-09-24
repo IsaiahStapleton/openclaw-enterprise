@@ -224,7 +224,8 @@ export async function renderAgentDetail(context) {
       selected === "draft" &&
       (deployInFlight ||
         authenticationSaveState === "saving" ||
-        (["configuration", "repositories"].includes(selectedTab) && draftEditorNavigationBlock))
+        (["configuration", "repositories", "channels"].includes(selectedTab) &&
+          draftEditorNavigationBlock))
     );
   }
   function trackRevisionControl(control) {
@@ -441,13 +442,18 @@ export async function renderAgentDetail(context) {
             onReload: () => context.navigate(target("draft", "credentials"), namespaceId, true),
           })
         : null;
+    function editedSubject() {
+      if (selectedTab === "repositories") {
+        return "repository access";
+      }
+      return selectedTab === "channels" ? "channel settings" : "Configuration";
+    }
     function updateDeployControls() {
       authenticationForm?.toggleAttribute("inert", Boolean(credentials?.mutationPending()));
       credentials?.section.toggleAttribute("inert", authenticationSaveState !== "idle");
       if (!deploy || !deployStatus) {
         return;
       }
-      const editedSubject = selectedTab === "repositories" ? "repository access" : "Configuration";
       deploy.disabled =
         deployPending ||
         authenticationSaveState !== "idle" ||
@@ -468,13 +474,13 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent =
             "Authentication may have been saved. Reload this draft before deploying.";
         } else if (draftEditorState.outcomeUnknown) {
-          deployStatus.textContent = `Refresh this draft before deploying because the last ${editedSubject} save outcome is unknown.`;
+          deployStatus.textContent = `Refresh this draft before deploying because the last ${editedSubject()} save outcome is unknown.`;
         } else if (draftEditorState.reloadRequired) {
           deployStatus.textContent = "Reload this draft before deploying.";
         } else if (draftEditorState.saving) {
-          deployStatus.textContent = `Wait for ${editedSubject} save to finish before deploying.`;
+          deployStatus.textContent = `Wait for ${editedSubject()} save to finish before deploying.`;
         } else if (draftEditorState.dirty) {
-          deployStatus.textContent = `Save or cancel ${editedSubject} edits before deploying.`;
+          deployStatus.textContent = `Save or cancel ${editedSubject()} edits before deploying.`;
         } else if (deployFeedback) {
           deployStatus.textContent = deployFeedback;
         } else if (revisionResult.status !== "fulfilled") {
@@ -620,9 +626,9 @@ export async function renderAgentDetail(context) {
           : draftEditorState.reloadRequired
             ? "Reload this draft before leaving the editor."
             : draftEditorState.saving
-              ? "Wait for Configuration save to finish before leaving the editor."
+              ? `Wait for ${editedSubject()} save to finish before leaving the editor.`
               : draftEditorState.dirty
-                ? "Save or cancel Configuration edits before leaving this tab."
+                ? `Save or cancel ${editedSubject()} edits before leaving this tab.`
                 : null;
         updateNavigationControls();
         updateDeployControls();
@@ -757,11 +763,12 @@ export async function renderAgentDetail(context) {
               }
             } catch (error) {
               error.message =
-                "Configuration saved, but Secret access grants could not be confirmed. Open Agent Credentials to inspect saved bindings, then ask a Namespace administrator to grant this Agent access to the saved Secret.";
+                "Configuration saved, but Secret access grants could not be confirmed. Reload the draft, inspect saved bindings in Agent Credentials, then ask a Namespace administrator to grant this Agent access to the saved Secret.";
               error.outcomeUnknown = true;
               throw error;
             }
             if (context.isCurrent()) {
+              data.setDraftEditorState({ saving: false, outcomeUnknown: false });
               change("draft", "channels");
             }
           } catch (error) {
@@ -787,8 +794,18 @@ export async function renderAgentDetail(context) {
             throw error;
           }
         },
+        onStateChange: ({ pending, outcomeUnknown }) => {
+          if (context.isCurrent()) {
+            data.setDraftEditorState({ dirty: false, saving: pending, outcomeUnknown });
+          }
+        },
+        onReload: () => context.navigate(target("draft", "channels"), namespaceId, true),
       });
-      content.append(channels);
+      const navigationFeedback = element("p", { className: "hint", role: "status" });
+      showDraftEditorNavigationBlock = () => {
+        navigationFeedback.textContent = draftEditorNavigationBlock;
+      };
+      content.append(channels, navigationFeedback);
     } else if (selectedTab === "credentials" && draft) {
       const auth = createHarnessAuthFields(context, agent.harnessAuth, agent.executionMode);
       const feedback = element("p", { role: "status", className: "hint" });
