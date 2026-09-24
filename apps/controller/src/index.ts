@@ -2109,6 +2109,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (operation.operationId === "getInstallationDeploymentInventory") {
+      reply.send({
+        data: await controller.getInstallationDeploymentInventory(context.actorId),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
     if (operation.operationId === "listProviders") {
       await requireInstallationAdmin(request, operation, context);
       const providers = options.providerSummaries;

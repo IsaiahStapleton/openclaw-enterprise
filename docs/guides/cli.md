@@ -45,6 +45,19 @@ commands:
 export OCC_NAMESPACE='<namespace-id>'
 ```
 
+Installation administrators can obtain a fail-closed fleet snapshot for a
+coordinated deployment:
+
+```bash
+occ installation deployment-inventory --output json
+```
+
+This command requires exact read access to every Namespace and Agent and exact
+deploy access to each eligible running Agent. OCC rejects the entire request if
+those checks or durable deployment-work checks cannot establish a complete
+inventory. Use the [production upgrade guide](deploy/production-upgrade.md) for
+the supported image-replacement workflow.
+
 ## Create an Agent draft
 
 Save this as `configuration.json` to create a draft that will not run yet:

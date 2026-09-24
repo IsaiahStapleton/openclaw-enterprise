@@ -28,9 +28,11 @@ Complete the following before invoking the command:
    The command submits the complete baseline fleet before waiting for any
    individual deployment.
 6. Establish the same protected API access used for normal production Agent
-   operations. The service identity must have complete Installation inventory,
-   exact-Agent deploy, and exact-revision read access. Partial collection
-   visibility is not a supported fleet upgrade.
+   operations. The service identity must have Installation `administer`, exact
+   `read` access to every Namespace and Agent, exact `deploy` access to every
+   eligible running Agent, and exact-revision read access. The
+   `occ installation deployment-inventory` operation fails instead of returning
+   a partial fleet when any required authorization is missing.
 
 Run from the checkout containing the reviewed chart. Keep the protected Helm
 values, Installation YAML, kubeconfig, and service key in owner-only files. The
@@ -51,8 +53,69 @@ export UPGRADE_EVIDENCE="/secure/occ/upgrades/$(date -u +%Y%m%dT%H%M%SZ)"
 
 Confirm no other operator is changing the Helm release, Installation startup
 Secret, protected inputs, or Agent drafts. Resolve any initial Agent deployment
-that is still running: the command rejects a running Agent without an active
-revision instead of guessing whether it belongs in the baseline.
+that is still running. The command rejects queued or claimed deployment work and
+a running Agent without an active revision instead of guessing whether either
+belongs in the baseline.
+
+### Bootstrap the inventory API once
+
+Skip this section when
+`occ installation deployment-inventory --output json` already succeeds. If the
+current controller returns `404`, it predates the complete-inventory operation
+and cannot safely admit a fleet upgrade.
+
+For first adoption, save the current protected values and Helm evidence. Change
+only `images.controller` in the protected Helm values to `$CONTROLLER_IMAGE`.
+Leave the Installation startup Secret and both runtime image selections
+unchanged:
+
+```bash
+export CONTROLLER_BOOTSTRAP_EVIDENCE="${UPGRADE_EVIDENCE}-controller-bootstrap"
+mkdir -m 700 "$CONTROLLER_BOOTSTRAP_EVIDENCE"
+install -m 600 /secure/occ/values.yaml \
+  "$CONTROLLER_BOOTSTRAP_EVIDENCE/before-values.yaml"
+helm get values oce \
+  --kubeconfig /secure/occ/kubeconfig \
+  --kube-context '<reviewed-context>' \
+  --namespace openclaw-system --output yaml \
+  > "$CONTROLLER_BOOTSTRAP_EVIDENCE/before-live-values.yaml"
+CONTROLLER_IMAGE="$CONTROLLER_IMAGE" yq -i \
+  '.images.controller = strenv(CONTROLLER_IMAGE)' /secure/occ/values.yaml
+helm template oce deploy/helm/openclaw-enterprise \
+  --kubeconfig /secure/occ/kubeconfig \
+  --kube-context '<reviewed-context>' \
+  --namespace openclaw-system \
+  --values /secure/occ/values.yaml \
+  > "$CONTROLLER_BOOTSTRAP_EVIDENCE/rendered.yaml"
+helm upgrade --install oce deploy/helm/openclaw-enterprise \
+  --kubeconfig /secure/occ/kubeconfig \
+  --kube-context '<reviewed-context>' \
+  --namespace openclaw-system \
+  --values /secure/occ/values.yaml \
+  --dry-run=server --hide-secret \
+  > "$CONTROLLER_BOOTSTRAP_EVIDENCE/server-dry-run.txt"
+helm upgrade --install oce deploy/helm/openclaw-enterprise \
+  --kubeconfig /secure/occ/kubeconfig \
+  --kube-context '<reviewed-context>' \
+  --namespace openclaw-system \
+  --values /secure/occ/values.yaml --wait --timeout 5m \
+  > "$CONTROLLER_BOOTSTRAP_EVIDENCE/helm-upgrade.txt"
+```
+
+Verify the API and worker use the candidate controller digest. Then verify OCC
+authentication and the complete inventory:
+
+```bash
+occ installation deployment-inventory --output json \
+  > "$CONTROLLER_BOOTSTRAP_EVIDENCE/deployment-inventory.json"
+```
+
+Do not continue if this operation fails. Preserve the controller-only bootstrap
+evidence separately, then run the coordinated command below with the same
+controller digest and its companion runtime digest. The command accepts an
+already-selected controller digest; at least one runtime image slot must still
+change. This prerequisite does not modify the Installation startup Secret or
+redeploy Agents.
 
 ## Run the coordinated upgrade
 
@@ -73,8 +136,13 @@ scripts/upgrade-production-images \
   --occ /secure/occ/bin/occ
 ```
 
-The command performs these mutations only after inventory, candidate rendering,
-and Helm server-side dry run succeed:
+Before mutation, the command saves the complete deployment inventory returned by
+OCC under `inventory/deployment-inventory.json`. It checks the Installation ID,
+rejects nonterminal Agent deployment work, and selects every active Agent that
+desires `running`, has an active revision, and belongs to a ready Namespace.
+
+The command performs these mutations only after that inventory, candidate
+rendering, and Helm server-side dry run succeed:
 
 1. It writes the candidate controller digest into the protected Helm values and
    the runtime digest into both Kubernetes Compute image slots. Original bytes
@@ -135,6 +203,8 @@ prepare a forward repair or coordinated data restore.
 
 - V1 has no canary, batch size, automatic compatibility check, or automatic
   rollback.
+- The first release needs the one-time controller-only inventory API bootstrap
+  above. Later releases begin directly with the coordinated command.
 - All baseline Agent requests are submitted concurrently. Large fleets must
   prove cluster, database, and worker capacity before using this version.
 - Deployment uses current drafts. Exact active-revision restart is not yet a

@@ -98,7 +98,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 
 func (app *application) installationCommand() *cobra.Command {
 	command := commandGroup("installation", "Inspect the singleton Installation")
-	command.AddCommand(&cobra.Command{
+	get := &cobra.Command{
 		Use:   "get",
 		Short: "Show the Installation",
 		Args:  cobra.NoArgs,
@@ -117,7 +117,27 @@ func (app *application) installationCommand() *cobra.Command {
 				{title: "CREATED", key: "createdAt"},
 			})
 		},
-	})
+	}
+	inventory := &cobra.Command{
+		Use:   "deployment-inventory",
+		Short: "Show the complete authorized Agent deployment inventory",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			inventory, err := client.GetInstallationDeploymentInventory()
+			if err != nil {
+				return err
+			}
+			return app.printItems(inventory, false, []column{
+				{title: "INSTALLATION", key: "installationId"},
+				{title: "NAMESPACES", key: "namespaces"},
+			})
+		},
+	}
+	command.AddCommand(get, inventory)
 	return command
 }
 

@@ -1478,6 +1478,112 @@ test("Agent deployment status polls the admitted revision work with exact read a
   assert.equal(denied.status, 403);
 });
 
+test("Installation deployment inventory fails closed on incomplete authorization and reports in-flight work", async () => {
+  const deploymentWorks = new Map();
+  const fixture = await createInjectedFixture({ deploymentWorks, recordOperations: true });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "deployment-inventory");
+  const agent = await createAgent(controller, namespace.id, "inventory-agent");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  await bindHarnessKey(fixture, namespace.id, agent);
+  const admitted = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  );
+  assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+  const workKey = `agent_revision:${admitted.data.id}:reconcile`;
+  const completedWork = {
+    kind: "lifecycle",
+    idempotencyKey: workKey,
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    revisionId: admitted.data.id,
+    actorId: fixture.principal.id,
+    state: "succeeded",
+    availableAt: new Date(0),
+    attemptCount: 1,
+    completedAt: new Date(1),
+    createdAt: new Date(0),
+    updatedAt: new Date(1),
+  };
+  deploymentWorks.set(workKey, completedWork);
+  await fixture.platformState.transact((unit) =>
+    unit.agents.compareAndSetActiveRevision(namespace.id, agent.id, undefined, admitted.data.id),
+  );
+
+  const inventoryPath = "/installation/deployment-inventory";
+  const inventory = await controller.request("GET", inventoryPath);
+  assert.equal(inventory.status, 200, JSON.stringify(inventory.body));
+  assert.equal(inventory.data.installationId, fixture.installationId);
+  assert.equal(inventory.data.namespaces.length, 2);
+  assert.deepEqual(
+    inventory.data.namespaces.find((candidate) => candidate.id === namespace.id),
+    {
+      id: namespace.id,
+      status: "ready",
+      agents: [
+        {
+          id: agent.id,
+          status: "active",
+          desiredRuntimeState: "running",
+          activeRevisionId: admitted.data.id,
+          deploymentInProgress: false,
+        },
+      ],
+    },
+  );
+
+  // A complete fleet response must not turn any exact-resource denial into omission.
+  for (const restriction of [
+    {
+      id: "deny-inventory-namespace-read",
+      namespaceId: namespace.id,
+      resourceKind: "namespace",
+      resourceId: namespace.id,
+      action: "read",
+      effect: "deny",
+    },
+    {
+      id: "deny-inventory-agent-read",
+      namespaceId: namespace.id,
+      resourceKind: "agent",
+      resourceId: agent.id,
+      action: "read",
+      effect: "deny",
+    },
+    {
+      id: "deny-inventory-agent-deploy",
+      namespaceId: namespace.id,
+      resourceKind: "agent",
+      resourceId: agent.id,
+      action: "deploy",
+      effect: "deny",
+    },
+  ]) {
+    fixture.state.restrictions.push(restriction);
+    const denied = await controller.request("GET", inventoryPath);
+    assert.equal(denied.status, 403, restriction.id);
+    fixture.state.restrictions.pop();
+  }
+
+  deploymentWorks.set(workKey, { ...completedWork, state: "claimed" });
+  const inProgress = await controller.request("GET", inventoryPath);
+  assert.equal(inProgress.status, 200, JSON.stringify(inProgress.body));
+  const inProgressAgent = inProgress.data.namespaces
+    .find((candidate) => candidate.id === namespace.id)
+    ?.agents.find((candidate) => candidate.id === agent.id);
+  assert.equal(inProgressAgent?.deploymentInProgress, true);
+
+  // Missing durable work makes completeness unknowable and must fail the whole operation.
+  deploymentWorks.set(workKey, undefined);
+  const incomplete = await controller.request("GET", inventoryPath);
+  assert.equal(incomplete.status, 503);
+  assert.equal(incomplete.body.error.code, "DEPENDENCY_UNAVAILABLE");
+});
+
 test("Agent create and update replace policy-only plugin maps and revisions freeze the requested snapshot", async () => {
   const controller = await configuredController();
   await bootstrap(controller);

@@ -52,6 +52,7 @@ import {
   IAMRoleListResponse,
   IAMRoleResponse,
   InstallationResponse,
+  InstallationDeploymentInventoryResponse,
   NamespaceListResponse,
   NamespaceResponse,
   ProviderListResponse,
@@ -210,6 +211,21 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       response: { 200: InstallationResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "getInstallationDeploymentInventory",
+    method: "GET",
+    path: "/installation/deployment-inventory",
+    action: "openclaw.installation.deployment_inventory.read",
+    iamAction: "administer",
+    resourceKind: "installation",
+    authorizationTarget: "installation",
+    summary: "Get the complete authorized Agent deployment inventory",
+    tags: ["Installation"],
+    schema: {
+      querystring: EmptyQuery,
+      response: { 200: InstallationDeploymentInventoryResponse, ...readErrors },
     },
   },
   {

@@ -22,6 +22,7 @@
 ### Installation
 
 - [`getInstallation`](../api.md#get-installation): Get the singleton Installation.
+- [`getInstallationDeploymentInventory`](../api.md#get-installationdeploymentinventory): Get the complete authorized Agent deployment inventory.
 - [`bootstrapInstallation`](../api.md#post-installationbootstrap): Bootstrap the singleton Installation.
 
 ### Namespaces

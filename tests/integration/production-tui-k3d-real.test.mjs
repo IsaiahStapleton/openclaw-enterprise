@@ -246,11 +246,9 @@ test(
         codexImage: images.runtime,
         cluster: `production-tui-${suffix}`,
       });
-      await writeFile(
-        join(directory, "installation.json"),
-        JSON.stringify(configuration),
-        { mode: 0o600 },
-      );
+      await writeFile(join(directory, "installation.json"), JSON.stringify(configuration), {
+        mode: 0o600,
+      });
       const port = await new Promise((resolve) => {
         const server = net.createServer();
         server.listen(0, "127.0.0.1", () => {
@@ -517,7 +515,7 @@ test(
         const result = await request(method, path, body, expected);
         return result.data;
       };
-      return { api, externalRequest, runGuideOcc };
+      return { api, baseURL, externalRequest, runGuideOcc };
     }
 
     async function provisionNamespaceAndAgent({ api, externalRequest, runGuideOcc }) {
@@ -720,10 +718,7 @@ test(
         202,
       );
       await waitFor("stopped baseline Agent shutdown", async () => {
-        const current = await api(
-          "GET",
-          `/namespaces/${namespace.id}/agents/${stoppedAgent.id}`,
-        );
+        const current = await api("GET", `/namespaces/${namespace.id}/agents/${stoppedAgent.id}`);
         return current.desiredRuntimeState === "stopped" && current.activeRevisionId === undefined;
       });
       return {
@@ -1149,9 +1144,62 @@ test(
         return finalGateway;
       }
 
-      const sourceRevision = (
-        await run("git", ["rev-parse", "HEAD"], { timeout: 30_000 })
-      ).trim();
+      const sourceRevision = (await run("git", ["rev-parse", "HEAD"], { timeout: 30_000 })).trim();
+      // First adoption upgrades only OCC so the old fleet remains unchanged
+      // while the candidate controller supplies fail-closed inventory admission.
+      const valuesPath = join(directory, "values.json");
+      const bootstrapValues = JSON.parse(await readFile(valuesPath, "utf8"));
+      bootstrapValues.images.controller = upgradeImages.controller;
+      await writeFile(valuesPath, JSON.stringify(bootstrapValues), { mode: 0o600 });
+      await run(
+        "helm",
+        [
+          "upgrade",
+          "--install",
+          release,
+          "deploy/helm/openclaw-enterprise",
+          "-n",
+          system,
+          "--kubeconfig",
+          selection.kubeconfigPath,
+          "--kube-context",
+          selection.kubernetesContext,
+          "-f",
+          valuesPath,
+          "--wait",
+          "--timeout",
+          "300s",
+        ],
+        { timeout: 330_000 },
+      );
+      for (const component of ["api", "worker"]) {
+        const deployment = `openclaw-enterprise-${component}`;
+        await kubectl("-n", system, "rollout", "status", `deployment/${deployment}`);
+        const observed = await kubectl(
+          "-n",
+          system,
+          "get",
+          `deployment/${deployment}`,
+          "-o",
+          `jsonpath={.spec.template.spec.containers[?(@.name=='${component}')].image}`,
+        );
+        assert.equal(observed, upgradeImages.controller);
+      }
+      const bootstrapInventory = await runGuideOcc(["installation", "deployment-inventory"]);
+      assert.ok(bootstrapInventory.namespaces.some((candidate) => candidate.id === namespace.id));
+      assert.equal(
+        (await api("GET", `/namespaces/${namespace.id}/agents/${agent.id}`)).activeRevisionId,
+        finalGateway.revisionId,
+      );
+      assert.equal(
+        (await api("GET", `/namespaces/${namespace.id}/agents/${secondaryAgent.id}`))
+          .activeRevisionId,
+        secondaryBaselineRevision,
+      );
+      await record("Controller-only inventory API bootstrap retained Agent revisions", {
+        controllerImage: upgradeImages.controller,
+      });
+
       const upgradeEvidence = join(directory, "coordinated-upgrade");
       const output = await run(
         "scripts/upgrade-production-images",
@@ -1165,7 +1213,7 @@ test(
           "--release",
           release,
           "--values",
-          join(directory, "values.json"),
+          valuesPath,
           "--installation",
           join(directory, "installation.json"),
           "--controller-image",
@@ -1385,7 +1433,7 @@ test(
       });
     }
 
-    const { api, externalRequest, runGuideOcc } = await installProductionControlPlane();
+    const { api, baseURL, externalRequest, runGuideOcc } = await installProductionControlPlane();
     const { agent, agentHash, namespace, secondaryAgent, stoppedAgent, tenant } =
       await provisionNamespaceAndAgent({
         api,

@@ -17,20 +17,20 @@ Configuration so fresh-workspace `BOOTSTRAP.md` onboarding does not replace the
 nonce reply; existing workspaces with bootstrap files are unaffected. Missing
 prerequisites fail the selected test instead of skipping.
 
-| Variable                               | Requirement or default                                                                                                  |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_PRODUCTION_TUI_REAL`         | Set to `1` to explicitly opt into the Helm-backed production TUI suite.                                                 |
-| `OCC_TEST_KUBERNETES_KUBECONFIG`       | Absolute path to the dedicated disposable k3d kubeconfig.                                                               |
-| `OCC_TEST_KUBERNETES_CONTEXT`          | Explicit `k3d-*` context with a verified loopback HTTPS Kubernetes API.                                                 |
-| `OCC_TEST_PRODUCTION_CONTROLLER_IMAGE` | Imported immutable controller image reference used by the Helm chart.                                                   |
-| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`    | Imported immutable runtime image reference used for the embedded OpenClaw gateway.                                      |
-| `OCC_TEST_PRODUCTION_POSTGRES_IMAGE`   | Imported immutable PostgreSQL image reference for the task-owned database Pod.                                          |
-| `OCC_TEST_PRODUCTION_NODE_IMAGE`       | Imported immutable Node image reference for the operator HTTPS proxy and network probes.                                |
-| `OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE` | Optional second immutable controller image; set with the matching runtime image to exercise coordinated upgrade. |
-| `OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE` | Optional second immutable runtime image from the same reviewed source as the upgrade controller.                    |
-| `OPENAI_API_KEY`                       | Existing authorized provider credential used only by the Agent-owned embedded gateway path.                             |
-| `OCC_TEST_OPENAI_MODEL`                | Authorized provider model; defaults to `gpt-6-astra`.                                                                   |
-| `OCC_TEST_PRODUCTION_TUI_KEEP`         | Optional `1` retains the owned Helm release, namespaces, final gateway, `attach.sh`, and `proof.json` rehearsal output. |
+| Variable                                       | Requirement or default                                                                                                  |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_PRODUCTION_TUI_REAL`                 | Set to `1` to explicitly opt into the Helm-backed production TUI suite.                                                 |
+| `OCC_TEST_KUBERNETES_KUBECONFIG`               | Absolute path to the dedicated disposable k3d kubeconfig.                                                               |
+| `OCC_TEST_KUBERNETES_CONTEXT`                  | Explicit `k3d-*` context with a verified loopback HTTPS Kubernetes API.                                                 |
+| `OCC_TEST_PRODUCTION_CONTROLLER_IMAGE`         | Imported immutable controller image reference used by the Helm chart.                                                   |
+| `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`            | Imported immutable runtime image reference used for the embedded OpenClaw gateway.                                      |
+| `OCC_TEST_PRODUCTION_POSTGRES_IMAGE`           | Imported immutable PostgreSQL image reference for the task-owned database Pod.                                          |
+| `OCC_TEST_PRODUCTION_NODE_IMAGE`               | Imported immutable Node image reference for the operator HTTPS proxy and network probes.                                |
+| `OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE` | Optional second immutable controller image; set with the matching runtime image to exercise coordinated upgrade.        |
+| `OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE`    | Optional second immutable runtime image from the same reviewed source as the upgrade controller.                        |
+| `OPENAI_API_KEY`                               | Existing authorized provider credential used only by the Agent-owned embedded gateway path.                             |
+| `OCC_TEST_OPENAI_MODEL`                        | Authorized provider model; defaults to `gpt-6-astra`.                                                                   |
+| `OCC_TEST_PRODUCTION_TUI_KEEP`                 | Optional `1` retains the owned Helm release, namespaces, final gateway, `attach.sh`, and `proof.json` rehearsal output. |
 
 Use the production TUI suite only with image references that already exist in
 the selected cluster, including the Node, PostgreSQL, controller, and runtime
@@ -42,11 +42,13 @@ cluster, image, Namespace, Agent, revision, Pod, and nonce-response evidence.
 Do not treat an in-progress run as passing live proof until the test completes.
 
 When both upgrade image variables are set, the test runs
+the first-adoption controller-only bootstrap and then
 `scripts/upgrade-production-images` after the initial revision and model proof.
-It requires different controller and runtime digests, verifies the resulting
-revisions and images for two running Agents, preserves one stopped Agent without
-a new revision, and sends a fresh model turn. Setting only one variable fails
-the selected test. Omitting both keeps the original installation and TUI coverage
+It requires different controller and runtime digests, verifies the bootstrap
+retains the old Agent revisions, then verifies the resulting revisions and
+images for two running Agents, preserves one stopped Agent without a new
+revision, and sends a fresh model turn. Setting only one variable fails the
+selected test. Omitting both keeps the original installation and TUI coverage
 but does not prove coordinated upgrade behavior.
 
 ## Run the suite
