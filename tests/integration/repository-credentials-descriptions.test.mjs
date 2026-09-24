@@ -4,9 +4,22 @@ import { request } from "node:http";
 import { createServer } from "node:net";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
+import {
+  githubConfigurationData,
+  requestHead,
+  serviceConfigurationData,
+} from "../fixtures/repository-credentials/builders.mjs";
+import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
 import { startCredentialServiceFixture } from "../fixtures/repository-credentials/service.mjs";
 import { resolveGitHubRepositoryBinding } from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
+import {
+  createGitHubDriverFactory,
+  createGitHubKeyOwner,
+} from "../../apps/controller/src/drivers/repo/github/credentials/index.ts";
+import { validateServiceConfig } from "../../apps/controller/src/drivers/repo/credentials/configuration.ts";
+import { createCredentialService } from "../../apps/controller/src/drivers/repo/credentials/service.ts";
 
 async function unusedPort() {
   const server = createServer();
@@ -75,6 +88,63 @@ async function settled(socketPath, payload) {
   }
   throw new Error("metadata lookup did not settle");
 }
+
+test("private metadata sessions reject other methods and routes before issuing a token", async (t) => {
+  const clock = createControlledClock();
+  const github = await startGitHubFixture(t, { clock });
+  const config = validateServiceConfig(serviceConfigurationData());
+  const metadataConfig = {
+    ...config,
+    sessionPolicy: { ...config.sessionPolicy, allowedProfiles: ["metadata-read"] },
+  };
+  const key = createGitHubKeyOwner({ privateKey: github.privateKey, appId: "12345", clock });
+  const factory = createGitHubDriverFactory({
+    configuration: githubConfigurationData(),
+    metadataOnly: true,
+    key,
+    clock,
+    gatewayOrigin: config.gateway.publicOrigin,
+    limits: config.limits,
+    trustedEndpoints: { apiOrigin: github.origin, gitOrigin: github.origin, ca: github.tls.ca },
+  });
+  const service = createCredentialService({ config: metadataConfig, factory, clock });
+  try {
+    const opened = service.open({ profile: "metadata-read", durationSeconds: 60 });
+    for (const [method, target] of [
+      ["GET", "/repos/fixture/other"],
+      ["GET", "/repos/fixture/repository?per_page=1"],
+      ["GET", "/repos/fixture/repository/issues"],
+      ["POST", "/repos/fixture/repository"],
+      ["POST", "/graphql"],
+      ["GET", "/fixture/repository.git/info/refs?service=git-upload-pack"],
+      ["GET", "//api.github.com/repos/fixture/repository"],
+    ]) {
+      const result = service.reserve(
+        opened.bearer,
+        requestHead(method, target),
+        new AbortController().signal,
+      );
+      assert.equal(result.kind, "denied", `${method} ${target}`);
+    }
+    assert.equal(github.issuesOfTokens.length, 0);
+    assert.equal(github.trace.length, 0);
+
+    const admitted = service.reserve(
+      opened.bearer,
+      requestHead("GET", "/repos/fixture/repository"),
+      new AbortController().signal,
+    );
+    assert.notEqual(admitted.kind, "denied");
+    const plan = service.plan(admitted);
+    assert.equal(plan.origin, github.origin);
+    assert.equal(plan.method, "GET");
+    assert.equal(plan.target, "/repos/fixture/repository");
+    service.cancel(admitted);
+  } finally {
+    await service.shutdown(1000);
+    key.close();
+  }
+});
 
 test("protected metadata lookup restricts scope, caches descriptions, and retires tokens", async (t) => {
   const fixture = await startRegistryCredentialServiceFixture(t, {

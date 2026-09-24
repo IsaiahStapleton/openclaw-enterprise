@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
@@ -358,6 +362,75 @@ test("Repository options expose only Namespace-approved display choices behind A
   );
   assert.equal(conflict.status, 409, JSON.stringify(conflict));
   assert.equal(conflict.error.code, "RESOURCE_CONFLICT");
+});
+
+test("Denied Agent discovery cannot start repository metadata lookups", async (t) => {
+  const f = await fixture(t);
+  const directory = await mkdtemp(join(tmpdir(), "repository-options-auth-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const socket = join(directory, "control.sock");
+  let lookups = 0;
+  // The independent socket peer observes actual metadata requests; IAM and Driver policy are real.
+  const server = createServer((request, response) => {
+    lookups++;
+    request.resume();
+    request.once("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          providerInstanceId: f.registry.providerInstanceId,
+          appId: f.registry.appId,
+          githubInstallationId: f.registry.githubInstallationId,
+          descriptions: [{ repositoryRef: "project", repositoryId: "789", description: "Project" }],
+          pending: false,
+        }),
+      );
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socket, resolve);
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  class ObservedRepositoryDriver extends GitHubRepoDriver {
+    constructor(backend, registry, options) {
+      super(
+        {
+          ...backend,
+          client: new UnixRepositoryCredentialControlClient({ controlSocket: socket }),
+        },
+        registry,
+        options,
+      );
+    }
+  }
+  const observed = await f.compose(f.registry, ObservedRepositoryDriver);
+  const agent = await f.createAgent();
+  const createPath = `${f.collection}/repository-options?descriptionRefs=project`;
+  const updatePath = `${f.collection}/${agent.id}/repository-options?descriptionRefs=project`;
+  for (const path of [createPath, updatePath]) {
+    const allowed = await observed.request("GET", path);
+    assert.equal(allowed.status, 200, JSON.stringify(allowed));
+    assert.equal(allowed.data[0].description, "Project");
+  }
+  assert.equal(lookups, 2);
+
+  for (const action of ["create", "update"]) {
+    f.iamState.restrictions.push({
+      id: `deny-metadata-${action}`,
+      namespaceId: f.namespace.id,
+      resourceKind: "agent",
+      action,
+      effect: "deny",
+    });
+  }
+  for (const path of [createPath, updatePath]) {
+    const denied = await observed.request("GET", path);
+    assert.equal(denied.status, 403, JSON.stringify(denied));
+    assert.equal(denied.error.code, "FORBIDDEN");
+  }
+  assert.equal(lookups, 2);
 });
 
 test("Repository options preserve an empty successful discovery", async (t) => {

@@ -35,6 +35,10 @@ const reviewedImports = {
   "drivers/repo/github/credentials/provider-transport/request.ts": {
     "node:https": ["request"],
   },
+  // The registry-backed metadata owner sends one authorized, metadata-only GET.
+  "drivers/repo/github/credentials/descriptions.ts": {
+    "node:https": ["request"],
+  },
   "drivers/repo/github/credentials/client/commands.ts": { "node:child_process": ["spawnSync"] },
   "drivers/repo/github/credentials/client/config.ts": {
     "node:fs/promises": ["lstat", "mkdir", "mkdtemp", "open", "rename", "rm"],
@@ -123,6 +127,9 @@ const ordinaryBuiltins = new Set([
   "node:zlib",
 ]);
 const senderConsumers = {
+  "drivers/repo/github/credentials/descriptions.ts": {
+    "composition/repository-credentials/config.ts": ["createGitHubRepositoryDescriptions"],
+  },
   "drivers/repo/github/credentials/provider-transport/request.ts": {
     "drivers/repo/github/credentials/provider-transport.ts": ["sendProviderRequest"],
   },

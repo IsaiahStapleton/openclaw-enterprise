@@ -559,7 +559,9 @@ test("repository descriptions remain scoped and reject stale identity without bl
   // An independent control peer can return malformed or stale identity data.
   const server = createServer(async (incoming, response) => {
     const chunks = [];
-    for await (const chunk of incoming) chunks.push(chunk);
+    for await (const chunk of incoming) {
+      chunks.push(chunk);
+    }
     requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify(reply));
