@@ -7,6 +7,7 @@ import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import { postgresRepositorySessions } from "./postgres-repository-sessions.ts";
 import {
   validRepositoryBindingSelections,
+  normalizedRepositoryAccess,
   validRepositoryRevisionState,
 } from "./repository-credential-state.ts";
 import type {
@@ -273,6 +274,15 @@ function presetFromRow(row: PostgresRow): Readonly<Preset> {
 function agentFromRow(row: PostgresRow): Readonly<Agent> {
   const activeRevisionId = optionalText(row, "active_revision_id");
   const repositoryBindings = repositoryBindingsFromJson(row.repository_bindings);
+  let repositoryAccess: Agent["repositoryAccess"];
+  try {
+    repositoryAccess = normalizedRepositoryAccess(
+      row.repository_access == null ? undefined : jsonObject(row.repository_access),
+      repositoryBindings,
+    );
+  } catch {
+    throw new DependencyUnavailableError("Persisted Agent repository access is invalid.");
+  }
   let harnessAuth: Agent["harnessAuth"];
   try {
     harnessAuth = normalizeHarnessAuthBinding(row.harness_auth);
@@ -295,6 +305,7 @@ function agentFromRow(row: PostgresRow): Readonly<Agent> {
       ? {}
       : { plugins: pluginStateFromJson(row.plugins)! }),
     ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+    ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
     servicePrincipalId: text(row, "service_principal_id"),
     harnessAuth,
     ...(activeRevisionId === undefined ? {} : { activeRevisionId }),
@@ -1934,7 +1945,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         (
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                    a.provider_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                    a.provider_id, a.plugins, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                     a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
              FROM occ.agents AS a
              JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
@@ -2017,7 +2028,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           (
             await client.query(
               `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                      a.provider_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                      a.provider_id, a.plugins, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                       a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
@@ -2053,7 +2064,12 @@ export class PostgresPlatformState implements PlatformStateStore {
         const plugins = normalizedPlugins(agent.plugins);
         const repositoryBindings =
           agent.repositoryBindings?.length === 0 ? undefined : agent.repositoryBindings;
+        const repositoryAccess = normalizedRepositoryAccess(
+          agent.repositoryAccess,
+          repositoryBindings,
+        );
         const {
+          repositoryAccess: _providedRepositoryAccess,
           plugins: _providedPlugins,
           repositoryBindings: _providedRepositoryBindings,
           ...withoutPlugins
@@ -2062,6 +2078,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           ...withoutPlugins,
           ...(plugins === undefined ? {} : { plugins }),
           ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+          ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
           desiredRuntimeState: "stopped" as const,
           status: "active" as const,
         });
@@ -2069,8 +2086,8 @@ export class PostgresPlatformState implements PlatformStateStore {
           `INSERT INTO occ.agents
            (id, namespace_id, name, configuration_id, provider_id, execution_mode,
              service_principal_id, harness_auth, active_revision_id, created_at, plugins,
-             repository_bindings)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb)`,
+             repository_bindings, repository_access)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb)`,
           [
             saved.id,
             saved.namespaceId,
@@ -2084,6 +2101,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             saved.createdAt,
             plugins === undefined ? null : JSON.stringify(plugins),
             repositoryBindings === undefined ? null : JSON.stringify(repositoryBindings),
+            repositoryAccess === undefined ? null : JSON.stringify(repositoryAccess),
           ],
         );
         await client.query(
@@ -2102,6 +2120,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         providerId,
         plugins,
         repositoryBindings,
+        repositoryAccess,
       ) => {
         if (harnessAuth !== undefined) {
           await assertHarnessAuthAvailable({ secrets, serviceAccounts }, namespaceId, harnessAuth);
@@ -2122,12 +2141,13 @@ export class PostgresPlatformState implements PlatformStateStore {
                    harness_auth = CASE WHEN $5::boolean THEN $6::jsonb ELSE a.harness_auth END,
                    provider_id = CASE WHEN $7::boolean THEN $8::text ELSE a.provider_id END,
                    plugins = CASE WHEN $9::boolean THEN $10::jsonb ELSE a.plugins END,
-                   repository_bindings = CASE WHEN $11::boolean THEN $12::jsonb ELSE a.repository_bindings END
+                   repository_bindings = CASE WHEN $11::boolean THEN $12::jsonb ELSE a.repository_bindings END,
+                   repository_access = CASE WHEN $13::boolean THEN $14::jsonb ELSE a.repository_access END
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                  RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.provider_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                          a.provider_id, a.plugins, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                           a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [
                 namespaceId,
@@ -2144,6 +2164,12 @@ export class PostgresPlatformState implements PlatformStateStore {
                 nextRepositoryBindings === undefined
                   ? null
                   : JSON.stringify(nextRepositoryBindings),
+                repositoryAccess !== undefined || repositoryBindings !== undefined,
+                repositoryAccess == null
+                  ? null
+                  : JSON.stringify(
+                      normalizedRepositoryAccess(repositoryAccess, nextRepositoryBindings),
+                    ),
               ],
             )
           ).rows,
@@ -2165,7 +2191,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                 AND a.active_revision_id IS NOT DISTINCT FROM $3::text
                   AND n.id = a.namespace_id AND n.deleted_at IS NULL
                   RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.provider_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                          a.provider_id, a.plugins, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                           a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId ?? null, candidateRevisionId],
             )
@@ -2182,7 +2208,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                WHERE a.namespace_id = $1 AND a.id = $2 AND a.active_revision_id = $3
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.provider_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.provider_id, a.plugins, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId],
             )
@@ -2201,7 +2227,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                  AND a.desired_runtime_state = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.provider_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.provider_id, a.plugins, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedStates, next],
             )
@@ -2223,7 +2249,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                  AND a.status = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.provider_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.provider_id, a.plugins, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedStatuses, next],
             )

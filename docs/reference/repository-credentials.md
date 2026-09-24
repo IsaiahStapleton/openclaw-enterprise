@@ -99,7 +99,7 @@ repositories:
 
 Use actual platform Namespace IDs. App, installation and repository IDs are
 positive decimal safe integers represented as strings. Repository names are
-canonicalized to lowercase. The registry admits at most 128 repositories, 128
+canonicalized to lowercase. The registry admits at most 1,000 repositories, 128
 Namespace policies per repository and 4,096 policies overall. References, numeric
 repository IDs and canonical names must be unique.
 
@@ -120,22 +120,26 @@ The selected Driver configuration supplies `controlSocket`,
 [Provider configuration](providers.md) and the
 [installation procedure](../guides/deploy/production-installation.md) for wiring.
 
-### Agent-create repository options
+### Repository options
 
 `GET /namespaces/:namespaceId/agents/repository-options` requires Agent `create`
 and returns only `repositoryRef`, `displayName` and `allowedProfiles`. Authorized
 optional discovery failure yields `503 REPOSITORY_OPTIONS_UNAVAILABLE`; no approvals
 yields `[]`; a closed Namespace yields 409. Only successful discovery or that
 explicit outage permits a fresh ordinary draft. Other failures block creation.
-Writes reauthorize and re-resolve choices.
+Writes reauthorize and re-resolve choices. Editing uses
+`GET /namespaces/:namespaceId/agents/:agentId/repository-options`, authorized by
+`update` on that exact Agent. Editing requires successful discovery; the
+fresh-draft outage exception does not apply.
 
 ### Profiles
 
 The Console offers **Read-only** (`git-read`) and **Contributor** (`git-full`).
 Contributor includes pushes, PR work, and issue management by default. Open
 **Customize access** to turn off issue management (`git-write`) when approved for
-all selected repositories. Push and PR access remain bundled; this UI does not
-create new permission profiles. The API default remains `git-write`.
+the repository. Push and PR access remain bundled; this UI does not
+create new permission profiles. Direct binding requests still default to `git-write`; inherited access is
+recorded separately in `repositoryAccess`.
 All three enforced profiles include GitHub API access.
 
 The [access-level reference](repository-credentials/access-levels.md) defines the

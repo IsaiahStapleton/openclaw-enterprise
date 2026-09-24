@@ -45,7 +45,7 @@ Each operation lists its supported status codes.
 | [Authentication](#authentication) | 6 operations |
 | [Installation](#installation) | 2 operations |
 | [Namespaces](#namespaces) | 4 operations |
-| [Agents](#agents) | 17 operations |
+| [Agents](#agents) | 18 operations |
 | [Agent deployments](#agent-deployments) | 1 operation |
 | [Agent revisions](#agent-revisions) | 2 operations |
 | [Configurations](#configurations) | 4 operations |
@@ -618,6 +618,7 @@ Get an exact Installation-owned Namespace
 | [`PATCH /namespaces/{namespaceId}/agents/{agentId}`](#patch-namespacesnamespaceidagentsagentid) | Replace an exact Namespace-owned Agent's editable draft |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/deploy`](#post-namespacesnamespaceidagentsagentiddeploy) | Admit an immutable revision from the Agent's saved draft |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/native-admin`](#get-namespacesnamespaceidagentsagentidnativeadmin) | Resolve native admin UI launch availability for one Agent |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/repository-options`](#get-namespacesnamespaceidagentsagentidrepositoryoptions) | List approved repository choices for updating one Agent |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`](#get-namespacesnamespaceidagentsagentidruntimecredentials) | Get metadata for one Agent's provisioned runtime credentials |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`](#post-namespacesnamespaceidagentsagentidruntimecredentials) | Provision initial runtime credentials for one undeployed Agent |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/stop`](#post-namespacesnamespaceidagentsagentidstop) | Stop one Agent while retaining its revision and persistent state |
@@ -673,6 +674,11 @@ List authorized Agents in one exact Namespace
 | `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data[].plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data[].providerId` | `string or null` | Yes | — |
+| `data[].repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `data[].repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data[].repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `data[].repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data[].repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data[].repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data[].repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data[].repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -723,6 +729,11 @@ Create a Namespace-owned Agent
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `providerId` | `string or null` | No | — |
+| `repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `repositoryBindings` | `array<object>` | No | max items: 16; Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references. |
 | `repositoryBindings[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -759,6 +770,11 @@ Create a Namespace-owned Agent
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `data.repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `data.repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -871,6 +887,11 @@ Create a new Agent and queue first-time provisioning
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `providerId` | `string or null` | No | — |
+| `repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `repositoryBindings` | `array<object>` | No | max items: 16; Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references. |
 | `repositoryBindings[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1057,7 +1078,7 @@ List approved repository choices for Agent creation in one Namespace
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
-| `data` | `array<object>` | Yes | max items: 128 |
+| `data` | `array<object>` | Yes | max items: 1000 |
 | `data[].allowedProfiles` | `array<string>` | Yes | min items: 1; max items: 16 |
 | `data[].displayName` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1114,6 +1135,11 @@ Begin deletion of an exact Namespace-owned Agent and its AgentRevisions
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `data.repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `data.repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1171,6 +1197,11 @@ Get an exact Namespace-owned Agent
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `data.repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `data.repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1216,6 +1247,11 @@ Replace an exact Namespace-owned Agent's editable draft
 | `harnessAuth` | `object or object or object or object or null` | No | — |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `providerId` | `string or null` | No | — |
+| `repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `repositoryBindings` | `array<object>` | No | max items: 16; Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references. |
 | `repositoryBindings[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1251,6 +1287,11 @@ Replace an exact Namespace-owned Agent's editable draft
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `data.repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `data.repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1380,6 +1421,51 @@ Resolve native admin UI launch availability for one Agent
 | `data.url` | `string (uri)` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
+
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/repository-options`
+
+<span id="get-namespacesnamespaceidagentsagentidrepositoryoptions"></span>
+
+List approved repository choices for updating one Agent
+
+**Operation ID:** `listAgentRepositoryOptions`
+
+**Permissions:** Requires update permission on the requested Agent.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `update` | `agent` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `array<object>` | Yes | max items: 1000 |
+| `data[].allowedProfiles` | `array<string>` | Yes | min items: 1; max items: 16 |
+| `data[].displayName` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `data[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
 #### `GET /namespaces/{namespaceId}/agents/{agentId}/runtime-credentials`
 
@@ -1527,6 +1613,11 @@ Stop one Agent while retaining its revision and persistent state
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.providerId` | `string or null` | Yes | — |
+| `data.repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
+| `data.repositoryAccess.defaultProfile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories` | `array<object>` | Yes | max items: 16 |
+| `data.repositoryAccess.repositories[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
+| `data.repositoryAccess.repositories[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -2521,6 +2612,8 @@ List readable Presets in one Namespace
 | `data[].template.agent.name` | `SafeJsonValue` | No | — |
 | `data[].template.agent.plugins` | `SafeJsonValue` | No | — |
 | `data[].template.agent.providerId` | `SafeJsonValue` | No | — |
+| `data[].template.agent.repositoryAccess` | `SafeJsonValue` | No | — |
+| `data[].template.agent.repositoryBindings` | `SafeJsonValue` | No | — |
 | `data[].template.configuration` | `object` | No | — |
 | `data[].template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data[].template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
@@ -2564,6 +2657,8 @@ Create a reusable Namespace-owned Agent Preset
 | `template.agent.name` | `SafeJsonValue` | No | — |
 | `template.agent.plugins` | `SafeJsonValue` | No | — |
 | `template.agent.providerId` | `SafeJsonValue` | No | — |
+| `template.agent.repositoryAccess` | `SafeJsonValue` | No | — |
+| `template.agent.repositoryBindings` | `SafeJsonValue` | No | — |
 | `template.configuration` | `object` | No | — |
 | `template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
@@ -2600,6 +2695,8 @@ Create a reusable Namespace-owned Agent Preset
 | `data.template.agent.name` | `SafeJsonValue` | No | — |
 | `data.template.agent.plugins` | `SafeJsonValue` | No | — |
 | `data.template.agent.providerId` | `SafeJsonValue` | No | — |
+| `data.template.agent.repositoryAccess` | `SafeJsonValue` | No | — |
+| `data.template.agent.repositoryBindings` | `SafeJsonValue` | No | — |
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
@@ -2690,6 +2787,8 @@ Read one exact Namespace-owned Preset
 | `data.template.agent.name` | `SafeJsonValue` | No | — |
 | `data.template.agent.plugins` | `SafeJsonValue` | No | — |
 | `data.template.agent.providerId` | `SafeJsonValue` | No | — |
+| `data.template.agent.repositoryAccess` | `SafeJsonValue` | No | — |
+| `data.template.agent.repositoryBindings` | `SafeJsonValue` | No | — |
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
@@ -2734,6 +2833,8 @@ Update a Preset without changing existing Agents
 | `template.agent.name` | `SafeJsonValue` | No | — |
 | `template.agent.plugins` | `SafeJsonValue` | No | — |
 | `template.agent.providerId` | `SafeJsonValue` | No | — |
+| `template.agent.repositoryAccess` | `SafeJsonValue` | No | — |
+| `template.agent.repositoryBindings` | `SafeJsonValue` | No | — |
 | `template.configuration` | `object` | No | — |
 | `template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
@@ -2770,6 +2871,8 @@ Update a Preset without changing existing Agents
 | `data.template.agent.name` | `SafeJsonValue` | No | — |
 | `data.template.agent.plugins` | `SafeJsonValue` | No | — |
 | `data.template.agent.providerId` | `SafeJsonValue` | No | — |
+| `data.template.agent.repositoryAccess` | `SafeJsonValue` | No | — |
+| `data.template.agent.repositoryBindings` | `SafeJsonValue` | No | — |
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |

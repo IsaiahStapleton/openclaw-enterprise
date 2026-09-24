@@ -43,6 +43,9 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Repository selection and inherited access](37-repository-picker-and-access.md) — Proposed;
+adaptive repository discovery, selected cards, and explicit per-repository overrides.
+
 [Native OpenClaw plugin tool policies](35-native-plugin-tool-policy.md) — Proposed;
 enforce Agent plugin policies through a managed native policy plugin and existing
 approval transport.

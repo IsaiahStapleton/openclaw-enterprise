@@ -829,3 +829,114 @@ summary:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+/* Repository discovery and the selected access stack share one column. */
+.repository-options {
+  grid-template-columns: minmax(0, 1fr);
+}
+.repository-result,
+.repository-card-heading,
+.repository-selected-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.repository-result {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.repository-result > button {
+  flex-shrink: 0;
+  min-height: 44px;
+}
+.repository-identity {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.repository-identity .hint,
+.repository-identity .error {
+  margin: 0;
+  font-size: 13px;
+}
+.repository-discovery > label {
+  display: block;
+  margin-bottom: 8px;
+}
+.repository-discovery input[type="search"] {
+  width: 100%;
+}
+.repository-selected {
+  margin-top: 24px;
+}
+.repository-selected-heading {
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.repository-selected-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.repository-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 8px 0;
+}
+.repository-card-heading {
+  padding: 12px;
+}
+.repository-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.repository-text-action,
+.repository-remove {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  padding: 8px;
+}
+.repository-text-action {
+  color: var(--accent);
+}
+.repository-card-actions [aria-expanded]::after {
+  content: "⌄";
+  margin-left: 5px;
+}
+.repository-card-actions [aria-expanded="true"]::after {
+  content: "⌃";
+}
+.repository-card-settings {
+  padding: 14px;
+  background: #f4f7f5;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
+}
+.repository-card-settings .repository-option {
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+}
+.repository-card-settings .repository-profiles {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 520px) {
+  .repository-selection {
+    padding: 14px;
+  }
+  .repository-card-heading {
+    flex-wrap: wrap;
+  }
+  .repository-card-actions {
+    margin-left: auto;
+  }
+  .repository-card-settings .repository-profiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

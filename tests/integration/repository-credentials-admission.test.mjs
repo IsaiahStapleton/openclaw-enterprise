@@ -528,6 +528,64 @@ test("Repository policy rejects invalid create and PATCH before changing stored 
   }
 });
 
+test("Agent repository access preserves inheritance intent and admits only resolved approved profiles", async (t) => {
+  const f = await fixture(t);
+  const intent = { defaultProfile: "git-full", repositories: [{ repositoryRef: "project" }] };
+  const agent = await f.createAgent({ repositoryAccess: intent });
+  const path = `${f.collection}/${agent.id}`;
+  assert.deepEqual(agent.repositoryAccess, intent);
+  assert.deepEqual(agent.repositoryBindings, [{ repositoryRef: "project", profile: "git-full" }]);
+  assert.deepEqual((await f.request("GET", path)).data.repositoryAccess, intent);
+  assert.equal((await f.request("GET", `${path}/repository-options`)).status, 200);
+  const patch = { configurationId: f.configuration.id };
+  const preserved = await f.request("PATCH", path, patch);
+  assert.deepEqual(preserved.data.repositoryAccess, intent);
+
+  // An explicit override stays explicit even while it equals the Agent default.
+  const custom = {
+    defaultProfile: "git-full",
+    repositories: [{ repositoryRef: "project", profile: "git-full" }],
+  };
+  assert.equal(
+    (await f.request("PATCH", path, { ...patch, repositoryAccess: custom })).status,
+    200,
+  );
+  custom.defaultProfile = "git-read";
+  const changed = await f.request("PATCH", path, { ...patch, repositoryAccess: custom });
+  assert.equal(changed.status, 200, JSON.stringify(changed));
+  assert.deepEqual(changed.data.repositoryAccess, custom);
+  assert.deepEqual(changed.data.repositoryBindings, agent.repositoryBindings);
+
+  // Reset to inheritance materializes the new default, without changing the saved intent.
+  const reset = { defaultProfile: "git-read", repositories: [{ repositoryRef: "project" }] };
+  const inherited = await f.request("PATCH", path, { ...patch, repositoryAccess: reset });
+  assert.equal(inherited.status, 200);
+  assert.deepEqual(inherited.data.repositoryAccess, reset);
+  assert.deepEqual(inherited.data.repositoryBindings, [
+    { repositoryRef: "project", profile: "git-read" },
+  ]);
+  const denied = await f.request("PATCH", path, {
+    ...patch,
+    repositoryAccess: { ...reset, defaultProfile: "unapproved" },
+  });
+  assert.notEqual(denied.status, 200);
+  assert.deepEqual((await f.request("GET", path)).data.repositoryAccess, reset);
+  const ambiguous = await f.request("PATCH", path, {
+    ...patch,
+    repositoryAccess: reset,
+    repositoryBindings: selection,
+  });
+  assert.notEqual(ambiguous.status, 200);
+  const legacy = await f.request("PATCH", path, { ...patch, repositoryBindings: selection });
+  assert.equal(legacy.status, 200);
+  assert.equal(Object.hasOwn(legacy.data, "repositoryAccess"), false);
+  const empty = { defaultProfile: "git-full", repositories: [] };
+  const cleared = await f.request("PATCH", path, { ...patch, repositoryAccess: empty });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual(cleared.data.repositoryAccess, empty);
+  assert.equal(Object.hasOwn(cleared.data, "repositoryBindings"), false);
+});
+
 test("Deploy freezes public repository selection without exposing provider grants", async (t) => {
   const f = await fixture(t);
   const agent = await f.createAgent({ repositoryBindings: [{ repositoryRef: "project" }] });

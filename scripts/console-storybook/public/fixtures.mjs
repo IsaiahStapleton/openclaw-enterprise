@@ -58,7 +58,9 @@ export function installFixture(scenario, evidence) {
   const roles = [];
   const bindings = [];
   const deleted = new Set();
-  const session = { user: { name: "Demo Operator", email: "operator@example.com" } };
+  const session = {
+    user: { id: "storybook-operator", name: "Demo Operator", email: "operator@example.com" },
+  };
   const namespaces = scenario.emptyNamespaces
     ? []
     : [
@@ -133,6 +135,9 @@ export function installFixture(scenario, evidence) {
     servicePrincipalId: "identity_demo_agent",
     createdAt,
     activeRevisionId: scenario.deployed ? "rev_00000000-0000-4000-8000-000000000001" : null,
+    ...(scenario.repositoryAccess
+      ? { repositoryAccess: structuredClone(scenario.repositoryAccess) }
+      : {}),
     ...(scenario.repositoryBindings
       ? { repositoryBindings: structuredClone(scenario.repositoryBindings) }
       : {}),
@@ -314,7 +319,11 @@ export function installFixture(scenario, evidence) {
       if (resource === "service-accounts" && method === "GET") {
         return response(accounts);
       }
-      if (resource === "agents/repository-options" && method === "GET") {
+      if (
+        (resource === "agents/repository-options" ||
+          /^agents\/[^/]+\/repository-options$/.test(resource)) &&
+        method === "GET"
+      ) {
         return response(
           scenario.repositoryOptions ?? [
             {

@@ -341,16 +341,16 @@ export const scenarios = {
   },
   createRepositoriesSelected: {
     group: "Pages/Create Agent",
-    name: "Approved repositories and shared access",
+    name: "Repositories using the Agent default",
     path: create,
     actions: [
       ...repositoryForm,
       { selector: "#repository-application", click: true },
       { selector: "#repository-handbook", click: true },
-      { selector: "#repository-profile-git-read", click: true },
+      { selector: "#repository-default-git-read", click: true },
     ],
     description:
-      "Two approved repositories share Read-only access to code, issues, pull requests, and checks. The real form offers only their common levels and requires an explicit choice.",
+      "Two approved repositories inherit Read-only access. Each Access disclosure can preserve an explicit override when the Agent default changes.",
     gap: "An operator supplies Namespace approvals, GitHub App configuration, credential service, compatible runtime images, and network policy. Repository grants do not change Harness filesystem or approval policy.",
   },
   createRepositoriesContributor: {
@@ -360,9 +360,9 @@ export const scenarios = {
     actions: [
       ...repositoryForm,
       { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
-      { selector: "#repository-issue-access", click: true },
+      { selector: "#repository-default-issues", click: true },
     ],
     description:
       "Customize Contributor access to turn off issue management while keeping push and pull request access. The collapsed summary retains that restriction.",
@@ -374,10 +374,53 @@ export const scenarios = {
     actions: [
       ...repositoryForm,
       { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: "#repository-default-git-full", click: true },
     ],
     description:
       "Contributor also creates and manages issues. GraphQL can permit merges and branch changes within the installation token grant; the Git push allowlist does not constrain GraphQL.",
+  },
+  ...Object.fromEntries(
+    [1, 5, 25, 140].map((count) => [
+      `createRepositories${count}`,
+      {
+        group: "Pages/Create Agent",
+        name: `${count} approved repositories`,
+        path: create,
+        actions: repositoryForm,
+        repositoryOptions: Array.from({ length: count }, (_, index) => ({
+          repositoryRef: `repository-${String(index + 1).padStart(3, "0")}`,
+          displayName: `example/${index === count - 1 && count > 1 ? "a-long-repository-name-for-mobile-review" : `repository-${String(index + 1).padStart(3, "0")}`}`,
+          allowedProfiles: ["git-read", "git-write", "git-full"],
+        })),
+        description:
+          count <= 5
+            ? "A small catalog offers direct Add actions without search. Access inherits the Agent default."
+            : "Search and six initial suggestions keep a large catalog bounded. Browse all uses pages of twenty.",
+      },
+    ]),
+  ),
+  createRepositoriesCustom: {
+    group: "Pages/Create Agent",
+    name: "Custom access survives default changes",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: "#repository-application", click: true },
+      { selector: '[aria-label="Access for example/application"]', click: true },
+      { selector: "#repository-inherit-application", click: true },
+      { selector: "#repository-default-git-read", click: true },
+      { selector: "#repository-handbook", click: true },
+    ],
+    description:
+      "The application keeps custom Contributor access while the handbook inherits Read-only. The broader exception remains explicit beside the default.",
+  },
+  createRepositoriesPolicyConflict: {
+    group: "Pages/Create Agent",
+    name: "Repair a restricted repository",
+    path: create,
+    actions: [...repositoryForm, { selector: "#repository-handbook", click: true }],
+    description:
+      "A repository restricted to Read-only remains visible with its Access pane open. The operator must explicitly repair the selection before saving.",
   },
   createRepositoriesEmpty: {
     group: "Pages/Create Agent",
@@ -443,9 +486,9 @@ export const scenarios = {
     actions: [
       ...repositoryForm,
       { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
-      { selector: "#repository-issue-access", click: true },
+      { selector: "#repository-default-issues", click: true },
       click("Create Agent"),
       click("Reload repository choices"),
     ],
@@ -716,6 +759,24 @@ export const scenarios = {
       { repositoryRef: "handbook", profile: "git-read" },
     ],
     description: "The new revision names Contributor and Read-only access and shows write limits.",
+  },
+  repositoryEditor: {
+    group: "Pages/Agent detail",
+    name: "Edit inherited and custom repository access",
+    path: `${draft}&tab=repositories`,
+    repositoryAccess: {
+      defaultProfile: "git-full",
+      repositories: [
+        { repositoryRef: "application" },
+        { repositoryRef: "handbook", profile: "git-read" },
+      ],
+    },
+    repositoryBindings: [
+      { repositoryRef: "application", profile: "git-full" },
+      { repositoryRef: "handbook", profile: "git-read" },
+    ],
+    description:
+      "Reopening the desired configuration keeps the Agent default and each explicit override. Saving changes updates the draft; admitted revisions retain their prior access.",
   },
   repositoryAdmitted: {
     group: "Pages/Agent detail",

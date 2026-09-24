@@ -4,6 +4,7 @@ import { renderNativeAdminAccess } from "./native-admin.mjs";
 import { createAgentDeletion } from "./deletion.mjs";
 import { createAgentStop } from "./stop.mjs";
 import { repositoryProfile, repositoryWriteAccessHelp } from "./repository-profiles.mjs";
+import { createRepositoryFields } from "./repositories.mjs";
 import { renderChannels } from "../channels.mjs";
 import { renderWorkspaceFiles } from "./workspace.mjs";
 import { displayDate, shortId, namespacePath, link, message } from "./list.mjs";
@@ -171,7 +172,7 @@ export async function renderAgentDetail(context) {
   const tabsForSelection = [
     "configuration",
     "channels",
-    ...(selected === "draft" ? ["credentials"] : []),
+    ...(selected === "draft" ? ["repositories", "credentials"] : []),
     "workspace",
   ];
   let selectedTab = tabsForSelection.includes(tab) ? tab : "configuration";
@@ -217,7 +218,11 @@ export async function renderAgentDetail(context) {
   let draftEditorNavigationBlock = null;
   let showDraftEditorNavigationBlock = () => {};
   function draftEditorBlocksNavigation() {
-    return selected === "draft" && selectedTab === "configuration" && draftEditorNavigationBlock;
+    return (
+      selected === "draft" &&
+      ["configuration", "repositories"].includes(selectedTab) &&
+      draftEditorNavigationBlock
+    );
   }
   function trackRevisionControl(control) {
     revisionControls.set(control, control.disabled);
@@ -238,7 +243,12 @@ export async function renderAgentDetail(context) {
   for (const [id, label] of [
     ["configuration", "Configuration"],
     ["channels", "Channels"],
-    ...(selected === "draft" ? [["credentials", "Credentials"]] : []),
+    ...(selected === "draft"
+      ? [
+          ["repositories", "Repositories"],
+          ["credentials", "Credentials"],
+        ]
+      : []),
     ["workspace", "Workspace files"],
   ]) {
     const control = button(
@@ -630,7 +640,9 @@ export async function renderAgentDetail(context) {
             : "Unselected AgentRevision · read-only admitted snapshot. Browsing this snapshot does not change the Agent's selected revision.",
       ),
     );
-    if (selectedTab === "channels") {
+    if (selectedTab === "repositories" && draft) {
+      content.append(renderRepositoryEditor(context, data));
+    } else if (selectedTab === "channels") {
       const channels = renderChannels({
         values,
         executionMode,
@@ -835,6 +847,113 @@ export async function renderAgentDetail(context) {
         ),
       );
     }
+  }
+
+  function renderRepositoryEditor(context, data) {
+    let fields;
+    let dirty = false;
+    let pending = false;
+    let outcomeUnknown = false;
+    let reloadRequired = false;
+    const feedback = element("p", { className: "hint", role: "status" });
+    const reload = button("Reload draft", () =>
+      context.navigate(target("draft", "repositories"), namespaceId, true),
+    );
+    const save = button("Save repository access", () => void submit(), {
+      className: "primary",
+      disabled: true,
+    });
+    const cancel = button("Cancel", () => {
+      data.setDraftEditorState({
+        dirty: false,
+        saving: false,
+        outcomeUnknown: false,
+        reloadRequired: false,
+      });
+      context.navigate(target("draft", "repositories"), namespaceId, true);
+    });
+    function update() {
+      const locked = pending || outcomeUnknown || reloadRequired;
+      data.setDraftEditorState({ dirty, saving: pending, outcomeUnknown, reloadRequired });
+      save.disabled = locked || !dirty || !fields?.isSettled() || fields.blocksCreate();
+      cancel.disabled = locked;
+      reload.hidden = !outcomeUnknown && !reloadRequired;
+      fields?.setDisabled(locked);
+    }
+    fields = createRepositoryFields(
+      context,
+      (changed) => {
+        dirty ||= changed;
+        if (changed) {
+          feedback.textContent = "Save or cancel repository changes before deploying.";
+        }
+        update();
+      },
+      { ...agent, agentId: agent.id },
+    );
+    showDraftEditorNavigationBlock = () => {
+      feedback.textContent = "Save or cancel repository changes before leaving this tab.";
+    };
+    async function submit() {
+      if (save.disabled || !fields.validate()) {
+        return;
+      }
+      pending = true;
+      update();
+      let mutationStarted = false;
+      try {
+        const fresh = await request(path);
+        if (!context.isCurrent()) {
+          return;
+        }
+        if (
+          fresh.configurationId !== agent.configurationId ||
+          JSON.stringify(fresh.repositoryAccess) !== JSON.stringify(agent.repositoryAccess) ||
+          JSON.stringify(fresh.repositoryBindings) !== JSON.stringify(agent.repositoryBindings)
+        ) {
+          reloadRequired = true;
+          feedback.textContent =
+            "Repository access changed while you were editing. Reload this draft before saving.";
+          return;
+        }
+        mutationStarted = true;
+        await request(path, {
+          method: "PATCH",
+          body: {
+            configurationId: agent.configurationId,
+            repositoryAccess: fields.access(),
+          },
+        });
+        fields.recordSuccessfulSave();
+        if (context.isCurrent()) {
+          data.setDraftEditorState({ dirty: false, saving: false });
+          context.navigate(target("draft", "repositories"), namespaceId, true);
+        }
+      } catch (error) {
+        if (!context.isCurrent()) {
+          return;
+        }
+        if (error.status === 401) {
+          context.onExpired();
+        } else {
+          feedback.textContent = message(error, mutationStarted);
+          outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
+        }
+      } finally {
+        pending = false;
+        if (context.isCurrent()) {
+          update();
+        }
+      }
+    }
+    update();
+    return element(
+      "section",
+      { className: "agent-card" },
+      fields.section,
+      element("div", { className: "form-actions" }, save, cancel, reload),
+      feedback,
+    );
   }
 
   function renderDraftConfigurationEditor(context, data) {

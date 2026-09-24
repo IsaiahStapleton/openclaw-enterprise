@@ -731,6 +731,27 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "listAgentRepositoryOptions",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/repository-options",
+    action: "openclaw.agents.repository_options.list",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "List approved repository choices for updating one Agent",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: AgentParams,
+      response: {
+        200: RepositoryOptionListResponse,
+        ...readErrors,
+        409: ErrorResponseRef,
+        503: ErrorResponseRef,
+      },
+    },
+  },
+  {
     operationId: "createAgent",
     method: "POST",
     path: "/namespaces/:namespaceId/agents",

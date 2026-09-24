@@ -51,6 +51,7 @@ import {
   type PermissionAction,
   type PresetTemplate,
   type ProviderSummary,
+  type RepositoryAccess,
   type RepositoryBindingRequest,
   type ResourceKind,
   type ResourceRef,
@@ -754,6 +755,7 @@ function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
     ...(agent.repositoryBindings === undefined
       ? {}
       : { repositoryBindings: agent.repositoryBindings }),
+    ...(agent.repositoryAccess === undefined ? {} : { repositoryAccess: agent.repositoryAccess }),
     harnessAuth: agent.harnessAuth,
     ...(agent.activeRevisionId === undefined ? {} : { activeRevisionId: agent.activeRevisionId }),
     desiredRuntimeState: agent.desiredRuntimeState,
@@ -2759,6 +2761,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 repositoryBindings:
                   provisionBody.repositoryBindings as readonly RepositoryBindingRequest[],
               }),
+          ...(provisionBody?.repositoryAccess === undefined
+            ? {}
+            : { repositoryAccess: provisionBody.repositoryAccess as RepositoryAccess }),
         });
         await unit.audit.append(
           event(
@@ -2781,9 +2786,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
-    if (operation.operationId === "listRepositoryOptions") {
+    if (
+      operation.operationId === "listRepositoryOptions" ||
+      operation.operationId === "listAgentRepositoryOptions"
+    ) {
       const options = await controller!
-        .listRepositoryOptions(context.actorId, namespaceId)
+        .listRepositoryOptions(
+          context.actorId,
+          namespaceId,
+          operation.operationId === "listAgentRepositoryOptions" ? params.agentId : undefined,
+        )
         .catch((error: unknown) => {
           if (error instanceof RepositoryOptionsUnavailableError) {
             throw failure(
@@ -2851,6 +2863,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             : {
                 repositoryBindings: body.repositoryBindings as readonly RepositoryBindingRequest[],
               }),
+          ...(body?.repositoryAccess === undefined
+            ? {}
+            : { repositoryAccess: body.repositoryAccess as RepositoryAccess }),
         });
         await unit.audit.append(
           event(
@@ -2956,6 +2971,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             : {
                 repositoryBindings: body.repositoryBindings as readonly RepositoryBindingRequest[],
               }),
+          ...(body?.repositoryAccess === undefined
+            ? {}
+            : { repositoryAccess: body.repositoryAccess as RepositoryAccess }),
         });
         await unit.audit.append(
           event(

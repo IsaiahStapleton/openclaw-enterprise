@@ -24,6 +24,12 @@ export interface RepositoryBindingSelection {
   readonly profile: string;
 }
 
+/** Desired editing intent; admission always resolves concrete binding profiles. */
+export interface RepositoryAccess {
+  readonly defaultProfile: string;
+  readonly repositories: readonly RepositoryBindingRequest[];
+}
+
 export interface RepositoryOption {
   readonly repositoryRef: string;
   readonly displayName: string;

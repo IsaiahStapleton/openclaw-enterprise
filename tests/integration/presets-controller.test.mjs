@@ -137,12 +137,14 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
       model: { type: "string", default: "openai/gpt-5.1" },
       enabled: { type: "boolean", default: true },
       mode: { type: "string", default: "unfinished" },
+      access: { type: "string", default: "git-read" },
     },
     agent: {
       name: "{{ vars.name }}",
       executionMode: "{{ vars.mode }}",
       plugins: { github: { enabled: "unfinished", approvalMode: "prompt" } },
       harnessAuth: null,
+      repositoryAccess: { defaultProfile: "{{ vars.access }}", repositories: [] },
     },
     configuration: {
       values: {
@@ -207,6 +209,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.data.name, 'My "Agent"');
   assert.equal(created.data.configurationId, configuration.data.id);
+  assert.deepEqual(created.data.repositoryAccess, { defaultProfile: "git-read", repositories: [] });
   assert.equal(Object.hasOwn(created.data, "presetId"), false);
 
   const replaced = await fixture.request("PATCH", `${collection(namespace.id)}/${preset.id}`, {

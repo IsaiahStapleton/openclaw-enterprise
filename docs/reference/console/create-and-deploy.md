@@ -133,24 +133,27 @@ failure remain available and are reused, never deleted automatically. A lost Sec
 save response requires checking existing Namespace Secrets before starting again.
 See the [provisioning flow](../../flows/agent-provisioning.md) for the API sequence.
 
-Repository discovery is independent of model authentication. The Console submits
-opaque references and never requests GitHub App or token configuration. Choose
-**Read-only** (`git-read`) or **Contributor** (`git-full`), which includes pushes,
-pull requests, and issue creation and management. **Customize access** lets you
-turn off issue management (`git-write`) when that profile is approved. Push and
-pull request permissions are bundled together. The control is disabled when the
-selected repositories do not share both writable profiles; its explanation states
-whether issue management is required or unavailable. The selected permissions
-remain visible when the pane is closed. Changing repositories never silently
-upgrades a customized grant; an unavailable selection must be chosen again.
-The pane also explains that token-bounded GraphQL permits merges and
-ref changes; native push allowlists do not constrain API writes. Repository
-administration and workflow permissions remain excluded. See
-[access levels](../repository-credentials/access-levels.md) for exact permissions.
-When several repositories are selected, the form offers only levels allowed by
-all of them and always submits the chosen level explicitly. The server rechecks
-current Namespace policy when it creates the Agent and again when it admits a
-deployment.
+Repository discovery is independent of model authentication. Add up to 16 approved
+repositories. Small catalogs show direct **Add** actions; larger catalogs offer
+search and paged browsing. Selected repositories appear below as compact cards.
+Initial suggestions prefer recently saved repositories in this browser, scoped
+to your signed-in identity and Namespace, then sort alphabetically. Only currently
+approved choices appear. Adding without saving does not change recent history;
+unavailable browser storage leaves alphabetical suggestions.
+
+**Default repository access** starts at **Contributor**: push code, work with PRs,
+and manage issues. Choose **Read-only** for inspection, or customize Contributor
+to turn off issue management. Each added repository inherits this default. Open
+its **Access** pane to choose a custom level; **Use Agent default** restores
+inheritance. Custom choices remain fixed when the default changes, even if they
+previously matched it. Invalid policy combinations stay visible and must be
+repaired or removed before saving. No change silently widens an override.
+
+The server resolves each selection against current Namespace policy on save and
+again on deployment. Push and PR permissions remain bundled. See
+[access levels](../repository-credentials/access-levels.md) for token permissions,
+merge behavior, and the API contract. Saved drafts can be edited in
+**New revision** > **Repositories**; admitted revisions stay unchanged.
 
 Only `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh ordinary draft to
 continue without repository bindings: Agent-create authorization succeeded, but
@@ -167,8 +170,8 @@ or a Repo Driver.
 
 After a known rejection of a repository-scoped Agent, **Reload repository choices**
 clears selections and refreshes Namespace policy while retaining the saved
-Configuration. Retry requires at least one current repository and a shared
-explicit access level; empty results cannot turn this attempt into an ordinary
+Configuration. Retry requires at least one current repository with approved
+access; empty results cannot turn this attempt into an ordinary
 Agent. Failed reloads keep creation disabled and the Configuration ID visible.
 Expiry returns to sign-in. **Start a new draft** opens a new form and leaves the
 Configuration saved. Neither action deletes saved resources.

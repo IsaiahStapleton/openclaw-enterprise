@@ -36,7 +36,7 @@ export const CreateWorkspaceFiles = { ...story("createWorkspaceFiles"), name: "W
 export const CreateEmbedded = { ...story("createEmbedded"), name: "OpenAI with OpenClaw harness" };
 export const RepositorySelection = {
   ...story("createRepositoriesSelected"),
-  name: "Approved repositories and shared access",
+  name: "Repositories using the Agent default",
 };
 export const RepositoryContributor = {
   ...story("createRepositoriesContributor"),
@@ -116,3 +116,10 @@ export const CreatePasswordPresetDenied = {
   ...story("createPasswordPresetDenied"),
   name: "Password Secret creation denied",
 };
+
+export const RepositoryOne = story("createRepositories1");
+export const RepositoryFive = story("createRepositories5");
+export const RepositoryTwentyFive = story("createRepositories25");
+export const RepositoryLargeCatalog = story("createRepositories140");
+export const RepositoryCustom = story("createRepositoriesCustom");
+export const RepositoryPolicyConflict = story("createRepositoriesPolicyConflict");

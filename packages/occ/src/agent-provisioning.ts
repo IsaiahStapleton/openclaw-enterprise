@@ -5,6 +5,7 @@ import type {
   OpenClawConfigurationDocument,
   PluginDesiredState,
   RepositoryBindingRequest,
+  RepositoryAccess,
   SecretBindings,
 } from "@openclaw-enterprise/contracts";
 import {
@@ -39,6 +40,7 @@ export interface ProvisionAgentInput {
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
+  readonly repositoryAccess?: RepositoryAccess;
 }
 
 export interface AgentProvisioningProgress {

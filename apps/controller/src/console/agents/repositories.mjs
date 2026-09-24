@@ -6,60 +6,73 @@ import {
   repositoryWriteAccessHelp,
 } from "./repository-profiles.mjs";
 
-export function createRepositoryFields(context, onChange) {
+const MAX_SELECTED = 16;
+const PAGE_SIZE = 20;
+const RECENT_LIMIT = 32;
+
+function recentRepositories(key) {
+  if (!key) {
+    return [];
+  }
+  try {
+    const stored = JSON.parse(localStorage.getItem(key));
+    return Array.isArray(stored)
+      ? stored.filter((ref) => typeof ref === "string").slice(0, RECENT_LIMIT)
+      : [];
+  } catch {
+    // Browser storage is optional; discovery remains usable when it is unavailable.
+    return [];
+  }
+}
+
+export function createRepositoryFields(context, onChange, initial = {}) {
+  const intent = initial.repositoryAccess;
+  const recentKey = context.operatorId
+    ? `oce.repository-recency:${JSON.stringify([context.operatorId, context.namespaceId])}`
+    : undefined;
+  let recent = recentRepositories(recentKey);
+  const state = {
+    options: [],
+    selected: new Map(
+      intent
+        ? intent.repositories.map(({ repositoryRef, profile }) => [repositoryRef, profile ?? null])
+        : (initial.repositoryBindings ?? []).map(({ repositoryRef, profile }) => [
+            repositoryRef,
+            profile ?? "git-write",
+          ]),
+    ),
+    profile: intent?.defaultProfile ?? "git-full",
+    settled: false,
+    draftOnly: false,
+    blockingFailure: undefined,
+    disabled: false,
+    query: "",
+    browsing: false,
+    dismissed: false,
+    page: 0,
+    showAll: false,
+    expanded: new Set(),
+    undo: undefined,
+  };
   const status = element(
     "p",
     { className: "hint", role: "status", "aria-live": "polite" },
     "Loading approved repositories…",
   );
-  const choices = element("div", { className: "repository-options", "aria-busy": "true" });
-  const profileChoices = element("div", { className: "repository-profiles" });
-  const writeAccess = element(
-    "p",
-    { className: "hint repository-write-access", hidden: true, "aria-live": "polite" },
-    repositoryWriteAccessHelp,
-  );
-  const issueAccess = element("input", { id: "repository-issue-access", type: "checkbox" });
-  const issueHelp = element("p", { className: "hint", id: "repository-issue-help" });
-  issueAccess.setAttribute("aria-describedby", issueHelp.id);
-  const accessSummary = element("p", { className: "hint", role: "status" });
-  const customize = element(
-    "details",
-    { className: "repository-customize", hidden: true },
-    element("summary", {}, "Customize access"),
-    element(
-      "p",
-      { className: "hint" },
-      "Push code and pull request access are included together. Issue management is optional.",
-    ),
-    element(
-      "label",
-      { className: "repository-option", for: issueAccess.id },
-      issueAccess,
-      element("span", {}, element("strong", {}, "Create and manage issues"), issueHelp),
-    ),
-    writeAccess,
-  );
-  issueAccess.addEventListener("change", () => {
-    state.profile = issueAccess.checked ? "git-full" : "git-write";
-    updateAccessDetails();
-    validation.hidden = true;
-    onChange(true);
-  });
-  const profileGroup = element(
-    "fieldset",
-    { className: "repository-profile-group", hidden: true },
-    element("legend", {}, "Access level"),
-    element(
-      "p",
-      { className: "hint" },
-      "Applies to every selected repository. Choose what this Agent can do.",
-    ),
-    profileChoices,
-    accessSummary,
-    customize,
-  );
   const validation = element("p", { className: "error", role: "alert", hidden: true });
+  const choices = element("div", { className: "repository-options", "aria-busy": "true" });
+  const cards = element("div", { className: "repository-selected" });
+  const announcements = element("p", { className: "hint", role: "status", "aria-live": "polite" });
+  const search = element("input", {
+    id: "repository-search",
+    type: "search",
+    autocomplete: "off",
+    placeholder: "Search by repository or owner…",
+    "aria-controls": "repository-results",
+  });
+  const results = element("div", { id: "repository-results" });
+  const discovery = element("div", { className: "repository-discovery" });
+  const access = element("fieldset", { className: "repository-profile-group" });
   const retry = button("Retry repository choices", async () => {
     if (state.disabled || !state.settled) {
       return;
@@ -77,15 +90,12 @@ export function createRepositoryFields(context, onChange) {
       tabindex: "-1",
     },
     element("h2", { id: "repository-selection-title" }, "Repository access"),
-    element(
-      "p",
-      { className: "muted" },
-      "Choose the repositories this Agent can work with, or skip to continue without repository access.",
-    ),
     status,
     retry,
+    access,
     choices,
-    profileGroup,
+    cards,
+    announcements,
     validation,
     element(
       "details",
@@ -94,240 +104,598 @@ export function createRepositoryFields(context, onChange) {
       element(
         "p",
         { className: "hint" },
-        element("strong", {}, "Supported runtimes. "),
         "Embedded OpenClaw and Dedicated Codex on Kubernetes, without a Sandbox Driver. Deployment rechecks runtime compatibility. Model authentication is configured separately.",
       ),
       element(
         "p",
         { className: "hint" },
-        element("strong", {}, "Credential handling. "),
         "GitHub App keys and installation tokens stay outside the Agent. The Agent receives bounded gateway authentication material and client configuration.",
       ),
       element(
         "p",
         { className: "hint" },
-        element("strong", {}, "GitHub API scope. "),
         "API access is bounded by the selected level and installation token. GraphQL can also return public information allowed by GitHub. Unselected private repositories remain outside the grant.",
       ),
     ),
   );
-  const state = {
-    options: [],
-    selected: new Set(),
-    profile: "",
-    settled: false,
-    draftOnly: false,
-    blockingFailure: undefined,
-    disabled: false,
-  };
-
-  function selectedOptions() {
-    return state.options.filter((option) => state.selected.has(option.repositoryRef));
-  }
-
-  function commonProfiles() {
-    const selected = selectedOptions();
-    return selected.length === 0
-      ? []
-      : repositoryProfiles.filter((profile) =>
-          selected.every((option) => option.allowedProfiles.includes(profile.id)),
-        );
-  }
-
-  function updateAccessDetails() {
-    const available = commonProfiles();
-    const writable = repositoryProfile(state.profile)?.writes;
-    customize.hidden = !writable;
-    writeAccess.hidden = !writable;
-    issueAccess.checked = state.profile === "git-full";
-    issueAccess.disabled =
-      state.disabled ||
-      !available.some((p) => p.id === "git-full") ||
-      !available.some((p) => p.id === "git-write");
-    if (!available.some((p) => p.id === "git-full")) {
-      issueHelp.textContent = "Issue management is not approved for every selected repository.";
-    } else if (!available.some((p) => p.id === "git-write")) {
-      issueHelp.textContent =
-        "Required by the approved Contributor profile for these repositories.";
-    } else {
-      issueHelp.textContent =
-        "Turn off to keep code and pull request access without issue management.";
+  const option = (ref) => state.options.find((entry) => entry.repositoryRef === ref);
+  const effective = (ref) => state.selected.get(ref) ?? state.profile;
+  const invalid = (ref) => !option(ref)?.allowedProfiles.includes(effective(ref));
+  const profileLabel = (profile) => repositoryProfile(profile)?.label ?? "Unknown access level";
+  const editable = () => !state.disabled && state.settled && state.blockingFailure === undefined;
+  function changed() {
+    validation.hidden = true;
+    for (const ref of state.selected.keys()) {
+      if (invalid(ref)) {
+        state.expanded.add(ref);
+      }
     }
-    accessSummary.textContent = "";
-    if (state.profile === "git-write") {
-      accessSummary.textContent =
-        "Contributor · push code and work with pull requests. Issue management is off.";
-    } else if (state.profile === "git-full") {
-      accessSummary.textContent =
-        "Contributor · push code, work with pull requests, and manage issues.";
-    }
-    accessSummary.hidden = !writable;
+    render();
+    onChange(true);
   }
-
-  function renderProfiles() {
-    const selected = selectedOptions();
-    const available = commonProfiles();
-    if (!available.some((profile) => profile.id === state.profile)) {
-      state.profile = "";
-    }
-    profileGroup.hidden = selected.length === 0;
-    // Keep the enforced profile IDs; only the Console's two choices are grouped.
-    const reader = available.find((profile) => profile.id === "git-read");
-    const contributor =
-      available.find((profile) => profile.id === "git-full") ??
-      available.find((profile) => profile.id === "git-write");
-    profileChoices.replaceChildren(
-      ...[reader, contributor].filter(Boolean).map((profile) => {
-        const writable = profile.writes;
-        const id = `repository-profile-${profile.id}`;
-        const input = element("input", {
-          id,
-          type: "radio",
-          name: "repository-profile",
-          value: profile.id,
-          checked: writable
-            ? !!repositoryProfile(state.profile)?.writes
-            : state.profile === profile.id,
-          required: true,
-          disabled: state.disabled,
-        });
-        input.addEventListener("change", () => {
-          state.profile = profile.id;
-          customize.open = false;
-          updateAccessDetails();
-          validation.hidden = true;
-          onChange(true);
-        });
-        return element(
+  function controls(profile, allowed, id, change) {
+    const group = element("div", { className: "repository-profiles" });
+    for (const [value, title, help] of [
+      ["git-read", "Read-only", "Read code, pull requests, and issues."],
+      ["git-full", "Contributor", "Push code, work with pull requests, and manage issues."],
+    ]) {
+      const writable = value !== "git-read";
+      const input = element("input", {
+        id: `${id}-${value}`,
+        type: "radio",
+        name: id,
+        value,
+        checked:
+          allowed.includes(profile) && (writable ? profile !== "git-read" : profile === value),
+        disabled:
+          !editable() ||
+          (writable ? !allowed.some((p) => p !== "git-read") : !allowed.includes(value)),
+      });
+      input.addEventListener("change", () => {
+        change(writable ? (allowed.includes("git-full") ? "git-full" : "git-write") : value);
+        document.getElementById(input.id)?.focus();
+      });
+      group.append(
+        element(
           "label",
-          { className: "repository-profile", for: id },
+          { className: "repository-profile", for: input.id },
           input,
           element(
             "span",
             {},
-            element("strong", {}, writable ? "Contributor" : "Read-only"),
-            element("span", { className: "hint" }, profile.help),
+            element("strong", {}, title),
+            element("span", { className: "hint" }, help),
+          ),
+        ),
+      );
+    }
+    const issue = element("input", {
+      type: "checkbox",
+      id: `${id}-issues`,
+      checked: profile === "git-full",
+      disabled: !editable() || !allowed.includes("git-full") || !allowed.includes("git-write"),
+    });
+    issue.addEventListener("change", () => {
+      change(issue.checked ? "git-full" : "git-write");
+      document.getElementById(issue.id)?.focus();
+    });
+    const details = element(
+      "details",
+      {
+        className: "repository-customize",
+        "data-access-customize": id,
+        hidden: profile === "git-read",
+      },
+      element("summary", {}, "Customize access"),
+      element(
+        "label",
+        { className: "repository-option", for: issue.id },
+        issue,
+        "Create and manage issues",
+      ),
+      element(
+        "p",
+        { className: "hint" },
+        !allowed.includes("git-full")
+          ? "Issue management is not approved for this repository."
+          : !allowed.includes("git-write")
+            ? "Issue management is required by the approved Contributor profile."
+            : "Push code and pull request access are included together. Issue management is optional.",
+      ),
+      element("p", { className: "hint repository-write-access" }, repositoryWriteAccessHelp),
+    );
+    return [group, details];
+  }
+  function renderAccess() {
+    access.hidden = !state.options.length && !state.selected.size;
+    const expanded = access.querySelector("details")?.open;
+    const allowed = repositoryProfiles.map((p) => p.id);
+    const custom = [...state.selected].filter(
+      ([ref, profile]) =>
+        profile !== null &&
+        ((state.profile === "git-read" && effective(ref) !== "git-read") ||
+          (state.profile === "git-write" && effective(ref) === "git-full")),
+    ).length;
+    access.replaceChildren(
+      element("legend", {}, "Default repository access"),
+      ...controls(state.profile, allowed, "repository-default", (profile) => {
+        state.profile = profile;
+        changed();
+        access
+          .querySelector(`input[value="${profile === "git-write" ? "git-full" : profile}"]`)
+          ?.focus();
+      }),
+      element(
+        "p",
+        { className: "hint", role: "status" },
+        `${profileLabel(state.profile)} applies to repositories using the Agent default.${custom ? ` ${custom} custom ${custom === 1 ? "repository keeps" : "repositories keep"} broader access.` : ""}`,
+      ),
+    );
+    if (expanded) {
+      access.querySelector("details").open = true;
+    }
+  }
+  function focusDiscovery() {
+    (search.isConnected
+      ? search
+      : (results.querySelector("button:not(:disabled)") ??
+        cards.querySelector(".repository-card:last-of-type .repository-text-action") ??
+        section)
+    ).focus();
+  }
+  function add(ref) {
+    if (!editable() || state.selected.has(ref) || state.selected.size >= MAX_SELECTED) {
+      return;
+    }
+    state.selected.set(ref, null);
+    state.undo = undefined;
+    announcements.textContent = `${option(ref).displayName} added.`;
+    changed();
+    focusDiscovery();
+  }
+  search.addEventListener("focus", () => {
+    state.dismissed = false;
+    renderResults();
+  });
+  search.addEventListener("input", () => {
+    state.dismissed = false;
+    state.query = search.value;
+    state.page = 0;
+    state.browsing = false;
+    renderResults();
+  });
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      state.dismissed = false;
+      renderResults();
+      results.querySelector("button[data-add]:not(:disabled)")?.focus();
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (state.dismissed) {
+        state.dismissed = false;
+        renderResults();
+        return;
+      }
+      results.querySelector("button[data-add]:not(:disabled)")?.click();
+    }
+  });
+  discovery.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !search.isConnected) {
+      return;
+    }
+    event.preventDefault();
+    search.focus();
+    state.dismissed = true;
+    renderResults();
+  });
+  function renderResults() {
+    results.hidden = state.dismissed;
+    const small = state.options.length <= 5;
+    const query = state.query.trim().toLocaleLowerCase();
+    const rank = (entry) => {
+      const names = [
+        entry.displayName.toLocaleLowerCase(),
+        entry.repositoryRef.toLocaleLowerCase(),
+      ];
+      return names.includes(query)
+        ? 0
+        : names.some((n) => n.startsWith(query) || n.split("/").at(-1).startsWith(query))
+          ? 1
+          : 2;
+    };
+    const matches = state.options
+      .filter(
+        (entry) =>
+          (!query ||
+            [entry.displayName, entry.repositoryRef].some((v) =>
+              v.toLocaleLowerCase().includes(query),
+            )) &&
+          (query || state.browsing || !state.selected.has(entry.repositoryRef)),
+      )
+      .sort(
+        (a, b) =>
+          (query
+            ? rank(a) - rank(b)
+            : !small && !state.browsing
+              ? (recent.includes(a.repositoryRef)
+                  ? recent.indexOf(a.repositoryRef)
+                  : RECENT_LIMIT) -
+                (recent.includes(b.repositoryRef) ? recent.indexOf(b.repositoryRef) : RECENT_LIMIT)
+              : 0) ||
+          a.displayName.localeCompare(b.displayName) ||
+          a.repositoryRef.localeCompare(b.repositoryRef),
+      );
+    const count = small ? 5 : state.browsing ? PAGE_SIZE : 6;
+    const visible = matches.slice(state.page * count, (state.page + 1) * count);
+    results.replaceChildren();
+    if (!small) {
+      results.append(
+        element(
+          "p",
+          { className: "hint", role: "status" },
+          query
+            ? `${matches.length} matching repositories`
+            : !state.browsing && matches.some((entry) => recent.includes(entry.repositoryRef))
+              ? `Recently used · ${state.options.length} repositories available`
+              : `${state.options.length} repositories available`,
+        ),
+      );
+    }
+    for (const entry of visible) {
+      const selected = state.selected.has(entry.repositoryRef);
+      const addButton = button(selected ? "Added" : "Add", () => add(entry.repositoryRef), {
+        id: `repository-${entry.repositoryRef}`,
+        "aria-label": `${selected ? "Added" : "Add"} ${entry.displayName}`,
+        "data-add": entry.repositoryRef,
+        disabled: !editable() || selected || state.selected.size >= MAX_SELECTED,
+      });
+      addButton.addEventListener("keydown", (event) => {
+        if (!["ArrowUp", "ArrowDown"].includes(event.key)) {
+          return;
+        }
+        event.preventDefault();
+        const buttons = [...results.querySelectorAll("button[data-add]:not(:disabled)")];
+        const next = buttons.indexOf(addButton) + (event.key === "ArrowDown" ? 1 : -1);
+        if (next < 0) {
+          focusDiscovery();
+        } else {
+          buttons[Math.min(next, buttons.length - 1)]?.focus();
+        }
+      });
+      results.append(
+        element(
+          "div",
+          { className: "repository-result" },
+          element(
+            "div",
+            { className: "repository-identity" },
+            element("strong", {}, entry.displayName),
+            element(
+              "span",
+              { className: "hint" },
+              entry.allowedProfiles.every((p) => p === "git-read")
+                ? "Read-only approved"
+                : entry.repositoryRef,
+            ),
+          ),
+          addButton,
+        ),
+      );
+    }
+    if (!visible.length) {
+      results.append(
+        element(
+          "p",
+          { className: "hint" },
+          query
+            ? "No repositories match this search."
+            : state.options.length
+              ? "All repositories added."
+              : "No approved repositories.",
+        ),
+      );
+    }
+    if (!small && !state.browsing && matches.length > count) {
+      results.append(
+        button(
+          "Browse all repositories",
+          () => {
+            state.browsing = true;
+            state.page = 0;
+            renderResults();
+            results.querySelector("button[data-add]:not(:disabled)")?.focus();
+          },
+          { className: "repository-text-action", disabled: !editable() },
+        ),
+      );
+    }
+    if (state.browsing && matches.length > count) {
+      const pager = element("div", { className: "form-actions" });
+      for (const [label, delta] of [
+        ["Previous repositories", -1],
+        ["Next repositories", 1],
+      ]) {
+        pager.append(
+          button(
+            label,
+            () => {
+              state.page += delta;
+              renderResults();
+              results.querySelector("button[data-add]:not(:disabled)")?.focus();
+            },
+            {
+              disabled:
+                !editable() ||
+                (delta < 0 ? state.page === 0 : (state.page + 1) * count >= matches.length),
+            },
           ),
         );
-      }),
+      }
+      results.append(pager);
+    }
+    if (state.selected.size >= MAX_SELECTED) {
+      results.append(
+        element("p", { className: "hint" }, "16 repositories selected. Remove one to add another."),
+      );
+    }
+  }
+  function renderCards() {
+    announcements.querySelector("button")?.remove();
+    cards.hidden = !state.selected.size;
+    const custom = [...state.selected.values()].filter((profile) => profile !== null).length;
+    cards.replaceChildren(
+      element(
+        "div",
+        { className: "repository-selected-heading" },
+        element("h3", {}, `Selected repositories (${state.selected.size})`),
+        element(
+          "span",
+          { className: "hint" },
+          `${state.selected.size - custom} inherited · ${custom} custom`,
+        ),
+      ),
     );
-    updateAccessDetails();
-    if (selected.length > 0 && available.length === 0) {
-      validation.textContent =
-        "These repositories have no authorization level in common. Remove a repository to continue.";
-      validation.hidden = false;
-    } else {
-      validation.hidden = true;
-    }
-  }
-
-  function updateChoiceControls() {
-    for (const input of choices.querySelectorAll('input[type="checkbox"]')) {
-      const selected = state.selected.has(input.value);
-      input.checked = selected;
-      input.disabled = state.disabled || (state.selected.size >= 16 && !selected);
-    }
-  }
-
-  function updateProfileControls() {
-    for (const input of profileChoices.querySelectorAll('input[type="radio"]')) {
-      input.disabled = state.disabled;
-    }
-  }
-
-  function renderChoices() {
-    choices.replaceChildren(
-      ...state.options.map((option) => {
-        const id = `repository-${option.repositoryRef}`;
-        const input = element("input", {
-          id,
-          type: "checkbox",
-          value: option.repositoryRef,
-          checked: state.selected.has(option.repositoryRef),
-          disabled:
-            state.disabled ||
-            (state.selected.size >= 16 && !state.selected.has(option.repositoryRef)),
-        });
-        input.addEventListener("change", () => {
-          if (input.checked) {
-            state.selected.add(option.repositoryRef);
-          } else {
-            state.selected.delete(option.repositoryRef);
+    [...state.selected].forEach(([ref, override], index) => {
+      const entry = option(ref);
+      if (!state.showAll && index >= 5 && !invalid(ref)) {
+        return;
+      }
+      const label = entry?.displayName ?? ref;
+      const card = element("div", { className: "repository-card" });
+      const settings = element("div", {
+        role: "group",
+        "aria-label": `Access for ${label}`,
+        id: `repository-access-${ref}`,
+        className: "repository-card-settings",
+        hidden: !state.expanded.has(ref),
+      });
+      const expand = button(
+        "Access",
+        () => {
+          settings.hidden = !settings.hidden;
+          expand.setAttribute("aria-expanded", String(!settings.hidden));
+          settings.hidden ? state.expanded.delete(ref) : state.expanded.add(ref);
+        },
+        {
+          className: "repository-text-action",
+          "aria-expanded": String(!settings.hidden),
+          "aria-controls": settings.id,
+          "aria-label": `Access for ${label}`,
+        },
+      );
+      const remove = button(
+        "×",
+        () => {
+          if (state.disabled) {
+            return;
           }
-          validation.hidden = true;
-          updateChoiceControls();
-          renderProfiles();
-          onChange(true);
-        });
-        return element(
-          "label",
-          { className: "repository-option", for: id },
-          input,
+          state.undo = { ref, override, index };
+          state.selected.delete(ref);
+          announcements.textContent = `${label} removed.`;
+          changed();
+          focusDiscovery();
+        },
+        {
+          className: "repository-remove",
+          "aria-label": `Remove ${label}`,
+          disabled: state.disabled,
+        },
+      );
+      const summary =
+        !state.settled || state.blockingFailure
+          ? "Access awaiting verification"
+          : invalid(ref)
+            ? "Choose approved access"
+            : `${profileLabel(effective(ref))} · ${override === null ? "Agent default" : "Custom"}`;
+      card.append(
+        element(
+          "div",
+          { className: "repository-card-heading" },
           element(
-            "span",
-            {},
-            element("strong", {}, option.displayName),
-            element("span", { className: "hint" }, `Repository alias: ${option.repositoryRef}`),
+            "div",
+            { className: "repository-identity" },
+            element("strong", {}, label),
+            element("span", { className: invalid(ref) ? "error" : "hint" }, summary),
+          ),
+          element("div", { className: "repository-card-actions" }, expand, remove),
+        ),
+        settings,
+      );
+      const inherit = element("input", {
+        id: `repository-inherit-${ref}`,
+        type: "checkbox",
+        checked: override === null,
+        disabled: !editable(),
+      });
+      inherit.addEventListener("change", () => {
+        state.selected.set(ref, inherit.checked ? null : effective(ref));
+        changed();
+        document.getElementById(inherit.id)?.focus();
+      });
+      settings.append(
+        element(
+          "label",
+          { className: "repository-option", for: inherit.id },
+          inherit,
+          "Use Agent default",
+        ),
+      );
+      if (!entry) {
+        settings.append(
+          element(
+            "p",
+            { className: "error" },
+            "This repository is no longer available. Remove it or retry discovery.",
           ),
         );
-      }),
-    );
+      } else {
+        if (invalid(ref)) {
+          settings.append(
+            element(
+              "p",
+              { className: "error" },
+              `Choose approved access: ${entry.allowedProfiles.map(profileLabel).join(", ")}.`,
+            ),
+          );
+        }
+        if (override !== null) {
+          settings.append(
+            ...controls(
+              override,
+              entry.allowedProfiles,
+              `repository-override-${ref}`,
+              (profile) => {
+                state.selected.set(ref, profile);
+                changed();
+                document
+                  .getElementById(
+                    `repository-override-${ref}-${profile === "git-write" ? "git-full" : profile}`,
+                  )
+                  ?.focus();
+              },
+            ),
+          );
+        }
+      }
+      cards.append(card);
+    });
+    if (state.selected.size > 5) {
+      cards.append(
+        button(
+          state.showAll ? "Show fewer repositories" : `Show all ${state.selected.size} selected`,
+          () => {
+            state.showAll = !state.showAll;
+            renderCards();
+            cards.lastElementChild.focus();
+          },
+          { className: "repository-text-action" },
+        ),
+      );
+    }
+    if (state.undo) {
+      announcements.append(
+        button(
+          "Undo",
+          () => {
+            if (state.disabled || state.selected.size >= MAX_SELECTED) {
+              return;
+            }
+            const entries = [...state.selected];
+            entries.splice(state.undo.index, 0, [state.undo.ref, state.undo.override]);
+            state.selected = new Map(entries);
+            state.undo = undefined;
+            announcements.textContent = "Repository restored.";
+            changed();
+            focusDiscovery();
+          },
+          {
+            disabled: state.disabled || state.selected.size >= MAX_SELECTED,
+            className: "repository-text-action",
+          },
+        ),
+      );
+    }
   }
-
+  function render() {
+    const expandedDetails = [
+      ...section.querySelectorAll("details[data-access-customize][open]"),
+    ].map((details) => details.dataset.accessCustomize);
+    renderAccess();
+    const needsSearch = state.options.length > 5;
+    if (!results.isConnected || needsSearch !== search.isConnected) {
+      discovery.replaceChildren(
+        ...(needsSearch ? [element("label", { for: search.id }, "Find a repository"), search] : []),
+        results,
+      );
+    }
+    if (!discovery.isConnected) {
+      choices.replaceChildren(discovery);
+    }
+    search.disabled = !editable();
+    renderResults();
+    renderCards();
+    for (const details of section.querySelectorAll("details[data-access-customize]")) {
+      details.open = expandedDetails.includes(details.dataset.accessCustomize);
+    }
+  }
   function hasValidSelection() {
     return (
-      selectedOptions().length > 0 &&
-      commonProfiles().some((profile) => profile.id === state.profile)
+      state.settled &&
+      state.blockingFailure === undefined &&
+      state.selected.size > 0 &&
+      [...state.selected.keys()].every((ref) => !invalid(ref))
     );
   }
-
   function validate({ required = false } = {}) {
     validation.hidden = true;
     if (!state.settled || state.blockingFailure !== undefined) {
       section.focus();
       return false;
     }
-    if (state.selected.size === 0) {
-      if (!required) {
-        return true;
+    if (state.selected.size === 0 && !required) {
+      return true;
+    }
+    if (!state.selected.size || [...state.selected.keys()].some(invalid)) {
+      validation.textContent = state.selected.size
+        ? "Choose approved access for each selected repository."
+        : "Select at least one current repository and an authorization level to retry this Agent, or start a new draft.";
+      validation.hidden = false;
+      for (const ref of state.selected.keys()) {
+        if (invalid(ref)) {
+          state.expanded.add(ref);
+        }
       }
-      validation.textContent =
-        "Select at least one current repository and an authorization level to retry this Agent, or start a new draft.";
-      validation.hidden = false;
+      renderCards();
       section.focus();
-      return false;
-    }
-    if (commonProfiles().length === 0) {
-      validation.textContent =
-        "These repositories have no authorization level in common. Remove a repository to continue.";
-      validation.hidden = false;
-      section.focus();
-      return false;
-    }
-    if (!commonProfiles().some((profile) => profile.id === state.profile)) {
-      validation.textContent = "Select one authorization level for the chosen repositories.";
-      validation.hidden = false;
-      profileChoices.querySelector("input")?.focus();
       return false;
     }
     return true;
   }
-
   function bindings() {
-    return selectedOptions().map((option) => ({
-      repositoryRef: option.repositoryRef,
-      profile: state.profile,
+    return [...state.selected.keys()].map((repositoryRef) => ({
+      repositoryRef,
+      profile: effective(repositoryRef),
     }));
   }
-
+  function accessIntent() {
+    return {
+      defaultProfile: state.profile,
+      repositories: [...state.selected].map(([repositoryRef, profile]) => ({
+        repositoryRef,
+        ...(profile === null ? {} : { profile }),
+      })),
+    };
+  }
   function setDisabled(disabled) {
+    if (state.disabled === disabled) {
+      return;
+    }
     state.disabled = disabled;
     retry.disabled = disabled || !state.settled;
-    updateChoiceControls();
-    updateProfileControls();
-    updateAccessDetails();
+    render();
   }
-
   async function load(clearSelections = false) {
     state.settled = false;
     state.draftOnly = false;
@@ -339,13 +707,15 @@ export function createRepositoryFields(context, onChange) {
     if (clearSelections) {
       state.options = [];
       state.selected.clear();
-      state.profile = "";
-      renderChoices();
-      renderProfiles();
+      state.undo = undefined;
+      state.expanded.clear();
+      state.showAll = false;
+      state.profile = "git-full";
     }
+    render();
     try {
       const options = await context.request(
-        `${namespacePath(context.namespaceId)}/agents/repository-options`,
+        `${namespacePath(context.namespaceId)}/agents/${initial.agentId ? `${encodeURIComponent(initial.agentId)}/` : ""}repository-options`,
         { expectedStatus: 200 },
       );
       if (!context.isCurrent()) {
@@ -367,11 +737,6 @@ export function createRepositoryFields(context, onChange) {
         throw new Error("Invalid repository choices response.");
       }
       state.options = options;
-      state.selected = new Set(
-        [...state.selected].filter((repositoryRef) =>
-          options.some((option) => option.repositoryRef === repositoryRef),
-        ),
-      );
       state.settled = true;
       choices.setAttribute("aria-busy", "false");
       if (clearSelections) {
@@ -383,8 +748,12 @@ export function createRepositoryFields(context, onChange) {
           ? "Select repositories for this Agent. Leave all unselected to continue without repository access."
           : "No approved repositories are available for this Namespace. You can continue without repository access.";
       }
-      renderChoices();
-      renderProfiles();
+      for (const ref of state.selected.keys()) {
+        if (invalid(ref)) {
+          state.expanded.add(ref);
+        }
+      }
+      render();
       onChange(false);
       return { kind: "success" };
     } catch (error) {
@@ -398,42 +767,60 @@ export function createRepositoryFields(context, onChange) {
         return { kind: "obsolete" };
       }
       state.options = [];
-      state.selected.clear();
-      state.profile = "";
       choices.setAttribute("aria-busy", "false");
       state.settled = true;
       const optionalOutage =
         error.status === 503 && error.code === "REPOSITORY_OPTIONS_UNAVAILABLE";
-      state.draftOnly = optionalOutage && !clearSelections;
+      state.draftOnly =
+        optionalOutage && !clearSelections && !initial.agentId && state.selected.size === 0;
       if (error.status === 403) {
         state.blockingFailure = "denied";
       } else if (error.status === 409) {
         state.blockingFailure = "conflict";
-      } else if (clearSelections || !optionalOutage) {
+      } else if (clearSelections || !optionalOutage || initial.agentId || state.selected.size > 0) {
         state.blockingFailure = "unavailable";
       }
       if (state.blockingFailure === "denied") {
         status.className = "error";
-        status.textContent =
-          "Repository choices are denied because you are not authorized to create Agents in this Namespace.";
+        status.textContent = initial.agentId
+          ? "Repository choices are denied because you are not authorized to update this Agent."
+          : "Repository choices are denied because you are not authorized to create Agents in this Namespace.";
       } else if (state.blockingFailure === "conflict") {
         status.className = "error";
-        status.textContent = "This Namespace no longer accepts new Agents.";
+        status.textContent = initial.agentId
+          ? "Repository choices conflict with the current Agent or Namespace. Reload this draft before continuing."
+          : "This Namespace no longer accepts new Agents.";
       } else if (clearSelections) {
         status.className = "error";
         status.textContent = `Repository choices could not be reloaded. ${message(error)} Retry the reload or start a new draft.`;
-      } else if (optionalOutage) {
+      } else if (state.draftOnly) {
         status.className = "hint";
         status.textContent = `Repository choices are unavailable. ${message(error)} You can save a draft without repository access; provisioning is unavailable until discovery succeeds.`;
       } else {
         status.className = "error";
-        status.textContent = `Repository choices could not be loaded. ${message(error)} Retry repository choices before creating an Agent.`;
+        status.textContent = `Repository choices could not be loaded. ${message(error)} Retry repository choices before ${initial.agentId ? "saving repository access" : "creating an Agent"}.`;
       }
       retry.hidden = clearSelections;
-      renderChoices();
-      renderProfiles();
+      for (const ref of state.selected.keys()) {
+        if (invalid(ref)) {
+          state.expanded.add(ref);
+        }
+      }
+      render();
       onChange(false);
       return { kind: state.blockingFailure ?? "unavailable" };
+    }
+  }
+
+  function recordSuccessfulSave() {
+    if (!recentKey) {
+      return;
+    }
+    recent = [...new Set([...state.selected.keys(), ...recent])].slice(0, RECENT_LIMIT);
+    try {
+      localStorage.setItem(recentKey, JSON.stringify(recent));
+    } catch {
+      // A successful save does not depend on optional local suggestions.
     }
   }
 
@@ -442,6 +829,8 @@ export function createRepositoryFields(context, onChange) {
   return {
     section,
     bindings,
+    access: accessIntent,
+    recordSuccessfulSave,
     validate,
     hasValidSelection,
     setDisabled,

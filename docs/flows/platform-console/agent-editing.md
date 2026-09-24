@@ -6,6 +6,11 @@ last_updated_session: 01a0d150-104a-71a3-9e56-6c5e3ee510ea
 
 # Console Agent editing and runtime requests
 
+The draft **Repositories** tab uses `createRepositoryFields` with exact-Agent
+update discovery. It retains inheritance intent, checks for intervening changes,
+and saves `repositoryAccess` through Agent PATCH. Dirty, pending, and uncertain
+saves block tab changes and deployment until saved, cancelled, or reloaded.
+
 ## Overview
 
 Follow authorized Agent detail requests through draft editing, initial

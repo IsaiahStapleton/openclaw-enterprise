@@ -7,6 +7,7 @@ import type {
   PluginDesiredState,
   PresetTemplate,
   RepositoryBindingSelection,
+  RepositoryAccess,
   SecretBindings,
   ServiceAccountCredential,
 } from "@openclaw-enterprise/contracts";
@@ -257,6 +258,7 @@ export const agents = occSchema.table(
     executionMode: text("execution_mode").$type<HarnessExecutionMode>().notNull(),
     plugins: jsonb("plugins").$type<PluginDesiredState>(),
     repositoryBindings: jsonb("repository_bindings").$type<readonly RepositoryBindingSelection[]>(),
+    repositoryAccess: jsonb("repository_access").$type<RepositoryAccess>(),
     servicePrincipalId: text("service_principal_id").notNull(),
     harnessAuth: jsonb("harness_auth").$type<HarnessAuthBinding>(),
     harnessAuthSecretId: text("harness_auth_secret_id").generatedAlwaysAs(
@@ -300,6 +302,10 @@ export const agents = occSchema.table(
     check(
       "agents_plugins_object",
       sql`${table.plugins} IS NULL OR jsonb_typeof(${table.plugins}) = 'object'`,
+    ),
+    check(
+      "agents_repository_access_valid",
+      sql`occ.repository_access_is_valid(${table.repositoryAccess}, ${table.repositoryBindings})`,
     ),
     check(
       "agents_repository_bindings_valid",

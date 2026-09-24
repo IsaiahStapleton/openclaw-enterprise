@@ -19,6 +19,7 @@ import {
   ProviderId,
   RepositoryBindingSelectionSchema,
   RepositoryBindingSelectionsSchema,
+  RepositoryAccessSchema,
   RevisionId,
   ResourceKindSchema,
   SecretBindings,
@@ -104,6 +105,7 @@ export const AgentSchema = Type.Object(
     executionMode: HarnessExecutionModeSchema,
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     repositoryBindings: Type.Optional(RepositoryBindingSelectionsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
     activeRevisionId: Type.Optional(RevisionId),
     status: Type.Union([Type.Literal("active"), Type.Literal("deleting")]),
@@ -398,7 +400,7 @@ export const ProviderListResponse = Type.Object(
 );
 
 export const RepositoryOptionListResponse = Type.Object(
-  { data: Type.Array(RepositoryOptionSchema, { maxItems: 128 }), meta: Meta },
+  { data: Type.Array(RepositoryOptionSchema, { maxItems: 1000 }), meta: Meta },
   { additionalProperties: false },
 );
 

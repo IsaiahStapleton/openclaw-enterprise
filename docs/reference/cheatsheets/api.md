@@ -33,6 +33,7 @@
 
 ### Agents
 
+- [`listAgentRepositoryOptions`](../api.md#get-namespacesnamespaceidagentsagentidrepositoryoptions): List approved repository choices for updating one Agent.
 - [`listAgents`](../api.md#get-namespacesnamespaceidagents): List authorized Agents in one exact Namespace.
 - [`listRepositoryOptions`](../api.md#get-namespacesnamespaceidagentsrepositoryoptions): List approved repository choices for Agent creation in one Namespace.
 - [`getAgent`](../api.md#get-namespacesnamespaceidagentsagentid): Get an exact Namespace-owned Agent.

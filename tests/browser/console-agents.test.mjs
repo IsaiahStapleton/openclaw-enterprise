@@ -776,117 +776,178 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   assert.match(page.url(), new RegExp(`/console/agents/new\\?namespace=${namespace.id}$`));
 });
 
-test("Agent creation selects approved repositories with one common explicit profile", async (t) => {
-  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
-    {
-      repositoryRef: "application",
-      repositoryId: "789",
-      repository: "example/application",
-      namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
-    },
-    {
-      repositoryRef: "documentation",
-      repositoryId: "790",
-      repository: "example/documentation",
-      namespaces: [{ namespaceId, profiles: ["git-read", "git-write"] }],
-    },
-    {
-      repositoryRef: "release",
-      repositoryId: "791",
-      repository: "example/release",
-      namespaces: [{ namespaceId, profiles: ["git-full"] }],
-    },
-  ]);
-
+test("Agent repository access preserves inheritance, custom overrides, and explicit repair through create and edit", async (t) => {
+  const { fixture, namespace, replacePolicy } = await createRepositoryLaunchFixture(
+    t,
+    (namespaceId) => [
+      {
+        repositoryRef: "application",
+        repositoryId: "789",
+        repository: "example/application",
+        namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+      },
+      {
+        repositoryRef: "documentation",
+        repositoryId: "790",
+        repository: "example/documentation",
+        namespaces: [{ namespaceId, profiles: ["git-read", "git-write"] }],
+      },
+      {
+        repositoryRef: "release",
+        repositoryId: "791",
+        repository: "example/release",
+        namespaces: [{ namespaceId, profiles: ["git-full"] }],
+      },
+    ],
+    { reloadablePolicy: true },
+  );
   const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
-  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
-  const accessDetails = page.locator(".repository-access-details");
-  const accessSummary = accessDetails.locator("summary");
-  const apiScope = accessDetails.getByText(/GraphQL can also return public information/);
-  assert.equal(await apiScope.isVisible(), false);
-  await accessSummary.focus();
-  await accessSummary.press("Enter");
-  assert.equal(await apiScope.isVisible(), true);
-  await accessSummary.press("Enter");
-  assert.equal(await apiScope.isVisible(), false);
-  const application = page.locator("#repository-application");
-  await application.focus();
-  await application.press("Space");
-  assert.equal(await application.isChecked(), true);
-  assert.deepEqual(
-    await application.evaluate((node) => ({
-      id: node.ownerDocument.activeElement?.id,
-      connected: node.ownerDocument.activeElement?.isConnected,
-    })),
-    { id: "repository-application", connected: true },
+  assert.equal(await page.getByLabel("Find a repository").count(), 0);
+  await page.getByRole("button", { name: "Add example/application", exact: true }).focus();
+  await page.keyboard.press("Space");
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Add example/documentation", exact: true })
+      .evaluate((node) => node === node.ownerDocument.activeElement),
+    true,
   );
-  assert.equal(await page.getByRole("radio", { name: /^Read-only / }).count(), 1);
-  assert.equal(await page.getByRole("radio", { name: /^Contributor / }).count(), 1);
-  assert.equal(await page.getByRole("radio").count(), 2);
-  assert.equal(await page.locator('[name="repository-profile"]:checked').count(), 0);
-  const writeAccess = page.locator(".repository-write-access");
-  assert.equal(await writeAccess.isVisible(), false);
-  await page.getByRole("radio", { name: /^Read-only / }).check();
-  assert.equal(await writeAccess.isVisible(), false);
-  await page.getByRole("radio", { name: /^Contributor / }).check();
-  assert.equal(await writeAccess.isVisible(), false);
-  await page.getByText("Customize access", { exact: true }).click();
-  assert.equal(await writeAccess.isVisible(), true);
-  assert.match(await writeAccess.innerText(), /can permit merges and branch changes/);
-  assert.match(await writeAccess.innerText(), /best effort and does not restrict GraphQL/);
-  assert.match(await writeAccess.innerText(), /administration and workflow permissions/);
-  await page.locator("#repository-documentation").check();
-  // Adding a repository that disallows the selected level clears that choice.
-  assert.equal(await page.locator('[name="repository-profile"]:checked').count(), 0);
-  assert.equal(await writeAccess.isVisible(), false);
-  assert.equal(await page.locator("#repository-profile-git-full").count(), 0);
-  assert.equal(await page.locator("#repository-profile-git-read").count(), 1);
-  assert.equal(await page.locator("#repository-profile-git-write").count(), 1);
-  await page.locator("#repository-release").check();
-  await page.getByText(/no authorization level in common/i).waitFor();
-  assert.equal(await page.locator('[name="repository-profile"]').count(), 0);
-  await page.locator("#repository-release").uncheck();
-  assert.equal(await page.locator("#repository-profile-git-write").count(), 1);
-  await page.locator("#repository-profile-git-write").check();
-  await page.getByText("Customize access", { exact: true }).click();
-  assert.equal(await writeAccess.isVisible(), true);
-  await page.getByText(/Does not grant ordinary issue management/).waitFor();
-  assert.equal(await page.locator("#repository-issue-access").isDisabled(), true);
-  assert.equal(await page.locator("#repository-issue-access").isChecked(), false);
+  await page.getByText("Contributor · Agent default", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Access for example/application" }).click();
+  await page.locator("#repository-inherit-application").uncheck();
+  await page.locator("#repository-default-git-read").check();
+  await page.getByText(/1 custom repository keeps broader access/).waitFor();
+  await page.getByText("Contributor · Custom", { exact: true }).waitFor();
+  await page.locator("#repository-documentation").click();
+  await page.getByText("Read-only · Agent default", { exact: true }).waitFor();
+  await page.locator("#repository-default-git-full").check();
+  await page.getByText("Choose approved access", { exact: true }).waitFor();
+  assert.equal(await page.locator("#repository-inherit-documentation").isVisible(), true);
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Repository Agent");
-
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
-  const configurationResponse = page.waitForResponse(
-    (response) =>
-      response.url() === `${fixture.origin}/namespaces/${namespace.id}/configurations` &&
-      response.request().method() === "POST",
-  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "Choose approved access for each selected repository." })
+    .waitFor();
+  assert.equal(nonAuthWriteRequests(requests).length, 0);
+  await page.locator("#repository-inherit-documentation").uncheck();
+  await page.locator("#repository-override-documentation-git-read").check();
+  await page.locator("#repository-default-git-read").check();
+  await page.getByRole("button", { name: "Access for example/documentation" }).click();
+  await page.getByRole("button", { name: "Remove example/documentation" }).click();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await page.getByText("Read-only · Custom", { exact: true }).waitFor();
   const createResponse = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
       response.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "Create Agent" }).click();
-  await configurationResponse;
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
   const created = await (await createResponse).json();
-  assert.equal(created.data.executionMode, "embedded");
+  assert.deepEqual(created.data.repositoryAccess, {
+    defaultProfile: "git-read",
+    repositories: [
+      { repositoryRef: "application", profile: "git-full" },
+      { repositoryRef: "documentation", profile: "git-read" },
+    ],
+  });
   assert.deepEqual(created.data.repositoryBindings, [
-    { repositoryRef: "application", profile: "git-write" },
-    { repositoryRef: "documentation", profile: "git-write" },
+    { repositoryRef: "application", profile: "git-full" },
+    { repositoryRef: "documentation", profile: "git-read" },
   ]);
-  await page
-    .getByText(
-      "application · Contributor · no issue management, documentation · Contributor · no issue management",
-      {
-        exact: true,
-      },
-    )
-    .waitFor();
-  assert.equal(await page.locator(".repository-write-access").isVisible(), true);
+  await page.getByRole("button", { name: "Repositories", exact: true }).click();
+  await page.getByText("Contributor · Custom", { exact: true }).waitFor();
+  await page.getByText("Read-only · Custom", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Access for example/application" }).click();
+  await page.locator("#repository-inherit-application").check();
+  assert.equal(
+    await page.getByRole("button", { name: "Channels", exact: true }).isDisabled(),
+    true,
+  );
+  const savedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/agents/${created.data.id}`) &&
+      response.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save repository access" }).click();
+  const saved = await (await savedResponse).json();
+  assert.deepEqual(saved.data.repositoryAccess, {
+    defaultProfile: "git-read",
+    repositories: [
+      { repositoryRef: "application" },
+      { repositoryRef: "documentation", profile: "git-read" },
+    ],
+  });
+  await page.getByText("Read-only · Agent default", { exact: true }).waitFor();
+  await page.locator("#repository-default-git-full").check();
+  await page.getByText("Contributor · Agent default", { exact: true }).waitFor();
+  await page.getByText("Read-only · Custom", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByText("Read-only · Agent default", { exact: true }).waitFor();
+  replacePolicy([
+    {
+      repositoryRef: "application",
+      repositoryId: "789",
+      repository: "example/application",
+      namespaces: [{ namespaceId: namespace.id, profiles: ["git-read", "git-write", "git-full"] }],
+    },
+    {
+      repositoryRef: "documentation",
+      repositoryId: "790",
+      repository: "example/documentation",
+      namespaces: [{ namespaceId: namespace.id, profiles: ["git-write"] }],
+    },
+  ]);
+  await page.reload();
+  await page.getByText("Choose approved access", { exact: true }).waitFor();
+  assert.equal(await page.locator("#repository-inherit-documentation").isVisible(), true);
+  await page.locator("#repository-override-documentation-git-full").check();
+  const issues = page.locator("#repository-access-documentation .repository-customize summary");
+  await issues.click();
+  assert.equal(await page.locator("#repository-override-documentation-issues").isDisabled(), true);
+  assert.equal(await page.locator("#repository-override-documentation-issues").isChecked(), false);
+  const repairedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/agents/${created.data.id}`) &&
+      response.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save repository access" }).click();
+  assert.equal((await repairedResponse).status(), 200);
+  const legacy = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "Legacy explicit repository access",
+      configurationId: created.data.configurationId,
+      repositoryBindings: [{ repositoryRef: "application", profile: "git-read" }],
+    },
+  });
+  assert.equal(legacy.status, 201);
+  await page.goto(
+    `${fixture.origin}/console/agents/${legacy.data.id}?namespace=${namespace.id}&revision=draft&tab=repositories`,
+  );
+  await page.getByText("Read-only · Custom", { exact: true }).waitFor();
+  const optionsPath = `**/namespaces/${namespace.id}/agents/${legacy.data.id}/repository-options`;
+  await page.route(optionsPath, (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "REPOSITORY_OPTIONS_UNAVAILABLE", message: "Discovery unavailable" },
+      }),
+    }),
+  );
+  await page.reload();
+  await page.getByText(/Retry repository choices before saving repository access/).waitFor();
+  await page.getByText("Access awaiting verification", { exact: true }).waitFor();
+  assert.equal(await page.getByText(/You can save a draft without repository access/).count(), 0);
+  assert.equal(
+    await page.getByRole("button", { name: "Save repository access" }).isDisabled(),
+    true,
+  );
 });
 
 test("Agent creation keeps loading and empty repository discovery safe for an ordinary Agent", async (t) => {
@@ -955,8 +1016,8 @@ test("Dedicated repository Agent keeps its bindings through Slack save and the d
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Dedicated repository Agent");
   assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
-  await page.locator("#repository-application").check();
-  await page.locator("#repository-profile-git-full").check();
+  await page.locator("#repository-application").click();
+  await page.locator("#repository-default-git-full").check();
   const createdResponse = page.waitForResponse(
     (response) =>
       response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
@@ -1242,6 +1303,101 @@ for (const failure of [
   });
 }
 
+for (const count of [1, 5, 25, 140]) {
+  test(`Agent repository discovery adapts to ${count} choices with bounded, keyboard-accessible results`, async (t) => {
+    const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) =>
+      Array.from({ length: count }, (_, index) => ({
+        repositoryRef: `repository-${String(index + 1).padStart(3, "0")}`,
+        repositoryId: String(1100 + index),
+        repository: `example/repository-${String(index + 1).padStart(3, "0")}`,
+        namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+      })),
+    );
+    const { page } = await newPage(t, fixture);
+    await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+    await page.getByRole("button", { name: "Start without Preset" }).click();
+    await page.getByRole("button", { name: "Add example/repository-001", exact: true }).waitFor();
+    assert.equal(
+      await page.locator("#repository-results button[data-add]").count(),
+      Math.min(count, 6),
+    );
+    const search = page.getByLabel("Find a repository");
+    assert.equal(await search.count(), count > 5 ? 1 : 0);
+    if (count > 5) {
+      await page.getByRole("button", { name: "Browse all repositories" }).click();
+      assert.equal(await page.locator("#repository-results button[data-add]").count(), 20);
+      await page.getByRole("button", { name: "Next repositories" }).click();
+      assert.equal(
+        await page.locator("#repository-results button[data-add]").count(),
+        Math.min(count - 20, 20),
+      );
+      await search.fill("repository-025");
+      await search.press("Escape");
+      assert.equal(await search.inputValue(), "repository-025");
+      assert.equal(await page.locator("#repository-results").isVisible(), false);
+      await search.press("ArrowDown");
+      assert.equal(
+        await page
+          .getByRole("button", { name: "Add example/repository-025", exact: true })
+          .evaluate((node) => node === node.ownerDocument.activeElement),
+        true,
+      );
+      await page.keyboard.press("Enter");
+      assert.equal(await search.inputValue(), "repository-025");
+      assert.equal(
+        await search.evaluate((node) => node === node.ownerDocument.activeElement),
+        true,
+      );
+      await page
+        .getByRole("button", { name: "Added example/repository-025", exact: true })
+        .waitFor();
+      await page.getByRole("button", { name: "Remove example/repository-025" }).click();
+      await search.fill("");
+    }
+    await page.setViewportSize({ width: 320, height: 800 });
+    assert.equal(
+      await page.locator("html").evaluate((node) => node.scrollWidth <= node.clientWidth),
+      true,
+    );
+    if (count === 140) {
+      await search.fill("repository-140");
+      await search.press("Enter");
+      await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+      await page.getByLabel("Agent name").fill("Recent repository Agent");
+      const saved = page.waitForResponse(
+        (response) =>
+          response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+          response.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+      assert.equal((await saved).status(), 201);
+      await page.getByRole("heading", { name: "New revision" }).waitFor();
+      await page.goto(`${fixture.origin}/console/agents/new?namespace=${namespace.id}`);
+      await page.getByRole("button", { name: "Start without Preset" }).click();
+      await page.getByText(/Recently used/).waitFor();
+      assert.equal(
+        await page
+          .locator("#repository-results button[data-add]")
+          .first()
+          .getAttribute("aria-label"),
+        "Add example/repository-140",
+      );
+      await search.fill("repository-139");
+      await search.press("Enter");
+      await page.reload();
+      await page.getByRole("button", { name: "Start without Preset" }).click();
+      await page.getByText(/Recently used/).waitFor();
+      assert.equal(
+        await page
+          .locator("#repository-results button[data-add]")
+          .first()
+          .getAttribute("aria-label"),
+        "Add example/repository-140",
+      );
+    }
+  });
+}
+
 test("Agent repository selection enforces the 16-item limit without narrow viewport overflow", async (t) => {
   const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) =>
     Array.from({ length: 17 }, (_, index) => ({
@@ -1257,9 +1413,17 @@ test("Agent repository selection enforces the 16-item limit without narrow viewp
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
 
+  await page.locator("#repository-default-git-read").check();
   for (let index = 1; index <= 16; index += 1) {
-    await page.locator(`#repository-repository-${index}`).check();
+    await page.getByLabel("Find a repository").fill(`example/repository-${index}`);
+    await page
+      .getByRole("button", { name: `Add example/repository-${index}`, exact: true })
+      .click();
   }
+  await page.getByLabel("Find a repository").fill("example/repository-17");
+  assert.equal(await page.locator(".repository-card").count(), 5);
+  await page.getByRole("button", { name: "Show all 16 selected" }).click();
+  assert.equal(await page.locator(".repository-card").count(), 16);
   assert.equal(await page.locator("#repository-repository-17").isDisabled(), true);
   assert.deepEqual(
     await page.locator("html").evaluate((node) => ({
@@ -1284,8 +1448,8 @@ test("Agent creation recovers from stale authoritative admission without replaci
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
-  await page.locator("#repository-application").check();
-  await page.locator("#repository-profile-git-read").check();
+  await page.locator("#repository-application").click();
+  await page.locator("#repository-default-git-read").check();
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Recovered Repository Agent");
@@ -1316,7 +1480,10 @@ test("Agent creation recovers from stale authoritative admission without replaci
       /Repository-scoped Agent creation returned a known rejection.*Configuration .* remains saved/,
     )
     .waitFor();
-  assert.equal(await page.locator("#repository-application").isDisabled(), true);
+  assert.equal(
+    await page.getByRole("button", { name: "Remove example/application" }).isDisabled(),
+    true,
+  );
   assert.equal(await page.getByRole("button", { name: "Start a new draft" }).isEnabled(), true);
 
   await page.getByRole("button", { name: "Reload repository choices" }).click();
@@ -1413,7 +1580,7 @@ test("Agent creation recovers from stale authoritative admission without replaci
   await page.getByRole("button", { name: "Reload repository choices" }).click();
   await page.getByText(/Repository choices reloaded/).waitFor();
   assert.equal(await page.locator("#repository-application").isEnabled(), true);
-  assert.equal(await page.locator("#repository-application").isChecked(), false);
+  assert.equal(await page.locator(".repository-card").count(), 0);
   // Refreshing policy permits editing; it must not turn this saved attempt into an ordinary Agent.
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Start a new draft" }).isVisible(), true);
@@ -1421,17 +1588,17 @@ test("Agent creation recovers from stale authoritative admission without replaci
   await page.waitForTimeout(100);
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
-  await page.locator("#repository-application").check();
+  await page.locator("#repository-application").click();
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
-  await page.locator("#repository-profile-git-read").check();
+  await page.locator("#repository-default-git-read").check();
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isEnabled(), true);
-  await page.locator("#repository-application").uncheck();
+  await page.getByRole("button", { name: "Remove example/application" }).click();
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
   await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
   await page.waitForTimeout(100);
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
-  await page.locator("#repository-application").check();
-  await page.locator("#repository-profile-git-read").check();
+  await page.locator("#repository-application").click();
+  await page.locator("#repository-default-git-read").check();
   const createdResponse = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
@@ -1468,8 +1635,8 @@ test("Agent creation does not expose recovery actions after an unknown admission
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
-  await page.locator("#repository-application").check();
-  await page.locator("#repository-profile-git-read").check();
+  await page.locator("#repository-application").click();
+  await page.locator("#repository-default-git-read").check();
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Unknown Outcome Agent");
@@ -1491,7 +1658,10 @@ test("Agent creation does not expose recovery actions after an unknown admission
     await page.getByRole("button", { name: "Start a new draft", includeHidden: true }).isDisabled(),
     true,
   );
-  assert.equal(await page.locator("#repository-application").isDisabled(), true);
+  assert.equal(
+    await page.getByRole("button", { name: "Remove example/application" }).isDisabled(),
+    true,
+  );
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
   await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
   await page.waitForTimeout(100);
@@ -1515,8 +1685,8 @@ test("Agent repository recovery with empty current policy requires an explicit n
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  await page.locator("#repository-application").check();
-  await page.locator("#repository-profile-git-read").check();
+  await page.locator("#repository-application").click();
+  await page.locator("#repository-default-git-read").check();
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Repository policy removed");
@@ -1746,8 +1916,9 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByLabel("Agent name").fill(agent.name);
-  await page.locator("#repository-application").check();
-  await page.locator("#repository-profile-git-write").check();
+  await page.locator("#repository-application").click();
+  await page.locator(".repository-profile-group .repository-customize summary").click();
+  await page.locator("#repository-default-issues").uncheck();
   await page.getByLabel("API key", { exact: true }).fill("model-secret-value");
   await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
@@ -1800,9 +1971,10 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
 
   assert.match(provisionBody.requestId, /^req_[0-9a-f-]{36}$/);
   assert.equal(provisionBody.name, agent.name);
-  assert.deepEqual(provisionBody.repositoryBindings, [
-    { repositoryRef: "application", profile: "git-write" },
-  ]);
+  assert.deepEqual(provisionBody.repositoryAccess, {
+    defaultProfile: "git-write",
+    repositories: [{ repositoryRef: "application" }],
+  });
   assert.equal(provisionBody.executionMode, "dedicated");
   assert.deepEqual(provisionBody.harnessAuth, agent.harnessAuth);
   assert.deepEqual(provisionBody.configuration.values.channels.slack, {
@@ -1900,6 +2072,7 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
         executionMode: "dedicated",
         initialWorkspaceFiles: WORKSPACE_DEFAULTS,
         workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
+        repositoryAccess: { defaultProfile: "git-full", repositories: [] },
         harnessAuth: agentPostRequests(requests, namespace.id)[0].body.harnessAuth,
         configurationId: requests.find(
           (request) =>

@@ -20,7 +20,7 @@ See [service forwarding and retirement](repository-credentials.md) and
   Agent lifecycle routes. Options and creation share Namespace-scoped Agent-create
   authorization.
 - `apps/controller/src/console/agents/repositories.mjs:createRepositoryFields`
-  renders optional repository selection and a common access level.
+  renders adaptive discovery, selected cards, and inherited or custom access.
 - `apps/controller/src/worker.ts:ControllerWorker.prepareRevision` prepares
   repository sessions before invoking the selected Compute Driver.
 
@@ -90,22 +90,23 @@ graph TD
 ### 1. Project choices and resolve Namespace policy during Agent admission
 
 `OpenClawController.listRepositoryOptions` authorizes Namespace-scoped Agent
-creation, checks Compute-owned availability, then projects opaque references,
+creation, or exact-Agent update for editing, checks Compute-owned availability,
+then projects opaque references,
 names and profiles through `GitHubRepoDriver.listOptions`. Exact Harness validation
 remains at deployment. No approvals yields an empty list; a closed Namespace conflicts.
 Only classified optional discovery failure after authorization becomes
 `RepositoryOptionsUnavailableError`, mapped by the options route to
 `503 REPOSITORY_OPTIONS_UNAVAILABLE`. Generic failures do not establish authorization.
 
-`createRepositoryFields` permits 16 selections with an explicit common
-`git-read`, `git-write` or `git-full` profile. Discovery success or that optional-outage
-code permits ordinary creation. Transport, malformed, throttled and generic failures
-block both writes; denial and lifecycle conflict remain distinct. Model selection
-is independent; toggles preserve focus.
+`createRepositoryFields` searches up to 1,000 choices with 16 attachments.
+Cards record inheritance or overrides. `repositorySettings` resolves intent
+through RepoDriver; the database checks consistency with concrete bindings.
+Draft edits preserve admitted revisions. Only fresh, empty drafts permit the
+classified optional discovery outage; other failures block saves.
 
 The form saves Configuration first. Known Agent rejections (400, 403, 404, 409, 429) preserve it. Ordinary retries reuse it; repository-scoped retries require
 successful reload, which clears stale selections, then nonempty reselection and
-an explicit profile. Empty selections cannot downgrade the attempt. Recovery
+approved access. Empty selections cannot downgrade the attempt. Recovery
 stays visible; starting a new draft preserves the Configuration. Failed reloads
 block creation, expiry signs out, and obsolete completions cannot mutate the view.
 Unknown outcomes require stored Agent and Configuration reads.

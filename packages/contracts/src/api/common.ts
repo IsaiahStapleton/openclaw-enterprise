@@ -365,6 +365,18 @@ export const RepositoryBindingRequestsSchema = Type.Array(RepositoryBindingReque
     "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
 });
 
+export const RepositoryAccessSchema = Type.Object(
+  {
+    defaultProfile: RepositoryBindingSelector,
+    repositories: Type.Array(RepositoryBindingRequestSchema, { maxItems: 16 }),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+  },
+);
+
 export const RepositoryBindingSelectionsSchema = Type.Array(RepositoryBindingSelectionSchema, {
   minItems: 1,
   maxItems: 16,
@@ -391,6 +403,7 @@ export const CreateAgentBody = Type.Object(
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
   },
   { additionalProperties: false },
 );
@@ -416,6 +429,7 @@ export const ProvisionAgentBody = Type.Object(
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
   },
   { additionalProperties: false },
 );
@@ -428,6 +442,7 @@ export const UpdateAgentBody = Type.Object(
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
   },
   { additionalProperties: false },
 );
@@ -629,10 +644,15 @@ export const PresetTemplateSchema = Type.Object(
     agent: Type.Optional(
       Type.Object(
         Object.fromEntries(
-          ["name", "executionMode", "providerId", "harnessAuth", "plugins"].map((key) => [
-            key,
-            Type.Optional(Type.Ref("SafeJsonValue")),
-          ]),
+          [
+            "name",
+            "executionMode",
+            "providerId",
+            "harnessAuth",
+            "plugins",
+            "repositoryBindings",
+            "repositoryAccess",
+          ].map((key) => [key, Type.Optional(Type.Ref("SafeJsonValue"))]),
         ),
         { additionalProperties: false },
       ),

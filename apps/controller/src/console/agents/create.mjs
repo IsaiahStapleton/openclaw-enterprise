@@ -811,13 +811,17 @@ function renderAgentForm(context, rendered) {
         "Codex uses Dedicated execution; OpenClaw uses Embedded execution. Slack requires Codex.",
       ),
     ),
-    (repositories = createRepositoryFields(context, (changed) => {
-      if (changed) {
-        edited = true;
-      }
-      feedback.textContent = "";
-      updateControls();
-    })).section,
+    (repositories = createRepositoryFields(
+      context,
+      (changed) => {
+        if (changed) {
+          edited = true;
+        }
+        feedback.textContent = "";
+        updateControls();
+      },
+      agent,
+    )).section,
     element(
       "details",
       { className: "launch-advanced" },
@@ -994,6 +998,9 @@ function renderAgentForm(context, rendered) {
   const updateControls = () => {
     const saved = Boolean(savedConfiguration || savedAgent || provisioningAttempt);
     for (const node of form.querySelectorAll("button, input, select, textarea")) {
+      if (repositories?.section.contains(node)) {
+        continue;
+      }
       node.disabled =
         pending || Boolean(savedAgent) || Boolean(provisioningAttempt) || outcomeUnknown;
     }
@@ -1179,6 +1186,7 @@ function renderAgentForm(context, rendered) {
         return;
       }
       provisioningAttempt = null;
+      repositories.recordSuccessfulSave();
       context.navigate(`agents/${agentId}?revision=${revisionId}&tab=workspace`);
     } catch (error) {
       if (!context.isCurrent()) {
@@ -1299,7 +1307,7 @@ function renderAgentForm(context, rendered) {
         workspaceInputs.map(([filename, input]) => [filename, input.value]),
       ),
       workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
-      ...(repositoryBindings.length ? { repositoryBindings } : {}),
+      repositoryAccess: repositories.access(),
       ...(Object.keys(desiredPlugins).length ? { plugins: desiredPlugins } : {}),
       ...(agent.providerId ? { providerId: agent.providerId } : {}),
     };
@@ -1360,6 +1368,7 @@ function renderAgentForm(context, rendered) {
           method: "POST",
           body: { ...body, configurationId: savedConfiguration.id },
         });
+        repositories.recordSuccessfulSave();
         if (!context.isCurrent()) {
           return;
         }

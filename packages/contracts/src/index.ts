@@ -8,6 +8,7 @@ import {
 } from "./api/resources.ts";
 import { Check } from "typebox/value";
 import type {
+  RepositoryAccess,
   RepositoryBindingSelection,
   RepositoryCredentialMaterialRef,
   RepositoryCredentialRuntimeBinding,
@@ -23,6 +24,7 @@ export {
 } from "./logging.ts";
 
 export type {
+  RepositoryAccess,
   AdmittedRepositoryBinding,
   OpenRepositorySessionInput,
   OpenRepositorySessionResult,
@@ -408,6 +410,7 @@ export interface Agent extends Scope {
   readonly executionMode: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
   readonly repositoryBindings?: readonly RepositoryBindingSelection[];
+  readonly repositoryAccess?: RepositoryAccess;
   readonly servicePrincipalId: string;
   readonly activeRevisionId?: string;
   readonly createdAt: string;

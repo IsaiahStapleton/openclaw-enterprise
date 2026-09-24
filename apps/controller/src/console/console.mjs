@@ -237,6 +237,7 @@ async function loadPage({ fromNavigation = false } = {}) {
       return;
     }
     const agentContext = {
+      operatorId: session.user.id,
       view: shell.view,
       namespaceId,
       request,
