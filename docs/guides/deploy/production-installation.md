@@ -186,6 +186,8 @@ Edit the protected YAML copies before provisioning anything:
   blocks user namespaces, install a reviewed compatibility profile on every
   eligible node and set `runtime.codexSeccompProfile` to its relative kubelet
   profile path. See the [Kubernetes runtime requirements](../../reference/drivers/kubernetes-compute.md#requirements).
+  Set `presets.includeDefaults: false` to disable the example's
+  [bundled Presets](../../reference/presets.md#installation-defaults).
 - `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
   namespace, size, and protected `storageClassName` for the cluster.
 

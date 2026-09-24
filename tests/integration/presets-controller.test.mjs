@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,19 +10,22 @@ import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 
-async function createFixture(t) {
+async function createFixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "occ-presets-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const audit = new InMemoryAuditSink();
   const state = new InMemoryPlatformState({ auditSink: audit });
-  const fixture = await createConsoleAppFixture(t, { state, providers: [] });
-  await fixture.bootstrap();
-  // The real filesystem Driver enforces native credential rules on copied configurations.
+  // The real filesystem Driver enforces native credential rules, including bootstrap defaults.
   const configurationDriver = new FilesystemConfigurationDriver(root);
-  fixture.controller.registerDriver(configurationDriver);
-  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const fixture = await createConsoleAppFixture(t, {
+    state,
+    providers: [],
+    configurationDriver,
+    ...options,
+  });
+  await fixture.bootstrap();
   const session = await fixture.signIn();
-  return { ...fixture, audit, session };
+  return { ...fixture, audit, session, state };
 }
 
 const collection = (namespaceId) => `/namespaces/${namespaceId}/presets`;
@@ -526,4 +529,122 @@ test("password Presets reject stored credentials and password substitution outsi
   const retained = await fixture.request("GET", `${collection(namespace.id)}/${preset.id}`);
   assert.deepEqual(retained.data.template, template);
   assert.equal(JSON.stringify(fixture.audit.events).includes("sentinel-credential"), false);
+});
+
+test("Installation YAML seeds authorized default Presets for new and existing Namespaces without replacing copies", async (t) => {
+  const { loadInstallationConfiguration, initializeInstallationPresets } =
+    await import("../../apps/controller/src/composition/installation-config.ts");
+  const { createInstallationDriverConfiguration } =
+    await import("../helpers/installation-driver-configuration.mjs");
+  const { OpenClawController } = await import("../../packages/occ/src/index.ts");
+  const directory = await mkdtemp(join(tmpdir(), "occ-default-presets-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "installation.yaml");
+  const configuration = createInstallationDriverConfiguration();
+  configuration.presets = { includeDefaults: true };
+  await writeFile(path, JSON.stringify(configuration));
+  const runtime = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  const fixture = await createFixture(t, { defaultPresets: runtime.defaultPresets });
+  const namespace = await fixture.createNamespace("Default catalog", { ready: true });
+  const list = await fixture.request("GET", collection(namespace.id));
+  assert.equal(list.status, 200);
+  assert.deepEqual(
+    list.data.map((preset) => preset.name),
+    ["standard-codex"],
+  );
+  assert.equal(list.data[0].template.variables.modelSecret.type, "password");
+  const principal = fixture.policy.identities.find((identity) => identity.kind === "principal");
+  const renamedTemplate = { agent: { name: "Operator customization" } };
+  const custom = await fixture.request("PATCH", `${collection(namespace.id)}/${list.data[0].id}`, {
+    body: { template: renamedTemplate },
+  });
+  assert.equal(custom.status, 200);
+  // Simulate a Namespace persisted before the setting was enabled, then run the
+  // same initialization invoked by production and development API composition.
+  const existing = await fixture.controller.transact((state) =>
+    state.namespaces.createNamespace({
+      id: `ns_${crypto.randomUUID()}`,
+      name: "Existing namespace",
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    }),
+  );
+  await Promise.all([
+    fixture.controller.initializeDefaultPresets(principal.id),
+    fixture.controller.initializeDefaultPresets(principal.id),
+  ]);
+  const retained = await fixture.request("GET", `${collection(namespace.id)}/${list.data[0].id}`);
+  assert.deepEqual(retained.data.template, renamedTemplate);
+  const seeded = await fixture.request("GET", collection(existing.id));
+  assert.equal(seeded.data.length, 1);
+  assert.equal(seeded.data[0].name, "standard-codex");
+  const audit = fixture.audit.events.filter(
+    (event) => event.details?.source === "installation-defaults",
+  );
+  assert.ok(
+    audit.some(
+      (event) => event.resource.id === seeded.data[0].id && event.actorId === principal.id,
+    ),
+  );
+  assert.equal(audit.filter((event) => event.resource.id === seeded.data[0].id).length, 1);
+
+  // Namespace creation must roll back if its caller cannot create the defaults.
+  const limited = await fixture.createAccountWithPolicy("namespace-only", (identity) => {
+    fixture.policy.roles.push({
+      id: "namespace-only",
+      permissions: [{ action: "create", resourceKind: "namespace" }],
+    });
+    fixture.policy.bindings.push({
+      id: "namespace-only",
+      subjectKind: "identity",
+      subjectId: identity.id,
+      roleId: "namespace-only",
+    });
+  });
+  const session = await fixture.signIn(limited.credentials);
+  const denied = await fixture.request("POST", "/namespaces", {
+    session,
+    body: { name: "Denied defaults" },
+  });
+  assert.equal(denied.status, 403);
+  const afterDenied = await fixture.request("GET", "/namespaces");
+  assert.equal(
+    afterDenied.data.some((item) => item.name === "Denied defaults"),
+    false,
+  );
+  fixture.policy.roles
+    .find((role) => role.id === "namespace-only")
+    .permissions.push({ action: "create", resourceKind: "preset" });
+  const permitted = await fixture.request("POST", "/namespaces", {
+    session,
+    body: { name: "Denied defaults" },
+  });
+  assert.equal(permitted.status, 201);
+  assert.equal(
+    (await fixture.request("GET", collection(permitted.data.id))).data[0].name,
+    "standard-codex",
+  );
+  // Startup must skip a persisted non-administrator even when it is returned first.
+  await initializeInstallationPresets(
+    fixture.controller,
+    fixture.controller.selectDriver("iam", "console-native-iam"),
+    [limited.principal, principal],
+    runtime.defaultPresets,
+  );
+  // Disabling startup defaults never removes a saved Preset.
+  configuration.presets.includeDefaults = false;
+  await writeFile(path, JSON.stringify(configuration));
+  const disabledRuntime = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  const disabled = new OpenClawController(fixture.controller.installation, {
+    state: fixture.state,
+    defaultPresets: disabledRuntime.defaultPresets,
+  });
+  await disabled.initializeDefaultPresets(principal.id);
+  assert.equal((await fixture.request("GET", collection(existing.id))).data.length, 1);
 });

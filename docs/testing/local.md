@@ -243,6 +243,10 @@ and dedicated Agent. It checks credential references, native policy retention,
 and rejection of a cross-Namespace model credential. The password workflow in
 `tests/browser/console-agents.test.mjs` exercises the real chooser, masked input,
 same-Namespace Secret creation, credential grant, and retry after a name conflict.
+The API suite also loads Installation YAML and checks default seeding, preserved
+customizations, and authorization rollback. The
+[production PostgreSQL suite](postgresql.md) checks bootstrap-namespace seeding,
+API restart preservation, and new-Namespace defaults with real persisted state.
 Persistence is in-memory with the filesystem Configuration Driver; no workload
 or model starts.
 

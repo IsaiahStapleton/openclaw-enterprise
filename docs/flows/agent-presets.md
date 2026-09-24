@@ -15,6 +15,11 @@ continues through [revision admission](configuration-driver/persistence-and-revi
 
 ## Entry Points
 
+- [Installation loader](../../apps/controller/src/composition/installation-config.ts):
+  `loadInstallationConfiguration` reads `presets.includeDefaults` and the shipped
+  artifact. Production and PostgreSQL development composition pass generic
+  name/template definitions to OCC and call `initializeDefaultPresets`.
+
 - Source: `packages/contracts/src/api/routes.ts:occApiRoutes`.
 - [Preset routes](../../packages/contracts/src/api/routes.ts): authenticated
   collection and exact-resource operations in a Namespace.
@@ -28,6 +33,10 @@ continues through [revision admission](configuration-driver/persistence-and-revi
 
 ```mermaid
 graph TD
+  S0["API startup with defaults enabled"] --> S1["Authorize and lock eligible Namespaces"]
+  S1 --> S2["Create missing names; preserve existing copies"]
+  S2 --> C
+  N["Authorized Namespace creation"] --> S2
   A["Operator writes Preset"] --> B["OCC authorizes and validates template"]
   B --> C["Store Namespace-owned Preset"]
   C --> D["Console reads selected Preset once"]
@@ -51,7 +60,29 @@ creates Preset storage and adds Preset CRUD grants to the unchanged built-in
 administrator Role. Its guarded update preserves customized Roles; the exact
 [eligibility rules](../reference/presets.md#crud-and-permissions) belong to the Preset contract.
 
-### 1. Admit and store a template
+### 1. Include configured defaults
+
+`apps/controller/src/composition/installation-config.ts:loadInstallationConfiguration`
+
+The loader validates the opt-in boolean and loads the bundled JSON only when
+enabled. [Production composition](../../apps/controller/src/composition/production.ts)
+and [development composition](../../apps/controller/src/composition/development-postgres.ts)
+pass generic definitions into `ControllerOptions.defaultPresets`, select an
+authorized persisted administrator through IAM, and initialize defaults after
+selecting Configuration and IAM Drivers. Native template contents
+remain in the application bundle; OCC owns generic Preset lifecycle.
+
+`packages/occ/src/index.ts:OpenClawController.initializeDefaultPresets`
+
+Initialization authorizes Installation administration, locks Namespaces in ID
+order in one transaction, and skips failed/deleting Namespaces. Missing names
+require Preset create permission and ordinary template/Driver validation before
+storage and mutation audit. Existing names are untouched. Any failure rolls back
+the transaction and prevents API startup. Namespace creation uses the same
+helper before queuing provisioning, so denied or invalid defaults also roll back
+the new Namespace. Disabling defaults leaves persisted copies alone.
+
+### 2. Admit and store a template
 
 `packages/occ/src/index.ts:OpenClawController.createPreset`
 
@@ -76,7 +107,7 @@ template atomically. DELETE removes its exact IAM bindings in the transaction.
 Presets prevent Namespace deletion while present. The controller's normal audit
 path records mutations and denials without template or variable contents.
 
-### 2. Read and render the selected copy
+### 3. Read and render the selected copy
 
 `apps/controller/src/console/agents/presets.mjs:createPresetFields`
 
@@ -95,7 +126,7 @@ chooser clears its detached password controls. Preset updates or deletion cannot
 chooser. After a save succeeds or its outcome becomes uncertain, restart is
 disabled so the user follows ordinary creation recovery.
 
-### 3. Save an independent draft
+### 4. Save an independent draft
 
 `apps/controller/src/console/agents/create.mjs:renderCreateAgent`
 
@@ -117,7 +148,7 @@ the Configuration ID and locks Configuration-affecting controls. A safe retry
 reuses the saved Configuration. An uncertain response requires inspection before
 another creation attempt. See [creation recovery](../reference/console/create-and-deploy.md#create-an-agent).
 
-### 4. Hand off to deployment
+### 5. Hand off to deployment
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
@@ -153,6 +184,8 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-24 02:30: Add opt-in Installation default Presets with authorized, atomic seeding and preservation of existing copies (codex/01a0cfbd-e4cc-7d62-8542-c1358ab1bc5b - 451a35dbd713be383f93cd50407fc9b880b2561e)
 
 - 2026-09-24: Add password variables and reuse the ordinary Secret creation and recovery flow (codex/01a0cfbd-e4cc-7d62-8542-c1358ab1bc5b - b682ffad80e92a9cdee1d265f0b51c735847d503)
 

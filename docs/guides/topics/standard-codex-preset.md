@@ -1,7 +1,7 @@
 # Install the standard Codex Preset
 
 Install [standard-codex](../../../deploy/presets/standard-codex.json) in a ready
-Namespace through the existing Preset API. It creates drafts for a dedicated
+Namespace through Installation defaults or the existing Preset API. It creates drafts for a dedicated
 Codex Harness connected to its own separate OpenClaw gateway. The template
 requests cached hosted search and starts with an empty tool-network allowlist.
 
@@ -26,7 +26,19 @@ Read the enforcement boundary below before deploying.
 
 ## Install and select
 
-From the repository root, use the authenticated request in
+To include the bundled Preset automatically, add this to the Installation YAML
+selected by `OCC_CONFIG_PATH`, then restart the API:
+
+```yaml
+presets:
+  includeDefaults: true
+```
+
+The API adds missing copies to existing and new Namespaces. Existing same-name
+Presets are preserved. Omit the setting or use `false` to disable automatic
+inclusion; saved copies are retained. See [permissions and restart behavior](../../reference/presets.md#installation-defaults).
+
+For manual installation in one Namespace instead, from the repository root, use the authenticated request in
 [Create a Preset](agent-presets.md#create-a-preset), replacing its
 `--data-binary @preset.json` argument with:
 
@@ -35,8 +47,7 @@ From the repository root, use the authenticated request in
 ```
 
 The POST returns HTTP `201`. A duplicate name returns `409`; read the existing
-Preset and review it before replacing its template through PATCH. Installation
-is explicit per Namespace; bootstrap does not seed or overwrite Presets.
+Preset and review it before replacing its template through PATCH.
 
 Open **Agents → Create Agent**, choose **standard-codex**, and supply:
 

@@ -7,8 +7,37 @@ editing or deleting the Preset cannot change them or their deployed revisions.
 See [Create an Agent from a Preset](../guides/topics/agent-presets.md).
 
 The checked-in [standard Codex Preset](../guides/topics/standard-codex-preset.md)
-uses this same API and chooser. It is explicitly installed per Namespace;
-its native sandbox settings do not establish Pod-wide egress isolation.
+uses this same API and chooser. Install it manually or enable the
+[Installation defaults](#installation-defaults); its native sandbox settings do not establish Pod-wide egress isolation.
+
+## Installation defaults
+
+The trusted Installation YAML can opt into bundled Presets:
+
+```yaml
+presets:
+  includeDefaults: true
+```
+
+Omitted or `false` disables automatic inclusion. Currently the bundle contains
+`standard-codex`. API startup adds missing defaults to existing ready or
+provisioning Namespaces, including the bootstrap Namespace. New Namespace
+creation includes the same defaults atomically. Failed or deleting Namespaces
+are skipped during startup.
+
+Each copy is an ordinary Namespace-owned Preset with its own ID and normal
+read/update/delete permissions. Matching names are preserved without comparing
+or overwriting their templates. Startup can restore a deleted or renamed
+default while enabled; bundle updates do not replace existing copies. Turning
+the option off stops seeding and leaves saved Presets and Agents unchanged.
+Restart the API after changing the YAML, keeping the worker configuration in sync.
+
+Startup selects a persisted Principal authorized to administer the Installation
+and requires `preset:create` wherever defaults are missing. Namespace
+creators likewise need `preset:create` when this option is enabled. Authorization
+or template validation failure rolls back initialization and prevents startup
+or Namespace creation. The selected Configuration Driver validates native
+values; seeding does not create workloads or credentials.
 
 ## Contents
 
