@@ -177,6 +177,7 @@ export async function renderAgentDetail(context) {
   ];
   let selectedTab = tabsForSelection.includes(tab) ? tab : "configuration";
   let deployInFlight = false;
+  let authenticationSaveState = "idle";
   const target = (revision = selected, tab = selectedTab) =>
     `agents/${agentId}?revision=${encodeURIComponent(revision)}&tab=${tab}`;
   const change = (revision, tab) => {
@@ -222,6 +223,7 @@ export async function renderAgentDetail(context) {
     return (
       selected === "draft" &&
       (deployInFlight ||
+        authenticationSaveState === "saving" ||
         (["configuration", "repositories"].includes(selectedTab) && draftEditorNavigationBlock))
     );
   }
@@ -413,6 +415,7 @@ export async function renderAgentDetail(context) {
     let deployReloadMessage = "";
     let deployFeedback = "";
     let deployStatus;
+    let authenticationForm;
     const draftEditorState = {
       dirty: false,
       saving: false,
@@ -435,15 +438,19 @@ export async function renderAgentDetail(context) {
               snapshot = configuration;
               values = configuration.values;
             },
+            onReload: () => context.navigate(target("draft", "credentials"), namespaceId, true),
           })
         : null;
     function updateDeployControls() {
+      authenticationForm?.toggleAttribute("inert", Boolean(credentials?.mutationPending()));
+      credentials?.section.toggleAttribute("inert", authenticationSaveState !== "idle");
       if (!deploy || !deployStatus) {
         return;
       }
       const editedSubject = selectedTab === "repositories" ? "repository access" : "Configuration";
       deploy.disabled =
         deployPending ||
+        authenticationSaveState !== "idle" ||
         Boolean(deployReloadMessage) ||
         draftEditorState.dirty ||
         draftEditorState.saving ||
@@ -455,6 +462,11 @@ export async function renderAgentDetail(context) {
       if (!deployPending) {
         if (deployReloadMessage) {
           deployStatus.textContent = deployReloadMessage;
+        } else if (authenticationSaveState === "saving") {
+          deployStatus.textContent = "Wait for the authentication save to finish before deploying.";
+        } else if (authenticationSaveState === "uncertain") {
+          deployStatus.textContent =
+            "Authentication may have been saved. Reload this draft before deploying.";
         } else if (draftEditorState.outcomeUnknown) {
           deployStatus.textContent = `Refresh this draft before deploying because the last ${editedSubject} save outcome is unknown.`;
         } else if (draftEditorState.reloadRequired) {
@@ -615,6 +627,18 @@ export async function renderAgentDetail(context) {
         updateNavigationControls();
         updateDeployControls();
       },
+      get authenticationSaveState() {
+        return authenticationSaveState;
+      },
+      setAuthenticationSaveState(nextState) {
+        authenticationSaveState = nextState;
+        updateNavigationControls();
+        updateDeployControls();
+      },
+      setAuthenticationForm(form) {
+        authenticationForm = form;
+        updateDeployControls();
+      },
     };
   }
 
@@ -773,8 +797,26 @@ export async function renderAgentDetail(context) {
         { type: "submit", className: "primary" },
         "Save authentication source",
       );
-      const form = element("form", { className: "agent-card" }, auth.section, save, feedback);
-      let outcomeUnknown = false;
+      const reload = button("Reload draft", () =>
+        context.navigate(target("draft", "credentials"), namespaceId, true),
+      );
+      let outcomeUnknown = data.authenticationSaveState === "uncertain";
+      reload.hidden = !outcomeUnknown;
+      save.disabled = outcomeUnknown;
+      auth.setDisabled(outcomeUnknown);
+      if (outcomeUnknown) {
+        feedback.textContent =
+          "Authentication may have been saved. Reload this draft before saving again.";
+      }
+      const form = element(
+        "form",
+        { className: "agent-card" },
+        auth.section,
+        save,
+        reload,
+        feedback,
+      );
+      data.setAuthenticationForm(form);
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!form.reportValidity() || save.disabled) {
@@ -782,6 +824,7 @@ export async function renderAgentDetail(context) {
         }
         save.disabled = true;
         auth.setDisabled(true);
+        data.setAuthenticationSaveState("saving");
         let mutationStarted = false;
         try {
           const harnessAuth = await auth.readBinding();
@@ -803,6 +846,7 @@ export async function renderAgentDetail(context) {
             body: { configurationId: agent.configurationId, harnessAuth },
           });
           if (context.isCurrent()) {
+            data.setAuthenticationSaveState("idle");
             change("draft", "credentials");
           }
         } catch (error) {
@@ -817,8 +861,10 @@ export async function renderAgentDetail(context) {
           }
         } finally {
           if (context.isCurrent()) {
+            data.setAuthenticationSaveState(outcomeUnknown ? "uncertain" : "idle");
             save.disabled = outcomeUnknown;
             auth.setDisabled(outcomeUnknown);
+            reload.hidden = !outcomeUnknown;
           }
         }
       });

@@ -13,7 +13,10 @@ import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture } from "./console-app.mjs";
 
 /** Real Console/API/Drivers with passive storage, but no cluster or external providers. */
-export async function createConsoleRepositoryLaunchFixture(t) {
+export async function createConsoleRepositoryLaunchFixture(
+  t,
+  { secretDriver: suppliedSecretDriver } = {},
+) {
   const resources = {
     requests: { cpu: "100m", memory: "64Mi" },
     limits: { cpu: "250m", memory: "128Mi" },
@@ -106,8 +109,11 @@ export async function createConsoleRepositoryLaunchFixture(t) {
     },
   };
   compute.apiClients = Promise.resolve(clients);
-  const secretDriver = new KubernetesSecretDriver({ authentication: { mode: "inCluster" } });
-  secretDriver.client = Promise.resolve(clients.core);
+  const secretDriver =
+    suppliedSecretDriver ?? new KubernetesSecretDriver({ authentication: { mode: "inCluster" } });
+  if (suppliedSecretDriver === undefined) {
+    secretDriver.client = Promise.resolve(clients.core);
+  }
   const state = new InMemoryPlatformState();
   let managedPolicy = { identities: [], roles: [], bindings: [] };
   const storage = {

@@ -1252,6 +1252,168 @@ for (const tab of ["configuration", "repositories"]) {
   });
 }
 
+for (const mutation of ["authentication", "generated credentials", "channel Secrets"]) {
+  test(`Agent deployment waits for ${mutation} writes and their recovery`, async (t) => {
+    const { fixture, namespace, modelSecret, grantModelAccess } =
+      await createConsoleRepositoryLaunchFixture(
+        t,
+        mutation === "channel Secrets" ? { secretDriver: createTestSecretDriver() } : {},
+      );
+    const values = createHarnessConfiguration("codex", "gpt-5.1");
+    let appSecret;
+    let secretBindings;
+    if (mutation === "channel Secrets") {
+      appSecret = await fixture.createSecret(namespace.id, "Slack app", "xapp-original");
+      const botSecret = await fixture.createSecret(namespace.id, "Slack bot", "xoxb-original");
+      values.channels = {
+        slack: {
+          enabled: true,
+          mode: "socket",
+          appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+          botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+          dmPolicy: "allowlist",
+          groupPolicy: "allowlist",
+          allowFrom: ["U123"],
+          channels: { C123: { requireMention: true } },
+        },
+      };
+      secretBindings = {
+        SLACK_APP_TOKEN: { source: appSecret.ref, delivery: { type: "env" } },
+        SLACK_BOT_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
+      };
+    }
+    const configuration = await fixture.createConfiguration(namespace.id, values, {
+      secretBindings,
+    });
+    const created = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
+      body: {
+        name: `Credential race ${mutation}`,
+        configurationId: configuration.id,
+        executionMode: "dedicated",
+        harnessAuth: { method: "api_key", source: modelSecret.ref },
+      },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const agent = created.data;
+    await grantModelAccess(agent);
+    const path = `/namespaces/${namespace.id}/agents/${agent.id}`;
+    const provisioned = await fixture.request("POST", `${path}/runtime-credentials`, {
+      headers: { origin: fixture.origin },
+      body: {},
+    });
+    assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
+    const { page } = await newPage(t, fixture);
+    const requests = apiRequests(page, fixture.origin);
+    await login(
+      page,
+      fixture,
+      `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft&tab=credentials`,
+    );
+    await page
+      .getByText(
+        "Stored credential metadata is present. This does not confirm live channel readiness.",
+      )
+      .waitFor();
+    const deploy = page.getByRole("button", { name: "Deploy new revision" });
+    assert.equal(await deploy.isEnabled(), true);
+    if (mutation === "authentication") {
+      fixture.policy.restrictions.push({
+        id: "deny-authentication-save",
+        namespaceId: namespace.id,
+        resourceKind: "agent",
+        resourceId: agent.id,
+        action: "update",
+        effect: "deny",
+      });
+      await page.getByRole("button", { name: "Save authentication source" }).click();
+      await page
+        .getByText("Access denied. You do not have permission for this operation.")
+        .waitFor();
+      assert.equal(await deploy.isEnabled(), true);
+      fixture.policy.restrictions.pop();
+    }
+    const mutationPath =
+      mutation === "authentication"
+        ? path
+        : mutation === "generated credentials"
+          ? `${path}/runtime-credentials`
+          : `/namespaces/${namespace.id}/secrets/${appSecret.id}`;
+    const method = mutation === "generated credentials" ? "POST" : "PATCH";
+    const committed = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    t.after(() => release.resolve());
+    await page.route(`${fixture.origin}${mutationPath}`, async (route) => {
+      if (route.request().method() !== method) {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      committed.resolve({ status: response.status(), body: await response.json() });
+      await release.promise;
+      await route.abort("failed");
+    });
+    if (mutation === "authentication") {
+      await page.getByRole("button", { name: "Save authentication source" }).click();
+    } else if (mutation === "generated credentials") {
+      await page.getByRole("button", { name: "Provision generated runtime credentials" }).click();
+    } else {
+      await page.getByLabel("Slack app token").fill("xapp-replacement");
+      await page.getByRole("button", { name: "Save channel Secrets" }).click();
+    }
+    const result = await committed.promise;
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(
+      await deploy.isDisabled(),
+      true,
+      "an in-flight credential write must block deployment",
+    );
+    if (mutation === "authentication") {
+      assert.equal(
+        await page.getByRole("button", { name: "Configuration", exact: true }).isDisabled(),
+        true,
+      );
+      assert.equal(await page.locator(".runtime-credentials").evaluate((node) => node.inert), true);
+    } else {
+      assert.equal(
+        await page
+          .getByRole("button", { name: "Save authentication source" })
+          .evaluate((node) => Boolean(node.closest("[inert]"))),
+        true,
+      );
+      await page.getByRole("button", { name: "Configuration", exact: true }).click();
+      assert.equal(await deploy.isDisabled(), true);
+      await page.getByRole("button", { name: "Credentials", exact: true }).click();
+    }
+    assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
+    release.resolve();
+    await page
+      .getByText(/Outcome unknown/)
+      .first()
+      .waitFor();
+    assert.equal(
+      await deploy.isDisabled(),
+      true,
+      "an unconfirmed credential write must block deployment",
+    );
+    await page.unroute(`${fixture.origin}${mutationPath}`);
+    if (mutation !== "authentication") {
+      await page.getByRole("button", { name: "Refresh status" }).click();
+      assert.equal(await deploy.isDisabled(), true);
+    }
+    await page.getByRole("button", { name: "Configuration", exact: true }).click();
+    await page.getByRole("button", { name: "Credentials", exact: true }).click();
+    assert.equal(await deploy.isDisabled(), true);
+    await page.getByRole("button", { name: "Reload draft", exact: true }).click();
+    await page
+      .getByText(
+        "Stored credential metadata is present. This does not confirm live channel readiness.",
+      )
+      .waitFor();
+    assert.equal(await deploy.isEnabled(), true);
+    assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
+  });
+}
+
 test("Agent repository editor distinguishes stale, rejected, and uncertain saves", async (t) => {
   const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
     {

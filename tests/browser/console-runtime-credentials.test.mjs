@@ -702,6 +702,8 @@ test("missing Slack credential fields require both tokens and clear replacements
   assert.equal(await page.getByLabel("Slack bot token").inputValue(), "");
 
   await page.getByRole("button", { name: "Refresh status" }).click();
+  assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
+  await page.getByRole("button", { name: "Reload draft" }).click();
   await page
     .getByText(/Deploy requires stored credential metadata: Slack Secret bindings/)
     .waitFor();

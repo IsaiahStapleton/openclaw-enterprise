@@ -106,9 +106,9 @@ function credentialError(error, mutation = false) {
     text = "Too many requests. Wait before trying again.";
   } else if (error.status === 404) {
     text = "Credential metadata is unavailable for this Agent. Check the ID and your access.";
-  } else if (error.status === 503 || mutation) {
+  } else if (mutation) {
     text =
-      "Outcome unknown. Credential storage could not be confirmed. Refresh status before trying again.";
+      "Outcome unknown. Credential storage could not be confirmed. Reload the draft and inspect the saved state before trying again.";
   } else {
     text = "Credential metadata unavailable. Refresh status before trying again.";
   }
@@ -174,6 +174,7 @@ export function createRuntimeCredentialsPanel({
   revisionCount,
   onConfigurationChange,
   onStatusChange,
+  onReload,
 }) {
   const endpoint = `${path}/runtime-credentials`;
   const state = {
@@ -192,12 +193,20 @@ export function createRuntimeCredentialsPanel({
   const section = element("section", { className: "agent-card runtime-credentials" });
 
   function canMutateGeneratedCredentials() {
-    return revisionsLoaded && revisionCount === 0 && state.loaded && state.error === null;
+    return (
+      revisionsLoaded &&
+      revisionCount === 0 &&
+      state.loaded &&
+      state.error === null &&
+      !state.outcomeUnknown
+    );
   }
 
   function canEnterChannelCredentials() {
     return (
       revisionsLoaded &&
+      !state.saving &&
+      !state.outcomeUnknown &&
       state.loaded &&
       state.error === null &&
       slackEnabled(state.values) &&
@@ -208,6 +217,8 @@ export function createRuntimeCredentialsPanel({
   function canDeploy() {
     return (
       revisionsLoaded &&
+      !state.saving &&
+      !state.outcomeUnknown &&
       state.loaded &&
       state.error === null &&
       hasRequiredRuntimeCredentials(state.status, state.values, state.configuration)
@@ -215,6 +226,12 @@ export function createRuntimeCredentialsPanel({
   }
 
   function deployGateMessage() {
+    if (state.saving) {
+      return "Wait for the credential save to finish before deploying.";
+    }
+    if (state.outcomeUnknown) {
+      return "Credential changes may have been saved. Reload this draft and inspect the saved state before deploying.";
+    }
     if (!revisionsLoaded) {
       return "Revision history is required before deploying this new revision.";
     }
@@ -243,7 +260,6 @@ export function createRuntimeCredentialsPanel({
     state.error = null;
     state.saveError = null;
     state.saveMessage = "";
-    state.outcomeUnknown = false;
     render();
     onStatusChange();
     try {
@@ -455,12 +471,15 @@ export function createRuntimeCredentialsPanel({
       status.textContent = "Saving channel Secrets...";
       error.textContent = "";
       updateControls();
+      onStatusChange();
       let mutationStarted = false;
+      let mutationCommitted = false;
       try {
         const bindings = { ...(state.configuration.secretBindings ?? {}) };
         for (const { binding, value } of replacementWrites) {
           mutationStarted = true;
           const secret = await storeChannelSecret(context, state, binding, value);
+          mutationCommitted = true;
           await ensureSecretOperateBinding(context, state.agent, secret);
           bindings[binding.key] = secretBinding(secret);
         }
@@ -492,7 +511,9 @@ export function createRuntimeCredentialsPanel({
         }
         state.saveError = cause;
         state.saveMessage = "";
-        state.outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(cause.status);
+        state.outcomeUnknown =
+          mutationCommitted ||
+          (mutationStarted && ![400, 403, 404, 409, 429].includes(cause.status));
         status.textContent = "";
         error.textContent = credentialError(cause, true);
       } finally {
@@ -563,6 +584,13 @@ export function createRuntimeCredentialsPanel({
               credentialError(state.saveError, true),
             )
           : null,
+        state.outcomeUnknown
+          ? element(
+              "p",
+              { className: "error", role: "status" },
+              "Credential changes may have been saved. Reload this draft and inspect the saved state before deploying.",
+            )
+          : null,
         element(
           "div",
           { className: "form-actions credential-actions" },
@@ -572,6 +600,7 @@ export function createRuntimeCredentialsPanel({
           button("Provision generated runtime credentials", () => void saveGeneratedCredentials(), {
             disabled: state.loading || state.saving || !canMutateGeneratedCredentials(),
           }),
+          state.outcomeUnknown ? button("Reload draft", onReload) : null,
         ),
         renderUnavailableReason(),
         renderChannelForm(),
@@ -585,5 +614,6 @@ export function createRuntimeCredentialsPanel({
     loadStatus,
     canDeploy,
     deployGateMessage,
+    mutationPending: () => state.saving || state.outcomeUnknown,
   };
 }
