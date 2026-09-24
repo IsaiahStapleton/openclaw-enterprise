@@ -139,16 +139,6 @@ RUN --mount=type=secret,id=build-ca,required=false \
     /usr/bin/git --version; \
     /usr/local/bin/gh --version | grep '^gh version 2.100.0 '
 
-COPY --from=repository-client-build /build/.build/repository-credentials/client/package.json /opt/oce/repository-credentials/package.json
-COPY --from=repository-client-build /build/.build/repository-credentials/client/dist /opt/oce/repository-credentials/dist
-COPY deploy/runtime/bin /opt/oce/repository-credentials/bin
-RUN chmod -R a+rX /opt/oce/repository-credentials \
-    && chmod 0555 /opt/oce/repository-credentials/bin/gh \
-    && test -f /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/router.js \
-    && test -f /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/native-git.js \
-    && test -x /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/hooks/pre-push \
-    && /usr/bin/git config --system --add include.path /run/oce/repository-credentials/gitconfig
-
 COPY --from=openclaw-runtime-assets /out/provenance.json /opt/oce/runtime/provenance.json
 # Driver entrypoints resolve ws from /app; reuse the pinned OpenClaw dependency.
 RUN --mount=type=bind,from=openclaw-runtime-assets,source=/out,target=/runtime-package \
@@ -187,5 +177,15 @@ RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw
   && test "$(codex --version)" = "codex-cli ${OPENAI_CODEX_VERSION}" \
   && test -f /app/dist/extensions/codex/openclaw.plugin.json \
   && test -f /app/dist/extensions/slack/openclaw.plugin.json
+
+COPY --from=repository-client-build /build/.build/repository-credentials/client/package.json /opt/oce/repository-credentials/package.json
+COPY --from=repository-client-build /build/.build/repository-credentials/client/dist /opt/oce/repository-credentials/dist
+COPY deploy/runtime/bin /opt/oce/repository-credentials/bin
+RUN chmod -R a+rX /opt/oce/repository-credentials \
+    && chmod 0555 /opt/oce/repository-credentials/bin/gh \
+    && test -f /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/router.js \
+    && test -f /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/native-git.js \
+    && test -x /opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/hooks/pre-push \
+    && /usr/bin/git config --system --add include.path /run/oce/repository-credentials/gitconfig
 
 USER node

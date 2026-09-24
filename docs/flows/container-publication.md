@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
 updated: 2026-09-24
-last_updated_session: codex/01a0c179-19f7-7111-8bb4-fc7680da5545
+last_updated_session: public-pr/348
 ---
 
 # Container publication flow
@@ -68,13 +68,20 @@ Matching bundled plugins replace
 independently installed plugin packages; the Dedicated Codex executable remains
 separately pinned. See the [runtime recipe](../../deploy/runtime/README.md) for
 source identity and installed-image checks.
-Before starting the runtime build,
-`scripts/ci/repository-platform-headroom.mjs:main` verifies it is running on the
-Ubuntu 24 GitHub-hosted runner and removes fixed, unused Android, language SDK,
-and non-Node tool-cache directories. The helper rejects symlinks, mounts, and
-unexpected paths, then requires 36 GiB free and logs capacity before and after
-cleanup. Local and self-hosted runners are rejected. Controller preparation does
-not use this cleanup.
+Runtime preparation uses the existing `blacksmith-8vcpu-ubuntu-2404` runner,
+also used by repository-platform CI, for the disk capacity needed by both
+architectures' source-build layers and the OCI export. The standard GitHub runner
+exhausted disk even after unused toolchains were removed. Controller preparation
+uses `ubuntu-24.04`. The repository must retain access to the Blacksmith runner
+label; container preparation does not delete preinstalled SDKs. The hosted-runner
+cleanup helper remains available to its existing CI callers and is not used on
+this runner.
+
+Before installing QEMU, the job mounts `binfmt_misc` on the host so emulator
+registrations survive the installer container. It then runs ARM64 Node from the
+pinned base image and asserts its architecture before starting the build. BuildKit
+can emulate builds itself, so a successful cross-build alone does not establish
+that Docker can execute the resulting ARM64 image.
 
 BuildKit runs one build step at a time to avoid overlapping dependency-install
 peaks. Each runtime dependency-install stage removes its temporary pnpm store
@@ -161,6 +168,8 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 
 ## Changelog
 
+- 2026-09-24 04:45: Keep host emulator registrations mounted and execute an ARM64 container before building. (public-pr/348 - 467bcc83)
+- 2026-09-24 03:50: Use the existing Blacksmith runner for runtime preparation after GitHub-hosted builds exhausted disk; keep both platforms and all smoke checks. (public-pr/348 - ee6a5a3d)
 - 2026-09-24 05:30: Retain the updated main source and manual-only publication gate while applying sequential platform assembly. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - b3469cc4)
 
 - 2026-09-24 04:30: Return Enterprise container builds to reviewed manual dispatch and update the runtime source to OpenClaw `2765f7a3341b8be4835afacbff3d04c6e3c3c79b` with its verified archive checksum. (codex/01a0d171-59c4-7b42-95ab-4050d18eab79 - 0224b638)
