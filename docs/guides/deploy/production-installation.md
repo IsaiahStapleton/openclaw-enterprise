@@ -11,13 +11,12 @@ password profile with native Agent administration enabled; complete
 password access, the optional [GitHub sign-in procedure](#enable-github-browser-sign-in)
 requires disabling native administration before activation.
 
-Run from the repository root; retain this shell and protected files for
+Run from the repository root; retain protected files for
 [Agent deployment](production-agents.md).
 
 ## Use published images
 
-For authorized `linux/amd64` or `linux/arm64` trials, use these private image
-indexes, built from `e3b28515f30523eede3cd905e589c1ab9063dbda`.
+These private `linux/amd64` and `linux/arm64` image indexes were built from `e3b28515f30523eede3cd905e589c1ab9063dbda`.
 Startup checks passed on both architectures (ARM64 under QEMU); remote digests
 were verified in [publication run 35680912119](https://github.com/openclaw/openclaw-enterprise/actions/runs/35680912119).
 These checks do not qualify production deployments.
@@ -36,8 +35,8 @@ export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:
 export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:792f0ffe88ec9f935b55c36f41ee646a828e3d83df21427cf7955a5beef52460'
 ```
 
-The controller serves the API, worker, migration, and bootstrap. Gateways and
-Agents share the runtime image. Keep these tested digests; never substitute `latest` or a bootstrap marker tag.
+Use the controller for API, worker, migration, and bootstrap; gateways and Agents
+share the runtime image. Retain these digests; never substitute `latest` or bootstrap tags.
 
 Configure approved cluster/node pull credentials for **both control-plane and
 tenant Pods**; local `docker login` does not authenticate cluster nodes. Continue

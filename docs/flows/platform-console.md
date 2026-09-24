@@ -95,56 +95,50 @@ graph TD
 
 `apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`
 
-Startup validates Provider definitions into safe `{id,type}` summaries passed to
-`createFastifyApp`. Requests never scan configuration live, read credentials, or
-contact a Provider. [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
-owns client construction and Driver activation.
+Startup passes validated Provider `{id,type}` summaries to `createFastifyApp`.
+Requests use this snapshot without credentials, configuration rescans, or Provider
+calls. [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
+owns client construction and activation.
 
-`apps/controller/src/console-assets.ts:readConsoleAsset` maps public console
-assets and capability modules to allowlisted files, with recognized page URLs
-using the shared HTML shell. Unknown console paths receive that shell with HTTP
-`404`. The controller sets MIME type and same-origin content security policy;
-other routes keep canonical API JSON errors. The Dockerfile copies these files
-into the controller image.
+`console-assets.ts:readConsoleAsset` serves allowlisted assets and the shared HTML
+shell for recognized pages. Unknown Console paths receive that shell with `404`;
+other routes retain API JSON errors. Responses set MIME type and same-origin CSP.
+The Dockerfile copies these assets.
 
-`scripts/build-console-metadata.mjs` stamps the console HTML during image build.
-The publisher supplies its checked `source_sha` as `OCC_BUILD_REVISION`, also used
-for the image revision label. Empty metadata stays empty; nonempty metadata must
-be a full lowercase Git SHA. `shell.mjs:renderShell` shows the short OCC hash
-beside OCE with the full revision in a tooltip; missing or invalid metadata shows
-**dev**. No browser or controller request inspects Git or an Agent gateway version.
+`scripts/build-console-metadata.mjs` stamps HTML with the publisher's checked
+`source_sha` as `OCC_BUILD_REVISION`, also used for the image revision label.
+Nonempty values require a full lowercase Git SHA. `shell.mjs:renderShell` shows
+its short hash beside OCE and full revision in a tooltip; missing/invalid metadata
+shows **dev**. Requests inspect neither Git nor Agent gateway versions.
 
 ### 2. Resolve the session before private reads
 
 `apps/controller/src/console/console.mjs:loadPage`
 
-The browser clears the prior view, advances its navigation generation, and
-requests `GET /api/auth/session`. No session opens login; unavailable session
-inspection blocks private reads and offers Retry. Login submits exactly email
-and password to the existing sign-in route. `showLogin` independently requests
-`GET /api/auth/providers`; only `github: true` adds **Continue with GitHub**.
-Discovery failure leaves the password form usable. The button sends
-`POST /api/auth/providers/github/start` with same-origin credentials, then navigates to the
-returned GitHub authorization URL. Pending sign-in disables both actions, and
-view-generation checks prevent a late result from redirecting a newer page.
+The browser clears old content, advances its navigation generation, and requests
+`GET /api/auth/session`. Absence opens login; unavailable inspection blocks
+private reads and offers Retry. Password login submits exactly email and password.
+`showLogin` independently discovers `GET /api/auth/providers`; only `github: true`
+adds **Continue with GitHub**. Discovery failure leaves password login usable.
+Clicking sends a same-origin `POST /api/auth/providers/github/start`, then navigates
+to its GitHub URL. Pending login disables both actions; generation checks reject
+late redirects.
 
-The callback returns to `/console/`, which resolves the ordinary session before
-reading resources. A literal `authError=github` without a session becomes a
-local generic error on the login screen; history replacement removes the marker.
-The Console neither copies provider errors nor restarts OAuth automatically.
-The [authentication flow](local-password-authentication.md#3-construct-session-authentication)
+The callback returns to `/console/` for ordinary session inspection before private
+reads. Without a session, literal `authError=github` produces a generic local error;
+history replacement removes it. The Console neither copies provider errors nor
+restarts OAuth automatically. The [authentication flow](local-password-authentication.md#3-construct-session-authentication)
 owns provider verification and session commit.
-`apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` compares browser
-Origin to the configured controller origin before sign-in or sign-out. Server SDK
-calls bypass Better Auth's request-origin middleware, so this HTTP boundary keeps
-that check while retaining headerless CLI requests. Better Auth owns the session
-cookie and password verification; the browser stores no credentials or tokens.
 
-After authentication, the client reads `GET /namespaces`, validates the URL's
-selection against readable Namespaces, or chooses the first ready one followed by
-the first readable one. An unavailable explicit ID stays unavailable until the
-user selects another. Selection stays in the URL and never becomes an API query
-selector.
+`auth/index.ts:requireTrustedBrowserOrigin` checks browser Origin before sign-in
+and sign-out because server SDK calls bypass Better Auth's middleware. Headerless
+CLI requests remain supported. Better Auth owns cookies and password verification;
+the browser stores no credentials or tokens.
+
+After authentication, `GET /namespaces` validates the URL selection against readable
+Namespaces. Otherwise, the client chooses the first ready Namespace, then the first
+readable one. An unavailable explicit ID requires another user selection. Selection
+remains in the URL, never an API query selector.
 
 ### 3. Authorize the selected page resource
 
@@ -236,31 +230,22 @@ traces draft/revision rendering, channel changes, credential provisioning,
 workspace reads/writes, stopping, and deletion. Each request returns through the
 response-ordering checks below.
 
-`apps/controller/src/console/channels/slack.mjs:supportSlack` checks whether the
-channel editor can preserve the stored settings. Existing `dmPolicy` and
-`groupPolicy` values do not block editing. `updatedSlack` copies those values
-unchanged, including their absence, when saving channel IDs, channel sender
-users, or mention settings. It preserves unrelated properties on selected
-channel entries, then writes the selected channels' `users` lists from the
-drawer. The everyone option writes `users: ["*"]` on each selected channel;
-direct-message `allowFrom` is not changed by channel edits. Only a new Slack
-configuration receives allowlist defaults. Existing channel maps with mixed
-sender lists or a `*` channel entry are rejected by the simple editor so native
-Configuration JSON remains the source of truth.
+`channels/slack.mjs:supportSlack` rejects channel maps the simple editor cannot
+preserve; native JSON remains authoritative. `updatedSlack` changes channel sender
+lists while preserving unrelated properties, existing policies, and direct-message
+access. Only new Slack configurations receive allowlist defaults. The
+[Agent editing flow](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
+details these rules.
 
-`apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers a
-handler for tab-only navigation with `console.mjs:loadPage`. For the same Agent,
-Namespace, and revision, tab clicks and browser history update the URL and replace
-only the content below the tabs. The shell, native-admin panel, and loaded
-revision controls remain mounted. Configuration and revision reads are shared
-within that detail view; a direct Workspace files URL does not wait for or start
-those reads. Refresh, revision changes, and successful channel or authentication
-edits use the full page read path.
+`agents/detail.mjs:renderAgentDetail` registers tab navigation with `loadPage`.
+For the same Agent, Namespace, and revision, tab clicks/history update only the
+URL and tab content; shell, native-admin panel, and revision controls stay mounted.
+Configuration and revision reads are shared. Direct Workspace URLs start neither.
+Refresh, revision changes, and successful channel/authentication edits reload fully.
 
-Each tab render captures its own generation. Late panel reads and form callbacks
-cannot overwrite a newer tab; leaving a tab clears its password inputs. Channel
-Secret saves update the shared draft snapshot used by other tabs and deployment
-preflight. Session expiry still clears the whole private view.
+Each tab captures its generation: late reads/callbacks cannot overwrite newer tabs,
+and leaving clears password inputs. Channel Secret saves update the shared draft
+used by other tabs and deployment preflight. Session expiry clears all private content.
 
 ### 7. Commit only the current response, or clear the view
 
@@ -292,8 +277,7 @@ this client never infers it from a network error.
 
 ## Deploy the new revision
 
-The **New revision** detail view exposes **Deploy new revision**.
-**Operator-managed credentials** persist `{ "method": "runtime" }` and bypass
+**Deploy new revision** appears in **New revision**. **Operator-managed credentials** persist `{ "method": "runtime" }` and bypass
 only the managed runtime-credential metadata gate; OCC does not validate host
 credentials. Deployment rereads the Agent and Configuration, checks their loaded
 association and generation, then sends the existing bodyless
@@ -307,11 +291,10 @@ uncertain response disables replay until refresh and inspection.
 - Use the displayed request ID to associate API failures with controller logs.
   A Namespace-only user cannot discover Providers; check Installation authority
   before treating that denial as a configuration problem.
-- The browser suites exercise real Fastify routes, Better Auth, and Native IAM
-  with in-memory storage. They verify user-visible navigation, list isolation,
-  Agent creation, draft/history rendering, channel draft editing, and auth
-  behavior; they do not establish PostgreSQL persistence, live Provider health,
-  runtime dispatch, worker lease handling, or Compute Driver effects.
+- Browser suites use real Fastify, Better Auth, Native IAM, and in-memory storage.
+  They verify navigation, isolation, creation, draft/history/channel editing, and
+  authentication, not PostgreSQL persistence, Provider health, runtime dispatch,
+  worker leases, or Compute effects.
 - API tests cover safe discovery, permission boundaries, empty versus missing
   wiring, static MIME/allowlisting, and unchanged API JSON errors. See
   [Testing](../testing/README.md) for commands and the image smoke boundary.
