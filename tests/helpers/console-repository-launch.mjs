@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   KubernetesComputeDriver,
+  kubernetesGatewayNamespaceName,
   kubernetesNamespaceName,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
@@ -164,9 +165,13 @@ export async function createConsoleRepositoryLaunchFixture(t) {
     ...compute.manifest("v1", "Namespace", namespaceName, { namespaceId: namespace.id }),
     status: { phase: "Active" },
   });
-  // Canonical model and transport Secrets live in the separate control namespace.
-  const controlNamespace = compute.gatewayNamespaceManifest({ namespaceId: namespace.id });
-  namespaces.set(controlNamespace.metadata.name, {
+  const controlNamespaceName = kubernetesGatewayNamespaceName(namespace.id);
+  const controlNamespace = compute.manifest("v1", "Namespace", controlNamespaceName, {
+    namespaceId: namespace.id,
+  });
+  delete controlNamespace.metadata.labels["openclaw.dev/namespace"];
+  controlNamespace.metadata.labels["openclaw.dev/gateway-namespace"] = namespace.id;
+  namespaces.set(controlNamespaceName, {
     ...controlNamespace,
     status: { phase: "Active" },
   });
