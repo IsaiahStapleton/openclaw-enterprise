@@ -480,7 +480,7 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent =
             "Authentication may have been saved. Reload this draft before deploying.";
         } else if (draftEditorState.outcomeUnknown) {
-          deployStatus.textContent = `Refresh this draft before deploying because the last ${editedSubject()} save outcome is unknown.`;
+          deployStatus.textContent = `Reload this draft before deploying because the last ${editedSubject()} save outcome is unknown.`;
         } else if (draftEditorState.reloadRequired) {
           deployStatus.textContent = "Reload this draft before deploying.";
         } else if (draftEditorState.saving) {
