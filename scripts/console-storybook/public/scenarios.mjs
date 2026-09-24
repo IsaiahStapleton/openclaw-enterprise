@@ -1106,6 +1106,40 @@ export const scenarios = {
     actions: [click("Edit Slack"), click("Save configuration")],
     description: "A rejected Configuration write keeps the drawer and feedback visible.",
   },
+  channelSavePending: {
+    group: "Components/Channels",
+    name: "Channel save pending",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    auth: "runtime",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        method: "PATCH",
+        hold: true,
+      },
+    ],
+    actions: [click("Disable Slack")],
+    description:
+      "A pending channel save disables deployment and revision navigation. The real client times out after 15 seconds; reset the story to replay it.",
+  },
+  channelSaveUnknown: {
+    group: "Components/Channels",
+    name: "Channel save outcome unknown",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    auth: "runtime",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        method: "PATCH",
+        status: 503,
+        once: true,
+      },
+    ],
+    description:
+      "Disable Slack to simulate an uncertain save. Deployment and navigation stay blocked until Reload draft; inspect the saved state before retrying.",
+  },
   credentials: {
     group: "Components/Credentials",
     name: "Stored",
@@ -1145,6 +1179,42 @@ export const scenarios = {
     actions: [{ selector: "#runtime-slack-app-token", value: "xapp-replacement-preview" }],
     description:
       "Only fields with entered replacements are saved. Empty stored fields preserve their existing Secret binding.",
+  },
+  credentialsSavePending: {
+    group: "Components/Credentials",
+    name: "Channel Secret save pending",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets/sec_demo_slack_app_token",
+        method: "PATCH",
+        hold: true,
+      },
+    ],
+    actions: [
+      { selector: "#runtime-slack-app-token", value: "simulated-token" },
+      click("Save channel Secrets"),
+    ],
+    description:
+      "A pending Secret save disables deployment. The real client times out after 15 seconds; reset the story to replay it.",
+  },
+  credentialsSaveUnknown: {
+    group: "Components/Credentials",
+    name: "Channel Secret save outcome unknown",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets/sec_demo_slack_app_token",
+        method: "PATCH",
+        status: 503,
+        once: true,
+      },
+    ],
+    actions: [{ selector: "#runtime-slack-app-token", value: "simulated-token" }],
+    description:
+      "Save the simulated replacement to see an uncertain Secret save. Reload the draft and inspect saved state before deploying or retrying.",
   },
   credentialsSlackPartial: {
     group: "Components/Credentials",

@@ -16,6 +16,14 @@ export const CredentialsSlackReplacement = {
   ...story("credentialsSlackReplacement"),
   name: "Slack token replacement",
 };
+export const CredentialsSavePending = {
+  ...story("credentialsSavePending"),
+  name: "Channel Secret save pending",
+};
+export const CredentialsSaveUnknown = {
+  ...story("credentialsSaveUnknown"),
+  name: "Channel Secret save outcome unknown",
+};
 export const CredentialsSlackPartial = {
   ...story("credentialsSlackPartial"),
   name: "One Slack token missing",

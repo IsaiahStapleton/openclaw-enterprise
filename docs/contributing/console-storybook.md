@@ -128,6 +128,12 @@ Deploy again to admit a new snapshot. The fixture retains both versions.
 Credential edits likewise need deployment to affect managed runtime configuration.
 Workspace-file writes apply immediately and do not create a revision.
 
+Review the pending and uncertain save guards in **Components/Channels** and
+**Components/Credentials**. In each outcome-unknown story, save the simulated
+change, observe that deployment is disabled, and select **Reload draft** before
+inspecting saved state. Pending stories use the real client's timeout; reset a
+story to replay it. These fixtures do not prove whether a real write committed.
+
 Native JSON editing changes Configuration values, not Agent-owned Provider or
 execution-mode fields. The Slack drawer preserves existing access policies; it
 does not provide a policy selector. Its channel sender controls edit per-channel
