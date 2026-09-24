@@ -119,7 +119,7 @@ for (const issuesEnabled of [true, false]) {
     await page.getByRole("button", { name: "Channels", exact: true }).click();
     await page.getByRole("button", { name: "Configure Slack", exact: true }).click();
     await page.getByLabel("Slack channel IDs").fill("CDEMO123");
-    await page.getByLabel("Allowed user IDs").fill("UDEMO123");
+    await page.getByLabel("Allowed channel user IDs").fill("UDEMO123");
     const channelDialog = page.getByRole("dialog", { name: "Configure Slack" });
     for (const [label, value] of [
       ["Slack app token", "xapp-synthetic-demo"],
@@ -171,6 +171,11 @@ for (const issuesEnabled of [true, false]) {
     assert.equal(revision.harness.mode, "dedicated");
     assert.deepEqual(revision.repositoryCredentials.bindings, expectedBindings);
     assert.equal(revision.configuration.channels.slack.enabled, true);
+    assert.deepEqual(revision.configuration.channels.slack.channels.CDEMO123, {
+      requireMention: true,
+      users: ["UDEMO123"],
+    });
+    assert.equal(Object.hasOwn(revision.configuration.channels.slack, "allowFrom"), false);
     const saved = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
     const configuration = await fixture.request(
       "GET",
@@ -178,6 +183,11 @@ for (const issuesEnabled of [true, false]) {
     );
     assert.deepEqual(saved.data.repositoryBindings, expectedBindings);
     assert.equal(configuration.data.values.channels.slack.enabled, true);
+    assert.deepEqual(configuration.data.values.channels.slack.channels.CDEMO123, {
+      requireMention: true,
+      users: ["UDEMO123"],
+    });
+    assert.equal(Object.hasOwn(configuration.data.values.channels.slack, "allowFrom"), false);
     assert.deepEqual(Object.keys(configuration.data.secretBindings).sort(), [
       "SLACK_APP_TOKEN",
       "SLACK_BOT_TOKEN",
