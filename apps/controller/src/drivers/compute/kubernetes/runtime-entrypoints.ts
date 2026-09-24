@@ -909,6 +909,9 @@ function verifyCodexAppConfiguration(configuration, effective) {
       }
       continue;
     }
+    // Failed-only bindings are disabled by the required-field check above.
+    // Their inherited defaults and tool exceptions cannot enable a disabled app.
+    if (appId !== "_default" && app.enabled === false) continue;
     for (const [field, value] of Object.entries(actual)) {
       if (field === "tools" || field === "links" || value == null) continue;
       if (field === "approvals_reviewer" && app.approvals_reviewer === undefined) continue;

@@ -168,34 +168,30 @@ selections contain explicit tool policies, `readCodexToolStatuses` pages through
 requested scoped tool IDs against `codex_apps` tool names and connector ownership.
 Unknown or unowned tools fail startup; tool classifications are not required.
 
-`codexRuntimeArtifact` writes app defaults and supplied tool fields independently;
-it does not expand category rules or copy defaults to every tool. `native` maps to
-Codex `auto`; `driverPolicy.destructiveEnabled` maps to `destructive_enabled`.
-`toolDefaults.reviewer` maps `human`/`auto` to app `approvals_reviewer` values
-`user`/`auto_review`; omission inherits the effective Harness reviewer. Both
-Drivers reject explicit reviewers at unsupported scopes before save.
-`writeCodexAppConfiguration` replaces each managed app
-subtree with `config/batchWrite`, removing stale per-app tool/link settings. It
-then rereads successful installations to check identity, version, and app mapping.
-Failed-only bindings are disabled; successful bindings retain admitted policy.
-Disabled selections do not contribute install attempts or startup results.
-`config/read` uses the Agent workspace `/home/node/workspace`, including its
-trusted project layers. `verifyCodexAppConfiguration` checks requested fields and
-unexpected app/global defaults before readiness. Enabled unselected apps fail;
-unselected disabled apps remain permitted. Serialized defaults/nulls and omitted
-reviewers preserve inheritance. Every nested tool's enablement/approval must match
-its requested override or app default; account approval must match the app.
-Unexpected explicit enablement fails because it can bypass category restrictions.
+`codexRuntimeArtifact` emits app defaults and explicit tool fields without expanding
+categories or copying defaults into tools. `native` maps to Codex `auto`;
+`driverPolicy.destructiveEnabled` maps to `destructive_enabled`.
+`toolDefaults.reviewer` maps `human`/`auto` to app `approvals_reviewer`
+`user`/`auto_review`; omission inherits the Harness reviewer. Unsupported reviewer
+scopes fail before save.
+`writeCodexAppConfiguration` replaces managed app subtrees with `config/batchWrite`;
+successful installations are checked for identity, version, and app mapping.
+Failed-only bindings are disabled; disabled selections produce no install attempts
+or startup results. `config/read` includes `/home/node/workspace`'s trusted project
+layers. Before readiness, `verifyCodexAppConfiguration` rejects mismatched requested
+fields, unexpected app/global defaults, and unselected enabled apps. Verified disabled
+bindings permit inherited app/tool/link fields; enabled apps and global defaults
+remain strict. Nulls, serialized defaults, and omitted reviewers preserve
+inheritance. Nested tool policies must match requested overrides or app defaults;
+account approval must match the app.
 
-`runtime-entrypoints.ts:verifyCodexReviewerConfiguration` checks explicit app
-reviewers against effective app/link settings and `configRequirements/read`.
-It rejects forbidden reviewers, incompatible automatic-review approval settings,
-and human review conflicting with current-model requirements. These startup
-checks do not establish later workspace/session/model changes or strict review.
-Codex 0.156 readback APIs omit managed app/tool requirements applied during
-execution; native effective-policy introspection remains required. See the
-[remaining proof](../testing/plugins.md#current-proof-notes).
-Codex owns cache integrity and runtime health.
+`runtime-entrypoints.ts:verifyCodexReviewerConfiguration` checks explicit app/link
+reviewers and `configRequirements/read`, rejecting forbidden reviewers, incompatible
+automatic-review settings, or conflicting model requirements. Startup checks do not
+cover later workspace/session/model changes or strict review. Codex 0.156 readback
+omits managed app/tool requirements applied during execution; native effective-policy
+introspection remains required. See [remaining proof](../testing/plugins.md#current-proof-notes).
+Codex owns cache integrity and health.
 
 For Compute-owned Kubernetes workloads, a selected OpenClaw install command's
 normal nonzero exit, a matching Codex `plugin/install` error response, or a
@@ -293,6 +289,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 23:09: Clarified disabled-app verification and shortened startup readback prose. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - 27d44ac0)
 
 - 2026-09-24 19:44: Added Driver-owned setup and recovery links. (01a0d1dd-aa36-7622-9f43-8376f6ff935e - ef89ded5)
 

@@ -940,7 +940,13 @@ test("Codex runtime helper reports plugin install warnings without retrying", as
         throw new Error("native install rejected");
       }
       if (method === "config/read") {
-        return codexConfigReadResponse({ enabled: false });
+        // Native layers may retain overrides, but app disablement blocks every tool.
+        return codexConfigReadResponse({
+          enabled: false,
+          default_tools_enabled: true,
+          tools: { list_issues: { enabled: true, approval_mode: "approve" } },
+          links: { account: { default_tools_approval_mode: "approve" } },
+        });
       }
       throw new Error(`unexpected request ${method}`);
     },
