@@ -139,3 +139,44 @@ Owning current documentation after implementation:
 [production Agents](../docs/guides/deploy/production-agents.md),
 [Agent deployment](../docs/reference/agents/deployment.md), and
 [production startup](../docs/flows/production-startup.md).
+
+## Amendment: prove complete inventory before mutation
+
+The administrator requirement above is necessary but insufficient: current
+Namespace and Agent lists omit resources denied by the selected IAM Driver,
+including matching Restrictions on administrator identities. Successful list
+responses cannot prove that the baseline contains the entire fleet. This
+amendment strengthens admission; the original rollout and recovery choices
+remain proposed.
+
+Before the first Secret or Helm mutation, the command must obtain a complete
+Installation inventory through a proposed OCC read-only operation. OCC requires
+exact-Installation `administer`, reads all Namespaces and their Agents from one
+consistent State snapshot, and checks exact-resource `read` for every Namespace
+and Agent through the selected IAM Driver. It returns the snapshot only if every
+check succeeds. Any denial fails the whole operation without returning a partial
+inventory or disclosing hidden resource identities. The response identifies the
+server-owned Installation and contains Namespace and Agent identities plus the
+Agent lifecycle state, desired runtime state, and active revision used to select
+the baseline. State owns completeness; IAM owns permission decisions.
+
+The command must use this authorized snapshot as its baseline. It must reject
+an unavailable complete-inventory operation, a different Installation, or a
+partial or failed response before mutation. Filtered lists, administrator role
+names, Kubernetes workload counts, and operator assertions are not substitutes.
+Current HTTP collection operations do not provide this contract. Implementing
+and qualifying the read-only operation is a prerequisite for enabling the
+upgrade command; it does not authorize deployment or bypass the existing
+exact-Agent mutation APIs.
+
+The snapshot proves inventory at admission, not exclusive access throughout the
+upgrade. Operators must prevent concurrent fleet changes and other upgrade runs
+until completion or recovery. If observed Agent state diverges from the baseline
+outside this command's recorded deployments, stop further mutations and report
+partial failure; do not claim that untargeted workloads were preserved.
+
+Extend the required production proof with an administrator denied `read` on one
+Namespace and, separately, one Agent. Both cases must fail before any startup
+Secret, Helm release, or Agent workload changes. An unavailable inventory
+operation must fail at the same boundary. Keep these checks in the implementation
+PR; this specification supplies no runtime qualification.
