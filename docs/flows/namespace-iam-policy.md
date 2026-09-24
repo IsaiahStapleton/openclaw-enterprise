@@ -115,7 +115,7 @@ authorization requests read the current policy through the IAM Driver.
 
 ## Changelog
 
-- 2026-09-24: Documented human Principal bindings and exact Namespace read targets.
+- 2026-09-24 09:45: Documented human Principal bindings and exact Namespace read targets. (scoped-human-onboarding - 1b830cd8)
 
 - 2026-09-23 22:56: Update source ownership for extracted IAM HTTP handlers; preserve admission and transaction boundaries. (codex/01a0d075-a358-7620-8c16-fd4290acddf1 - 4df9f9800836dc1c2b57afd5f8af4d91f55088d5)
 - 2026-09-20 09:32: Document Namespace IAM policy management flow. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 5f7728e8c5d128bc7067b7035e07f06c3c4da92c)

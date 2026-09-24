@@ -401,6 +401,52 @@ test(
        WHERE action = 'openclaw.auth.accounts.create'`,
     );
     assert.equal(afterAudit.rows[0].count, beforeAudit.rows[0].count + 1);
+
+    // Grant the existing human exact Namespace access through the public policy API.
+    // The second controller must observe it without gaining Installation or sibling access.
+    const namespaces = await appA.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+    });
+    assert.equal(namespaces.statusCode, 200, namespaces.body);
+    const namespaceId = namespaces.json().data[0].id;
+    const namespaceRole = await appA.inject({
+      method: "POST",
+      url: `/namespaces/${namespaceId}/iam/roles`,
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: { permissions: [{ action: "read", resourceKind: "namespace" }] },
+    });
+    assert.equal(namespaceRole.statusCode, 201, namespaceRole.body);
+    const binding = await appA.inject({
+      method: "POST",
+      url: `/namespaces/${namespaceId}/iam/access-bindings`,
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: {
+        subjectKind: "identity",
+        subjectId: noGrant.json().data.principalId,
+        roleId: namespaceRole.json().data.id,
+        resourceKind: "namespace",
+        resourceId: namespaceId,
+      },
+    });
+    assert.equal(binding.statusCode, 201, binding.body);
+    const visibleNamespaces = await appB.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(visibleNamespaces.statusCode, 200, visibleNamespaces.body);
+    assert.deepEqual(
+      visibleNamespaces.json().data.map(({ id }) => id),
+      [namespaceId],
+    );
+    const stillDenied = await appB.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(stillDenied.statusCode, 403, stillDenied.body);
   },
 );
 

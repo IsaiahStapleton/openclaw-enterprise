@@ -74,7 +74,9 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
 The [Namespace policy API](../authorization.md#manage-namespace-policy) accepts
 all seven action names on `agent`, `agent_revision`, `configuration`, `preset`, `secret`,
 and `service_account`, including combinations no current operation checks.
-It can create bindings only for an identity and an existing exact resource.
+It also accepts `read` on `namespace`, with the exact path Namespace as target.
+It can bind a same-Namespace service identity or an Installation-scoped human
+Principal to an existing exact resource.
 It cannot create Installation or Namespace-wide grants, including the collection
 permission needed to create resources. Existing Namespace-wide and Group
 bindings can still be listed or deleted. Groups and Restrictions cannot be
