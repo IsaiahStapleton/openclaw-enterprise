@@ -51,8 +51,13 @@ violations by rule, source, target, import form, type-only status and bindings.
 Each records a capability owner, why the edge exists and its removal condition.
 The baseline reflects the source currently checked: authentication schema
 binding, runtime Driver loading, Configuration errors, shared Compute scripts,
-repository composition and transaction errors each retain their own entries
-until their actual imports change.
+repository composition, the type-only aggregate contracts used by repository lifetime
+projections, Work status and claim handling, provisioning record types, repository
+snapshot validation, and transaction errors each retain their own entries until
+their actual imports change. Console browser URLs are resolved by the explicit
+asset map rather than adjacent source files; the credential-service launcher
+imports a generated entrypoint outside the authored-source graph. Those exact
+resolution and asset-path allowances do not exempt other imports in those files.
 
 Policy adoption is reviewed independently of product changes. Before merging an
 adoption change, refresh and review the baseline against the resulting main
