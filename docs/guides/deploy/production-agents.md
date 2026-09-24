@@ -36,7 +36,7 @@ after creation. Complete the tenant RoleBindings below, then wait until
 `GET /namespaces/$NAMESPACE_ID` reports `ready` before creating Configurations.
 If it reports `failed`, inspect reconciliation audit evidence and worker logs;
 [exhausted lease recovery](../../reference/controller/reconciliation.md#deferred-namespace-and-agent-convergence)
-also stops provisioning permanently, so waiting for another attempt will not help.
+permanently stops provisioning; no further attempt is scheduled.
 
 ### Grant tenant RoleBindings
 
