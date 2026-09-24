@@ -1,5 +1,9 @@
 # Egress delivery and qualification
 
+> **Historical custom-proxy proposal:** deferred for 0.x by the
+> [current disposition](../31-basic-egress-proxy.md#current-disposition--2026-09-24).
+> The original contracts below are retained for reference.
+
 [Overview](../31-basic-egress-proxy.md) · [Architecture](architecture.md)
 
 C0, C1, C2 and C3 remain selected. Each needs its own connected consumer and

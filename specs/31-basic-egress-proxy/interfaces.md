@@ -1,5 +1,9 @@
 # Egress interfaces
 
+> **Historical custom-proxy proposal:** deferred for 0.x by the
+> [current disposition](../31-basic-egress-proxy.md#current-disposition--2026-09-24).
+> The original contracts below are retained for reference.
+
 [Overview](../31-basic-egress-proxy.md) · [Admission order](architecture.md#admission-and-preparation)
 
 This page owns the RFC's complete proposed policy, resolution and startup

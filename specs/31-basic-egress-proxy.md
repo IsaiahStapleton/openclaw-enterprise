@@ -1,5 +1,53 @@
 # Basic Agent egress proxy
 
+## Current disposition — 2026-09-24
+
+The custom Enterprise proxy is **deferred for 0.x**. The
+[0.x direction](https://github.com/openclaw/openclaw-enterprise/pull/249#issuecomment-5754828001)
+selects wiring and verifying existing runtime protections first. This amendment
+supersedes the implementation selection below for 0.x; the original C0–C3 design,
+contracts and acceptance requirements remain a historical proposal. They do not
+establish current implementation approval or release gates for other work.
+
+The selected integration work has three distinct boundaries:
+
+- **Gateway-hosted commands:** use OpenClaw's
+  [built-in secret egress proxy](https://docs.openclaw.ai/gateway/secrets/secret-store-and-egress#secret-egress-proxy)
+  for destination-bound secret injection. Its traffic allowlist covers clients
+  that honor proxy configuration; a process can bypass it with direct sockets.
+  Sandbox and remote commands do not automatically receive that proxy's secrets
+  or configuration. Secret protection alone does not establish network confinement.
+- **Sandboxed OpenClaw tools:** use OpenShell when tool code must not bypass
+  network restrictions. The current Enterprise
+  [OpenShell integration](../docs/reference/drivers/openshell-sandbox.md)
+  is a separate, dedicated-Codex path: it rejects embedded OpenClaw and cannot
+  deploy production Agents with stock pre.7. Wiring the selected OpenClaw tool
+  path remains work for its existing runtime, Sandbox and Compute owners.
+  A compatibility fixture does not close that gap.
+- **Codex commands and subprocesses:** use Codex's
+  [sandbox and network controls](https://learn.chatgpt.com/docs/agent-approvals-security#network-access).
+  Enabling command networking alone does not enable destination filtering.
+  Codex's own model and authentication requests are outside that command-network
+  policy. The Enterprise OpenShell integration disables the inner Codex sandbox,
+  so its outer OpenShell boundary needs separate qualification; combining names
+  of available controls does not prove they are active together.
+
+For each selected path, the owning integration must record the pinned runtime,
+effective configuration and actual traffic boundary, then demonstrate a useful
+allowed operation and denial from the real tool child, including direct sockets
+where confinement is required. Verify credential placement and stop/replacement
+behavior separately from network permission. Current references and their
+[OpenShell qualification procedures](../docs/testing/openshell.md) own supported
+behavior and proof; this documentation refresh supplies no installed-runtime or
+live-provider qualification.
+
+If an existing path cannot meet a concrete 0.x requirement, record the unmet
+requirement, its release consequence, responsible owner and missing proof before
+proposing a new proxy service. A later reviewed decision must explicitly select
+any revived custom-proxy scope. No such decision is made here.
+
+## Historical implementation status
+
 **Status:** Accepted for implementation against historical baseline
 [`046e12b`](https://github.com/openclaw/openclaw-enterprise/commit/046e12b007bb1b4928bd3f7497a2353714be11a8).
 Acceptance establishes neither runtime availability nor release qualification.
