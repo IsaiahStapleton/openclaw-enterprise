@@ -3083,7 +3083,7 @@ test("Agent detail preserves admitted revision history while draft edits change 
   await page.getByText('"marker": "rev-one"').waitFor();
   assertRevisionUrl(page, first.revision.id);
 
-  await page.getByRole("button", { name: "New revision" }).click();
+  await page.getByRole("button", { name: "New revision", exact: true }).click();
   await page.waitForURL((url) => url.searchParams.get("revision") === "draft");
   await revealNativeConfiguration(page, "View native Configuration");
   await page.getByText('"marker": "draft-current"').waitFor();

@@ -274,10 +274,8 @@ readiness is not exposed; use the operator deployment workflow for those Agents.
 If a deployment response is lost, inspect the Agent's revision history before
 trying again; the console does not automatically repeat an uncertain request.
 To follow the deployment worker, use the [deployment status API](../agents.md#deployment-status).
-The revision view displays the stored deployment failure and, when available,
-its startup component, check, code, and observation timestamp. Missing evidence
-leaves the cause unspecified; it does not mean the runtime is healthy.
-The console does not display live runtime health. Give your operator the
+The revision view displays stored deployment failures and available startup evidence.
+Missing evidence leaves the cause unspecified. The console does not display live runtime health. Give your operator the
 Namespace ID, the Agent ID shown on its detail page, and the full revision ID
 in the `revision` query parameter of the page URL after deployment. Ask them to
 [verify that exact workload and get a real model response](../../guides/deploy/production-agents.md#verify-production-workloads).
