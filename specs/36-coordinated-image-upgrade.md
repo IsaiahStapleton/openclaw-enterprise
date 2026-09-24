@@ -49,18 +49,31 @@ and Helm release are reachable, and the current API authenticates with the
 provided service key. It renders the candidate chart and runs server-side dry
 run before applying it.
 
-The operator identity must list every Namespace and Agent in the Installation,
-read every selected Agent and its deployment status, and deploy every selected
-Agent. Collection filtering cannot silently turn an unauthorized Agent into an
-upgrade omission: this first version requires an Installation administrator
-whose inventory covers the fleet.
+Before the first Secret or Helm mutation, the command obtains a complete
+Installation inventory through a new OCC read-only operation. OCC requires
+exact-Installation `administer`, reads all Namespaces and their Agents from one
+consistent State snapshot, and checks exact-resource `read` for every Namespace
+and Agent through the selected IAM Driver. For every Agent selected for the
+baseline, it also checks exact-Agent `deploy`. It returns the snapshot only when
+every check succeeds. A denial fails the operation without returning a partial
+inventory or disclosing hidden resource identities.
+
+The response identifies the server-owned Installation and contains the
+Namespace and Agent identities, Agent lifecycle state, desired runtime state,
+active revision, and whether deployment work is nonterminal. The command rejects
+an unavailable inventory operation, a different Installation, or a failed or
+partial response before mutation. Filtered collection operations, administrator
+role names, Kubernetes workload counts, and operator assertions cannot prove
+completeness. The inventory operation authorizes no deployment; every later
+Agent mutation repeats exact-resource authorization.
 
 Before changing cluster state, the script saves protected copies of the live
 Helm values, Installation startup document, input files, Agent inventory, and
 current workload images. The target set contains Agents whose status is
 `active`, desired runtime state is `running`, and `activeRevisionId` is present.
-It rejects a running Agent without an active revision because another initial
-deployment may be in flight. Stopped and deleting Agents remain untouched.
+It rejects a running Agent without an active revision and any Agent with
+nonterminal deployment work. These states indicate an initial or replacement
+deployment may still be in flight. Stopped and deleting Agents remain untouched.
 
 ### Coordinated replacement
 
@@ -104,18 +117,26 @@ batch size, canary, maintenance window, automatic database snapshot, workspace
 backup, or compatibility oracle. It preserves existing PVCs and database state
 but does not treat identifiers or hashes as backups.
 
+The inventory is consistent at admission but does not provide exclusive access
+throughout the upgrade. Operators must prevent concurrent fleet changes and
+other upgrade runs until completion or recovery. If observed Agent state
+diverges from the baseline outside the command's recorded deployments, the
+command stops further mutations and reports partial failure.
+
 ## Implementation and documentation
 
-1. Add the fail-closed upgrade script and keep protected evidence out of the
-   repository. Reuse the OCC HTTP contract; do not add an upgrade endpoint or
-   Kubernetes special case to platform core.
-2. Add an operator guide under `docs/guides/deploy/` with prerequisites,
+1. Add the authorized, fail-closed Installation inventory operation. State owns
+   inventory completeness, and the selected IAM Driver owns permission checks.
+2. Add the fail-closed upgrade script and keep protected evidence out of the
+   repository. Reuse the exact-Agent deployment and status operations; do not
+   add an upgrade mutation endpoint or Kubernetes special case to platform core.
+3. Add an operator guide under `docs/guides/deploy/` with prerequisites,
    invocation, completion evidence, partial-failure recovery, and rollback
    boundaries. Link it from the deployment overview and production installation
    guide.
-3. Update the production startup and Agent deployment flows to show the
+4. Update the production startup and Agent deployment flows to show the
    coordinated handoff from Helm readiness to exact-Agent deployment fan-out.
-4. Extend the existing real production Kubernetes integration so one test
+5. Extend the existing real production Kubernetes integration so one test
    installs the old image pair, creates multiple running Agents plus a stopped
    Agent, executes the upgrade command with a second pair, and verifies OCC
    readiness, concurrent new revisions, preserved storage, runtime digests, a
@@ -134,49 +155,13 @@ the command through Helm and the OCC API; command stubs or hand-written Agent
 state do not satisfy it. Record unavailable image pairs, credentials, or cluster
 capacity as verification gaps rather than substituting a fake rollout.
 
+The proof separately denies the administrator `read` on one Namespace, `read`
+on one Agent, and `deploy` on one selected Agent. Those cases, an unavailable
+complete-inventory operation, and existing nonterminal Agent deployment work
+must fail before any startup Secret, Helm release, or Agent workload changes.
+
 Owning current documentation after implementation:
 [production installation](../docs/guides/deploy/production-installation.md),
 [production Agents](../docs/guides/deploy/production-agents.md),
 [Agent deployment](../docs/reference/agents/deployment.md), and
 [production startup](../docs/flows/production-startup.md).
-
-## Amendment: prove complete inventory before mutation
-
-The administrator requirement above is necessary but insufficient: current
-Namespace and Agent lists omit resources denied by the selected IAM Driver,
-including matching Restrictions on administrator identities. Successful list
-responses cannot prove that the baseline contains the entire fleet. This
-amendment strengthens admission; the original rollout and recovery choices
-remain proposed.
-
-Before the first Secret or Helm mutation, the command must obtain a complete
-Installation inventory through a proposed OCC read-only operation. OCC requires
-exact-Installation `administer`, reads all Namespaces and their Agents from one
-consistent State snapshot, and checks exact-resource `read` for every Namespace
-and Agent through the selected IAM Driver. It returns the snapshot only if every
-check succeeds. Any denial fails the whole operation without returning a partial
-inventory or disclosing hidden resource identities. The response identifies the
-server-owned Installation and contains Namespace and Agent identities plus the
-Agent lifecycle state, desired runtime state, and active revision used to select
-the baseline. State owns completeness; IAM owns permission decisions.
-
-The command must use this authorized snapshot as its baseline. It must reject
-an unavailable complete-inventory operation, a different Installation, or a
-partial or failed response before mutation. Filtered lists, administrator role
-names, Kubernetes workload counts, and operator assertions are not substitutes.
-Current HTTP collection operations do not provide this contract. Implementing
-and qualifying the read-only operation is a prerequisite for enabling the
-upgrade command; it does not authorize deployment or bypass the existing
-exact-Agent mutation APIs.
-
-The snapshot proves inventory at admission, not exclusive access throughout the
-upgrade. Operators must prevent concurrent fleet changes and other upgrade runs
-until completion or recovery. If observed Agent state diverges from the baseline
-outside this command's recorded deployments, stop further mutations and report
-partial failure; do not claim that untargeted workloads were preserved.
-
-Extend the required production proof with an administrator denied `read` on one
-Namespace and, separately, one Agent. Both cases must fail before any startup
-Secret, Helm release, or Agent workload changes. An unavailable inventory
-operation must fail at the same boundary. Keep these checks in the implementation
-PR; this specification supplies no runtime qualification.
