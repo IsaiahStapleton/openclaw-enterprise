@@ -344,10 +344,10 @@
                 ]
               },
               {
-                "group": "Providers",
+                "group": "Backends (Experimental)",
                 "pages": [
                   {
-                    "page": "reference/providers",
+                    "page": "reference/backends",
                     "label": "Overview"
                   },
                   {

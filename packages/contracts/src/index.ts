@@ -52,36 +52,37 @@ export const DRIVER_CAPABILITIES = Object.freeze([
 
 export type DriverCapability = (typeof DRIVER_CAPABILITIES)[number];
 
-export type ProviderType = ProviderDefinition["type"];
+/** Experimental Installation backend composition; separate from native model providers. */
+export type BackendType = BackendDefinition["type"];
 
-export type ProviderRef = string | null;
+export type BackendRef = string | null;
 
-export interface ProviderConfiguration {
+export interface BackendConfiguration {
   readonly workspaceId: string;
   readonly apiKeyPath: string;
   readonly credentialTtlSeconds?: number;
 }
 
-export interface ChatGPTProviderDefinition {
+export interface ChatGPTBackendDefinition {
   readonly id: string;
   readonly type: "chatgpt";
-  readonly configuration: ProviderConfiguration;
+  readonly configuration: BackendConfiguration;
   readonly drivers: Readonly<Record<"service_account", string>>;
 }
 
-export interface GitHubRepositoryCredentialProviderDefinition {
+export interface GitHubRepositoryCredentialBackendDefinition {
   readonly id: string;
   readonly type: "github";
   readonly configuration: { readonly registryPath: string };
   readonly drivers: { readonly repo: string };
 }
 
-export type ProviderDefinition =
-  ChatGPTProviderDefinition | GitHubRepositoryCredentialProviderDefinition;
+export type BackendDefinition =
+  ChatGPTBackendDefinition | GitHubRepositoryCredentialBackendDefinition;
 
-export interface ProviderSummary {
+export interface BackendSummary {
   readonly id: string;
-  readonly type: ProviderType;
+  readonly type: BackendType;
 }
 
 export interface InstallationCapabilities {
@@ -89,7 +90,8 @@ export interface InstallationCapabilities {
   readonly pluginPolicies?: PluginPolicyCapabilities & { readonly driver: PluginDriverIdentity };
 }
 
-export interface Provider<Client = unknown> {
+/** Experimental authenticated client shared by related Installation Drivers. */
+export interface Backend<Client = unknown> {
   readonly id: string;
   readonly client: Client;
   readonly drivers: Readonly<Partial<Record<DriverCapability, string>>>;
@@ -241,8 +243,8 @@ export type HarnessAuthSnapshot =
       readonly method: "chatgpt_service_account";
       readonly serviceAccountId: string;
       readonly credential: ServiceAccountCredential & { readonly kind: "access_token" };
-      readonly providerBinding: {
-        readonly providerId: string;
+      readonly backendBinding: {
+        readonly backendId: string;
         readonly driverId: string;
         readonly workspaceId: string;
         readonly credentialIssued: boolean;
@@ -443,7 +445,7 @@ export interface Agent extends Scope {
   readonly desiredRuntimeState: AgentDesiredRuntimeState;
   readonly status: AgentStatus;
   readonly configurationId: string;
-  readonly providerId: ProviderRef;
+  readonly backendId: BackendRef;
   readonly harnessAuth: HarnessAuthBinding | null;
   readonly executionMode: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
@@ -467,7 +469,7 @@ export interface AgentRevision extends Scope {
   readonly namespaceId: string;
   readonly agentId: string;
   readonly revision: number;
-  readonly providerId: ProviderRef;
+  readonly backendId: BackendRef;
   readonly configurationId: string;
   readonly configurationKind: ConfigurationKind;
   readonly configurationGeneration: number;
