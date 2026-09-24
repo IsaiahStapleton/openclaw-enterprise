@@ -142,7 +142,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
     agent: {
       name: "{{ vars.name }}",
       executionMode: "{{ vars.mode }}",
-      plugins: { github: { enabled: "unfinished", approvalMode: "prompt" } },
+      plugins: { github: { enabled: "unfinished", toolDefaults: { approval: "prompt" } } },
       harnessAuth: null,
       repositoryAccess: { defaultProfile: "{{ vars.access }}", repositories: [] },
     },

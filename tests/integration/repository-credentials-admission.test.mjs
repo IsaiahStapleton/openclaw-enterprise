@@ -5,6 +5,7 @@ import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
+import { OCCPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
 import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
 import { validateGitHubRepositoryRegistry } from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
@@ -584,6 +585,50 @@ test("Agent repository access preserves inheritance intent and admits only resol
   assert.equal(cleared.status, 200);
   assert.deepEqual(cleared.data.repositoryAccess, empty);
   assert.equal(Object.hasOwn(cleared.data, "repositoryBindings"), false);
+});
+
+test("Agent updates apply repository access and validate plugin policy together", async (t) => {
+  const f = await fixture(t);
+  const driver = new OCCPluginDriver();
+  f.controller.registerDriver(driver);
+  f.controller.selectDriver("plugin", driver.id);
+  const initialAccess = {
+    defaultProfile: "git-read",
+    repositories: [{ repositoryRef: "project" }],
+  };
+  const initialPlugins = { "occ-plugin:diffs": { enabled: true } };
+  const agent = await f.createAgent({ repositoryAccess: initialAccess, plugins: initialPlugins });
+  const path = `${f.collection}/${agent.id}`;
+  const nextAccess = { ...initialAccess, defaultProfile: "git-full" };
+
+  // A policy the selected Driver cannot enforce rejects the whole update, including access.
+  const denied = await f.request("PATCH", path, {
+    configurationId: f.configuration.id,
+    repositoryAccess: nextAccess,
+    plugins: { "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "prompt" } } },
+  });
+  assert.equal(denied.status, 400, JSON.stringify(denied));
+  const unchanged = await f.request("GET", path);
+  assert.deepEqual(unchanged.data.repositoryAccess, initialAccess);
+  assert.deepEqual(unchanged.data.repositoryBindings, [
+    { repositoryRef: "project", profile: "git-read" },
+  ]);
+  assert.deepEqual(unchanged.data.plugins, initialPlugins);
+
+  const nextPlugins = {
+    "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "approve" } },
+  };
+  const updated = await f.request("PATCH", path, {
+    configurationId: f.configuration.id,
+    repositoryAccess: nextAccess,
+    plugins: nextPlugins,
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated));
+  assert.deepEqual(updated.data.repositoryAccess, nextAccess);
+  assert.deepEqual(updated.data.repositoryBindings, [
+    { repositoryRef: "project", profile: "git-full" },
+  ]);
+  assert.deepEqual(updated.data.plugins, nextPlugins);
 });
 
 test("Deploy freezes public repository selection without exposing provider grants", async (t) => {
