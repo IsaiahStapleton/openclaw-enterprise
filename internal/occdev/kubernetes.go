@@ -273,7 +273,7 @@ func openShellInstallationConfiguration(s *developmentState, workspaceResources 
 				"process": map[string]string{"runAsUser": "1000", "runAsGroup": "1000"},
 				"networkPolicies": []any{
 					map[string]any{"name": "source-control", "endpoints": []any{map[string]any{"host": "github.com", "ports": []int{443}, "tls": "skip"}}, "binaries": []any{map[string]string{"path": "/usr/bin/git"}}},
-					map[string]any{"name": "model-provider", "endpoints": []any{map[string]any{"host": "api.openai.com", "ports": []int{443}, "tls": "skip"}}, "binaries": []any{map[string]string{"path": "/app/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"}}},
+					map[string]any{"name": "model-provider", "endpoints": []any{map[string]any{"host": "api.openai.com", "ports": []int{443}, "tls": "skip"}}, "binaries": []any{map[string]string{"path": "/app/node_modules/openclaw/node_modules/.pnpm/@openai+codex@0.156.0-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex"}}},
 				},
 			},
 			"sandboxNamePrefix": "os",

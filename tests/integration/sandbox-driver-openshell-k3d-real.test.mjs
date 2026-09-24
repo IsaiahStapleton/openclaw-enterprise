@@ -119,7 +119,7 @@ const {
   createControllerIdentity,
   waitFor,
   validateOpenShellPrerequisites,
-  provisionAgentTransportCredentials,
+  readAgentTransportCredentials,
   waitForOpenShellGateway,
   installOpenShellGateway,
   startOpenShellGatewayPortForward,
@@ -1563,7 +1563,7 @@ async function prepareProductionInstallation(
     { loadInstallationConfiguration },
     { composeProduction },
     { createControllerWorker },
-    { kubernetesNamespaceName },
+    { kubernetesGatewayNamespaceName, kubernetesNamespaceName },
     { OpenShellSandboxDriver },
     { GrpcOpenShellGatewayClient },
     { KubeConfig, KubernetesObjectApi },
@@ -1656,6 +1656,7 @@ async function prepareProductionInstallation(
   let worker;
   let productionApp;
   let placement;
+  let gatewayPlacement;
   context.after(async () => {
     const cleanupFailures = [];
     const cleanupStep = async (description, operation) => {
@@ -1690,6 +1691,7 @@ async function prepareProductionInstallation(
           "delete",
           "namespace",
           placement,
+          ...(gatewayPlacement === undefined ? [] : [gatewayPlacement]),
           "--ignore-not-found=true",
           "--wait=true",
           "--timeout=120s",
@@ -1729,7 +1731,11 @@ async function prepareProductionInstallation(
     authBaseURL,
     drivers,
   });
-  const request = await createAuthenticatedControllerRequest(productionApp, adminCredentials);
+  const request = await createAuthenticatedControllerRequest(
+    productionApp,
+    adminCredentials,
+    authBaseURL,
+  );
   const events = [];
   workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
   worker = createControllerWorker({
@@ -1749,6 +1755,7 @@ async function prepareProductionInstallation(
   assert.equal(createdNamespace.status, 201, JSON.stringify(createdNamespace.error));
   const namespaceId = createdNamespace.data.id;
   placement = kubernetesNamespaceName(namespaceId);
+  gatewayPlacement = kubernetesGatewayNamespaceName(namespaceId);
 
   await waitFor(`worker namespace creation for ${placement}`, async () => {
     try {
@@ -1769,6 +1776,28 @@ async function prepareProductionInstallation(
     `--clusterrole=${controller.tenantRole}`,
     `--serviceaccount=${platformNamespace}:${controller.account}`,
   );
+  // Dedicated Gateways now live in a separate control-plane Namespace. Wait
+  // for Compute to claim it, then grant the same exact scoped controller role
+  // so reconciliation can prepare both sides of the supported topology.
+  await waitFor(`worker gateway namespace creation for ${gatewayPlacement}`, async () => {
+    try {
+      return await resource("namespace", gatewayPlacement);
+    } catch (error) {
+      if (/NotFound|not found/i.test(error.stderr ?? error.message)) {
+        return undefined;
+      }
+      throw error;
+    }
+  });
+  await kubectl(
+    "create",
+    "rolebinding",
+    "openclaw-production-controller",
+    "--namespace",
+    gatewayPlacement,
+    `--clusterrole=${controller.tenantRole}`,
+    `--serviceaccount=${platformNamespace}:${controller.account}`,
+  );
   await waitFor(`worker namespace readiness for ${placement}`, async () => {
     const observed = await request("GET", `/namespaces/${namespaceId}`);
     assert.equal(observed.status, 200, JSON.stringify(observed.error));
@@ -1776,12 +1805,14 @@ async function prepareProductionInstallation(
   });
   await waitForOpenShellGateway(placement);
   await assertGatewayBootstrapPolicies(placement);
+  // Agent-owned model credentials follow the control-plane Gateway namespace;
+  // the API identity must not receive Secret authority in the Harness namespace.
   await kubectl(
     "create",
     "rolebinding",
     "openshell-secret-api",
     "--namespace",
-    placement,
+    gatewayPlacement,
     `--clusterrole=${controller.apiSecretRole}`,
     `--serviceaccount=${platformNamespace}:${controller.apiIdentity.account}`,
   );
@@ -1805,7 +1836,16 @@ async function prepareProductionInstallation(
   });
   assert.equal(agent.status, 201, JSON.stringify(agent.error));
 
-  const transport = await provisionAgentTransportCredentials(directory, placement, agent.data.id);
+  // Generate the durable transport Secret through the supported Agent API so
+  // current Compute ownership metadata and control-plane placement are exercised.
+  const runtimeCredentials = await request(
+    "POST",
+    `/namespaces/${namespaceId}/agents/${agent.data.id}/runtime-credentials`,
+    {},
+  );
+  assert.equal(runtimeCredentials.status, 200, JSON.stringify(runtimeCredentials.error));
+  assert.equal(runtimeCredentials.data.transportConfigured, true);
+  const transport = await readAgentTransportCredentials(gatewayPlacement, agent.data.id);
   const {
     rows: [principal],
   } = await observerPool.query(
@@ -1867,7 +1907,7 @@ async function prepareProductionInstallation(
       ),
       false,
     );
-    for (const pod of await resources("pods", placement)) {
+    for (const pod of await resources("pods", gatewayPlacement)) {
       if (pod.metadata.labels?.["openclaw.dev/workload-role"] !== "gateway") {
         continue;
       }
@@ -1918,7 +1958,7 @@ async function prepareProductionInstallation(
   );
 
   const agentServiceName = openShellAgentName(agent.data.id);
-  const gatewayPods = (await resources("pods", placement)).filter(
+  const gatewayPods = (await resources("pods", gatewayPlacement)).filter(
     (pod) =>
       pod.metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
       pod.metadata.labels?.["openclaw.dev/agent"] === agent.data.id,
@@ -2211,21 +2251,29 @@ test(
         "OpenShell integration: checking create-time service exposure authentication boundary.\n",
       );
       assert.match(topology.harnessServiceUrl, /^https?:\/\//);
-      // OpenShell pre.7 consumes gateway Authorization and strips it before proxying. A 401 from
-      // the protected Codex endpoint proves the route reaches the real app server without weakening
-      // its bearer-token requirement or mistaking an arbitrary non-5xx gateway response for success.
-      await waitFor("OpenShell create-time Harness service exposure", async () => {
-        try {
-          return (await observeExposedCodexAuthenticationBoundary(
-            topology.harnessServiceUrl,
-            topology.appServerToken,
-          )) === 401
-            ? true
-            : undefined;
-        } catch {
-          return undefined;
-        }
-      });
+      // OpenShell pre.7 consumes gateway Authorization and strips it before proxying. An
+      // authentication rejection from the protected Codex endpoint proves the route reaches the
+      // real app server without weakening its bearer-token requirement or accepting a gateway 5xx.
+      let lastServiceObservation = "no response";
+      try {
+        await waitFor("OpenShell create-time Harness service exposure", async () => {
+          try {
+            const status = await observeExposedCodexAuthenticationBoundary(
+              topology.harnessServiceUrl,
+              topology.appServerToken,
+            );
+            lastServiceObservation = `HTTP ${status}`;
+            return [401, 403].includes(status) ? true : undefined;
+          } catch (error) {
+            lastServiceObservation = error instanceof Error ? error.message : String(error);
+            return undefined;
+          }
+        });
+      } catch (error) {
+        throw new Error(`${error.message} Last observation: ${lastServiceObservation}.`, {
+          cause: error,
+        });
+      }
       process.stderr.write(
         "OpenShell integration: create-time route reached protected Harness; starting authenticated real in-Sandbox model turn.\n",
       );

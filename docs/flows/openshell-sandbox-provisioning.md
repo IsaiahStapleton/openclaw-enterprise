@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: "2026-09-24"
-last_updated_session: "authoring-run/7e5d6b66-1359-4dfd-94be-9a156cc2bccc"
+last_updated_session: "authoring-run/6c779a54-4d36-4317-827c-84931cf01ace"
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -158,7 +158,10 @@ least one executable path and sends those binary identities with its endpoints.
 The regular Codex requirements contain Secret-backed environment entries.
 `environment` rejects the first such entry before any gateway mutation, so the
 candidate revision remains inactive. Requests without those entries continue to
-the gateway client.
+the gateway client. The development profile and real-runtime fixture bind model
+egress to the exact native Codex executable in the source-pinned runtime image's
+pnpm tree. A runtime dependency-layout change must update that identity; a stale
+path fails closed before Codex can complete its startup model probe.
 
 ### 4. Call the versioned gateway contract
 
@@ -226,7 +229,7 @@ Kubernetes Compute delete the Kubernetes namespace.
   operator Job stages the exact Secret values, plugin-runtime files, and
   projected workload token in revision-specific PVC subpaths. The provider-owned
   Sandbox exposes its app-server port at create time. The test observes the
-  protected app server's `401` response because pre.7 strips its bearer header,
+  protected app server's authentication rejection because pre.7 strips its bearer header,
   then runs the real model and tool checks from inside the Pod. This mode proves
   pre.7 containment, the Compute-created node route, Helm NetworkPolicy
   enforcement, exposed-route reachability, and lifecycle behavior. It does not
@@ -250,6 +253,7 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Changelog
 
+- 2026-09-24 11:08: Updated the source-pinned Codex binary identity after the runtime dependency layout changed, preserving fail-closed model egress and the real startup probe. (authoring-run/6c779a54-4d36-4317-827c-84931cf01ace - d89c609e6712dbc6501fcaed5cfefec8d311c9be)
 - 2026-09-24 09:43: Rebased the development profile onto current Kubernetes lifecycle behavior, documented current source-pinned runtime packaging, and made default controller and runtime images rebuild from the checkout. (authoring-run/7e5d6b66-1359-4dfd-94be-9a156cc2bccc - d74e1dcf79d4763c9137a8f9d8087f4ca4da6c47)
 - 2026-09-24 07:02: Consolidated reusable OpenShell startup and cleanup under the common development scripts. (authoring-run/3903cc3f-3260-4dfa-9706-5d622cb9e151 - d972d1ac64847c428ba334a7c12b6ddf4fefb317)
 - 2026-09-24 06:37: Documented the verified pre.7 model-turn path, the OpenShell supervisor-to-Envoy policy boundary, and the required workspace-node CLI flags. (authoring-run/c524c9aa-b229-42cf-9bc8-b47f7a92075e - d972d1ac64847c428ba334a7c12b6ddf4fefb317)
