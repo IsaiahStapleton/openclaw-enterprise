@@ -1055,8 +1055,8 @@ export const scenarios = {
         })),
         description:
           count <= 5
-            ? "A small catalog shows each approved repository and its reference with a direct Add action. Access inherits the Agent default."
-            : "Search and six initial repository cards keep a large catalog bounded. Browse all uses pages of twenty; selected repositories have their own access cards.",
+            ? "A small catalog shows compact Add controls for approved repositories and their references. Access inherits the Agent default."
+            : "Search and six initial repository choices keep a large catalog bounded. Browse all uses pages of twenty; selected repositories have their own access settings.",
       },
     ]),
   ),

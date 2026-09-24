@@ -1281,7 +1281,6 @@ summary:focus-visible {
   grid-template-columns: minmax(0, 1fr);
 }
 .repository-results-heading,
-.repository-result,
 .repository-selected-heading {
   display: flex;
   align-items: center;
@@ -1300,76 +1299,63 @@ summary:focus-visible {
 .repository-results-heading p {
   margin: 0;
 }
-.repository-result {
-  justify-content: flex-start;
-  padding: 12px;
-  margin: 8px 0;
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgba(60, 42, 24, 0.06);
-}
-.repository-result:focus-within {
-  border-color: var(--accent);
-}
-.repository-result:hover {
-  border-color: var(--input-border);
-  box-shadow: 0 4px 12px rgba(60, 42, 24, 0.09);
-}
-.repository-icon {
+.repository-results-list {
   display: grid;
-  place-items: center;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  color: var(--primary-hover);
-  background: var(--accent-subtle);
-  border-radius: var(--radius-sm);
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
-.repository-icon svg {
-  width: 21px;
-  height: 21px;
+.repository-result-row {
+  display: flex;
 }
-.repository-result .repository-add {
-  display: inline-flex;
+.repository-result {
+  display: grid;
+  grid-template-columns: 22px minmax(0, auto) auto auto;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
-  flex-shrink: 0;
-  margin-left: auto;
-  min-width: 86px;
+  gap: 4px 8px;
+  max-width: 100%;
   min-height: 44px;
-  color: var(--primary-hover);
-  border-color: var(--accent);
-  font-weight: 600;
+  padding: 7px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: 22px;
+  background: var(--surface);
+  text-align: left;
 }
-.repository-result .repository-add:not(:disabled):hover {
-  color: var(--on-primary);
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
+.repository-result:not(:disabled):hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
 }
 .repository-add-symbol {
-  font-size: 19px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--primary-hover);
+  background: var(--accent-subtle);
+  font-size: 17px;
   line-height: 1;
 }
-.repository-result.is-added {
-  background: var(--surface-muted);
+.repository-add-label {
+  color: var(--primary-hover);
+  font-weight: 600;
 }
-.repository-result.is-added .repository-add:disabled {
-  color: var(--success);
-  border-color: transparent;
+.repository-result.is-added:disabled {
   background: var(--success-subtle);
+  border-color: var(--success);
   opacity: 1;
   cursor: default;
+}
+.repository-result.is-added .repository-add-symbol,
+.repository-result.is-added .repository-add-label {
+  color: var(--success);
 }
 .repository-identity {
   display: grid;
   gap: 4px;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-.repository-result .repository-identity {
-  flex: 1;
 }
 .repository-identity strong {
   color: var(--text-strong);
@@ -1378,6 +1364,22 @@ summary:focus-visible {
   color: var(--warning);
   font-size: 12px;
   font-weight: 600;
+}
+.repository-result-meta {
+  grid-column: 4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-width: 0;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.repository-result-meta .hint {
+  margin: 0;
+  font-size: inherit;
 }
 .repository-identity .hint,
 .repository-identity .error {
@@ -1517,22 +1519,13 @@ summary:focus-visible {
 }
 @container (max-width: 400px) {
   .repository-result {
-    display: grid;
-    grid-template-columns: 32px minmax(0, 1fr);
-    align-items: start;
-    gap: 8px;
+    grid-template-columns: 22px minmax(0, auto) auto;
+    border-radius: var(--radius);
   }
-  .repository-icon {
-    flex-basis: 32px;
-    width: 32px;
-    height: 32px;
-  }
-  .repository-result .repository-add {
-    grid-column: 2;
-    justify-self: end;
-    margin: 0;
-    min-width: 70px;
-    padding: 8px;
+  .repository-result-meta {
+    grid-column: 2 / -1;
+    padding: 0;
+    border: 0;
   }
   .repository-card-heading {
     flex-wrap: wrap;

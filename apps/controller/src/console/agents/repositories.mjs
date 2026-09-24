@@ -10,24 +10,6 @@ const MAX_SELECTED = 16;
 const PAGE_SIZE = 20;
 const RECENT_LIMIT = 32;
 
-function repositoryIcon() {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.6");
-  svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute(
-    "d",
-    "M5 4.5h12.5A1.5 1.5 0 0 1 19 6v13H7a2 2 0 0 1-2-2V4.5Zm0 12.5a2 2 0 0 1 2-2h12M9 8h6",
-  );
-  path.setAttribute("stroke-linecap", "round");
-  path.setAttribute("stroke-linejoin", "round");
-  svg.append(path);
-  return element("span", { className: "repository-icon", "aria-hidden": "true" }, svg);
-}
-
 function recentRepositories(key) {
   if (!key) {
     return [];
@@ -432,20 +414,47 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         ),
       ),
     );
-    for (const entry of visible) {
+    const list = element("ul", { className: "repository-results-list" });
+    for (const [index, entry] of visible.entries()) {
       const selected = state.selected.has(entry.repositoryRef);
-      const addButton = button(selected ? "Added" : "Add", () => add(entry.repositoryRef), {
-        className: "repository-add",
+      const showReference = entry.displayName !== entry.repositoryRef;
+      const readOnly = entry.allowedProfiles.every((profile) => profile === "git-read");
+      const metadataId = `repository-result-info-${index}`;
+      const addButton = button("", () => add(entry.repositoryRef), {
+        className: selected ? "repository-result is-added" : "repository-result",
         "aria-label": `${selected ? "Added" : "Add"} ${entry.displayName}`,
+        ...(showReference || readOnly ? { "aria-describedby": metadataId } : {}),
         "data-add": entry.repositoryRef,
         disabled: !editable() || selected || state.selected.size >= MAX_SELECTED,
       });
-      addButton.prepend(
+      addButton.append(
         element(
           "span",
           { className: "repository-add-symbol", "aria-hidden": "true" },
           selected ? "✓" : "+",
         ),
+        element(
+          "span",
+          { className: "repository-identity" },
+          element("strong", {}, entry.displayName),
+        ),
+        element(
+          "span",
+          { className: "repository-add-label", "aria-hidden": "true" },
+          selected ? "Added" : "Add",
+        ),
+        showReference || readOnly
+          ? element(
+              "span",
+              { id: metadataId, className: "repository-result-meta" },
+              showReference
+                ? element("span", { className: "hint" }, `Reference: ${entry.repositoryRef}`)
+                : null,
+              readOnly
+                ? element("span", { className: "repository-approval" }, "Read-only approved")
+                : null,
+            )
+          : null,
       );
       addButton.addEventListener("keydown", (event) => {
         if (!["ArrowUp", "ArrowDown"].includes(event.key)) {
@@ -460,25 +469,10 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           buttons[Math.min(next, buttons.length - 1)]?.focus();
         }
       });
-      results.append(
-        element(
-          "div",
-          { className: selected ? "repository-result is-added" : "repository-result" },
-          repositoryIcon(),
-          element(
-            "div",
-            { className: "repository-identity" },
-            element("strong", {}, entry.displayName),
-            entry.displayName === entry.repositoryRef
-              ? null
-              : element("span", { className: "hint" }, `Reference: ${entry.repositoryRef}`),
-            entry.allowedProfiles.every((p) => p === "git-read")
-              ? element("span", { className: "repository-approval" }, "Read-only approved")
-              : null,
-          ),
-          addButton,
-        ),
-      );
+      list.append(element("li", { className: "repository-result-row" }, addButton));
+    }
+    if (visible.length) {
+      results.append(list);
     }
     if (!visible.length) {
       results.append(

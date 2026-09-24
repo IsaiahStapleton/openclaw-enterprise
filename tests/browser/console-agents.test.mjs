@@ -2448,7 +2448,7 @@ for (const count of [1, 5, 25, 140]) {
   });
 }
 
-test("Repository cards distinguish names, references, and restricted access", async (t) => {
+test("Repository choices distinguish names, references, and restricted access", async (t) => {
   const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
     {
       repositoryRef: "application",
@@ -2480,13 +2480,20 @@ test("Repository cards distinguish names, references, and restricted access", as
   );
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  const application = page.locator(".repository-result").filter({ hasText: "example/application" });
-  const handbook = page.locator(".repository-result").filter({ hasText: "example/handbook" });
+  const application = page
+    .locator(".repository-result-row")
+    .filter({ hasText: "example/application" });
+  const handbook = page.locator(".repository-result-row").filter({ hasText: "example/handbook" });
   await application.getByRole("button", { name: "Add example/application" }).waitFor();
   assert.equal(await application.getByText(/Reference:/).count(), 0);
+  await application.getByText("example/application", { exact: true }).click();
+  await page.getByRole("button", { name: "Access for example/application" }).waitFor();
   await handbook.getByText("Reference: handbook", { exact: true }).waitFor();
   await handbook.getByText("Read-only approved", { exact: true }).waitFor();
-  await handbook.getByRole("button", { name: "Add example/handbook" }).click();
+  const addHandbook = handbook.getByRole("button", { name: "Add example/handbook" });
+  const descriptionId = await addHandbook.getAttribute("aria-describedby");
+  assert.match(await page.locator(`[id="${descriptionId}"]`).innerText(), /Read-only approved/);
+  await addHandbook.click();
   await page.getByText("Choose approved access", { exact: true }).waitFor();
   assert.equal(
     await page
