@@ -513,6 +513,17 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await page.getByLabel("Harness", { exact: true }).selectOption("codex");
   await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
+  // Invalid manual bindings must not be replaced by a channel editor's empty snapshot.
+  await page.getByLabel("Secret bindings JSON").fill("[]");
+  await page
+    .getByText("Enter a valid Secret bindings JSON object before configuring channels.")
+    .waitFor();
+  assert.equal(await page.getByRole("button", { name: "Configure Slack" }).count(), 0);
+  // Applying Slack must preserve independent bindings authored in Advanced settings.
+  const manualBinding = { source: replacementSlackAppSecret.ref, delivery: { type: "env" } };
+  await page
+    .getByLabel("Secret bindings JSON")
+    .fill(JSON.stringify({ CUSTOM_CONTEXT: manualBinding }));
   await page.getByRole("button", { name: "Configure Slack" }).click();
   const createChannelDialog = page.getByRole("dialog", { name: /^(Configure|Edit) Slack$/ });
   await createChannelDialog
@@ -582,6 +593,7 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   const stagedSecretBindings = JSON.parse(
     await page.getByLabel("Secret bindings JSON").inputValue(),
   );
+  assert.deepEqual(stagedSecretBindings.CUSTOM_CONTEXT, manualBinding);
   assert.deepEqual(stagedSecretBindings.SLACK_APP_TOKEN, {
     source: replacementSlackAppSecret.ref,
     delivery: { type: "env" },
