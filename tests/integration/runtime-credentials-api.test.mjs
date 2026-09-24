@@ -7,6 +7,7 @@ import test from "node:test";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
+import { ResourceConflictError, ScopeViolationError } from "../../packages/occ/src/index.ts";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
@@ -95,6 +96,12 @@ function createRuntimeCredentialComputeDriver(options = {}) {
         agentId: binding.agent.id,
         revisionId: binding.revision.id,
       });
+      if (options.diagnosticsError !== undefined) {
+        throw options.diagnosticsError;
+      }
+      if (Object.hasOwn(options, "diagnosticsResult")) {
+        return options.diagnosticsResult;
+      }
       return {
         revisionId: binding.revision.id,
         observedAt: diagnosticObservedAt,
@@ -611,4 +618,57 @@ test("runtime credential driver and audit failures stay sanitized and recoverabl
   assert.deepEqual(auditRecovered.data, {
     transportConfigured: true,
   });
+});
+
+// Typed Driver exceptions are still untrusted at the API disclosure boundary.
+for (const DriverError of [ResourceConflictError, ScopeViolationError]) {
+  test(`runtime operations sanitize ${DriverError.name} from Drivers`, async (t) => {
+    const marker = `private-driver-detail-${randomUUID()}`;
+    const error = new DriverError(marker);
+    const fixture = await createFixture(t, {
+      computeDriver: createRuntimeCredentialComputeDriver({
+        statusError: error,
+        provisionError: error,
+        diagnosticsError: error,
+      }),
+    });
+    const { namespace, agent } = await fixture.bootstrapAgent();
+    const agentPath = `/namespaces/${namespace.id}/agents/${agent.id}`;
+    for (const method of ["GET", "POST"]) {
+      const result = await fixture.request(
+        method,
+        `${agentPath}/runtime-credentials`,
+        method === "POST" ? { body: {} } : undefined,
+      );
+      assert.equal(result.status, 503);
+      assert.equal(result.body.error.code, "DEPENDENCY_UNAVAILABLE");
+      assert.equal(JSON.stringify(result.body).includes(marker), false);
+    }
+    const revision = await fixture.request("POST", `${agentPath}/deploy`);
+    assert.equal(revision.status, 202);
+    const result = await fixture.request(
+      "POST",
+      `${agentPath}/deployments/${revision.data.id}/diagnostics`,
+    );
+    assert.equal(result.status, 503);
+    assert.equal(result.body.error.code, "DEPENDENCY_UNAVAILABLE");
+    assert.equal(JSON.stringify(result.body).includes(marker), false);
+    assert.equal(JSON.stringify(fixture.auditSink.events).includes(marker), false);
+  });
+}
+
+test("deployment diagnostics reject a null Driver response as unavailable", async (t) => {
+  const fixture = await createFixture(t, {
+    computeDriver: createRuntimeCredentialComputeDriver({ diagnosticsResult: null }),
+  });
+  const { namespace, agent } = await fixture.bootstrapAgent();
+  const agentPath = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  const revision = await fixture.request("POST", `${agentPath}/deploy`);
+  assert.equal(revision.status, 202);
+  const result = await fixture.request(
+    "POST",
+    `${agentPath}/deployments/${revision.data.id}/diagnostics`,
+  );
+  assert.equal(result.status, 503);
+  assert.equal(result.body.error.code, "DEPENDENCY_UNAVAILABLE");
 });

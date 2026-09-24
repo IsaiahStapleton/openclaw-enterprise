@@ -2629,6 +2629,7 @@ test("Kubernetes runtime diagnostics read exact private Pod status without nativ
     }),
   );
   const namespaceName = kubernetesNamespaceName(tenant.id);
+  const gatewayNamespaceName = kubernetesGatewayNamespaceName(tenant.id);
   const agent = {
     id: "agent-runtime-diagnostics",
     namespaceId: tenant.id,
@@ -2650,7 +2651,7 @@ test("Kubernetes runtime diagnostics read exact private Pod status without nativ
     kind: "Pod",
     metadata: {
       name: `${role}-runtime-diagnostics-pod`,
-      namespace: namespaceName,
+      namespace: role === "gateway" ? gatewayNamespaceName : namespaceName,
       uid: `${role}-runtime-diagnostics-uid`,
       labels: {
         "openclaw.dev/agent": revision.agentId,
@@ -2686,18 +2687,18 @@ test("Kubernetes runtime diagnostics read exact private Pod status without nativ
         };
       },
       async listNamespacedPod({ namespace, labelSelector }) {
-        assert.equal(namespace, namespaceName);
         const role = labelSelector.includes("openclaw.dev/workload-role=agent")
           ? "agent"
           : "gateway";
+        assert.equal(namespace, role === "gateway" ? gatewayNamespaceName : namespaceName);
         podListReads.push(role);
         return { apiVersion: "v1", kind: "PodList", items: [structuredClone(pods[role])] };
       },
       async connectGetNamespacedPodProxyWithPath({ name, namespace, path }) {
         proxyReads.push({ name, namespace, path });
-        assert.equal(namespace, namespaceName);
         assert.equal(path, "openclaw/runtime/diagnostics");
         const role = name.startsWith("agent-") ? "agent" : "gateway";
+        assert.equal(namespace, role === "gateway" ? gatewayNamespaceName : namespaceName);
         assert.equal(name, `${pods[role].metadata.name}:18791`);
         return {
           revisionId: revision.id,
@@ -2741,7 +2742,7 @@ test("Kubernetes runtime diagnostics read exact private Pod status without nativ
     },
     {
       name: "gateway-runtime-diagnostics-pod:18791",
-      namespace: namespaceName,
+      namespace: gatewayNamespaceName,
       path: "openclaw/runtime/diagnostics",
     },
   ]);

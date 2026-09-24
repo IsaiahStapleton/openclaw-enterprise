@@ -244,7 +244,12 @@ revision selections, uninstall account-wide plugins, or promise rollback.
 Kubernetes Compute implements the optional deployment diagnostics contract. OCC
 authorizes the exact Agent and revision, then the Driver reads the owned
 runtime Pods through the Kubernetes apiserver Pod proxy. The private runtime
-endpoint returns bounded generic checks for the requested revision. Missing
+endpoint returns bounded generic checks for the requested revision. The API needs
+Pod `get`/`list` and `pods/proxy` `get` permission in each runtime namespace.
+Dedicated Gateways are read in their managed Gateway namespace, while Harnesses
+are read in the tenant namespace. The chart adds these read permissions to the
+unbound tenant API role; operators retain control of its namespace-local bindings.
+Missing
 Pods, unavailable private endpoints, or unsupported containers report unknown
 diagnostic checks instead of mutating deployment status.
 

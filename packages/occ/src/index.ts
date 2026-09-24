@@ -4616,7 +4616,9 @@ export class OpenClawController {
     revisionId: string,
   ): Readonly<AgentDeploymentDiagnostics> {
     if (
-      diagnostics === undefined ||
+      typeof diagnostics !== "object" ||
+      diagnostics === null ||
+      Array.isArray(diagnostics) ||
       diagnostics.revisionId !== revisionId ||
       !isNonEmptyString(diagnostics.observedAt) ||
       Number.isNaN(Date.parse(diagnostics.observedAt)) ||
@@ -4697,10 +4699,7 @@ export class OpenClawController {
   private async runtimeCredentialOperation<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
-    } catch (error) {
-      if (error instanceof ResourceConflictError || error instanceof ScopeViolationError) {
-        throw error;
-      }
+    } catch {
       throw new DependencyUnavailableError(
         "The Agent runtime credential operation failed or its outcome is unknown.",
       );

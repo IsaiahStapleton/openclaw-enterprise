@@ -1,6 +1,6 @@
 ---
 created: 2026-09-20
-updated: 2026-09-21
+updated: 2026-09-24
 last_updated_session: authoring-run/3183720c-678d-44cd-8c0c-c090ff60b907
 ---
 
@@ -50,7 +50,9 @@ Source: `packages/contracts/src/index.ts:ComputeDriver.diagnoseAgentDeployment`
 and
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.diagnoseAgentDeployment`.
 OCC passes the resolved Namespace, Agent, and revision to Compute. The Kubernetes
-Driver verifies Namespace and Pod identity before reading the runtime-local
+Driver resolves each container in its current placement: dedicated Gateways use
+the managed Gateway namespace and Harnesses use the tenant namespace. It verifies
+Namespace and Pod identity before reading the runtime-local
 diagnostics endpoint. Slack diagnostics use a no-send status probe for
 configuration, authentication, and connectivity, and must not return secrets,
 raw provider output, logs, or backend-specific detail.
@@ -59,8 +61,9 @@ raw provider output, logs, or backend-specific detail.
 
 Source: `packages/occ/src/index.ts:OpenClawController.deploymentDiagnostics`
 and `packages/occ/src/index.ts:OpenClawController.validRuntimeDiagnosticCheck`.
-OCC accepts only the requested revision, a valid observation time, and bounded
-checks. Missing support, collection failure, mismatched evidence, or invalid
+OCC accepts only an object for the requested revision, a valid observation time,
+and bounded checks. Driver exceptions, including typed scope and conflict errors,
+are sanitized before they reach the API; their messages can contain private data. Missing support, collection failure, mismatched evidence, or invalid
 Driver output becomes `503 DEPENDENCY_UNAVAILABLE`. The response is current
 observation only; it does not update deployment work, startup failure evidence,
 Agent active revision, plugin warnings, or audit lifecycle results.

@@ -92,18 +92,14 @@ For a current runtime observation, send a bodyless diagnostics request:
 POST /namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/diagnostics
 ```
 
-The caller needs exact Agent `read` and `operate`, plus read access to the exact
-AgentRevision. The revision must belong to the Agent in the requested Namespace.
-The response contains the `revisionId`, an `observedAt` timestamp, and up to 32
-generic `checks`. Each check includes `component`, `check`, `state`, nullable
-`checkedAt`, and optional safe `code`. States are `succeeded`, `failed`, or `unknown`; the selected Compute implementation owns
-their meaning and collection method. Unsupported Drivers or invalid Driver
-evidence return `503 DEPENDENCY_UNAVAILABLE`.
+Requires exact Agent `read` and `operate`, and AgentRevision `read` in the
+requested Namespace. Returns `revisionId`, `observedAt`, and up to 32 `checks`
+with `component`, `check`, `state`, nullable `checkedAt`, and optional safe `code`.
+States are `succeeded`, `failed`, or `unknown`. Compute owns collection and
+meaning; unsupported Drivers or invalid evidence return `503 DEPENDENCY_UNAVAILABLE`.
 
-Diagnostics are on-demand runtime checks. They do not rewrite the deployment
-status row, repeat the startup model probe, or prove message delivery. Use
-deployment GET for persisted startup failures and diagnostics for a fresh
-Compute-owned observation.
+Diagnostics leave persisted deployment status unchanged and do not repeat the
+startup model probe or prove message delivery.
 
 ## Provider association
 

@@ -1785,7 +1785,11 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     controller.account,
     platformNamespace,
   );
-  for (const role of [controller.apiSecretRole, controller.apiConfigurationRole]) {
+  for (const role of [
+    controller.apiSecretRole,
+    controller.apiConfigurationRole,
+    controller.apiComputeRole,
+  ]) {
     await kubectl(
       "create",
       "rolebinding",

@@ -270,10 +270,8 @@ To follow the deployment worker, use the [deployment status API](../agents.md#de
 The revision view displays the stored deployment failure and, when available,
 its startup component, check, code, and observation timestamp. Missing evidence
 leaves the cause unspecified; it does not mean the runtime is healthy.
-Select **Run current diagnostics** on a revision view to request fresh
-Compute-owned runtime checks for that exact revision. These checks do not update
-the stored deployment status or send a model turn. To prove the Agent answers,
-give your operator the Namespace ID, the Agent ID shown on its detail page, and
-the full revision ID in the `revision` query parameter of the page URL after
-deployment. Ask them to [verify that exact workload and get a real model response](../../guides/deploy/production-agents.md#verify-production-workloads).
+Select **Run current diagnostics** for fresh Compute-owned checks of that revision,
+without changing stored status or sending a model turn. For response proof, give
+your operator the Namespace ID, Agent ID, and revision ID from the page URL.
+Ask them to [verify that workload and get a real model response](../../guides/deploy/production-agents.md#verify-production-workloads).
 Do not create another Agent to verify this one.

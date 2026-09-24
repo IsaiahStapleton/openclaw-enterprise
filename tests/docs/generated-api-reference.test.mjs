@@ -27,7 +27,7 @@ test("generated API reference stays on the approved single page", async () => {
   );
 
   const page = outputs[0].content;
-  assert.match(page, /\| \[Agents\]\(#agents\) \| 15 operations \|/);
+  assert.match(page, /\| \[Agents\]\(#agents\) \| 17 operations \|/);
   assert.match(page, /\| \[Agent deployments\]\(#agent-deployments\) \| 2 operations \|/);
   assert.match(page, /\| \[Providers\]\(#providers\) \| 1 operation \|/);
   assert.match(
