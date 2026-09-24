@@ -22,6 +22,7 @@ const receipt = {
   stage: "hosted-guard",
   sdkRemoved: false,
   removedDirectories: [],
+  checkedDirectories: [],
 };
 
 // Bound the command and its descendants; never forward raw command output.
@@ -146,14 +147,21 @@ async function main() {
       }
       throw error;
     }
-    assert(info.isDirectory() && !info.isSymbolicLink() && info.uid === 0);
-    assert((await realpath(root)) === root && info.dev === rootDevice);
-    assert(
-      !mounts.split("\n").some((line) => {
+    const check = {
+      path: root,
+      directory: info.isDirectory(),
+      symbolicLink: info.isSymbolicLink(),
+      ownerUid: info.uid,
+      canonical: (await realpath(root)) === root,
+      rootFilesystem: info.dev === rootDevice,
+      mount: mounts.split("\n").some((line) => {
         const path = line.split(" ")[4];
         return path === root || path?.startsWith(`${root}/`);
       }),
-    );
+    };
+    receipt.checkedDirectories.push(check);
+    assert(check.directory && !check.symbolicLink && check.ownerUid === 0);
+    assert(check.canonical && check.rootFilesystem && !check.mount);
     presentRoots.push(root);
   }
   receipt.stage = "sdk-removal";
