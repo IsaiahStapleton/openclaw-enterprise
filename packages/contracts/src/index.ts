@@ -28,6 +28,7 @@ export type {
   OpenRepositorySessionResult,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
+  RepositoryOption,
   RepoDriver,
   RepositoryCredentialGrantIdentity,
   RepositoryCredentialMaterialRef,
@@ -218,6 +219,7 @@ export interface SecretEnvironmentProjection {
 
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
+  | { readonly method: "codex_pat"; readonly source: SecretReference }
   | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
   | { readonly method: "runtime" };
 
@@ -226,6 +228,11 @@ export type HarnessAuthSnapshot =
   | { readonly method: "runtime" }
   | {
       readonly method: "api_key";
+      readonly source: SecretReference;
+      readonly secretDriverId: string;
+    }
+  | {
+      readonly method: "codex_pat";
       readonly source: SecretReference;
       readonly secretDriverId: string;
     }
@@ -243,7 +250,7 @@ export type HarnessAuthSnapshot =
 
 /** Authoritative delivery references, resolved again at dispatch; never secret values. */
 export type ResolvedHarnessAuth =
-  | (Extract<HarnessAuthSnapshot, { method: "api_key" }> & {
+  | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" }> & {
       readonly backendRef: SecretBackendRef;
     })
   | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" | "runtime" }>;
@@ -873,6 +880,12 @@ export interface ComputeDriver extends Driver {
   readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
   readonly activationOrder?: "beforeCommit" | "afterCommit";
   readonly maintenanceIntervalMs?: number;
+  /** Read-only native model discovery; supplied credentials must never be persisted. */
+  discoverHarnessModels?(input: {
+    readonly authMethod: "api_key" | "codex_pat";
+    readonly provider: string;
+    readonly apiKey: string;
+  }): Promise<readonly { readonly id: string; readonly name: string }[]>;
   validateAgentProvisioning?(input: ComputeAgentProvisioningInput): void;
   validateHarnessAuth?(
     harness: RevisionHarnessDescriptor,
@@ -880,6 +893,8 @@ export interface ComputeDriver extends Driver {
     configuration: OpenClawConfigurationDocument,
     secretBindings?: SecretBindings,
   ): void;
+  /** Discovery availability; deployment must still validate its exact Harness. */
+  validateRepositoryCredentialSupport?(sandboxDriverId?: string): void;
   validateRepositoryCredentials?(
     harness: RevisionHarnessDescriptor,
     sandboxDriverId?: string,

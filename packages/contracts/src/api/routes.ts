@@ -11,6 +11,7 @@ import {
   CreateIAMAccessBindingBody,
   CreateIAMRoleBody,
   CreateAgentBody,
+  DiscoverAgentModelsBody,
   CreateConfigurationBody,
   CreateNamespaceBody,
   ProvisionAgentBody,
@@ -35,6 +36,7 @@ import {
 } from "./common.ts";
 import {
   AgentListResponse,
+  AgentModelListResponse,
   PresetResponse,
   PresetListResponse,
   AgentDeploymentStatusResponse,
@@ -53,6 +55,7 @@ import {
   NamespaceListResponse,
   NamespaceResponse,
   ProviderListResponse,
+  RepositoryOptionListResponse,
   SecretListResponse,
   ServiceAccountListResponse,
   ServiceAccountResponse,
@@ -665,6 +668,28 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "discoverAgentModels",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/models",
+    action: "openclaw.agents.models.discover",
+    iamAction: "create",
+    resourceKind: "agent",
+    authorizationTarget: "namespace_collection",
+    summary: "List provider models for Agent creation without storing the supplied credential",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: NamespaceParams,
+      body: DiscoverAgentModelsBody,
+      response: {
+        200: AgentModelListResponse,
+        429: ErrorResponseRef,
+        501: ErrorResponseRef,
+        ...createErrors,
+      },
+    },
+  },
+  {
     operationId: "provisionAgent",
     method: "POST",
     path: "/namespaces/:namespaceId/agents/provision",
@@ -679,6 +704,30 @@ export const occApiRoutes = [
       params: NamespaceParams,
       body: ProvisionAgentBody,
       response: { 202: AgentProvisioningResponse, ...createErrors },
+    },
+  },
+  {
+    operationId: "listRepositoryOptions",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/repository-options",
+    action: "openclaw.agents.repository_options.list",
+    iamAction: "create",
+    resourceKind: "agent",
+    authorizationTarget: "namespace_collection",
+    summary: "List approved repository choices for Agent creation in one Namespace",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: NamespaceParams,
+      response: {
+        200: RepositoryOptionListResponse,
+        ...readErrors,
+        409: ErrorResponseRef,
+        503: Type.Ref("ErrorResponse", {
+          description:
+            "Check `error.code`: `REPOSITORY_OPTIONS_UNAVAILABLE` means optional repository discovery is unavailable after Namespace lifecycle and Agent create authorization checks. Creation without repository bindings remains available subject to fresh authorization. `DEPENDENCY_UNAVAILABLE` includes IAM and other required dependency failures and does not permit proceeding. Successful discovery returns a data array, including an empty array when no repositories are approved.",
+        }),
+      },
     },
   },
   {

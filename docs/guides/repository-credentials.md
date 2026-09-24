@@ -1,12 +1,10 @@
 # Give an Agent repository access
 
-Create and deploy an Agent with approved repository references, then use ordinary
-`git` and `gh` commands. The runtime receives gateway session material; GitHub
-credentials remain in the service. Review the
-[profiles](../reference/repository-credentials.md#profiles) before selecting `git-full`.
-
-For a team GitHub App, start with the [team runbook](repository-credentials/team-runbook.md)
-for App registration, copyable configuration, a first draft PR, and cleanup.
+Select approved repositories, deploy an Agent, then use ordinary `git` and `gh`.
+GitHub credentials stay in the service. Choose an
+[access level](../reference/repository-credentials/access-levels.md) for the task;
+the [team runbook](repository-credentials/team-runbook.md) covers App registration,
+configuration, a first draft PR and cleanup.
 
 Keep the gateway private to approved clients, with enforced NetworkPolicies and
 HTTPS on port 443. A `.svc` hostname or ClusterIP alone does not establish isolation;
@@ -14,8 +12,8 @@ check forwarding, Ingress, load balancers and effective policy enforcement.
 
 ## Prepare the platform installation
 
-Use Kubernetes Compute-owned **embedded OpenClaw**, `api_key` Harness
-authentication and no Sandbox Driver. Enable the optional credential sidecar
+Use Kubernetes Compute-owned **Dedicated Codex** or **Embedded OpenClaw**,
+compatible Harness authentication and no Sandbox Driver. Enable the optional credential sidecar
 through the [repository installation procedure](repository-credentials/installation.md).
 It requires one immutable registry ConfigMap shared by API, worker and service,
 a separate public CA Secret, and service-only configuration, App-key and TLS
@@ -42,6 +40,15 @@ Follow the production guides to publish or import it, select its digest and
 configure model authentication.
 
 ## Create and deploy an Agent
+
+In **Agents** > **Create Agent**, choose up to 16 repositories and one common level.
+Use **Dedicated** for Slack on the same Agent; follow the
+[same-Agent Console sequence](../reference/console/create-and-deploy.md#use-repositories-and-slack-on-the-same-agent)
+for channels, credentials and deployment. Repository profiles and model
+authentication are separate. Unverified discovery blocks writes; authorized
+optional outages permit ordinary drafts. Creation and deployment recheck policy.
+
+The API sequence below shows the Embedded variant.
 
 Complete [Namespace and embedded Agent preparation](deploy/production-agents.md)
 to prepare the embedded `configuration.json` and Namespace-owned model Secret
@@ -87,7 +94,7 @@ body = {
             "id": os.environ["HARNESS_SECRET_ID"],
         },
     },
-    "repositoryBindings": [{"repositoryRef": "application", "profile": "git-full"}],
+    "repositoryBindings": [{"repositoryRef": "application", "profile": "git-write"}],
 }
 with open("agent.json", "w") as output:
     json.dump(body, output)
@@ -97,7 +104,9 @@ AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(j
 export AGENT_ID
 ```
 
-Select `git-read` for read-only work, or omit `profile` for default `git-write`.
+Select Reader (`git-read`) for read-only work, Contributor (`git-write`) for
+pushes and PRs, or Collaborator (`git-full`) for issue management too. Send the
+profile explicitly; omitting it selects Contributor.
 Add distinct approved references to the array for more repositories. API
 creation uses `POST /namespaces/$NAMESPACE_ID/agents`; the CLI returns the
 unwrapped Agent. Bindings confer no model access: before deploying, complete the
@@ -135,9 +144,8 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   'Clone https://github.com/example/project.git into your workspace using the default destination. Create a new branch, configure repository-local Git author name Repository Agent and email agent@example.invalid, add a short repository-access-check.md, commit it, push the new branch, and open a draft PR with gh pr create using an explicit head and body text. Report the commit and PR URL.'
 ```
 
-The model-executing gateway keeps its model credential; the TUI client unsets
-its copy. The runtime workspace is `/home/node/.openclaw/workspace`. No operator
-session-opening or pre-clone step is required. The Agent can use:
+The gateway retains its model credential; the TUI client unsets its copy.
+The Agent works in `/home/node/.openclaw/workspace` without manual session-opening:
 
 ```sh
 git clone https://github.com/example/project.git
@@ -157,14 +165,19 @@ selects an admitted binding from the effective HTTPS host and repository path.
 `OCE_REPOSITORY_REF=application` selects among bindings for the same repository;
 it does not override the network destination. Concurrent commands can use
 different bindings without changing shared selection state. Local Git settings,
-identity, hooks and aliases keep their normal behavior. See
+identity, hooks and aliases keep their normal behavior. To prevent accidental
+branch pushes, configure the optional
+[push-ref guardrail](../reference/repository-credentials/push-ref-guardrail.md).
+See
 [native routing limits](../reference/repository-credentials.md#client-routing-and-limits)
 for configuration overrides and credential retention.
 
 The `gh` router selects from an explicit target or effective Git remotes. Ambiguous
 implicit targets require an explicit repository. `gh api` accepts supported relative
 paths such as `repos/example/project/pulls/1`; absolute API URLs are refused.
-API operations require `git-full`.
+Reader supports selected API reads. Contributor adds PR writes; Collaborator
+adds ordinary issue writes. Both writable levels can permit GraphQL merges,
+subject to GitHub rules.
 
 Inspect the actual remote commit and PR to confirm completion. If a push or
 mutation has an uncertain response, inspect remote state before repeating it.
@@ -179,8 +192,8 @@ also requires a new authorized deployment.
 
 ## Use the standalone service
 
-The remaining steps are for independently launched clients. They do not create
-an OCC Agent or connect a client container to the platform lifecycle.
+These steps launch independent clients without creating an OCC Agent or joining
+the platform lifecycle.
 
 ## Build and validate
 
@@ -192,11 +205,9 @@ pnpm credentials:build
 pnpm credentials:check-config /absolute/path/service.json
 ```
 
-The check validates protected configuration, RSA and TLS inputs without starting
-listeners or calling GitHub. The builder emits separate service and client
-closures under `.build/repository-credentials`, using Node built-ins without
-runtime `node_modules`. The client includes the native Git preparer, GitHub CLI
-router and standalone session launcher.
+The check validates protected configuration, RSA and TLS inputs without listeners
+or GitHub calls. The builder emits separate service and client closures under
+`.build/repository-credentials`, using Node built-ins without runtime `node_modules`.
 
 For `invalid-configuration`, inspect the file and every directory in its absolute
 path. Use root or service-user ownership, private configuration/key files, and
@@ -228,8 +239,8 @@ outside the Agent's filesystem mounts.
 
 Keep duration within `maximumDurationSeconds` and select an `allowedProfiles`
 entry. Omitting `--profile` uses the configured default, `git-write` here.
-Use `git-read` when push is unnecessary. The example selects `git-full` for
-PR, issue and comment operations; both Git-only profiles deny API calls.
+Use Reader (`git-read`) for reads and Contributor (`git-write`) for pushes and
+PR work. The example selects Collaborator (`git-full`) for issue management too.
 
 The output directory must not exist, and its parent must be owned and mode 0700. The command writes private
 files atomically and prints the session identifier, deadline and directory,
@@ -273,7 +284,8 @@ Git keeps its normal configuration, hooks and worktrees. These native settings
 are overridable defaults, so operators remain responsible for inherited URL
 credentials and configuration overrides.
 
-API commands require a `git-full` session. The launcher checks that the
+Choose a session with the [access level](../reference/repository-credentials/access-levels.md)
+required by the operation. The launcher checks that the
 executable is exactly `gh` 2.100.0. Create a
 request body file in the working directory, then use relative API paths:
 
@@ -338,9 +350,6 @@ pnpm credentials:build
 pnpm credentials:image
 pnpm credentials:client-image
 ```
-
-The scripts use `deploy/runtime/repository-credentials/Dockerfile` and
-`Dockerfile.client`, with their respective emitted directories as build contexts.
 
 The service entrypoint is `node /app/dist/repository-credentials.js`; the client
 entrypoint is

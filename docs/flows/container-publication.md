@@ -1,21 +1,24 @@
 ---
 created: 2026-09-21
-updated: 2026-09-22
-last_updated_session: codex/01a0c70f-8a8f-7c62-ac81-ee1a3e99f48b
+updated: 2026-09-24
+last_updated_session: codex/01a0c179-19f7-7111-8bb4-fc7680da5545
 ---
 
 # Container publication flow
 
 ## Overview
 
-Manual Enterprise container publication builds controller and runtime OCI archives
-for Linux amd64 and arm64, checks both variants, and transfers the tested bytes
-to private GHCR packages. Each package receives one multi-platform index digest.
-This flow ends with verified remote digests and a publication receipt; it does
-not deploy workloads or change package visibility.
+Enterprise Containers builds controller and runtime OCI archives for Linux amd64
+and arm64 on pull requests and manual dispatches. Both paths check each variant;
+only a validated manual main run can transfer the tested bytes to private GHCR.
+Published packages receive one multi-platform index digest. PR runs end with
+check results; publication ends with verified remote digests and a receipt.
+Neither path deploys workloads or changes package visibility.
 
 ## Entry Points
 
+- `.github/workflows/container-publish.yml:jobs.prepare`: pull-request opened,
+  synchronize, and reopened events build and smoke the PR merge commit.
 - `.github/workflows/container-publish.yml:jobs.validate`: manual dispatch on
   `main` with its exact source SHA, successful main-push CI run ID, and publish flag.
 - `scripts/ci/container-release.mjs:main`: validation, smoke, seal, and publication
@@ -29,11 +32,14 @@ not deploy workloads or change package visibility.
 ```mermaid
 graph TD
   A["Operator selects main SHA and successful CI"] --> B["Validate source, CI and approved base"]
-  B --> C["Build controller and runtime OCI indexes"]
+  P["PR opened or updated"] --> Q["Select merge commit and its CI base"]
+  Q --> C["Build controller and runtime OCI indexes"]
+  B --> C
   C --> D["Verify amd64 and arm64 manifests and configs"]
   D --> E["Load and smoke each platform's exact config ID"]
   E -->|either fails| X["Stop before publication"]
-  E -->|both pass| F["Seal and upload each archive"]
+  E -->|PR passes| R["Finish checks without release artifacts"]
+  E -->|manual run passes| F["Seal and upload each archive"]
   F -->|publish false| G["Finish with retained artifacts"]
   F -->|publish true| I["Recheck source, CI, seals and private packages"]
   I --> J["Copy all manifests with digest preservation"]
@@ -52,10 +58,37 @@ main source and successful CI identity, and approved Node base digest. Publicati
 also checks the main-only environment branch policy. No-push preparation has no package write
 permission or protected-environment credentials.
 
+For pull requests, `.github/workflows/container-publish.yml:jobs.validate` is
+skipped. Preparation checks out `github.sha`, the PR merge commit, and selects
+the Node base from its CI suite manifest without repository-variable approval.
+PR jobs have only content-read permission, no environment, and no registry
+credentials. New revisions cancel older preparation jobs for the same PR and
+image. Manual runs retain independent preparation and release validation.
+
 `.github/workflows/container-publish.yml:jobs.prepare` runs once per image. It
 registers ARM64 QEMU support and asks Buildx for `linux/amd64,linux/arm64`, with
 provenance disabled, in a single OCI archive. The approved Node base index must
 provide both platforms. The controller and runtime use their existing recipes.
+`deploy/runtime/Dockerfile:openclaw-source` downloads the pinned public OpenClaw
+source archive, rejects a SHA-256 mismatch, installs its frozen dependency graph,
+and follows the upstream Docker build and production-dependency assembly with
+Codex and Slack selected. Plugin-local dependencies retain their own versions.
+Missing package-root dependencies are linked from those plugin installations so
+shared compiled chunks resolve them; existing core versions remain unchanged.
+The runtime stage verifies the assembled runtime archive checksum before extraction and
+retains `/opt/oce/runtime/provenance.json`; this archive is not an npm package.
+Matching bundled plugins replace
+independently installed plugin packages; the Dedicated Codex executable remains
+separately pinned. See the [runtime recipe](../../deploy/runtime/README.md) for
+source identity and installed-image checks.
+Before starting the runtime build,
+`scripts/ci/repository-platform-headroom.mjs:main` verifies it is running on the
+Ubuntu 24 GitHub-hosted runner and removes only its unused, fixed Android SDK
+directory. The helper rejects symlinks, mounts, and unexpected runner/SDK paths
+and logs free bytes and inodes before and after cleanup. This makes room for
+the source-build dependency layers before OCI export; local and self-hosted
+runners are rejected. Controller preparation does not use this cleanup.
+
 After OCI export, the job prunes only its dedicated Buildx builder's cache so
 the cache and unpacked smoke images do not exhaust the runner's disk together.
 
@@ -75,17 +108,21 @@ natively and ARM64 under QEMU. The ARM64 invocation scales smoke command and
 probe deadlines by six; native deadlines and all outcome assertions stay unchanged.
 Both must pass, and the archive hash must remain
 unchanged. A failure prevents sealing and artifact upload for that image.
+PR runs end after smoke checks, without seals, uploaded archives, or publication.
 After each successful platform smoke, the loaded image tag is removed before
 the next variant is loaded. The exported archive remains the publication input.
 
 ### 3. Seal and enter publication
 
-`scripts/ci/container-release.mjs:seal` rechecks the platform contents and records
+For manual dispatches only, `scripts/ci/container-release.mjs:seal` rechecks the
+platform contents and records
 the archive hash, multi-platform index digest, platform list, source, workflow,
 run attempt, CI identity, and approved base. Both prepared artifacts must exist
-before `.github/workflows/container-publish.yml:jobs.publish` can start.
+before `.github/workflows/container-publish.yml:jobs.publish` can start. Its
+event condition additionally requires manual dispatch and `publish: true`;
+release context validation still rejects PR events.
 
-No-push runs end with artifacts. Publishing runs proceed directly to automated
+Manual no-push runs end with artifacts. Publishing runs proceed directly to automated
 validation. Archive retention and package access requirements are owned
 by the [operator instructions](../../.github/containers.md).
 
@@ -128,6 +165,14 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-24 00:30: Reclaim unused hosted Android SDK space before the runtime source build, retaining both platforms and all startup checks. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - ae96345b)
+
+- 2026-09-24 00:05: Build and smoke PR merge commits without release artifacts or publication; keep manual main release validation. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - 75ce7de8)
+
+- 2026-09-23 20:39: Link missing plugin dependencies for shared compiled runtime chunks without replacing core versions. (public-pr/295 - cf486a31)
+
+- 2026-09-23 19:47: Build the runtime from verified public source with matching bundled plugins and retained runtime archive provenance. (public-pr/295 - 7f6d9107)
 
 - 2026-09-22 03:04: Use manual dispatch without an independent approval or linkage comment (codex/01a0c70f-8a8f-7c62-ac81-ee1a3e99f48b - 149ac0fe)
 

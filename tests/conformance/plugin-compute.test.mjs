@@ -10,6 +10,7 @@ import {
   createKubernetesComputeDriver,
   KubernetesComputeDriver,
   kubernetesNamespaceName,
+  kubernetesGatewayNamespaceName,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import {
   AGENT_RUNTIME_ENTRYPOINT,
@@ -158,7 +159,7 @@ function harnessAuthContext(candidate) {
     harnessAuth: {
       ...candidate.harnessAuth,
       backendRef: {
-        namespaceName: kubernetesNamespaceName(tenant.id),
+        namespaceName: kubernetesGatewayNamespaceName(tenant.id),
         name: "plugin-model-key",
         key: "value",
         uid: "plugin-model-key-uid",
@@ -244,6 +245,7 @@ function kubernetesOptions(overrides = {}) {
     runtime: {
       transportSecretPrefix: "transport",
       gatewayStorageClassName: "local-path",
+      gatewayNodeSelector: { "openclaw.dev/plane": "control" },
     },
     ...overrides,
   };
@@ -1343,9 +1345,25 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   const reconciled = [];
 
   // This fresh Agent has no prior authentication-probe workloads to retire.
+  const credentialObjects = new Map();
+  const cp = kubernetesGatewayNamespaceName(tenant.id);
+  credentialObjects.set(`${cp}:plugin-model-key`, {
+    apiVersion: "v1",
+    kind: "Secret",
+    metadata: { name: "plugin-model-key", namespace: cp, uid: "plugin-model-key-uid" },
+    data: { value: Buffer.from("fixture-model").toString("base64") },
+  });
   driver.clients = async () => ({
     apps: { listNamespacedDeployment: async () => ({ items: [] }) },
     core: {
+      createNamespacedSecret: async ({ body }) => {
+        const observed = {
+          ...body,
+          metadata: { ...body.metadata, uid: `${body.metadata.name}-uid`, resourceVersion: "1" },
+        };
+        credentialObjects.set(`${body.metadata.namespace}:${body.metadata.name}`, observed);
+        return observed;
+      },
       createNamespacedConfigMap: async ({ body }) => {
         configMaps.set(body.metadata.name, {
           ...structuredClone(body),
@@ -1364,14 +1382,21 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     },
   });
   driver.resolveNamespace = async () => ({ name: namespace, external: false });
-  driver.get = async (kind, name) =>
-    kind === "Namespace"
-      ? {
-          ...driver.manifest("v1", "Namespace", name, tenantOwnership),
-          status: { phase: "Active" },
-        }
-      : undefined;
-  driver.getOwned = async (kind, name) => {
+  driver.get = async (kind, name, target) =>
+    kind === "Secret"
+      ? credentialObjects.get(`${target}:${name}`)
+      : kind === "Namespace"
+        ? {
+            ...(name === cp
+              ? driver.gatewayNamespaceManifest(tenantOwnership)
+              : driver.manifest("v1", "Namespace", name, tenantOwnership)),
+            status: { phase: "Active" },
+          }
+        : undefined;
+  driver.getOwned = async (kind, name, target) => {
+    if (kind === "Secret" && name !== driver.workspaceNodeName(embedded)) {
+      return credentialObjects.get(`${target}:${name}`);
+    }
     if (kind === "NetworkPolicy") {
       return defaultPolicies.get(name);
     }
@@ -1404,6 +1429,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   assert.ok(gatewayDeploymentIndex >= 0);
   assert.ok(runtimePolicyIndex < gatewayDeploymentIndex);
   assert.deepEqual(reconciled[runtimePolicyIndex].spec.podSelector.matchLabels, {
+    "openclaw.dev/namespace": embedded.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": embedded.agentId,
   });
@@ -1426,23 +1452,56 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   );
   const dedicatedReconciled = [];
 
+  const transportName = `transport-${shortHash(dedicated.agentId)}`;
+  const transport = {
+    ...dedicatedDriver.manifest(
+      "v1",
+      "Secret",
+      transportName,
+      { namespaceId: tenant.id, agentId: dedicated.agentId },
+      cp,
+    ),
+    type: "Opaque",
+    data: { "app-server-token": Buffer.from("fixture-transport").toString("base64") },
+  };
+  transport.metadata.uid = "transport-uid";
+  credentialObjects.set(`${cp}:${transportName}`, transport);
   dedicatedDriver.clients = async () => ({
     apps: { listNamespacedDeployment: async () => ({ items: [] }) },
     core: {
+      createNamespacedSecret: async ({ body }) => {
+        const observed = {
+          ...body,
+          metadata: { ...body.metadata, uid: `${body.metadata.name}-uid`, resourceVersion: "1" },
+        };
+        credentialObjects.set(`${body.metadata.namespace}:${body.metadata.name}`, observed);
+        return observed;
+      },
+      replaceNamespacedSecret: async ({ body }) => {
+        credentialObjects.set(`${body.metadata.namespace}:${body.metadata.name}`, body);
+        return body;
+      },
       createNamespacedConfigMap: async () => ({}),
       patchNamespacedConfigMap: async () => ({}),
       listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [] }),
     },
   });
   dedicatedDriver.resolveNamespace = async () => ({ name: dedicatedNamespace, external: false });
-  dedicatedDriver.get = async (kind, name) =>
-    kind === "Namespace"
-      ? {
-          ...dedicatedDriver.manifest("v1", "Namespace", name, dedicatedTenantOwnership),
-          status: { phase: "Active" },
-        }
-      : undefined;
-  dedicatedDriver.getOwned = async (kind, name) => {
+  dedicatedDriver.get = async (kind, name, target) =>
+    kind === "Secret"
+      ? credentialObjects.get(`${target}:${name}`)
+      : kind === "Namespace"
+        ? {
+            ...(name === cp
+              ? dedicatedDriver.gatewayNamespaceManifest(dedicatedTenantOwnership)
+              : dedicatedDriver.manifest("v1", "Namespace", name, dedicatedTenantOwnership)),
+            status: { phase: "Active" },
+          }
+        : undefined;
+  dedicatedDriver.getOwned = async (kind, name, target) => {
+    if (kind === "Secret" && name !== dedicatedDriver.workspaceNodeName(dedicated)) {
+      return credentialObjects.get(`${target}:${name}`);
+    }
     if (kind === "Secret") {
       return enrolledNodeSecret(dedicatedDriver, dedicated, dedicatedNamespace);
     }
@@ -1643,6 +1702,12 @@ test("Codex runtime gates startup and readiness on a successful native authentic
   const scenarios = [
     { name: "failed login", loginStatus: 1 },
     {
+      name: "service account token uses native access-token login before probe and clears credentials",
+      pat: true,
+      events: [started, assistant, completed],
+      ready: true,
+    },
+    {
       name: "nonfatal advisory followed by completed assistant turn",
       events: [started, advisory, assistant, completed],
       ready: true,
@@ -1703,8 +1768,10 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           process: {
             env: {
               CODEX_HOME: join(directory, "codex"),
-              CODEX_LOGIN_MODE: "api_key",
-              OPENAI_API_KEY: "fixture-api-key",
+              CODEX_LOGIN_MODE: scenario.pat ? "codex_pat" : "api_key",
+              ...(scenario.pat
+                ? { CODEX_ACCESS_TOKEN: "at-fixture-token" }
+                : { OPENAI_API_KEY: "fixture-api-key" }),
               OPENCLAW_HARNESS_MODEL: "codex/gpt-4.1",
               OPENCLAW_AGENT_REVISION_ID: revisionId,
               OPENCLAW_RUNTIME_STATUS_CONTAINER: "agent",
@@ -1741,8 +1808,23 @@ test("Codex runtime gates startup and readiness on a successful native authentic
             }
             if (specifier === "node:child_process") {
               return {
-                spawnSync() {
+                spawnSync(command, args, options) {
                   nativeCalls++;
+                  if (nativeCalls === 1 && scenario.pat) {
+                    assert.equal(command, "codex");
+                    assert.deepEqual(Array.from(args), [
+                      "-c",
+                      "cli_auth_credentials_store=file",
+                      "login",
+                      "--with-access-token",
+                    ]);
+                    assert.equal(options.input, "at-fixture-token");
+                  }
+                  if (nativeCalls === 2) {
+                    assert.equal(sandbox.process.env.CODEX_ACCESS_TOKEN, undefined);
+                    assert.equal(sandbox.process.env.OPENAI_API_KEY, undefined);
+                    assert.equal(sandbox.process.env.CODEX_CHATGPT_WORKSPACE_ID, undefined);
+                  }
                   // Substitute only native process output; execute the production
                   // login/probe parser and readiness control flow unmodified.
                   return nativeCalls === 1
@@ -2091,7 +2173,7 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
     driver.harnessAuthForRevision(
       candidate,
       harnessAuthContext(candidate),
-      kubernetesNamespaceName(tenant.id),
+      kubernetesGatewayNamespaceName(tenant.id),
     ),
     [],
     [],
@@ -2171,23 +2253,60 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
   const reconciled = [];
   let candidateRevisionName;
 
+  const credentialObjects = new Map();
+  const cp = kubernetesGatewayNamespaceName(tenant.id);
+  credentialObjects.set(`${cp}:plugin-model-key`, {
+    apiVersion: "v1",
+    kind: "Secret",
+    metadata: { name: "plugin-model-key", namespace: cp, uid: "plugin-model-key-uid" },
+    data: { value: Buffer.from("fixture-model").toString("base64") },
+  });
+  const transportName = `transport-${shortHash(candidate.agentId)}`;
+  const transport = {
+    ...driver.manifest(
+      "v1",
+      "Secret",
+      transportName,
+      { namespaceId: tenant.id, agentId: candidate.agentId },
+      cp,
+    ),
+    type: "Opaque",
+    data: { "app-server-token": Buffer.from("fixture-transport").toString("base64") },
+  };
+  transport.metadata.uid = "transport-uid";
+  credentialObjects.set(`${cp}:${transportName}`, transport);
   driver.clients = async () => ({
     apps: { listNamespacedDeployment: async () => ({ items: [] }) },
     core: {
+      createNamespacedSecret: async ({ body }) => {
+        const observed = {
+          ...body,
+          metadata: { ...body.metadata, uid: `${body.metadata.name}-uid`, resourceVersion: "1" },
+        };
+        credentialObjects.set(`${body.metadata.namespace}:${body.metadata.name}`, observed);
+        return observed;
+      },
       createNamespacedConfigMap: async () => ({}),
       patchNamespacedConfigMap: async () => ({}),
       listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [] }),
     },
   });
   driver.resolveNamespace = async () => ({ name: namespace, external: false });
-  driver.get = async (kind, name) =>
-    kind === "Namespace"
-      ? {
-          ...driver.manifest("v1", "Namespace", name, tenantOwnership),
-          status: { phase: "Active" },
-        }
-      : undefined;
-  driver.getOwned = async (kind, name) => {
+  driver.get = async (kind, name, target) =>
+    kind === "Secret"
+      ? credentialObjects.get(`${target}:${name}`)
+      : kind === "Namespace"
+        ? {
+            ...(name === cp
+              ? driver.gatewayNamespaceManifest(tenantOwnership)
+              : driver.manifest("v1", "Namespace", name, tenantOwnership)),
+            status: { phase: "Active" },
+          }
+        : undefined;
+  driver.getOwned = async (kind, name, target) => {
+    if (kind === "Secret" && name !== driver.workspaceNodeName(candidate)) {
+      return credentialObjects.get(`${target}:${name}`);
+    }
     if (kind === "Secret") {
       return enrolledNodeSecret(driver, candidate, namespace);
     }
@@ -2308,7 +2427,7 @@ test("Kubernetes dedicated Codex gateway mounts bridge runtime and prior plugin 
     "gateway",
     {},
     "info",
-    undefined,
+    driver.gatewayConfiguration(revision(), undefined, "oce-plugin-compute"),
     false,
     undefined,
     undefined,

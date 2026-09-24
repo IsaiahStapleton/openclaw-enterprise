@@ -69,9 +69,11 @@ import {
   AuthorizationDeniedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   DependencyUnavailableError,
+  ModelDiscoveryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
+  RepositoryOptionsUnavailableError,
   ResourceConflictError,
   ScopeViolationError,
   type DeploymentStatusResult,
@@ -417,7 +419,9 @@ function operationTarget(
     return { kind: "secret", id: secretId, namespaceId };
   }
   if (
-    (operation.operationId === "createAgent" || operation.operationId === "provisionAgent") &&
+    (operation.operationId === "createAgent" ||
+      operation.operationId === "provisionAgent" ||
+      operation.operationId === "listRepositoryOptions") &&
     namespaceId
   ) {
     return { kind: "agent", id: namespaceId, namespaceId };
@@ -911,6 +915,34 @@ function isDependencyUnavailable(error: unknown): boolean {
 function requestFailure(error: unknown): RequestFailure {
   if (error instanceof RequestFailure) {
     return error;
+  }
+  if (error instanceof ModelDiscoveryError) {
+    switch (error.reason) {
+      case "credentials_rejected":
+        return failure(
+          400,
+          "MODEL_DISCOVERY_CREDENTIALS_REJECTED",
+          "The provider rejected model discovery. Check the selected credential and its permission to list models, then retry or enter a model ID manually.",
+        );
+      case "rate_limited":
+        return failure(
+          429,
+          "MODEL_DISCOVERY_RATE_LIMITED",
+          "The provider rate-limited model discovery. Wait and retry, or enter a model ID manually.",
+        );
+      case "invalid_response":
+        return failure(
+          503,
+          "MODEL_DISCOVERY_INVALID_RESPONSE",
+          "The provider returned an invalid model list. Retry or enter a model ID manually.",
+        );
+      case "unavailable":
+        return failure(
+          503,
+          "MODEL_DISCOVERY_UNAVAILABLE",
+          "The provider model service is unavailable. Retry or enter a model ID manually.",
+        );
+    }
   }
   if (error instanceof PresetValidationError) {
     return failure(400, "INVALID_REQUEST", "The supplied Preset template is invalid.");
@@ -2193,6 +2225,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (operation.operationId === "discoverAgentModels") {
+      const models = await controller.discoverAgentModels(context.actorId, namespaceId, {
+        provider: body?.provider as string,
+        authMethod: body?.authMethod as "api_key" | "codex_pat",
+        apiKey: body?.apiKey as string,
+      });
+      reply.header("cache-control", "no-store");
+      reply.send({ data: models, meta: { requestId: request.id } });
+      return;
+    }
+
     if (operation.operationId === "createConfiguration") {
       const configuration = await controller.transact(async (unit) => {
         const created = await controller!.createConfiguration(context.actorId, {
@@ -2735,6 +2778,30 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         };
       });
       reply.status(202).send({ data: result, meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "listRepositoryOptions") {
+      const options = await controller!
+        .listRepositoryOptions(context.actorId, namespaceId)
+        .catch((error: unknown) => {
+          if (error instanceof RepositoryOptionsUnavailableError) {
+            throw failure(
+              503,
+              "REPOSITORY_OPTIONS_UNAVAILABLE",
+              "Repository options are unavailable.",
+            );
+          }
+          throw error;
+        });
+      reply.send({
+        data: options.map(({ repositoryRef, displayName, allowedProfiles }) => ({
+          repositoryRef,
+          displayName,
+          allowedProfiles,
+        })),
+        meta: { requestId: request.id },
+      });
       return;
     }
 
