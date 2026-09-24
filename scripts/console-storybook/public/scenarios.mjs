@@ -11,6 +11,13 @@ const readyForm = [
   { selector: "#provider-api-key", value: "storybook-model-api-key" },
   { selector: "#agent-model", value: "openai-story-model" },
 ];
+const passwordPresetForm = [
+  { selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" },
+  { selector: "#preset-variable-name", value: "Codex assistant" },
+  { selector: "#preset-variable-model", value: "gpt-5.1" },
+  { selector: "#preset-variable-modelSecret", value: "storybook-model-key" },
+  click("Use Preset"),
+];
 const repositoryForm = [...readyForm, { selector: "#agent-name", value: "Repository assistant" }];
 const repositoryOptionsPath =
   "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/repository-options";
@@ -285,7 +292,7 @@ export const scenarios = {
       click("Apply channel settings"),
     ],
     description:
-      "Applying channel settings copies staged Slack Secret bindings into the create form's Configuration Secret bindings JSON without exposing token values.",
+      "Applying channel settings retains staged Slack Secret bindings for creation. The raw Secret bindings JSON editor is hidden; token values stay masked.",
   },
   createSlackChannelAccessRequired: {
     group: "Pages/Create Agent",
@@ -453,6 +460,40 @@ export const scenarios = {
     description:
       "A reusable template with required and defaulted variables. Use Preset copies values into an editable draft.",
     gap: "Preset CRUD has no console page; the fixture supplies a pre-existing Preset.",
+  },
+  createPasswordPreset: {
+    group: "Pages/Create Agent",
+    name: "Standard Codex password variable",
+    path: create,
+    standardCodexPreset: true,
+    actions: [{ selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" }],
+    description:
+      "The shipped Preset asks for name, model, and a masked modelSecret password. No Namespace or Secret ID is needed.",
+    steps: [
+      "Enter a name, model ID, and a dummy model key.",
+      "Use Preset and review the masked API key and restricted configuration.",
+      "Create Agent saves a same-Namespace Secret before provisioning.",
+    ],
+    gap: "All credentials and API responses in this preview are simulated.",
+  },
+  createPasswordPresetDraft: {
+    group: "Pages/Create Agent",
+    name: "Standard Codex password draft",
+    path: create,
+    standardCodexPreset: true,
+    actions: passwordPresetForm,
+    description:
+      "The password remains masked in the editable draft; Configuration JSON contains no model key. The raw Secret bindings JSON editor is hidden.",
+  },
+  createPasswordPresetDenied: {
+    group: "Pages/Create Agent",
+    name: "Password Secret creation denied",
+    path: create,
+    standardCodexPreset: true,
+    denySecretCreate: true,
+    actions: [...passwordPresetForm, click("Create Agent")],
+    description:
+      "Missing Secret create permission leaves the draft available with its password masked. No Agent is created.",
   },
   createNoPresets: {
     group: "Pages/Create Agent",
