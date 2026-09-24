@@ -169,14 +169,12 @@ retry reuses the saved Configuration and does not depend on repository choices
 or a Repo Driver.
 
 After a known rejection of a repository-scoped Agent, **Reload repository choices**
-clears selections and refreshes Namespace policy while retaining the saved
-Configuration. It also clears the search, returns to the first page, and reveals
-results, including when the refreshed catalog no longer needs a search field.
-Retry requires at least one current repository with approved
-access; empty results cannot turn this attempt into an ordinary
-Agent. Failed reloads keep creation disabled and the Configuration ID visible.
-Expiry returns to sign-in. **Start a new draft** opens a new form and leaves the
-Configuration saved. Neither action deletes saved resources.
+clears selections and search, resets pagination, reveals results, and refreshes
+Namespace policy. It retains the saved Configuration. Retrying requires at least
+one approved repository; an empty catalog cannot turn this attempt into an ordinary
+Agent. Failed reloads keep creation disabled and show the Configuration ID.
+Expiry returns to sign-in. **Start a new draft** opens a new form without deleting
+the saved Configuration.
 
 If the Agent response is lost or otherwise unknown, the save may have succeeded.
 The form disables further creation and does not expose the known-rejection
