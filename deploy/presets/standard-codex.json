@@ -104,7 +104,17 @@
                     "enabled": true,
                     "baseProfile": "workspace",
                     "mode": "limited",
-                    "domains": {},
+                    "domains": {
+                      "codeload.github.com": "allow",
+                      "dl.google.com": "allow",
+                      "github.com": "allow",
+                      "go.dev": "allow",
+                      "nodejs.org": "allow",
+                      "proxy.golang.org": "allow",
+                      "registry.npmjs.org": "allow",
+                      "storage.googleapis.com": "allow",
+                      "sum.golang.org": "allow"
+                    },
                     "unixSockets": {},
                     "enableSocks5": false,
                     "enableSocks5Udp": false,

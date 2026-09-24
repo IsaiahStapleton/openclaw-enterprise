@@ -3,7 +3,7 @@
 Install [standard-codex](../../../deploy/presets/standard-codex.json) in a ready
 Namespace through Installation defaults or the existing Preset API. It creates drafts for a dedicated
 Codex Harness connected to its own separate OpenClaw gateway. The template
-requests cached hosted search and starts with an empty tool-network allowlist.
+requests cached hosted search and allows the hosts used to build OCE from source.
 
 **This is a launch template, not a Pod-wide network isolation guarantee.**
 Read the enforcement boundary below before deploying.
@@ -47,7 +47,10 @@ For manual installation in one Namespace instead, from the repository root, use 
 ```
 
 The POST returns HTTP `201`. A duplicate name returns `409`; read the existing
-Preset and review it before replacing its template through PATCH.
+Preset and review it before replacing its template through PATCH. Updating the
+bundled file does not overwrite an installed same-name Preset. PATCH existing
+copies to receive the build allowlist; existing Agent drafts and deployments
+keep their independent Configuration until explicitly updated and redeployed.
 
 Open **Agents → Create Agent**, choose **standard-codex**, and supply:
 
@@ -71,11 +74,59 @@ an explicit Codex runtime and an unreachable direct HTTP base URL. This keeps
 model execution on authenticated app-server transport. There are no selected
 optional plugins, channels, browser, web fetch, or elevated execution.
 
+## Build network allowlist
+
+The template grants these exact hostnames with value `allow` under
+`plugins.entries.codex.config.appServer.networkProxy.domains`:
+
+| Hosts                                      | Observed use                                                                  |
+| ------------------------------------------ | ----------------------------------------------------------------------------- |
+| `github.com`                               | Git access, verified with the pinned Carapace source tag.                     |
+| `codeload.github.com`                      | The docs site's pinned Carapace source archive.                               |
+| `registry.npmjs.org`                       | pnpm bootstrap and workspace, docs, and Storybook packages.                   |
+| `nodejs.org`                               | Node.js toolchain archive and checksum manifest.                              |
+| `go.dev`, `dl.google.com`                  | Go release metadata, toolchain archive, and its download redirect.            |
+| `proxy.golang.org`                         | Go modules and automatic toolchain selection.                                 |
+| `sum.golang.org`, `storage.googleapis.com` | Automatic Go toolchain checksum verification and redirected archive download. |
+
+These hosts were observed on 2026-09-24 while building source revision
+`63a70947fed440a875b2e6338d0a22500f9a9f5e` on Linux amd64 with Node 24.16.0,
+pnpm 11.15.1, and Go 1.27.0. A second fresh container repeated the build with
+only these hosts permitted by an HTTPS CONNECT proxy. Both runs started with
+empty package/module caches and no installed project dependencies. The trace
+recorded destination hostnames, including redirects, without decrypting TLS or
+recording credentials. Direct external access was blocked by an internal
+container network; an unlisted hostname was rejected by the proxy.
+
+The verified commands, from a clean repository root, were:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm credentials:build
+pnpm cli:build
+pnpm cli:check
+pnpm cli:test
+pnpm docs:install
+pnpm docs:build
+pnpm storybook:install
+pnpm storybook:build
+```
+
+Toolchain archives were verified against their published checksums. A separate
+cold module cache also exercised Go 1.26.0 automatically downloading Go 1.27.0
+from `go.mod` before building the CLI. This source-build proof covers the
+workspace, credential packages, Go CLI, docs, and Storybook. It excludes OCI
+image builds, browser downloads, cluster provisioning, other operating systems,
+and execution inside a deployed Codex Harness. Repeat the trace when dependency
+pins or build targets change; a module's import hostname need not be an egress
+host when Go downloads it through its module proxy.
+
 ## Enforcement boundary
 
 The native bridge requests a workspace-write permission profile with its managed
-network proxy enabled, `mode: limited`, and an empty `domains` map. No domain
-is granted by default. Upstream proxies, local binding, SOCKS, and unrestricted
+network proxy enabled, `mode: limited`, and the build allowlist above. The
+shipped map has no wildcard grants. Upstream proxies, local binding, SOCKS, and unrestricted
 Unix-socket access are disabled. `approvalPolicy: never` requests denial of
 operations that need approval instead of approving an escape from the sandbox.
 
@@ -113,10 +164,11 @@ the checks below. Do not copy a host's general network allowlist.
 On your selected runtime, verify all of these through a fresh gateway session:
 
 1. Read effective app-server thread configuration: the named permission profile
-   has no allowed domains, approvals remain disabled, and search is cached.
+   contains only the listed build hosts, approvals remain disabled, and search is cached.
    Inspect the rendered runtime configuration as well as the saved draft.
-2. Execute a tool request to a known reachable, operator-controlled destination.
-   Confirm native proxy denial, and attempt direct-IP/proxy-bypass access from
+2. Execute a tool request to a listed package host, then to a known reachable,
+   operator-controlled hostname outside the allowlist. Confirm success for the
+   listed host and native proxy denial for the unlisted host. Attempt direct-IP/proxy-bypass access from
    the same sandbox. A timeout alone does not establish policy enforcement.
 3. Confirm a normal model turn and cached hosted-search result succeed while
    direct web fetch and browser access remain unavailable.

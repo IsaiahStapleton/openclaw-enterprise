@@ -70,7 +70,12 @@ and [development composition](../../apps/controller/src/composition/development-
 pass generic definitions into `ControllerOptions.defaultPresets`, select an
 authorized persisted administrator through IAM, and initialize defaults after
 selecting Configuration and IAM Drivers. Native template contents
-remain in the application bundle; OCC owns generic Preset lifecycle.
+remain in the application bundle; OCC owns generic Preset lifecycle. The
+[standard Codex artifact](../../deploy/presets/standard-codex.json) requests
+cached hosted search and grants the exact build hosts documented in the
+[standard Preset guide](../guides/topics/standard-codex-preset.md#build-network-allowlist).
+Seeding and rendering copy that native policy; the deployed Codex plugin owns
+its enforcement. Updating the bundle does not replace already installed copies.
 
 `packages/occ/src/index.ts:OpenClawController.initializeDefaultPresets`
 
@@ -170,6 +175,10 @@ or an immutable admitted revision.
   [PostgreSQL coverage](../../tests/integration/postgres-presets.test.mjs) exercises
   persistence; [browser coverage](../../tests/browser/console-agents.test.mjs)
   exercises the real selection form. Coverage names are not proof of a live model response.
+- The standard Preset's [clean-build network trace](../guides/topics/standard-codex-preset.md#build-network-allowlist)
+  covers source builds with cold dependency caches behind an enforcing HTTPS
+  proxy. It establishes required destinations for those targets, not native
+  Codex enforcement or cached-search model behavior.
 - The local cluster attempt for this implementation stopped at a cgroup v2
   startup failure. A Kubernetes deployment and real model response remain
   unverified; use the [Kubernetes testing guide](../testing/kubernetes.md) on a
@@ -184,6 +193,8 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-24 03:19: Grant observed clean-build hosts in the standard Codex Preset while retaining cached search and limited native networking (codex/01a0cfbd-e4cc-7d62-8542-c1358ab1bc5b - 63a70947fed440a875b2e6338d0a22500f9a9f5e)
 
 - 2026-09-24 02:30: Add opt-in Installation default Presets with authorized, atomic seeding and preservation of existing copies (codex/01a0cfbd-e4cc-7d62-8542-c1358ab1bc5b - 451a35dbd713be383f93cd50407fc9b880b2561e)
 
