@@ -75,8 +75,9 @@ export async function createProductionNetworkAccess(t, { selection, image }) {
       child.stdin.end(JSON.stringify({ apiVersion: "v1", kind: "List", items: objects }));
     });
   t.after(async () => {
-    if (ownedNamespaces.length)
+    if (ownedNamespaces.length) {
       await kubectl("delete", "namespace", ...ownedNamespaces, "--wait=false");
+    }
   });
   for (const name of [namespace, destinations, envoyNamespace]) {
     await kubectl("create", "namespace", name);
@@ -157,8 +158,9 @@ export async function createProductionNetworkAccess(t, { selection, image }) {
     ),
     port: 10443,
   };
-  for (const name of ["database", "cluster", "exporter", "provider"])
+  for (const name of ["database", "cluster", "exporter", "provider"]) {
     targets[`${name}WrongPort`] = { ...targets[name], port: targets[name].port + 1 };
+  }
 
   const values = {
     ...productionCollectorValues,
@@ -198,7 +200,9 @@ export async function createProductionNetworkAccess(t, { selection, image }) {
   await Promise.all(
     Object.entries(sources).map(async ([name, source]) => {
       const host = await pod(name.toLowerCase(), source.namespace, source.labels, 8080);
-      if (name === "api") targets.api = { host, port: 8080 };
+      if (name === "api") {
+        targets.api = { host, port: 8080 };
+      }
     }),
   );
 
@@ -222,7 +226,9 @@ export async function createProductionNetworkAccess(t, { selection, image }) {
       const selected = names.filter(
         (name) => (envoyEnabled && name === "envoy" ? "api" : "operator") === source,
       );
-      if (!selected.length) continue;
+      if (!selected.length) {
+        continue;
+      }
       await waitFor(
         `${source}: reachable positive controls ${selected}`,
         async () => {
@@ -262,11 +268,12 @@ export async function createProductionNetworkAccess(t, { selection, image }) {
         `${source}: allow ${allow}; deny ${deny}`,
         async () => {
           last = await probe(source, names);
-          for (const name of names)
+          for (const name of names) {
             assert.ok(
               last[name] === "connected" || deniedErrors.has(last[name]),
               `${source} -> ${name}: unexpected probe result ${last[name]}`,
             );
+          }
           const matches =
             allow.every((name) => last[name] === "connected") &&
             deny.every((name) => deniedErrors.has(last[name]));

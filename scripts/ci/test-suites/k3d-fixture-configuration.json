@@ -16,9 +16,7 @@
   "files": [
     {
       "path": "tests/integration/production-network-access.test.mjs",
-      "expectedTests": [
-        "production Helm policies enforce workload network access levels"
-      ]
+      "expectedTests": ["production Helm policies enforce workload network access levels"]
     },
     {
       "path": "tests/integration/kubernetes-compute-real.test.mjs",

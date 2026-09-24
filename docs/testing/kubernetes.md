@@ -93,14 +93,14 @@ it runs in the required `k3d-fixture-configuration` CI lane. Probe Pods use the
 chart's actual workload labels and rendered NetworkPolicies. The matrix checks
 connections through the enforcing CNI, with reachable controls around denials:
 
-| Workload / phase                    | DNS   | Database | Kubernetes API | Exporter | Provider / private Envoy |
-| ----------------------------------- | ----- | -------- | -------------- | -------- | ------------------------ |
-| Initialization hook, before install | Allow | Allow    | Deny           | Deny     | Deny                     |
-| API, installed                      | Allow | Allow    | Allow          | Deny     | Only when configured     |
+| Workload / phase                    | DNS   | Database | Kubernetes API | Exporter | Provider / private Envoy      |
+| ----------------------------------- | ----- | -------- | -------------- | -------- | ----------------------------- |
+| Initialization hook, before install | Allow | Allow    | Deny           | Deny     | Deny                          |
+| API, installed                      | Allow | Allow    | Allow          | Deny     | Only when configured          |
 | Worker, installed                   | Allow | Allow    | Allow          | Deny     | Private Envoy when configured |
-| Initialization, installed           | Allow | Allow    | Allow          | Deny     | Deny                     |
-| Collector                           | Allow | Deny     | Allow          | Allow    | Deny                     |
-| Unknown / missing component         | Deny  | Deny     | Deny           | Deny     | Deny                     |
+| Initialization, installed           | Allow | Allow    | Allow          | Deny     | Deny                          |
+| Collector                           | Allow | Deny     | Allow          | Allow    | Deny                          |
+| Unknown / missing component         | Deny  | Deny     | Deny           | Deny     | Deny                          |
 
 Unexpected destinations and ungranted ports remain denied. Each dependency is a
 listening fixture endpoint; DNS uses the cluster resolver. This proves network

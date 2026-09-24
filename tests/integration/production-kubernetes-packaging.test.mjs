@@ -9,7 +9,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { renderProductionChart, parseProductionChart as resources } from "../helpers/production-chart.mjs";
+import {
+  renderProductionChart,
+  parseProductionChart as resources,
+} from "../helpers/production-chart.mjs";
 
 const execute = promisify(execFile);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
@@ -59,11 +62,15 @@ const controlPlaneSelectorValues = {
   "controlPlane.nodeSelector.oce-role": "control",
 };
 
-const render = (overrides = {}, options = {}) => renderProductionChart({
-  "database.cidrs[1]": "10.45.0.13/32",
-  "cluster.cidrs[1]": "10.43.0.2/32",
-  ...overrides,
-}, options);
+const render = (overrides = {}, options = {}) =>
+  renderProductionChart(
+    {
+      "database.cidrs[1]": "10.45.0.13/32",
+      "cluster.cidrs[1]": "10.43.0.2/32",
+      ...overrides,
+    },
+    options,
+  );
 
 let tooling;
 try {
@@ -900,11 +907,13 @@ test(
         "app.kubernetes.io/name": "openclaw-enterprise",
         "app.kubernetes.io/instance": "oce",
       },
-      matchExpressions: [{
-        key: "app.kubernetes.io/component",
-        operator: "In",
-        values: ["api", "worker", "initialization"],
-      }],
+      matchExpressions: [
+        {
+          key: "app.kubernetes.io/component",
+          operator: "In",
+          values: ["api", "worker", "initialization"],
+        },
+      ],
     });
     assert.deepEqual(
       dependencyEgress.spec.egress.find(({ ports }) => ports.some(({ port }) => port === 5432)).to,
