@@ -2,15 +2,15 @@
 
 Use the [platform console](../console.md) to create an Agent and, for supported
 Dedicated runtimes, start first-time provisioning from the same form. On an
-existing Kubernetes Installation,
-start with [production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
-you need a ready Namespace, configured Secret storage, and permission to
-create Secrets. First-time provisioning grants access to accepted Secret references;
+existing Kubernetes Installation, check the
+[production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
+a ready Namespace, configured Secret storage, and permission to create Secrets.
+First-time provisioning grants access to accepted Secret references;
 ordinary draft creation also requires permission to grant the Agent access to its key. After deployment, [verify this same
 Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
-If you are using [Local Setup](../../guides/quickstart.md) instead, the
-[local first-Agent walkthrough](../../guides/first-agent.md) creates a separate
-Agent; it does not verify an Agent you create in the console.
+The [first-Agent walkthrough](../../guides/first-agent.md) in
+[Local Setup](../../guides/quickstart.md) creates a separate Agent; it does not
+verify one created in the console.
 
 ## Create an Agent
 
@@ -52,15 +52,14 @@ does not make that link available.
    models must use the same supported provider and Harness. For custom settings,
    open **Advanced settings**. Selection changes preserve unrelated JSON edits;
    **Reset template** replaces them.
-5. Optional: under **Repository access**, select up to 16 repositories approved
-   for this Namespace. Select one authorization level shared by every chosen
-   repository. Kubernetes supports Codex (Dedicated) or OpenClaw (Embedded),
+5. Optionally select approved repositories and set access levels under **Repository access**.
+   Kubernetes supports Codex (Dedicated) or OpenClaw (Embedded),
    without a Sandbox Driver. Use Codex when this Agent also
    needs Slack. Leave every repository unselected for an ordinary Agent without
    repository access.
 
-6. If you need Slack, use OpenAI with the **Codex** harness and use its channel card. Each token
-   menu lets you select a readable Namespace Secret or **Create new Secret...**.
+6. For Slack, use OpenAI with **Codex** and its channel card. Each token menu
+   offers readable Namespace Secrets or **Create new Secret...**.
    Creating a Secret stores it immediately, even if you later cancel Agent creation.
    **Apply channel settings** stages settings and bindings into the form;
    cancelling the drawer discards its selections.
@@ -133,24 +132,21 @@ failure remain available and are reused, never deleted automatically. A lost Sec
 save response requires checking existing Namespace Secrets before starting again.
 See the [provisioning flow](../../flows/agent-provisioning.md) for the API sequence.
 
-Repository discovery is independent of model authentication. Add up to 16 approved
-repositories. Small catalogs show direct **Add** actions; larger catalogs offer
-search and paged browsing. Selected repositories appear below as compact cards.
-Initial suggestions prefer recently saved repositories in this browser, scoped
-to your signed-in identity and Namespace, then sort alphabetically. Only currently
-approved choices appear. Adding without saving does not change recent history;
-unavailable browser storage leaves alphabetical suggestions.
+Repository discovery is independent of model authentication. Select up to 16 approved
+repositories. Small catalogs offer **Add**; larger ones support search and paging.
+Suggestions prefer repositories recently saved in this browser for your identity and
+Namespace; unsaved selections do not change that history. Other suggestions sort
+alphabetically, as do all suggestions without browser storage.
 
-**Default repository access** starts at **Contributor**: push code, work with PRs,
-and manage issues. Choose **Read-only** for inspection, or customize Contributor
-to turn off issue management. Each added repository inherits this default. Expand
-its card to choose a custom level; **Use Agent default** restores
-inheritance. Custom choices remain fixed when the default changes, even if they
-previously matched it. Invalid policy combinations stay visible and must be
-repaired or removed before saving. No change silently widens an override.
+**Default repository access** starts at **Contributor** for code pushes, PRs,
+and issue management. Choose **Read-only**, or customize Contributor to turn off
+issue management. Added repositories inherit the default; expand a repository card
+to choose a custom level or **Use Agent default** to restore inheritance. Custom choices stay
+fixed when the default changes, even if they matched it. Invalid combinations stay
+visible and must be repaired or removed before saving. Overrides never widen silently.
 
-The server resolves each selection against current Namespace policy on save and
-again on deployment. Push and PR permissions remain bundled. See
+The server resolves selections against current Namespace policy on save and
+deployment. Push and PR permissions remain bundled. See
 [access levels](../repository-credentials/access-levels.md) for token permissions,
 merge behavior, and the API contract. Saved drafts can be edited in
 **New revision** > **Repositories**; admitted revisions stay unchanged.
@@ -174,11 +170,10 @@ or a Repo Driver.
 
 After a known rejection of a repository-scoped Agent, **Reload repository choices**
 clears selections and search, resets pagination, reveals results, and refreshes
-Namespace policy. It retains the saved Configuration. Retrying requires at least
+Namespace policy while retaining the saved Configuration. Retry requires at least
 one approved repository; an empty catalog cannot turn this attempt into an ordinary
-Agent. Failed reloads keep creation disabled and show the Configuration ID.
-Expiry returns to sign-in. **Start a new draft** opens a new form without deleting
-the saved Configuration.
+Agent. Failed reloads disable creation and show the Configuration ID. Expiry returns
+to sign-in. **Start a new draft** opens a new form without deleting the Configuration.
 
 If the Agent response is lost or otherwise unknown, the save may have succeeded.
 The form disables further creation and does not expose the known-rejection
@@ -246,11 +241,11 @@ stored status before explicitly retrying. Already-created Secrets remain in plac
 even when later storage or audit work fails; there is no automatic retry or
 rollback deletion.
 
-On the **Credentials** tab, bound Slack tokens appear as filled password fields using a synthetic mask.
-The browser never reads the saved token values. Focus a field to enter a
-replacement; leave it empty to keep its existing binding. Missing tokens remain
-empty and must be supplied before saving. **Save channel Secrets** requires at
-least one new value and a saved binding or new value for each token.
+Bound Slack tokens appear as masked password fields on the **Credentials** tab;
+the browser never reads saved token values. Focus a field to replace a token or leave
+it empty to keep its binding. Supply missing tokens before saving.
+**Save channel Secrets** requires at least one new value and a saved binding or
+new value for each token.
 
 Saving writes only the entered tokens through the Namespace Secret API, creates
 exact IAM bindings for the returned Agent `servicePrincipalId`, and saves
