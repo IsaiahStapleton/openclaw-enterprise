@@ -136,7 +136,6 @@
                       },
                       {
                         "page": "reference/authentication",
-                  "reference/postgres-auth-binding",
                         "label": "Authentication"
                       },
                       {
@@ -789,7 +788,8 @@
               "flows/repository-credential-configuration",
               "testing/repository-credentials",
               "testing/repository-credentials-platform",
-              "flows/agent-presets"
+              "flows/agent-presets",
+              "reference/postgres-auth-binding"
             ]
           }
         ]

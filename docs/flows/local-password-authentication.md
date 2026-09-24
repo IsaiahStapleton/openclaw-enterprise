@@ -1,6 +1,6 @@
 ---
 created: 2026-08-24
-updated: 2026-09-01
+updated: 2026-09-24
 last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
 ---
 
@@ -118,6 +118,16 @@ retains its non-secret IDs. Lost output does not trigger regeneration; normal
 [service-key management](service-api-keys.md) owns replacement and revocation.
 
 ### 3. Construct session authentication
+
+`apps/controller/src/auth/index.ts:createPostgresControllerAuth` passes the
+application-owned pool to OCC's public
+`packages/occ/src/auth-persistence/postgres-auth-binding.ts:createPostgresAuthBinding`.
+The binding returns a Drizzle database and the complete canonical schema without
+acquiring a connection. The controller configures its Better Auth adapter with
+PostgreSQL, camelCase mapping, and transactions enabled. Construction failures
+propagate without a memory fallback; the application retains pool shutdown.
+See the [binding reference](../reference/postgres-auth-binding.md) for the pool
+contract and the separate Better Auth and OCC transaction boundaries.
 
 `apps/controller/src/auth/index.ts:createControllerAuth` configures Better Auth
 email/password authentication, protected session cookies, and durable PostgreSQL

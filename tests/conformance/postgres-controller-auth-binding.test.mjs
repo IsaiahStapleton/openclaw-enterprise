@@ -148,7 +148,9 @@ const scenarios = {
 };
 const scenario = process.argv[2];
 if (scenario === undefined) {
-  for (const name of Object.keys(scenarios)) test(name, () => runIsolated(name));
+  for (const name of Object.keys(scenarios)) {
+    test(name, () => runIsolated(name));
+  }
 } else {
   assert.ok(Object.hasOwn(scenarios, scenario), "Unsupported child scenario");
   await scenarios[scenario]();

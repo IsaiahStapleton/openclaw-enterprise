@@ -3,7 +3,8 @@
   "compilerOptions": {
     "composite": false,
     "declaration": false,
-    "noEmit": true
+    "noEmit": true,
+    "allowJs": true
   },
   "files": ["producer.ts", "type-negatives.ts"]
 }

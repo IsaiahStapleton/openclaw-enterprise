@@ -8,6 +8,7 @@ import type {
 
 declare const pool: Parameters<typeof createPostgresAuthBinding>[0];
 declare const binding: SchemaAuthBoundaryV1;
+declare const replacement: SchemaAuthBoundaryV1;
 // @ts-expect-error Construction accepts the original caller pool, not a URL.
 createPostgresAuthBinding("postgresql://localhost/example");
 // @ts-expect-error A query-only object does not provide pool connect/end ownership.
@@ -19,13 +20,13 @@ const synchronous: SchemaAuthBoundaryV1 = createPostgresAuthBinding(pool);
 // @ts-expect-error The binding offers no pool teardown operation.
 binding.end();
 // @ts-expect-error The schema retains its real inferred columns.
-binding.schema.user.nonexistent;
+void binding.schema.user.nonexistent;
 // @ts-expect-error The selected original namespace has no installationId column.
-binding.schema.namespaces.installationId;
+void binding.schema.namespaces.installationId;
 // @ts-expect-error The database cannot be replaced through the readonly boundary.
-binding.database = binding.database;
+binding.database = replacement.database;
 // @ts-expect-error The schema cannot be replaced through the readonly boundary.
-binding.schema = binding.schema;
+binding.schema = replacement.schema;
 const options: SchemaAuthAdapterOptionsV1 = {
   provider: "pg",
   schema: binding.schema,
@@ -46,22 +47,25 @@ createPostgresAuthBinding({
 });
 
 // @ts-expect-error The full schema must accompany the database.
-const withoutSchema: SchemaAuthBoundaryV1 = { database: binding.database };
+const _withoutSchema: SchemaAuthBoundaryV1 = { database: binding.database };
 // @ts-expect-error The binding must expose a typed database.
-const withoutDatabase: SchemaAuthBoundaryV1 = { schema: binding.schema };
+const _withoutDatabase: SchemaAuthBoundaryV1 = { schema: binding.schema };
 // @ts-expect-error Authentication tables alone are not the complete schema.
-const authOnly: SchemaAuthSchemaV1 = { user: binding.schema.user, session: binding.schema.session };
+const _authOnly: SchemaAuthSchemaV1 = {
+  user: binding.schema.user,
+  session: binding.schema.session,
+};
 // @ts-expect-error Core resource tables alone are not the complete schema.
-const coreOnly: SchemaAuthSchemaV1 = { namespaces: binding.schema.namespaces };
+const _coreOnly: SchemaAuthSchemaV1 = { namespaces: binding.schema.namespaces };
 declare const unknownValue: unknown;
 // @ts-expect-error Unknown database values cannot cross this typed boundary.
-const unknownDatabase: SchemaAuthBoundaryV1["database"] = unknownValue;
+const _unknownDatabase: SchemaAuthBoundaryV1["database"] = unknownValue;
 // @ts-expect-error Unknown schema values cannot cross this typed boundary.
-const unknownSchema: SchemaAuthSchemaV1 = unknownValue;
+const _unknownSchema: SchemaAuthSchemaV1 = unknownValue;
 // @ts-expect-error Only the existing PostgreSQL provider is supported.
-const wrongProvider: SchemaAuthAdapterOptionsV1["provider"] = "mysql";
+const _wrongProvider: SchemaAuthAdapterOptionsV1["provider"] = "mysql";
 // @ts-expect-error Existing camelCase mapping remains enabled.
-const wrongCasing: SchemaAuthAdapterOptionsV1["camelCase"] = false;
+const _wrongCasing: SchemaAuthAdapterOptionsV1["camelCase"] = false;
 declare const client: PoolClient;
 // @ts-expect-error A checked-out transaction client is not the pool.
 createPostgresAuthBinding(client);

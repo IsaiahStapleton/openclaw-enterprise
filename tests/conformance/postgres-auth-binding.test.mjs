@@ -68,7 +68,9 @@ test("structural wrappers and checked-out clients cannot replace a real pool", a
 });
 
 test("the public auth binding factory preserves inferred types and rejects unsupported contracts", () => {
-  const compiler = fileURLToPath(new URL("../../node_modules/typescript/bin/tsc", import.meta.url));
+  const compiler = fileURLToPath(
+    new URL("./bin/tsc", import.meta.resolve("@typescript/native/package.json")),
+  );
   const project = "apps/controller/tests/fixtures/postgres-auth-binding/tsconfig.json";
   const result = spawnSync(
     process.execPath,
