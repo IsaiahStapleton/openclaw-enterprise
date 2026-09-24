@@ -116,7 +116,10 @@ Service selects a dedicated in-cluster proxy whose exact Namespace and Pod
 labels are admitted by the OCE Helm NetworkPolicy. The OCE API itself remains a
 ClusterIP Service. OCE's worker authenticates to Kubernetes in-cluster and
 reaches OpenShell Gateway through a narrow development NetworkPolicy in
-`oce-system`.
+`oce-system`. The Gateway uses OpenShell's unauthenticated development mode, so
+an ingress policy admits only the OCE worker and OpenShell supervisor Pods from
+OCE-owned tenant Namespaces. A matching tenant policy grants Gateway egress only
+to supervisor Pods; ordinary Agent and tenant Pods cannot call the Gateway.
 
 Because this cluster is disposable and owned by one development profile, the
 helper binds the chart's tenant worker, configuration, and Secret ClusterRoles

@@ -30,6 +30,10 @@ const (
 	openShellGatewayNamespace       = "openshell-system"
 	openShellOperatorNamespaceLabel = "openshell.ai/openclaw-workspace"
 	openShellOperatorNamespaceValue = "true"
+	openShellManagedByLabel         = "openshell.ai/managed-by"
+	openShellManagedByValue         = "openshell"
+	openShellBoundaryRoleLabel      = "openshell.ai/boundary-role"
+	openShellSupervisorRole         = "supervisor"
 	openShellNodePort               = 30051
 	openShellSourceSHA256           = "48b474ba93692331246acde00e8ca641503714c3250bbe50db5fe4f8f7a1e453"
 	agentSandboxManifestSHA256      = "230ee446d6035f631577e1c6b857f6973a8f09a0a853675d3cc34ebfe47abd6b"

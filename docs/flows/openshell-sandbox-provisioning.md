@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: "2026-09-24"
-last_updated_session: "authoring-run/12db753e-0ea9-497a-b9bf-e2fdbe9b7fad"
+last_updated_session: "authoring-run/285e1867-ba73-4a0f-ae7a-e6f6bf79d5d4"
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -101,10 +101,15 @@ the API and worker in `oce-system`. The Installation selects in-cluster
 Kubernetes authentication and the central Gateway's ClusterIP DNS name. A
 labeled development proxy is the API NetworkPolicy's only local client; k3d
 publishes its NodePort on host loopback. A separate development NetworkPolicy
-admits only the worker-to-Gateway port. Because the cluster is disposable, the
-helper also binds the Helm chart's tenant roles to the OCE service accounts for
-all Namespaces. A development ClusterRole lets the worker manage the workspace
-Role and RoleBinding, with `bind` and `escalate` limited to the pinned OpenShell
+admits the OCE worker to the Gateway. The Gateway ingress policy also admits
+OpenShell supervisor Pods, but only from OCE-owned tenant namespaces. In each
+tenant namespace, the callback egress policy selects only Pods carrying the
+OpenShell managed-by and supervisor boundary labels. Other tenant Pods cannot
+reach the Gateway even though this disposable profile enables OpenShell's
+unauthenticated development mode. Because the cluster is disposable, the helper
+also binds the Helm chart's tenant roles to the OCE service accounts for all
+Namespaces. A development ClusterRole lets the worker manage the workspace Role
+and RoleBinding, with `bind` and `escalate` limited to the pinned OpenShell
 workspace Role. Production retains operator-owned tenant-local RoleBindings.
 Startup copies the generated service key
 through a temporary PVC reader Pod, verifies it against the live Installation,
@@ -256,6 +261,7 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Changelog
 
+- 2026-09-24 16:34: Restricted the unauthenticated development Gateway to the OCE worker and OpenShell supervisor callback path, with tenant egress limited to supervisor Pods. (authoring-run/285e1867-ba73-4a0f-ae7a-e6f6bf79d5d4 - 7019738b86395a211e5b999a433f0ffaef101cdd)
 - 2026-09-24 15:58: Aligned the development profile's verified charts and runtime images with OpenShell v0.1.0-pre.7 and documented its release pin. (authoring-run/12db753e-0ea9-497a-b9bf-e2fdbe9b7fad - 1364f08511f0771f9221f92bfc5a3cd28c57175f)
 - 2026-09-24 11:08: Updated the source-pinned Codex binary identity after the runtime dependency layout changed, preserving fail-closed model egress and the real startup probe. (authoring-run/6c779a54-4d36-4317-827c-84931cf01ace - d89c609e6712dbc6501fcaed5cfefec8d311c9be)
 - 2026-09-24 09:43: Rebased the development profile onto current Kubernetes lifecycle behavior, documented current source-pinned runtime packaging, and made default controller and runtime images rebuild from the checkout. (authoring-run/7e5d6b66-1359-4dfd-94be-9a156cc2bccc - d74e1dcf79d4763c9137a8f9d8087f4ca4da6c47)

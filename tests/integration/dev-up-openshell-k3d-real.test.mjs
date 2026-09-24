@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -107,6 +107,100 @@ async function waitForNamespaceReady(environment, apiPort, stateDirectory, names
     await delay(500);
   }
   throw new Error(`OCC Namespace ${namespaceId} did not become ready.`);
+}
+
+async function runGatewayProbe({
+  directory,
+  kubectl,
+  environment,
+  namespace,
+  name,
+  image,
+  gatewayIP,
+  labels,
+}) {
+  const manifestPath = join(directory, `${name}.json`);
+  const connect = [
+    "const net=require('node:net')",
+    "const socket=net.connect(8080,process.argv[1])",
+    "const timer=setTimeout(()=>{socket.destroy();process.exit(2)},5000)",
+    "socket.once('connect',()=>{clearTimeout(timer);socket.destroy();process.exit(0)})",
+    "socket.once('error',()=>{clearTimeout(timer);process.exit(3)})",
+  ].join(";");
+  await writeFile(
+    manifestPath,
+    JSON.stringify({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: { name, namespace, labels },
+      spec: {
+        automountServiceAccountToken: false,
+        restartPolicy: "Never",
+        securityContext: {
+          runAsNonRoot: true,
+          runAsUser: 1000,
+          runAsGroup: 1000,
+          seccompProfile: { type: "RuntimeDefault" },
+        },
+        containers: [
+          {
+            name: "probe",
+            image,
+            imagePullPolicy: "Never",
+            command: ["node", "-e", connect, gatewayIP],
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              capabilities: { drop: ["ALL"] },
+            },
+            resources: {
+              requests: { cpu: "10m", memory: "16Mi" },
+              limits: { cpu: "100m", memory: "64Mi" },
+            },
+          },
+        ],
+      },
+    }),
+    { mode: 0o600 },
+  );
+  await execute("kubectl", [...kubectl, "apply", "-f", manifestPath], {
+    cwd: repository,
+    env: environment,
+  });
+  try {
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const pod = JSON.parse(
+        (
+          await execute(
+            "kubectl",
+            [...kubectl, "get", "pod", name, "--namespace", namespace, "-o", "json"],
+            { cwd: repository, env: environment, maxBuffer: 4 * 1024 * 1024 },
+          )
+        ).stdout,
+      );
+      if (["Succeeded", "Failed"].includes(pod.status.phase)) {
+        return pod.status.phase;
+      }
+      await delay(250);
+    }
+    throw new Error(`Gateway network probe ${name} did not complete.`);
+  } finally {
+    await execute(
+      "kubectl",
+      [
+        ...kubectl,
+        "delete",
+        "pod",
+        name,
+        "--namespace",
+        namespace,
+        "--ignore-not-found=true",
+        "--wait=true",
+        "--timeout=60s",
+      ],
+      { cwd: repository, env: environment },
+    );
+  }
 }
 
 test(
@@ -250,6 +344,7 @@ test(
       ).stdout,
     );
     assert.equal(service.spec.type, "ClusterIP");
+    let controllerImage;
     for (const [component, selector] of [
       ["PostgreSQL", "app=postgres"],
       ["OCE API", "app.kubernetes.io/component=api"],
@@ -280,7 +375,46 @@ test(
         pods.items[0].status.containerStatuses?.every(({ ready }) => ready),
         `${component} containers must be ready`,
       );
+      if (component === "OCE API") {
+        controllerImage = pods.items[0].spec.containers[0].image;
+      }
     }
+    assert.equal(typeof controllerImage, "string");
+
+    // The Gateway accepts unauthenticated development calls, so both halves of
+    // the NetworkPolicy boundary must deny arbitrary tenant Pods while retaining
+    // the OpenShell supervisor callback path.
+    assert.equal(
+      await runGatewayProbe({
+        directory: root,
+        kubectl,
+        environment,
+        namespace,
+        name: `gateway-denied-${suffix}`,
+        image: controllerImage,
+        gatewayIP: service.spec.clusterIP,
+        labels: { "app.kubernetes.io/name": "untrusted-gateway-probe" },
+      }),
+      "Failed",
+      "an ordinary tenant Pod must not reach the unauthenticated Gateway",
+    );
+    assert.equal(
+      await runGatewayProbe({
+        directory: root,
+        kubectl,
+        environment,
+        namespace,
+        name: `gateway-allowed-${suffix}`,
+        image: controllerImage,
+        gatewayIP: service.spec.clusterIP,
+        labels: {
+          "openshell.ai/managed-by": "openshell",
+          "openshell.ai/boundary-role": "supervisor",
+        },
+      }),
+      "Succeeded",
+      "an OpenShell supervisor Pod must retain its Gateway callback",
+    );
     await execute(
       "kubectl",
       [...kubectl, "get", "serviceaccount", "openshell-sandbox", "--namespace", namespace],

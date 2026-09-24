@@ -467,15 +467,53 @@ func (r *runner) installDevelopmentAPIProxy(ctx context.Context, state *developm
 	if err := r.writeAndApply(ctx, state, "api-proxy-service", service); err != nil {
 		return err
 	}
-	workerEgress := map[string]any{
-		"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": kubernetesMetadata("openclaw-enterprise-openshell-egress", namespace, labels),
-		"spec": map[string]any{
-			"podSelector": map[string]any{"matchLabels": map[string]string{"app.kubernetes.io/name": "openclaw-enterprise", "app.kubernetes.io/instance": "openclaw-enterprise", "app.kubernetes.io/component": "worker"}},
-			"policyTypes": []string{"Egress"},
-			"egress":      []any{map[string]any{"to": []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]string{"app.kubernetes.io/name": "openshell", "app.kubernetes.io/instance": openShellGatewayService}}}}, "ports": []any{map[string]any{"protocol": "TCP", "port": 8080}}}},
+	workerLabels := map[string]string{
+		"app.kubernetes.io/name":      "openclaw-enterprise",
+		"app.kubernetes.io/instance":  "openclaw-enterprise",
+		"app.kubernetes.io/component": "worker",
+	}
+	gatewayLabels := map[string]string{
+		"app.kubernetes.io/name":     "openshell",
+		"app.kubernetes.io/instance": openShellGatewayService,
+	}
+	supervisorLabels := map[string]string{
+		openShellManagedByLabel:    openShellManagedByValue,
+		openShellBoundaryRoleLabel: openShellSupervisorRole,
+	}
+	port := []any{map[string]any{"protocol": "TCP", "port": 8080}}
+	networkPolicies := map[string]any{
+		"apiVersion": "v1", "kind": "List", "items": []any{
+			map[string]any{
+				"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": kubernetesMetadata("openclaw-enterprise-openshell-egress", namespace, labels),
+				"spec": map[string]any{
+					"podSelector": map[string]any{"matchLabels": workerLabels},
+					"policyTypes": []string{"Egress"},
+					"egress":      []any{map[string]any{"to": []any{map[string]any{"podSelector": map[string]any{"matchLabels": gatewayLabels}}}, "ports": port}},
+				},
+			},
+			map[string]any{
+				"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": kubernetesMetadata("openclaw-development-openshell-ingress", namespace, labels),
+				"spec": map[string]any{
+					"podSelector": map[string]any{"matchLabels": gatewayLabels},
+					"policyTypes": []string{"Ingress"},
+					"ingress": []any{map[string]any{
+						"from": []any{
+							map[string]any{"podSelector": map[string]any{"matchLabels": workerLabels}},
+							map[string]any{
+								"namespaceSelector": map[string]any{
+									"matchLabels":      map[string]string{openShellOperatorNamespaceLabel: openShellOperatorNamespaceValue},
+									"matchExpressions": []any{map[string]any{"key": "openclaw.dev/namespace", "operator": "Exists"}},
+								},
+								"podSelector": map[string]any{"matchLabels": supervisorLabels},
+							},
+						},
+						"ports": port,
+					}},
+				},
+			},
 		},
 	}
-	if err := r.writeAndApply(ctx, state, "openshell-egress", workerEgress); err != nil {
+	if err := r.writeAndApply(ctx, state, "openshell-network-policies", networkPolicies); err != nil {
 		return err
 	}
 	return r.run(ctx, "kubectl", "-n", namespace, "rollout", "status", "deployment/occ-development-api-proxy", "--timeout", timeout.String())

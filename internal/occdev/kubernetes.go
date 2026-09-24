@@ -255,7 +255,11 @@ func openShellInstallationConfiguration(s *developmentState, workspaceResources 
 						"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
 						"metadata": map[string]string{"name": "allow-openshell-sandbox-callback"},
 						"spec": map[string]any{
-							"podSelector": map[string]any{}, "policyTypes": []string{"Egress"},
+							"podSelector": map[string]any{"matchLabels": map[string]string{
+								openShellManagedByLabel:    openShellManagedByValue,
+								openShellBoundaryRoleLabel: openShellSupervisorRole,
+							}},
+							"policyTypes": []string{"Egress"},
 							"egress": []any{map[string]any{"to": []any{map[string]any{
 								"namespaceSelector": map[string]any{"matchLabels": map[string]string{"kubernetes.io/metadata.name": gatewayNamespace}},
 								"podSelector":       map[string]any{"matchLabels": gatewayLabels},

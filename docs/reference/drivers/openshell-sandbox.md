@@ -167,6 +167,12 @@ resources in the trusted Installation configuration. For every OCC Namespace,
 the Driver applies those resources before creating its Workspace through the
 Gateway API. There is no per-Namespace Helm release.
 
+The disposable profile enables OpenShell's unauthenticated development mode.
+Its Gateway ingress policy admits only the OCE worker in `oce-system` and
+OpenShell supervisor Pods from OCE-owned tenant Namespaces. The per-tenant
+callback egress policy selects only Pods labeled as OpenShell-managed
+supervisors. Other tenant Pods cannot reach the Gateway administrative API.
+
 `gateway.operatorWorkspaceResources` accepts the namespace-scoped
 ServiceAccount, Role, RoleBinding, and NetworkPolicy objects rendered from the
 workspace chart. The Driver injects the current Compute-owned namespace and OCC

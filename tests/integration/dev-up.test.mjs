@@ -773,6 +773,49 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
   assert.match(configuration, /operatorNamespaceLabels:/);
   assert.match(configuration, /openshell\.ai\/openclaw-workspace: "true"/);
   assert.doesNotMatch(configuration, /workspace: default/);
+  const sandboxConfiguration = loadYaml(configuration).drivers.sandbox.configuration;
+  assert.deepEqual(
+    sandboxConfiguration.gateway.networkPolicyResources[0].spec.podSelector.matchLabels,
+    {
+      "openshell.ai/managed-by": "openshell",
+      "openshell.ai/boundary-role": "supervisor",
+    },
+    "only OpenShell supervisors may use the tenant callback egress rule",
+  );
+
+  const developmentPolicies = JSON.parse(
+    await readFile(join(directory, "openshell-network-policies.json"), "utf8"),
+  );
+  const gatewayIngress = developmentPolicies.items.find(
+    ({ metadata }) => metadata.name === "openclaw-development-openshell-ingress",
+  );
+  assert.deepEqual(gatewayIngress.spec.podSelector.matchLabels, {
+    "app.kubernetes.io/name": "openshell",
+    "app.kubernetes.io/instance": "openshell-gateway",
+  });
+  assert.deepEqual(gatewayIngress.spec.ingress[0].from, [
+    {
+      podSelector: {
+        matchLabels: {
+          "app.kubernetes.io/name": "openclaw-enterprise",
+          "app.kubernetes.io/instance": "openclaw-enterprise",
+          "app.kubernetes.io/component": "worker",
+        },
+      },
+    },
+    {
+      namespaceSelector: {
+        matchLabels: { "openshell.ai/openclaw-workspace": "true" },
+        matchExpressions: [{ key: "openclaw.dev/namespace", operator: "Exists" }],
+      },
+      podSelector: {
+        matchLabels: {
+          "openshell.ai/managed-by": "openshell",
+          "openshell.ai/boundary-role": "supervisor",
+        },
+      },
+    },
+  ]);
 
   // The selected profile must use only the pinned cluster and imported images;
   // no Compose command may participate in startup or cleanup.
