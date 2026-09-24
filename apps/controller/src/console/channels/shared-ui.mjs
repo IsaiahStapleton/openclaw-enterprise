@@ -433,9 +433,9 @@ export function renderChannelSection(
         ),
       ),
       state.error,
-      state.outcomeUnknown && state.onReload
-        ? element("div", { className: "form-actions" }, button("Reload draft", state.onReload))
-        : null,
+      ...(state.outcomeUnknown && state.onReload
+        ? [element("div", { className: "form-actions" }, button("Reload draft", state.onReload))]
+        : []),
       ...providers.map((provider) => renderCard(section, state, provider)),
     );
   }
