@@ -159,9 +159,8 @@ lock OpenClaw across provider changes. Installation Provider discovery is hidden
 owns permissions and partial-save recovery.
 
 Advanced settings holds JSON and plugins; model selection starts empty.
-Secret binding edits rebuild the channel editor from the current bindings, so
-applying Slack selections preserves unrelated manual bindings. Invalid binding
-JSON blocks channel editing until corrected.
+Binding edits refresh channel settings, preserving unrelated bindings when applying
+Slack. Invalid binding JSON blocks channel editing.
 `POST /namespaces/:namespaceId/agents/models` reaches
 `OpenClawController.discoverAgentModels`, which authorizes Namespace Agent creation
 and calls Compute outside a state transaction. `compute/model-discovery.ts` uses
