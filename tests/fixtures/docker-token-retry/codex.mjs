@@ -8,10 +8,10 @@ function optionValue(name) {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
-// The production launcher prefixes native Codex commands with -c settings.
-// Ignore those settings in this transport-only fixture, preserving its command.
+// The production launcher supplies settings and disables tools for its probe.
+// Parse those prefixes without implementing their native Codex behavior.
 const arguments_ = process.argv.slice(2);
-while (arguments_[0] === "-c" && arguments_.length >= 2) {
+while (["-c", "--disable", "-a"].includes(arguments_[0]) && arguments_.length >= 2) {
   arguments_.splice(0, 2);
 }
 const command = arguments_[0];
@@ -21,6 +21,17 @@ const command = arguments_[0];
 if (command === "login") {
   process.stdin.resume();
   process.stdin.on("end", () => process.exit(0));
+} else if (command === "exec") {
+  // The real launcher now requires a model-probe transcript before serving.
+  // This external protocol stand-in only unblocks transport setup; it does not
+  // authenticate a model, contact a provider, or verify native Codex execution.
+  for (const event of [
+    { type: "turn.started" },
+    { type: "item.completed", item: { type: "agent_message", text: "READY" } },
+    { type: "turn.completed" },
+  ]) {
+    process.stdout.write(`${JSON.stringify(event)}\n`);
+  }
 } else if (command === "app-server") {
   const listen = new URL(optionValue("--listen") ?? "ws://0.0.0.0:18790");
   const expectedDigest = optionValue("--ws-token-sha256");

@@ -60,7 +60,8 @@ OCC_TEST_DOCKER_TOKEN_RETRY=1 NODE_BASE_IMAGE=node:24-bookworm \
 
 The fixture calls the real Docker Driver directly and runs its runtime entrypoints
 in disposable containers. Minimal gateway and app-server binaries exercise
-WebSocket authentication, including invalid and missing bearer rejection. The
+WebSocket authentication, including invalid and missing bearer rejection. Login
+and model-probe responses are simulated solely to satisfy launcher startup. The
 case checks both peer-loss directions, retained token reuse, token rotation,
 replacement of a healthy gateway holding a stale token, and preservation of
 foreign-owned same-name containers and their siblings.
