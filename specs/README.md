@@ -50,14 +50,11 @@ GitHub login with existing OCE accounts and permissions.
 enforce Agent plugin policies through a managed native policy plugin and existing
 approval transport.
 
-
 [Initial Agent workspace files](34-agent-workspace-files-setup.md) — Proposed;
 create-only Console and API input, applied once before first runtime execution.
 
 [Agent presets](33-agent-presets.md) — Implementing; reusable, partial Agent launch
 templates with variables, CRUD APIs, and console selection.
-
-[Human federated sign-in](31-human-federated-sign-in.md) — Proposed; Existing human accounts, provider sign-in, and current authorization.
 
 [Harness authentication bindings](30-harness-auth-binding.md) — Accepted for implementation;
 one Agent auth binding for supplied OpenAI keys and issued ChatGPT account credentials.

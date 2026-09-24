@@ -7,7 +7,8 @@
 **Status:** Draft. [Implementation PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305) is available for review. Deployment and live GitHub verification remain open.
 
 **2026-09-23 amendment:** Use the same GitHub App registration for sign-in and
-repository integration. This supersedes the OAuth-App-only choice below.
+repository integration. This supersedes the OAuth-App-only choice below, including the Scope and
+Verification sections; those retain the original proposal wording.
 Sign-in uses the App's client ID and client secret; repository access keeps its
 existing private-key consumer. OCC reads the authenticated user's numeric ID,
 then discards the returned access and refresh tokens. App permissions govern
@@ -69,8 +70,8 @@ credentials used by Agents to access repositories.
 Configure `OCC_AUTH_GITHUB_CLIENT_ID`, `OCC_AUTH_GITHUB_CLIENT_SECRET`, and
 `OCC_AUTH_GITHUB_RECOVERY_USER_ID` on the controller, alongside existing
 `OCC_AUTH_BASE_URL` and `OCC_AUTH_SECRET`. Keep secrets in protected server
-configuration. Register `/api/auth/github/callback` on the configured origin as
-the OAuth callback.
+configuration. Register `/api/auth/providers/github/callback` on the configured
+origin as the OAuth callback.
 
 1. A human Installation administrator verifies the person's numeric GitHub ID
    and the intended OCE account independently, then attaches that identity.
@@ -94,15 +95,20 @@ Proposed lifecycle. Arrows show requests and replies, not deployment status.
 All paths below begin with `/api/auth`. JSON results use the existing
 `{data, meta: {requestId}}` envelope.
 
-| Operation                        | Input and result                                                                                                                                         |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /providers`                 | Returns `{github: boolean}` so Console can show the button.                                                                                              |
-| `POST /github/start`             | Requires the configured browser `Origin`. Returns `{url}` and sets the attempt cookie. Accepts no provider choice or return URL.                         |
-| `GET /github/callback`           | Receives `state` and `code` or provider `error`, with the matching browser cookie. Redirects to `/console/`, or `/console/?authError=github` on failure. |
-| `GET /accounts/:userId`          | Returns current `userId`, `principalId`, `version`, `disabled`, and `methods` with `methodId`, `providerId`, and `subject`.                              |
-| `POST /accounts/:userId/github`  | Accepts `{subject, expectedVersion}`. Attaches the numeric GitHub identity and invalidates prior sessions and pending authentication proofs.             |
-| `POST /accounts/:userId/disable` | Accepts `{expectedVersion}`. Blocks login and invalidates sessions and pending proofs. Refuses the protected recovery account.                           |
-| `POST /accounts/:userId/revoke`  | Accepts `{expectedVersion}`. Invalidates sessions and pending proofs while allowing a fresh login.                                                       |
+Browser routes reserve `/providers/{provider}/start` and
+`/providers/{provider}/callback`, where `{provider}` selects a server-configured
+integration. Only GitHub ships in this MVP, with no arbitrary issuer URLs or
+generic OIDC backend.
+
+| Operation                                 | Input and result                                                                                                                                         |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /providers`                          | Returns `{github: boolean}` so Console can show the button.                                                                                              |
+| `POST /providers/github/start`            | Requires the configured browser `Origin`. Returns `{url}` and sets the attempt cookie. Accepts no provider override or return URL.                       |
+| `GET /providers/github/callback`          | Receives `state` and `code` or provider `error`, with the matching browser cookie. Redirects to `/console/`, or `/console/?authError=github` on failure. |
+| `GET /accounts/:userId`                   | Returns current `userId`, `principalId`, `version`, `disabled`, and `methods` with `methodId`, `providerId`, and `subject`.                              |
+| `POST /accounts/:userId/providers/github` | Accepts `{subject, expectedVersion}`. Attaches the numeric GitHub identity and invalidates prior sessions and pending authentication proofs.             |
+| `POST /accounts/:userId/disable`          | Accepts `{expectedVersion}`. Blocks login and invalidates sessions and pending proofs. Refuses the protected recovery account.                           |
+| `POST /accounts/:userId/revoke`           | Accepts `{expectedVersion}`. Invalidates sessions and pending proofs while allowing a fresh login.                                                       |
 
 All four account operations require a current human session, the exact trusted
 `Origin`, and native IAM `administer` permission on the Installation. Service keys
@@ -199,9 +205,10 @@ release acceptance remain open.
 
 ## Deferred
 
-Google could add OIDC verification through the same account/session path.
-Configured Entra, Okta, or other enterprise providers would need their own
-identity rules and qualification. These are possible extensions, not a roadmap.
+Google sign-in is the next planned provider extension, using OIDC verification
+through the same account/session path. Enterprise SSO comes later; configured
+Entra, Okta, or other enterprise providers need their own identity rules and
+qualification.
 
 Later work may add external-only onboarding, account creation while this profile
 is active, method repair/linking, reenablement, password reset, CLI browser login,
