@@ -25,6 +25,69 @@ function recentRepositories(key) {
   }
 }
 
+function repositoryResults(
+  options,
+  selected,
+  recent,
+  { query: queryText, browsing, page: requestedPage },
+) {
+  const small = options.length <= 5;
+  const query = queryText.trim().toLocaleLowerCase();
+  const rank = (entry) => {
+    const names = [entry.displayName, entry.repositoryRef].flatMap((value) => {
+      const name = value.toLocaleLowerCase();
+      return [name, name.split("/").at(-1)];
+    });
+    if (names.includes(query)) {
+      return 0;
+    }
+    return names.some((name) => name.startsWith(query)) ? 1 : 2;
+  };
+  const priority = (entry) => {
+    if (query) {
+      return rank(entry);
+    }
+    if (small || browsing) {
+      return 0;
+    }
+    const index = recent.indexOf(entry.repositoryRef);
+    return index === -1 ? RECENT_LIMIT : index;
+  };
+  const matches = options
+    .filter(
+      (entry) =>
+        (!query ||
+          [entry.displayName, entry.repositoryRef].some((v) =>
+            v.toLocaleLowerCase().includes(query),
+          )) &&
+        (query || browsing || !selected.has(entry.repositoryRef)),
+    )
+    .sort(
+      (a, b) =>
+        priority(a) - priority(b) ||
+        a.displayName.localeCompare(b.displayName) ||
+        a.repositoryRef.localeCompare(b.repositoryRef),
+    );
+  const count = browsing && !small ? PAGE_SIZE : Math.min(options.length, 6);
+  const pageCount = count === 0 ? 0 : Math.ceil(matches.length / count);
+  const page = Math.min(requestedPage, Math.max(0, pageCount - 1));
+  const visible = matches.slice(page * count, (page + 1) * count);
+  return { small, query, matches, count, page, visible };
+}
+
+function discoveryFailure(error, { allowDraft }) {
+  if (error.status === 403) {
+    return "denied";
+  }
+  if (error.status === 409) {
+    return "conflict";
+  }
+  if (allowDraft && error.status === 503 && error.code === "REPOSITORY_OPTIONS_UNAVAILABLE") {
+    return "draft-only";
+  }
+  return "unavailable";
+}
+
 export function createRepositoryFields(context, onChange, initial = {}) {
   const intent = initial.repositoryAccess;
   const recentKey = context.operatorId
@@ -42,18 +105,14 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           ]),
     ),
     profile: intent?.defaultProfile ?? "git-full",
-    settled: false,
-    draftOnly: false,
-    blockingFailure: undefined,
+    discovery: "loading",
     disabled: false,
-    query: "",
-    browsing: false,
-    dismissed: false,
-    page: 0,
     showAll: false,
     expanded: new Set(),
     undo: undefined,
   };
+  const initialAccess = JSON.stringify(accessIntent());
+  let searchState;
   const status = element(
     "p",
     { className: "hint", role: "status", "aria-live": "polite" },
@@ -74,7 +133,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
   const discovery = element("div", { className: "repository-discovery" });
   const access = element("fieldset", { className: "repository-profile-group" });
   const retry = button("Retry repository choices", async () => {
-    if (state.disabled || !state.settled) {
+    if (state.disabled || !isSettled()) {
       return;
     }
     const loading = load();
@@ -122,19 +181,43 @@ export function createRepositoryFields(context, onChange, initial = {}) {
   const effective = (ref) => state.selected.get(ref) ?? state.profile;
   const invalid = (ref) => !option(ref)?.allowedProfiles.includes(effective(ref));
   const profileLabel = (profile) => repositoryProfile(profile)?.label ?? "Unknown access level";
-  const editable = () => !state.disabled && state.settled && state.blockingFailure === undefined;
-  function changed() {
-    validation.hidden = true;
+  const isSettled = () => state.discovery !== "loading";
+  const blocksCreate = () => !["loading", "ready", "draft-only"].includes(state.discovery);
+  const editable = () => !state.disabled && isSettled() && !blocksCreate();
+  const isDirty = () => JSON.stringify(accessIntent()) !== initialAccess;
+
+  function accessSummary(ref, override) {
+    if (!isSettled() || blocksCreate()) {
+      return "Access awaiting verification";
+    }
+    if (invalid(ref)) {
+      return "Choose approved access";
+    }
+    return `${profileLabel(effective(ref))} · ${override === null ? "Agent default" : "Custom"}`;
+  }
+
+  function resetSearch() {
+    searchState = { query: "", browsing: false, dismissed: false, page: 0 };
+    search.value = "";
+  }
+
+  function revealInvalidSelections() {
     for (const ref of state.selected.keys()) {
       if (invalid(ref)) {
         state.expanded.add(ref);
       }
     }
+  }
+
+  function changed() {
+    validation.hidden = true;
+    revealInvalidSelections();
     render();
     onChange(true);
   }
   function controls(profile, allowed, id, change) {
     const group = element("div", { className: "repository-profiles" });
+    const contributor = allowed.includes("git-full") ? "git-full" : "git-write";
     for (const [value, title, help] of [
       ["git-read", "Read-only", "Read code, pull requests, and issues."],
       [
@@ -158,7 +241,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           (writable ? !allowed.some((p) => p !== "git-read") : !allowed.includes(value)),
       });
       input.addEventListener("change", () => {
-        change(writable ? (allowed.includes("git-full") ? "git-full" : "git-write") : value);
+        change(writable ? contributor : value);
         document.getElementById(input.id)?.focus();
       });
       group.append(
@@ -265,27 +348,27 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     focusDiscovery();
   }
   search.addEventListener("focus", () => {
-    state.dismissed = false;
+    searchState.dismissed = false;
     renderResults();
   });
   search.addEventListener("input", () => {
-    state.dismissed = false;
-    state.query = search.value;
-    state.page = 0;
-    state.browsing = false;
+    searchState.dismissed = false;
+    searchState.query = search.value;
+    searchState.page = 0;
+    searchState.browsing = false;
     renderResults();
   });
   search.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      state.dismissed = false;
+      searchState.dismissed = false;
       renderResults();
       results.querySelector("button[data-add]:not(:disabled)")?.focus();
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      if (state.dismissed) {
-        state.dismissed = false;
+      if (searchState.dismissed) {
+        searchState.dismissed = false;
         renderResults();
         return;
       }
@@ -298,44 +381,17 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     }
     event.preventDefault();
     search.focus();
-    state.dismissed = true;
+    searchState.dismissed = true;
     renderResults();
   });
   function renderResults() {
-    results.hidden = state.dismissed;
-    const small = state.options.length <= 5;
-    const query = state.query.trim().toLocaleLowerCase();
-    const rank = (entry) => {
-      const names = [entry.displayName, entry.repositoryRef].flatMap((value) => {
-        const name = value.toLocaleLowerCase();
-        return [name, name.split("/").at(-1)];
-      });
-      return names.includes(query) ? 0 : names.some((name) => name.startsWith(query)) ? 1 : 2;
-    };
-    const matches = state.options
-      .filter(
-        (entry) =>
-          (!query ||
-            [entry.displayName, entry.repositoryRef].some((v) =>
-              v.toLocaleLowerCase().includes(query),
-            )) &&
-          (query || state.browsing || !state.selected.has(entry.repositoryRef)),
-      )
-      .sort(
-        (a, b) =>
-          (query
-            ? rank(a) - rank(b)
-            : !small && !state.browsing
-              ? (recent.includes(a.repositoryRef)
-                  ? recent.indexOf(a.repositoryRef)
-                  : RECENT_LIMIT) -
-                (recent.includes(b.repositoryRef) ? recent.indexOf(b.repositoryRef) : RECENT_LIMIT)
-              : 0) ||
-          a.displayName.localeCompare(b.displayName) ||
-          a.repositoryRef.localeCompare(b.repositoryRef),
-      );
-    const count = small ? 5 : state.browsing ? PAGE_SIZE : 6;
-    const visible = matches.slice(state.page * count, (state.page + 1) * count);
+    results.hidden = searchState.dismissed;
+    const { small, query, matches, count, page, visible } = repositoryResults(
+      state.options,
+      state.selected,
+      recent,
+      searchState,
+    );
     results.replaceChildren();
     if (!small) {
       results.append(
@@ -344,7 +400,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           { className: "hint", role: "status" },
           query
             ? `${matches.length} matching ${matches.length === 1 ? "repository" : "repositories"}`
-            : !state.browsing && matches.some((entry) => recent.includes(entry.repositoryRef))
+            : !searchState.browsing && matches.some((entry) => recent.includes(entry.repositoryRef))
               ? `Recently used · ${state.options.length} repositories available`
               : `${state.options.length} repositories available`,
         ),
@@ -404,13 +460,13 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         ),
       );
     }
-    if (!small && !state.browsing && matches.length > count) {
+    if (!small && !searchState.browsing && matches.length > count) {
       results.append(
         button(
           "Browse all repositories",
           () => {
-            state.browsing = true;
-            state.page = 0;
+            searchState.browsing = true;
+            searchState.page = 0;
             renderResults();
             results.querySelector("button[data-add]:not(:disabled)")?.focus();
           },
@@ -418,7 +474,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         ),
       );
     }
-    if (state.browsing && matches.length > count) {
+    if (searchState.browsing && matches.length > count) {
       const pager = element("div", { className: "form-actions" });
       for (const [label, delta] of [
         ["Previous repositories", -1],
@@ -428,14 +484,13 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           button(
             label,
             () => {
-              state.page += delta;
+              searchState.page = page + delta;
               renderResults();
               results.querySelector("button[data-add]:not(:disabled)")?.focus();
             },
             {
               disabled:
-                !editable() ||
-                (delta < 0 ? state.page === 0 : (state.page + 1) * count >= matches.length),
+                !editable() || (delta < 0 ? page === 0 : (page + 1) * count >= matches.length),
             },
           ),
         );
@@ -512,12 +567,6 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           disabled: state.disabled,
         },
       );
-      const summary =
-        !state.settled || state.blockingFailure
-          ? "Access awaiting verification"
-          : invalid(ref)
-            ? "Choose approved access"
-            : `${profileLabel(effective(ref))} · ${override === null ? "Agent default" : "Custom"}`;
       expand.append(
         element("span", { className: "repository-chevron", "aria-hidden": "true" }),
         element(
@@ -527,7 +576,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           element(
             "span",
             { id: `repository-summary-${ref}`, className: invalid(ref) ? "error" : "hint" },
-            summary,
+            accessSummary(ref, override),
           ),
         ),
       );
@@ -654,15 +703,14 @@ export function createRepositoryFields(context, onChange, initial = {}) {
   }
   function hasValidSelection() {
     return (
-      state.settled &&
-      state.blockingFailure === undefined &&
+      state.discovery === "ready" &&
       state.selected.size > 0 &&
       [...state.selected.keys()].every((ref) => !invalid(ref))
     );
   }
   function validate({ required = false } = {}) {
     validation.hidden = true;
-    if (!state.settled || state.blockingFailure !== undefined) {
+    if (!isSettled() || blocksCreate()) {
       section.focus();
       return false;
     }
@@ -674,11 +722,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         ? "Choose approved access for each selected repository."
         : "Select at least one current repository and an authorization level to retry this Agent, or start a new draft.";
       validation.hidden = false;
-      for (const ref of state.selected.keys()) {
-        if (invalid(ref)) {
-          state.expanded.add(ref);
-        }
-      }
+      revealInvalidSelections();
       renderCards();
       section.focus();
       return false;
@@ -705,13 +749,13 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       return;
     }
     state.disabled = disabled;
-    retry.disabled = disabled || !state.settled;
+    retry.disabled = disabled || !isSettled();
     render();
   }
   async function load(clearSelections = false) {
-    state.settled = false;
-    state.draftOnly = false;
-    state.blockingFailure = undefined;
+    state.discovery = "loading";
+    // A new catalog must not inherit filters or pages whose controls may disappear.
+    resetSearch();
     retry.hidden = true;
     choices.setAttribute("aria-busy", "true");
     status.className = "hint";
@@ -749,7 +793,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         throw new Error("Invalid repository choices response.");
       }
       state.options = options;
-      state.settled = true;
+      state.discovery = "ready";
       choices.setAttribute("aria-busy", "false");
       if (clearSelections) {
         status.textContent = options.length
@@ -760,11 +804,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           ? "Select repositories for this Agent. Leave all unselected to continue without repository access."
           : "No approved repositories are available for this Namespace. You can continue without repository access.";
       }
-      for (const ref of state.selected.keys()) {
-        if (invalid(ref)) {
-          state.expanded.add(ref);
-        }
-      }
+      revealInvalidSelections();
       render();
       onChange(false);
       return { kind: "success" };
@@ -780,24 +820,15 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       }
       state.options = [];
       choices.setAttribute("aria-busy", "false");
-      state.settled = true;
-      const optionalOutage =
-        error.status === 503 && error.code === "REPOSITORY_OPTIONS_UNAVAILABLE";
-      state.draftOnly =
-        optionalOutage && !clearSelections && !initial.agentId && state.selected.size === 0;
-      if (error.status === 403) {
-        state.blockingFailure = "denied";
-      } else if (error.status === 409) {
-        state.blockingFailure = "conflict";
-      } else if (clearSelections || !optionalOutage || initial.agentId || state.selected.size > 0) {
-        state.blockingFailure = "unavailable";
-      }
-      if (state.blockingFailure === "denied") {
+      state.discovery = discoveryFailure(error, {
+        allowDraft: !clearSelections && !initial.agentId && state.selected.size === 0,
+      });
+      if (state.discovery === "denied") {
         status.className = "error";
         status.textContent = initial.agentId
           ? "Repository choices are denied because you are not authorized to update this Agent."
           : "Repository choices are denied because you are not authorized to create Agents in this Namespace.";
-      } else if (state.blockingFailure === "conflict") {
+      } else if (state.discovery === "conflict") {
         status.className = "error";
         status.textContent = initial.agentId
           ? "Repository choices conflict with the current Agent or Namespace. Reload this draft before continuing."
@@ -805,7 +836,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       } else if (clearSelections) {
         status.className = "error";
         status.textContent = `Repository choices could not be reloaded. ${message(error)} Retry the reload or start a new draft.`;
-      } else if (state.draftOnly) {
+      } else if (state.discovery === "draft-only") {
         status.className = "hint";
         status.textContent = `Repository choices are unavailable. ${message(error)} You can save a draft without repository access; provisioning is unavailable until discovery succeeds.`;
       } else {
@@ -813,14 +844,10 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         status.textContent = `Repository choices could not be loaded. ${message(error)} Retry repository choices before ${initial.agentId ? "saving repository access" : "creating an Agent"}.`;
       }
       retry.hidden = clearSelections;
-      for (const ref of state.selected.keys()) {
-        if (invalid(ref)) {
-          state.expanded.add(ref);
-        }
-      }
+      revealInvalidSelections();
       render();
       onChange(false);
-      return { kind: state.blockingFailure ?? "unavailable" };
+      return { kind: state.discovery === "draft-only" ? "unavailable" : state.discovery };
     }
   }
 
@@ -847,8 +874,9 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     hasValidSelection,
     setDisabled,
     reload: () => load(true),
-    isSettled: () => state.settled,
-    blocksCreate: () => state.blockingFailure !== undefined,
-    draftOnly: () => state.draftOnly,
+    isDirty,
+    isSettled,
+    blocksCreate,
+    draftOnly: () => state.discovery === "draft-only",
   };
 }

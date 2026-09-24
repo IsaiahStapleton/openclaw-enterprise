@@ -851,10 +851,7 @@ export async function renderAgentDetail(context) {
 
   function renderRepositoryEditor(context, data) {
     let fields;
-    let dirty = false;
-    let pending = false;
-    let outcomeUnknown = false;
-    let reloadRequired = false;
+    let saveState = "idle";
     const feedback = element("p", { className: "hint", role: "status" });
     const reload = button("Reload draft", () =>
       context.navigate(target("draft", "repositories"), namespaceId, true),
@@ -873,7 +870,11 @@ export async function renderAgentDetail(context) {
       context.navigate(target("draft", "repositories"), namespaceId, true);
     });
     function update() {
-      const locked = pending || outcomeUnknown || reloadRequired;
+      const dirty = fields?.isDirty() ?? false;
+      const pending = saveState === "saving";
+      const outcomeUnknown = saveState === "uncertain";
+      const reloadRequired = saveState === "conflict";
+      const locked = saveState !== "idle";
       data.setDraftEditorState({ dirty, saving: pending, outcomeUnknown, reloadRequired });
       save.disabled = locked || !dirty || !fields?.isSettled() || fields.blocksCreate();
       cancel.disabled = locked;
@@ -883,9 +884,10 @@ export async function renderAgentDetail(context) {
     fields = createRepositoryFields(
       context,
       (changed) => {
-        dirty ||= changed;
         if (changed) {
-          feedback.textContent = "Save or cancel repository changes before deploying.";
+          feedback.textContent = fields.isDirty()
+            ? "Save or cancel repository changes before deploying."
+            : "No repository changes to save.";
         }
         update();
       },
@@ -898,7 +900,7 @@ export async function renderAgentDetail(context) {
       if (save.disabled || !fields.validate()) {
         return;
       }
-      pending = true;
+      saveState = "saving";
       update();
       let mutationStarted = false;
       try {
@@ -911,11 +913,13 @@ export async function renderAgentDetail(context) {
           JSON.stringify(fresh.repositoryAccess) !== JSON.stringify(agent.repositoryAccess) ||
           JSON.stringify(fresh.repositoryBindings) !== JSON.stringify(agent.repositoryBindings)
         ) {
-          reloadRequired = true;
+          saveState = "conflict";
           feedback.textContent =
             "Repository access changed while you were editing. Reload this draft before saving.";
           return;
         }
+        // TODO: enforce an expected Agent version in PATCH when draft concurrency
+        // is implemented; this preflight cannot prevent a write between requests.
         mutationStarted = true;
         await request(path, {
           method: "PATCH",
@@ -937,10 +941,14 @@ export async function renderAgentDetail(context) {
           context.onExpired();
         } else {
           feedback.textContent = message(error, mutationStarted);
-          outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
+          if (mutationStarted && ![400, 403, 404, 409, 429].includes(error.status)) {
+            saveState = "uncertain";
+          }
         }
       } finally {
-        pending = false;
+        if (saveState === "saving") {
+          saveState = "idle";
+        }
         if (context.isCurrent()) {
           update();
         }

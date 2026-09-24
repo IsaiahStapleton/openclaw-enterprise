@@ -866,6 +866,24 @@ test("Agent repository access preserves inheritance, custom overrides, and expli
   ]);
   await page.getByRole("button", { name: "Repositories", exact: true }).click();
   await page.getByText("Contributor · Custom", { exact: true }).waitFor();
+  // Reversing an edit restores the saved intent, including explicit overrides.
+  await page.getByRole("button", { name: "Remove example/documentation" }).click();
+  assert.equal(
+    await page.getByRole("button", { name: "Save repository access" }).isEnabled(),
+    true,
+  );
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  assert.equal(
+    await page.getByRole("button", { name: "Save repository access" }).isDisabled(),
+    true,
+  );
+  assert.equal(await page.getByRole("button", { name: "Channels", exact: true }).isEnabled(), true);
+  await page.locator("#repository-default-git-full").check();
+  await page.locator("#repository-default-git-read").check();
+  assert.equal(
+    await page.getByRole("button", { name: "Save repository access" }).isDisabled(),
+    true,
+  );
   await page.getByText("Read-only · Custom", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Access for example/application" }).click();
   await page.locator("#repository-inherit-application").check();
@@ -952,6 +970,123 @@ test("Agent repository access preserves inheritance, custom overrides, and expli
     await page.getByRole("button", { name: "Save repository access" }).isDisabled(),
     true,
   );
+});
+
+test("Agent repository editor distinguishes stale, rejected, and uncertain saves", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "application",
+      repositoryId: "1600",
+      repository: "example/application",
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+    },
+  ]);
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Repository save lifecycle",
+    nativeValues("repository-save"),
+  );
+  const path = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  const access = (defaultProfile) => ({
+    defaultProfile,
+    repositories: [{ repositoryRef: "application" }],
+  });
+  const initial = await fixture.request("PATCH", path, {
+    body: { configurationId: agent.configurationId, repositoryAccess: access("git-full") },
+  });
+  assert.equal(initial.status, 200);
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(
+    page,
+    fixture,
+    `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft&tab=repositories`,
+  );
+  await page.getByText("Contributor · Agent default", { exact: true }).waitFor();
+  await page.locator("#repository-default-git-read").check();
+
+  // A changed saved baseline must be detected before this browser sends a PATCH.
+  const concurrent = await fixture.request("PATCH", path, {
+    body: { configurationId: agent.configurationId, repositoryAccess: access("git-write") },
+  });
+  assert.equal(concurrent.status, 200);
+  const save = page.getByRole("button", { name: "Save repository access" });
+  const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+  await save.click();
+  await page
+    .getByText("Repository access changed while you were editing. Reload this draft before saving.")
+    .waitFor();
+  assert.equal(pathRequests(requests, "PATCH", path).length, 0);
+  assert.equal(await save.isDisabled(), true);
+  assert.equal(await cancel.isDisabled(), true);
+  await page.getByRole("button", { name: "Reload draft", exact: true }).click();
+  await page
+    .getByText("Contributor · no issue management · Agent default", { exact: true })
+    .waitFor();
+  assert.equal(await save.isDisabled(), true);
+
+  // A known denial preserves edits and allows correction; it is not an uncertain write.
+  await page.locator(".repository-profile-group .repository-customize summary").click();
+  await page.locator("#repository-default-issues").check();
+  fixture.policy.restrictions.push({
+    id: "deny-repository-update",
+    namespaceId: namespace.id,
+    resourceKind: "agent",
+    action: "update",
+    effect: "deny",
+  });
+  await save.click();
+  await page
+    .getByText("Access denied. You do not have permission for this operation.", { exact: true })
+    .waitFor();
+  assert.equal(await save.isEnabled(), true);
+  assert.equal(await cancel.isEnabled(), true);
+  assert.equal(await page.locator("#repository-default-issues").isChecked(), true);
+  fixture.policy.restrictions.pop();
+
+  // Commit through the real API, then lose its response. Hold completion long enough
+  // to verify pending controls before proving that readback is required after loss.
+  const committed = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  t.after(() => release.resolve());
+  await page.route(`${fixture.origin}${path}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    committed.resolve(response.status());
+    await release.promise;
+    await route.abort("failed");
+  });
+  await save.click();
+  assert.equal(await committed.promise, 200);
+  assert.equal(await save.isDisabled(), true);
+  assert.equal(
+    await page.getByRole("button", { name: "Remove example/application" }).isDisabled(),
+    true,
+  );
+  assert.equal(
+    await page.getByRole("button", { name: "Channels", exact: true }).isDisabled(),
+    true,
+  );
+  release.resolve();
+  await page
+    .getByText(
+      "Outcome unknown. The result could not be confirmed. Refresh and inspect the saved state before trying again.",
+    )
+    .waitFor();
+  assert.equal(await save.isDisabled(), true);
+  assert.equal(await cancel.isDisabled(), true);
+  const persisted = await fixture.request("GET", path);
+  assert.deepEqual(persisted.data.repositoryAccess, access("git-full"));
+  assert.equal(pathRequests(requests, "PATCH", path).length, 2);
+  await page.getByRole("button", { name: "Reload draft", exact: true }).click();
+  await page.getByText("Contributor · Agent default", { exact: true }).waitFor();
+  assert.equal(await save.isDisabled(), true);
+  assert.equal(await cancel.isEnabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Channels", exact: true }).isEnabled(), true);
+  assert.equal(pathRequests(requests, "PATCH", path).length, 2);
 });
 
 test("Agent creation keeps loading and empty repository discovery safe for an ordinary Agent", async (t) => {
@@ -1474,6 +1609,92 @@ test("Agent repository selection enforces the 16-item limit without narrow viewp
     { clientWidth: 360, scrollWidth: 360 },
   );
 });
+
+for (const discoveryState of ["later page", "search filter", "dismissed results"]) {
+  test(`Agent repository recovery clears ${discoveryState} when the catalog shrinks`, async (t) => {
+    const { fixture, namespace, replacePolicy } = await createRepositoryLaunchFixture(
+      t,
+      (namespaceId) =>
+        Array.from({ length: 25 }, (_, index) => ({
+          repositoryRef: `repository-${String(index + 1).padStart(3, "0")}`,
+          repositoryId: String(1500 + index),
+          repository: `example/repository-${String(index + 1).padStart(3, "0")}`,
+          namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+        })),
+      { reloadablePolicy: true },
+    );
+    const { page } = await newPage(t, fixture);
+    const requests = apiRequests(page, fixture.origin);
+    await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+    await page.getByRole("button", { name: "Start without Preset" }).click();
+    const search = page.getByLabel("Find a repository");
+    await search.fill("repository-025");
+    await search.press("Enter");
+    if (discoveryState === "later page") {
+      await search.fill("");
+      await page.getByRole("button", { name: "Browse all repositories" }).click();
+      await page.getByRole("button", { name: "Next repositories" }).click();
+    } else if (discoveryState === "dismissed results") {
+      await search.fill("");
+      await search.press("Escape");
+    }
+    await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+    await page.getByLabel("Agent name").fill("Recovered repository selection");
+
+    // Admission sees the new policy after discovery. Recovery must reuse the saved
+    // Configuration and expose the smaller catalog without an inaccessible filter.
+    replacePolicy([
+      {
+        repositoryRef: "repository-001",
+        repositoryId: "1500",
+        repository: "example/repository-001",
+        namespaces: [
+          { namespaceId: namespace.id, profiles: ["git-read", "git-write", "git-full"] },
+        ],
+      },
+    ]);
+    const rejected = page.waitForResponse(
+      (response) =>
+        response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+        response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    assert.equal((await rejected).status(), 404);
+    await page.getByRole("button", { name: "Reload repository choices" }).click();
+    await page.getByText(/Repository choices reloaded/).waitFor();
+    assert.equal(await search.count(), 0);
+    assert.equal(await page.locator(".repository-card").count(), 0);
+    assert.equal(await page.locator("#repository-results").isVisible(), true);
+    const add = page.getByRole("button", { name: "Add example/repository-001", exact: true });
+    assert.equal(await add.count(), 1);
+    assert.equal(await add.isEnabled(), true);
+    assert.equal(
+      await page.getByRole("button", { name: "Create Agent", exact: true }).isDisabled(),
+      true,
+    );
+    await add.click();
+    const saved = page.waitForResponse(
+      (response) =>
+        response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+        response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    const response = await saved;
+    assert.equal(response.status(), 201);
+    const agent = (await response.json()).data;
+    assert.deepEqual(agent.repositoryAccess, {
+      defaultProfile: "git-full",
+      repositories: [{ repositoryRef: "repository-001" }],
+    });
+    assert.deepEqual(agent.repositoryBindings, [
+      { repositoryRef: "repository-001", profile: "git-full" },
+    ]);
+    assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+    const attempts = agentPostRequests(requests, namespace.id);
+    assert.equal(attempts.length, 2);
+    assert.equal(agent.configurationId, attempts[0].body.configurationId);
+  });
+}
 
 test("Agent creation recovers from stale authoritative admission without replacing its Configuration", async (t) => {
   const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [

@@ -170,7 +170,9 @@ or a Repo Driver.
 
 After a known rejection of a repository-scoped Agent, **Reload repository choices**
 clears selections and refreshes Namespace policy while retaining the saved
-Configuration. Retry requires at least one current repository with approved
+Configuration. It also clears the search, returns to the first page, and reveals
+results, including when the refreshed catalog no longer needs a search field.
+Retry requires at least one current repository with approved
 access; empty results cannot turn this attempt into an ordinary
 Agent. Failed reloads keep creation disabled and the Configuration ID visible.
 Expiry returns to sign-in. **Start a new draft** opens a new form and leaves the

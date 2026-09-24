@@ -82,6 +82,11 @@ update discovery. It retains inheritance intent, checks for intervening changes,
 and saves `repositoryAccess` through Agent PATCH. Like Configuration edits, these
 preflight reads cannot prevent a later concurrent write. Dirty, pending, and
 uncertain saves block tab changes and deployment until saved, cancelled, or reloaded.
+Dirty state compares current access intent with the loaded draft: reversing an edit
+or restoring a removed repository with Undo unlocks navigation without a save.
+The picker owns discovery status separately from access intent and search state.
+Reloading choices resets search, pagination, and dismissed results together, so a
+smaller catalog cannot retain filters whose controls are no longer visible.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders supported
 Slack channel settings in **New revision** only. Slack uses fixed unresolved
