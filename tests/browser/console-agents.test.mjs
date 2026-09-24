@@ -5181,7 +5181,9 @@ test("Agent tab switches ignore late configuration reads and keep direct workspa
   assert.equal(await tabs.evaluate((node) => node.isConnected), true);
   await page.getByRole("button", { name: "Channels", exact: true }).click();
   await page.getByRole("button", { name: "Configure Slack", exact: true }).waitFor();
-  assert.equal(requests.filter((request) => request.path === configurationPath).length, 1);
+  // Shared controls reread saved Configuration for the credential gate after the
+  // first panel response. Neither read may replace the active tab or its controls.
+  assert.equal(requests.filter((request) => request.path === configurationPath).length, 2);
 });
 
 test("standard Codex password Preset creates one scoped Secret and reuses it after an Agent conflict", async (t) => {

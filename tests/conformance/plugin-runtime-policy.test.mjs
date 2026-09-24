@@ -90,9 +90,10 @@ for (const [name, tools] of [
       {
         baseConfig: { tools },
         env: {
-          OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+          OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify(runtime),
+          OPENCLAW_RUNTIME_STATUS_PORT: "18791",
           OPENCLAW_AGENT_REVISION_ID: "revision-plugin-compute-1",
-          OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
+          OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
         },
       },
     );
