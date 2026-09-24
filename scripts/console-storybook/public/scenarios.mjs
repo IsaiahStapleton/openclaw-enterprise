@@ -350,7 +350,7 @@ export const scenarios = {
       { selector: "#repository-default-git-read", click: true },
     ],
     description:
-      "Two approved repositories inherit Read-only access. Each Access disclosure can preserve an explicit override when the Agent default changes.",
+      "Two approved repositories inherit Read-only access. Expand a repository header to customize its access; an explicit override stays fixed when the Agent default changes.",
     gap: "An operator supplies Namespace approvals, GitHub App configuration, credential service, compatible runtime images, and network policy. Repository grants do not change Harness filesystem or approval policy.",
   },
   createRepositoriesContributor: {
@@ -441,7 +441,7 @@ export const scenarios = {
     path: create,
     actions: [...repositoryForm, { selector: "#repository-handbook", click: true }],
     description:
-      "A repository restricted to Read-only remains visible with its Access pane open. The operator must explicitly repair the selection before saving.",
+      "A repository restricted to Read-only remains expanded. The operator must explicitly repair the selection before saving.",
   },
   createRepositoriesEmpty: {
     group: "Pages/Create Agent",

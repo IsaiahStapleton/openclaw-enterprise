@@ -192,7 +192,12 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         "data-access-customize": id,
         hidden: profile === "git-read",
       },
-      element("summary", {}, "Customize access"),
+      element(
+        "summary",
+        {},
+        element("span", { className: "repository-chevron", "aria-hidden": "true" }),
+        "Customize access",
+      ),
       element(
         "label",
         { className: "repository-option", for: issue.id },
@@ -245,7 +250,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     (search.isConnected
       ? search
       : (results.querySelector("button:not(:disabled)") ??
-        cards.querySelector(".repository-card:last-of-type .repository-text-action") ??
+        cards.querySelector(".repository-card:last-of-type .repository-card-toggle") ??
         section)
     ).focus();
   }
@@ -474,15 +479,16 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         hidden: !state.expanded.has(ref),
       });
       const expand = button(
-        "Access",
+        "",
         () => {
           settings.hidden = !settings.hidden;
           expand.setAttribute("aria-expanded", String(!settings.hidden));
           settings.hidden ? state.expanded.delete(ref) : state.expanded.add(ref);
         },
         {
-          className: "repository-text-action",
+          className: "repository-card-toggle",
           "aria-expanded": String(!settings.hidden),
+          "aria-describedby": `repository-summary-${ref}`,
           "aria-controls": settings.id,
           "aria-label": `Access for ${label}`,
         },
@@ -502,6 +508,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         {
           className: "repository-remove",
           "aria-label": `Remove ${label}`,
+          title: `Remove ${label}`,
           disabled: state.disabled,
         },
       );
@@ -511,18 +518,21 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           : invalid(ref)
             ? "Choose approved access"
             : `${profileLabel(effective(ref))} · ${override === null ? "Agent default" : "Custom"}`;
-      card.append(
+      expand.append(
+        element("span", { className: "repository-chevron", "aria-hidden": "true" }),
         element(
-          "div",
-          { className: "repository-card-heading" },
+          "span",
+          { className: "repository-identity" },
+          element("strong", {}, label),
           element(
-            "div",
-            { className: "repository-identity" },
-            element("strong", {}, label),
-            element("span", { className: invalid(ref) ? "error" : "hint" }, summary),
+            "span",
+            { id: `repository-summary-${ref}`, className: invalid(ref) ? "error" : "hint" },
+            summary,
           ),
-          element("div", { className: "repository-card-actions" }, expand, remove),
         ),
+      );
+      card.append(
+        element("div", { className: "repository-card-heading" }, expand, remove),
         settings,
       );
       const inherit = element("input", {

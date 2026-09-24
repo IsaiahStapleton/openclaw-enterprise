@@ -42,7 +42,7 @@ configure model authentication.
 ## Create and deploy an Agent
 
 In **Agents** > **Create Agent**, add up to 16 repositories. They inherit
-the Agent default; open a repository’s **Access** pane to customize it.
+the Agent default; expand a selected repository’s card to customize its access.
 Use **Dedicated** for Slack on the same Agent; follow the
 [same-Agent Console sequence](../reference/console/create-and-deploy.md#use-repositories-and-slack-on-the-same-agent)
 for channels, credentials and deployment. Repository profiles and model

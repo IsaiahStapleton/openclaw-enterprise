@@ -143,8 +143,8 @@ unavailable browser storage leaves alphabetical suggestions.
 
 **Default repository access** starts at **Contributor**: push code, work with PRs,
 and manage issues. Choose **Read-only** for inspection, or customize Contributor
-to turn off issue management. Each added repository inherits this default. Open
-its **Access** pane to choose a custom level; **Use Agent default** restores
+to turn off issue management. Each added repository inherits this default. Expand
+its card to choose a custom level; **Use Agent default** restores
 inheritance. Custom choices remain fixed when the default changes, even if they
 previously matched it. Invalid policy combinations stay visible and must be
 repaired or removed before saving. No change silently widens an override.

@@ -15,7 +15,7 @@ OCE requests one numeric repository ID and rejects a different returned grant.
 App permissions must be approved on the installation before use.
 
 The Console starts with Contributor as the Agent default. Added repositories
-inherit it until customized in their **Access** pane. Turning off issue management
+inherit it until customized by expanding their card. Turning off issue management
 selects `git-write`; each repository must permit its resulting profile.
 
 Agent create, provision, and update requests can use `repositoryAccess`:
