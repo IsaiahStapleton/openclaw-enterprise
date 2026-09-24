@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
 updated: "2026-09-24"
-last_updated_session: "authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685"
+last_updated_session: "public-pr/374"
 ---
 
 # Agent repository credential flow
@@ -23,7 +23,7 @@ See [service forwarding and retirement](repository-credentials.md) and
 - `apps/controller/src/worker.ts:ControllerWorker.prepareRevision` prepares
   repository sessions before invoking the selected Compute Driver.
 
-The Installation selects a repository Driver and Provider. API, worker and service
+The Installation selects a repository Driver and Backend. API, worker and service
 share one immutable registry; the Namespace is ready. Unbound Agents bypass this
 capability.
 
@@ -138,11 +138,11 @@ serializer in `apps/controller/src/index.ts` returns only Driver identity,
 references, profiles and deadline.
 
 `apps/controller/src/composition/repository-credentials/platform.ts:composeRepoDriver`
-constructs `GitHubRepoDriver` for `repo` from a Provider-owned Unix client,
-validated registry and public CA. Installation and Provider membership must select
-the same Driver ID. The API and worker never load the token engine or App key.
-The [production startup flow](production-startup.md) owns composition and sidecar
-launch; the service validates protected inputs before listening.
+constructs `GitHubRepoDriver` for capability `repo` from a Backend-owned Unix
+client, validated registry and public CA. Installation and Backend membership
+must select the same Driver ID. The API and worker never load the token engine or
+App key. The [production startup flow](production-startup.md) owns composition and
+sidecar launch; the service validates protected inputs before listening.
 
 ### 3. Record ownership before opening a session
 
@@ -155,7 +155,7 @@ new attempts for stopped or deleting owners.
 `RepositoryCredentialLifecycle.open` calls the Driver outside the transaction.
 State stores recovery identifiers and phases, never bearers or client files.
 
-`apps/controller/src/providers/repository-credentials/control-client.ts:UnixRepositoryCredentialControlClient`
+`apps/controller/src/backends/repository-credentials/control-client.ts:UnixRepositoryCredentialControlClient`
 sends the bound request over the private socket. The service independently
 resolves and compares the grant through
 `apps/controller/src/drivers/repo/github/credentials/registry-factory.ts:createGitHubRegistryDriverFactory`.
@@ -357,7 +357,7 @@ Slack or GitHub execution; Ready Pods and local commands do not prove live write
 
 ## Changelog
 
-- 2026-09-24 19:41: Trace request-order persistence after Driver resolution. (authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685 - 43d99e7dce02fbd34b072c877868ad1beef4d245)
+- 2026-09-24 19:41: Trace request-order persistence after Driver resolution. (public-pr/374 - 43d99e7dce02fbd34b072c877868ad1beef4d245)
 
 - 2026-09-24 07:53: Trace discovery, inheritance, and per-repository overrides. (public-change/repository-picker - 81b18912)
 

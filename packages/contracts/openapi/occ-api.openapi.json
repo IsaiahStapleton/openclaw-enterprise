@@ -1242,6 +1242,102 @@
         "tags": ["Authentication"]
       }
     },
+    "/backends": {
+      "get": {
+        "description": "Requires administer permission on the requested Installation.",
+        "operationId": "listBackends",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                            "type": "string"
+                          },
+                          "type": {
+                            "anyOf": [
+                              { "const": "chatgpt", "type": "string" },
+                              { "const": "github", "type": "string" }
+                            ]
+                          }
+                        },
+                        "required": ["id", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List configured Backends (experimental)",
+        "tags": ["Backends"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
+        ]
+      }
+    },
     "/installation": {
       "get": {
         "description": "Requires read permission on the requested Installation.",
@@ -2194,6 +2290,17 @@
                             "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                             "type": "string"
                           },
+                          "backendId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "configurationId": {
                             "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                             "type": "string"
@@ -2312,17 +2419,6 @@
                             "type": "string"
                           },
                           "plugins": { "$ref": "#/components/schemas/def-4" },
-                          "providerId": {
-                            "anyOf": [
-                              {
-                                "maxLength": 200,
-                                "minLength": 1,
-                                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                                "type": "string"
-                              },
-                              { "type": "null" }
-                            ]
-                          },
                           "repositoryAccess": {
                             "additionalProperties": false,
                             "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -2402,7 +2498,7 @@
                           "name",
                           "servicePrincipalId",
                           "configurationId",
-                          "providerId",
+                          "backendId",
                           "harnessAuth",
                           "executionMode",
                           "desiredRuntimeState",
@@ -2496,6 +2592,17 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "backendId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                        "type": "string"
+                      },
+                      { "type": "null" }
+                    ]
+                  },
                   "configurationId": {
                     "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                     "type": "string"
@@ -2616,17 +2723,6 @@
                     "type": "string"
                   },
                   "plugins": { "$ref": "#/components/schemas/def-4" },
-                  "providerId": {
-                    "anyOf": [
-                      {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                        "type": "string"
-                      },
-                      { "type": "null" }
-                    ]
-                  },
                   "repositoryAccess": {
                     "additionalProperties": false,
                     "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -2710,6 +2806,17 @@
                         "activeRevisionId": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
+                        },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -2829,17 +2936,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryAccess": {
                           "additionalProperties": false,
                           "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -2919,7 +3015,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -3603,6 +3699,17 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "backendId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                        "type": "string"
+                      },
+                      { "type": "null" }
+                    ]
+                  },
                   "configuration": {
                     "additionalProperties": false,
                     "properties": {
@@ -3770,17 +3877,6 @@
                     "type": "string"
                   },
                   "plugins": { "$ref": "#/components/schemas/def-4" },
-                  "providerId": {
-                    "anyOf": [
-                      {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                        "type": "string"
-                      },
-                      { "type": "null" }
-                    ]
-                  },
                   "repositoryAccess": {
                     "additionalProperties": false,
                     "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -4498,6 +4594,17 @@
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -4616,17 +4723,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryAccess": {
                           "additionalProperties": false,
                           "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -4706,7 +4802,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -4820,6 +4916,17 @@
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -4938,17 +5045,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryAccess": {
                           "additionalProperties": false,
                           "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -5028,7 +5124,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -5128,6 +5224,17 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "backendId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                        "type": "string"
+                      },
+                      { "type": "null" }
+                    ]
+                  },
                   "configurationId": {
                     "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                     "type": "string"
@@ -5216,17 +5323,6 @@
                     ]
                   },
                   "plugins": { "$ref": "#/components/schemas/def-4" },
-                  "providerId": {
-                    "anyOf": [
-                      {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                        "type": "string"
-                      },
-                      { "type": "null" }
-                    ]
-                  },
                   "repositoryAccess": {
                     "additionalProperties": false,
                     "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -5309,6 +5405,17 @@
                         "activeRevisionId": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
+                        },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -5428,17 +5535,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryAccess": {
                           "additionalProperties": false,
                           "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -5518,7 +5614,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -5659,6 +5755,17 @@
                           "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "compute": {
                           "additionalProperties": false,
                           "properties": {
@@ -5793,17 +5900,6 @@
                           "required": ["driver", "plugins"],
                           "type": "object"
                         },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryCredentials": {
                           "additionalProperties": false,
                           "properties": {
@@ -5894,7 +5990,7 @@
                         "namespaceId",
                         "agentId",
                         "revision",
-                        "providerId",
+                        "backendId",
                         "configurationId",
                         "configurationKind",
                         "configurationGeneration",
@@ -6470,6 +6566,17 @@
                             "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                             "type": "string"
                           },
+                          "backendId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "compute": {
                             "additionalProperties": false,
                             "properties": {
@@ -6609,17 +6716,6 @@
                             "required": ["driver", "plugins"],
                             "type": "object"
                           },
-                          "providerId": {
-                            "anyOf": [
-                              {
-                                "maxLength": 200,
-                                "minLength": 1,
-                                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                                "type": "string"
-                              },
-                              { "type": "null" }
-                            ]
-                          },
                           "repositoryCredentials": {
                             "additionalProperties": false,
                             "properties": {
@@ -6710,7 +6806,7 @@
                           "namespaceId",
                           "agentId",
                           "revision",
-                          "providerId",
+                          "backendId",
                           "configurationId",
                           "configurationKind",
                           "configurationGeneration",
@@ -6834,6 +6930,17 @@
                         "agentId": {
                           "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
+                        },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "compute": {
                           "additionalProperties": false,
@@ -6969,17 +7076,6 @@
                           "required": ["driver", "plugins"],
                           "type": "object"
                         },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryCredentials": {
                           "additionalProperties": false,
                           "properties": {
@@ -7070,7 +7166,7 @@
                         "namespaceId",
                         "agentId",
                         "revision",
-                        "providerId",
+                        "backendId",
                         "configurationId",
                         "configurationKind",
                         "configurationGeneration",
@@ -7549,6 +7645,17 @@
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -7667,17 +7774,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryAccess": {
                           "additionalProperties": false,
                           "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
@@ -7757,7 +7853,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -10056,6 +10152,7 @@
                               "agent": {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "backendId": { "$ref": "#/components/schemas/def-0" },
                                   "executionMode": { "$ref": "#/components/schemas/def-0" },
                                   "harnessAuth": { "$ref": "#/components/schemas/def-0" },
                                   "initialWorkspaceFiles": {
@@ -10086,7 +10183,6 @@
                                   },
                                   "name": { "$ref": "#/components/schemas/def-0" },
                                   "plugins": { "$ref": "#/components/schemas/def-0" },
-                                  "providerId": { "$ref": "#/components/schemas/def-0" },
                                   "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
                                   "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                                 },
@@ -10264,6 +10360,7 @@
                       "agent": {
                         "additionalProperties": false,
                         "properties": {
+                          "backendId": { "$ref": "#/components/schemas/def-0" },
                           "executionMode": { "$ref": "#/components/schemas/def-0" },
                           "harnessAuth": { "$ref": "#/components/schemas/def-0" },
                           "initialWorkspaceFiles": {
@@ -10294,7 +10391,6 @@
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
                           "plugins": { "$ref": "#/components/schemas/def-0" },
-                          "providerId": { "$ref": "#/components/schemas/def-0" },
                           "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
                           "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                         },
@@ -10411,6 +10507,7 @@
                             "agent": {
                               "additionalProperties": false,
                               "properties": {
+                                "backendId": { "$ref": "#/components/schemas/def-0" },
                                 "executionMode": { "$ref": "#/components/schemas/def-0" },
                                 "harnessAuth": { "$ref": "#/components/schemas/def-0" },
                                 "initialWorkspaceFiles": {
@@ -10441,7 +10538,6 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" },
-                                "providerId": { "$ref": "#/components/schemas/def-0" },
                                 "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
                                 "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
@@ -10733,6 +10829,7 @@
                             "agent": {
                               "additionalProperties": false,
                               "properties": {
+                                "backendId": { "$ref": "#/components/schemas/def-0" },
                                 "executionMode": { "$ref": "#/components/schemas/def-0" },
                                 "harnessAuth": { "$ref": "#/components/schemas/def-0" },
                                 "initialWorkspaceFiles": {
@@ -10763,7 +10860,6 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" },
-                                "providerId": { "$ref": "#/components/schemas/def-0" },
                                 "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
                                 "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
@@ -10945,6 +11041,7 @@
                       "agent": {
                         "additionalProperties": false,
                         "properties": {
+                          "backendId": { "$ref": "#/components/schemas/def-0" },
                           "executionMode": { "$ref": "#/components/schemas/def-0" },
                           "harnessAuth": { "$ref": "#/components/schemas/def-0" },
                           "initialWorkspaceFiles": {
@@ -10975,7 +11072,6 @@
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
                           "plugins": { "$ref": "#/components/schemas/def-0" },
-                          "providerId": { "$ref": "#/components/schemas/def-0" },
                           "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
                           "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                         },
@@ -11091,6 +11187,7 @@
                             "agent": {
                               "additionalProperties": false,
                               "properties": {
+                                "backendId": { "$ref": "#/components/schemas/def-0" },
                                 "executionMode": { "$ref": "#/components/schemas/def-0" },
                                 "harnessAuth": { "$ref": "#/components/schemas/def-0" },
                                 "initialWorkspaceFiles": {
@@ -11121,7 +11218,6 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" },
-                                "providerId": { "$ref": "#/components/schemas/def-0" },
                                 "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
                                 "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
@@ -12594,102 +12690,6 @@
         "tags": ["Service accounts"],
         "x-openclaw-permissions": [
           { "action": "update", "resourceKind": "service_account", "scope": "requested" }
-        ]
-      }
-    },
-    "/providers": {
-      "get": {
-        "description": "Requires administer permission on the requested Installation.",
-        "operationId": "listProviders",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "id": {
-                            "maxLength": 200,
-                            "minLength": 1,
-                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                            "type": "string"
-                          },
-                          "type": {
-                            "anyOf": [
-                              { "const": "chatgpt", "type": "string" },
-                              { "const": "github", "type": "string" }
-                            ]
-                          }
-                        },
-                        "required": ["id", "type"],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    },
-                    "meta": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "requestId": {
-                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                          "type": "string"
-                        }
-                      },
-                      "required": ["requestId"],
-                      "type": "object"
-                    }
-                  },
-                  "required": ["data", "meta"],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Default Response"
-          },
-          "400": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "401": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "403": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "404": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "500": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "503": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          }
-        },
-        "summary": "List configured Providers",
-        "tags": ["Providers"],
-        "x-openclaw-permissions": [
-          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
         ]
       }
     }

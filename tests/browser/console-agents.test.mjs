@@ -19,11 +19,11 @@ import {
 } from "../../packages/contracts/src/workspace-defaults.mjs";
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
 import { validateGitHubRepositoryRegistry } from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
-import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
+import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/backends/repository-credentials/control-client.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
-import { createConsoleAppFixture, providerFixtures } from "../helpers/console-app.mjs";
+import { createConsoleAppFixture, backendFixtures } from "../helpers/console-app.mjs";
 import { createConsoleRepositoryLaunchFixture } from "../helpers/console-repository-launch.mjs";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
@@ -91,7 +91,7 @@ async function login(page, fixture, path = "/console/agents", credentials = fixt
   await page.getByLabel("Username").fill(credentials.email);
   await page.getByLabel("Password").fill(credentials.password);
   await page.getByRole("button", { name: "Login" }).click();
-  await page.waitForURL(/\/console\/(agents|providers|namespaces|settings)/);
+  await page.waitForURL(/\/console\/(agents|backends|namespaces|settings)/);
 }
 
 function apiRequests(page, origin) {
@@ -321,7 +321,7 @@ function nativeValues(marker, options = {}) {
   };
 }
 
-const repositoryProviderFixture = Object.freeze({
+const repositoryBackendFixture = Object.freeze({
   id: "console-repositories",
   type: "github",
   configuration: Object.freeze({ registryPath: "/unused/console/repositories.json" }),
@@ -334,7 +334,7 @@ async function createRepositoryLaunchFixture(
   { reloadablePolicy = false } = {},
 ) {
   const fixture = await createConsoleAppFixture(t, {
-    providers: [...providerFixtures, repositoryProviderFixture],
+    backends: [...backendFixtures, repositoryBackendFixture],
     repositoryCredentials: true,
   });
   await fixture.bootstrap();
@@ -368,26 +368,26 @@ async function createRepositoryLaunchFixture(
 }
 
 function repositoryPolicyDriver(repositories) {
-  const provider = repositoryProviderFixture;
+  const backend = repositoryBackendFixture;
   const registry = validateGitHubRepositoryRegistry(
     {
       version: 1,
-      providerId: provider.id,
+      backendId: backend.id,
       providerInstanceId: "console-repository-provider",
       appId: "123",
       githubInstallationId: "456",
       maximumDurationSeconds: 3600,
       repositories,
     },
-    provider.id,
+    backend.id,
   );
   return new GitHubRepoDriver(
     {
-      id: provider.id,
+      id: backend.id,
       client: new UnixRepositoryCredentialControlClient({
         controlSocket: "/unused/console/repository-control.sock",
       }),
-      drivers: provider.drivers,
+      drivers: backend.drivers,
     },
     registry,
     { sessionDurationSeconds: 600 },
@@ -448,7 +448,7 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  assert.equal(await page.getByRole("link", { name: "Providers", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("link", { name: "Backends", exact: true }).count(), 0);
   assert.deepEqual(await optionValues(page.getByLabel("Provider", { exact: true })), [
     { value: "openai", text: "OpenAI" },
     { value: "anthropic", text: "Anthropic" },
@@ -622,7 +622,7 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   assert.equal(created.data.configurationId, configuration.data.id);
   assert.equal(created.data.executionMode, "dedicated");
   assert.deepEqual(agentProvisionPostRequests(requests, namespace.id), []);
-  assert.equal(created.data.providerId, null);
+  assert.equal(created.data.backendId, null);
   assert.deepEqual(created.data.harnessAuth, { method: "api_key", source: secret.ref });
   assert.equal((await page.locator("body").textContent()).includes(key), false);
   assert.equal(
@@ -843,6 +843,24 @@ test("Agent repository access preserves inheritance, custom overrides, and expli
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
+  const accessDetails = page.locator(".repository-access-details");
+  const accessSummary = accessDetails.locator("summary");
+  const apiScope = accessDetails.getByText(/GraphQL can also return public information/);
+  assert.equal(await apiScope.isVisible(), false);
+  await accessSummary.focus();
+  await accessSummary.press("Enter");
+  assert.equal(await apiScope.isVisible(), true);
+  await accessSummary.press("Enter");
+  assert.equal(await apiScope.isVisible(), false);
+  const defaultAccess = page.locator(".repository-profile-group");
+  const writeAccess = defaultAccess.locator(".repository-write-access");
+  assert.equal(await writeAccess.isVisible(), false);
+  await defaultAccess.getByText("Customize access", { exact: true }).click();
+  assert.equal(await writeAccess.isVisible(), true);
+  assert.match(await writeAccess.innerText(), /can permit merges and branch changes/);
+  assert.match(await writeAccess.innerText(), /best effort and does not restrict GraphQL/);
+  assert.match(await writeAccess.innerText(), /administration and workflow permissions/);
+  await defaultAccess.getByText("Customize access", { exact: true }).click();
   assert.equal(await page.getByLabel("Find a repository").count(), 0);
   await page.getByRole("button", { name: "Add example/application", exact: true }).focus();
   await page.keyboard.press("Space");
@@ -1359,7 +1377,7 @@ test("Agent deployment reports preflight errors and requires reload for changed 
 
 for (const [field, change] of [
   ["execution mode", { executionMode: "dedicated" }],
-  ["Provider", { providerId: providerFixtures[0].id }],
+  ["Backend", { backendId: backendFixtures[0].id }],
   [
     "plugin policy",
     {
@@ -3063,7 +3081,7 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
     namespaceId: namespace.id,
     agentId,
     revision: 1,
-    providerId: null,
+    backendId: null,
     configurationId: agent.configurationId,
     configurationKind: "agent",
     configurationGeneration: 2,
@@ -3461,7 +3479,7 @@ test("Dedicated Agent creation reuses separately saved Secret references after p
     namespaceId: namespace.id,
     agentId,
     revision: 1,
-    providerId: null,
+    backendId: null,
     configurationId: agent.configurationId,
     configurationKind: "agent",
     configurationGeneration: 1,
@@ -3679,7 +3697,7 @@ test("Agent creation offers mainline Anthropic models before credentials and sav
   const fixture = await createConsoleAppFixture(t, {
     state,
     secretDriver,
-    providerSummaries: undefined,
+    backendSummaries: undefined,
   });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Anthropic authoring", { ready: true });
@@ -3768,7 +3786,7 @@ test("Agent creation offers mainline Anthropic models before credentials and sav
   const agent = (await response.json()).data;
   await page.waitForURL((url) => url.pathname === `/console/agents/${agent.id}`);
   assert.equal(agent.executionMode, "embedded");
-  assert.equal(agent.providerId, null);
+  assert.equal(agent.backendId, null);
   assert.equal(agent.harnessAuth.method, "api_key");
   const configuration = await fixture.request(
     "GET",
@@ -3784,7 +3802,7 @@ test("Agent creation offers mainline Anthropic models before credentials and sav
     configuration.data.values.agents.defaults.models["anthropic/claude-fable-5-1"].agentRuntime.id,
     "openclaw",
   );
-  assert.equal(pathRequests(requests, "GET", "/providers").length, 0);
+  assert.equal(pathRequests(requests, "GET", "/backends").length, 0);
   assert.equal(
     pathRequests(requests, "GET", `/namespaces/${namespace.id}/service-accounts`).length,
     0,
@@ -6963,7 +6981,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
         agent: {
           name: "{{ vars.name }}",
           executionMode: "{{ vars.execution }}",
-          providerId: providerFixtures[0].id,
+          backendId: backendFixtures[0].id,
           harnessAuth: { method: "codex_pat", source: secret.ref },
           plugins,
           initialWorkspaceFiles: {
@@ -7102,7 +7120,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     [WORKSPACE_DEFAULTS_ID, WORKSPACE_DEFAULTS_ID],
   );
   assert.deepEqual(created.data.plugins, plugins);
-  assert.equal(created.data.providerId, providerFixtures[0].id);
+  assert.equal(created.data.backendId, backendFixtures[0].id);
   assert.deepEqual(created.data.harnessAuth, { method: "codex_pat", source: secret.ref });
   const saved = await fixture.request(
     "GET",

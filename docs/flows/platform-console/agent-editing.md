@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
 updated: 2026-09-24
-last_updated_session: authoring-run/40ce5588-8a3c-4908-ae43-f87680889e36
+last_updated_session: public-pr/374
 ---
 
 # Console Agent editing and runtime requests
@@ -308,11 +308,11 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 
 ## Changelog
 
-- 2026-09-24 20:12: Check the saved draft before channel Secret writes. (authoring-run/40ce5588-8a3c-4908-ae43-f87680889e36 - 5fda9d8a7770b95aff6e67a03bbb796639e8ada0)
+- 2026-09-24 20:12: Check the saved draft before channel Secret writes. (public-pr/374 - 5fda9d8a7770b95aff6e67a03bbb796639e8ada0)
 
-- 2026-09-24 20:00: Trace deployment checks for Agent settings and pending credential and channel writes. (authoring-run/a76da345-0aab-449e-a344-726196fc376c - 22fc4b0e18d5a6a1a7923d42c1503c1de3b7bf72)
+- 2026-09-24 20:00: Trace deployment checks for Agent settings and pending credential and channel writes. (public-pr/374 - 22fc4b0e18d5a6a1a7923d42c1503c1de3b7bf72)
 
-- 2026-09-24 19:41: Trace unavailable discovery and the repository-access deployment check. (authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685 - 43d99e7dce02fbd34b072c877868ad1beef4d245)
+- 2026-09-24 19:41: Trace unavailable discovery and the repository-access deployment check. (public-pr/374 - 43d99e7dce02fbd34b072c877868ad1beef4d245)
 
 - 2026-09-24 07:53: Trace draft repository editing and save guards. (public-change/repository-picker - 81b18912)
 

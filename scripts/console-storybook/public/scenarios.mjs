@@ -306,7 +306,7 @@ export const scenarios = {
     path: "/console/agents",
     description:
       "Browse pages, component states, and guided Agent workflows. Every preview mounts the production console modules and styles in its own frame. Reset story discards all local changes.",
-    gap: "Stop Agent requests the stopped desired state; deployment resumes an Agent. Namespace provisioning, Preset management, and installed Provider setup require an API, CLI, or operator workflow. Serving health and model responses require separate runtime verification.",
+    gap: "Stop Agent requests the stopped desired state; deployment resumes an Agent. Namespace provisioning, Preset management, and experimental Backend setup require an API, CLI, or operator workflow. Serving health and model responses require separate runtime verification.",
   },
   login: {
     group: "Pages/Sign in",
@@ -412,26 +412,27 @@ export const scenarios = {
     rules: [{ path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents", hold: true }],
     description: "The collection read remains pending until the real 15-second client timeout.",
   },
-  providers: {
-    group: "Pages/Providers",
+  backends: {
+    group: "Pages/Backends",
     name: "Configured",
-    path: "/console/providers",
-    description: "Installation-wide Provider discovery.",
-    gap: "This is a read-only page; configure Providers through installation configuration.",
+    path: "/console/backends",
+    description:
+      "Experimental Installation-wide Backend discovery, separate from model provider selection.",
+    gap: "This is a read-only page; configure experimental Backends through Installation configuration.",
   },
-  providersEmpty: {
-    group: "Pages/Providers",
+  backendsEmpty: {
+    group: "Pages/Backends",
     name: "Empty",
-    path: "/console/providers",
-    emptyProviders: true,
-    description: "No Providers are configured.",
+    path: "/console/backends",
+    emptyBackends: true,
+    description: "No experimental Backends are configured.",
   },
-  providersError: {
-    group: "Pages/Providers",
+  backendsError: {
+    group: "Pages/Backends",
     name: "Discovery unavailable",
-    path: "/console/providers",
-    rules: [{ path: "/providers", status: 503 }],
-    description: "Provider discovery fails and can be retried.",
+    path: "/console/backends",
+    rules: [{ path: "/backends", status: 503 }],
+    description: "Backend discovery fails and can be retried.",
   },
   namespaces: {
     group: "Pages/Namespaces",
@@ -1596,14 +1597,14 @@ export const scenarios = {
     path: "/console/agents?debug=true",
     buildRevision: "abcdef1234567890abcdef1234567890abcdef12",
     description:
-      "OCE branding with an adjacent eight-character OCC commit. Hover the version for the full hash. This revision is simulated.",
+      "Approved OpenClaw mech mascot beside OCE and an eight-character OCC commit. Check the mascot at desktop and mobile widths, then hover the version for the full hash. This revision is simulated.",
   },
   developmentBuild: {
     group: "Components/Navigation",
     name: "OCC development build",
     path: "/console/agents?debug=true",
     description:
-      "OCE branding with an adjacent dev label when OCC build metadata is unavailable. No checkout or gateway revision is inferred.",
+      "Approved OpenClaw mech mascot beside OCE with an adjacent dev label when OCC build metadata is unavailable. No checkout or gateway revision is inferred.",
   },
   menu: {
     group: "Components/Navigation",

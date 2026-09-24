@@ -535,7 +535,7 @@ export async function renderAgentDetail(context) {
           }
           if (
             freshAgent.executionMode !== agent.executionMode ||
-            freshAgent.providerId !== agent.providerId ||
+            freshAgent.backendId !== agent.backendId ||
             JSON.stringify(freshAgent.plugins) !== JSON.stringify(agent.plugins)
           ) {
             deployReloadMessage = "Agent settings changed. Reload this draft before deploying.";
@@ -909,7 +909,7 @@ export async function renderAgentDetail(context) {
         : snapshot.repositoryCredentials?.bindings;
       const details = [
         ["Execution mode", executionMode === "dedicated" ? "Dedicated" : "Embedded"],
-        ["Provider", draft ? agent.providerId : snapshot.providerId],
+        ["Backend (experimental)", draft ? agent.backendId : snapshot.backendId],
         [
           "Repository access",
           repositoryBindings

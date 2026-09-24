@@ -230,7 +230,7 @@ export function validatePresetTemplate(template) {
       [
         "name",
         "executionMode",
-        "providerId",
+        "backendId",
         "harnessAuth",
         "plugins",
         "repositoryAccess",

@@ -16,7 +16,7 @@ import {
   Name,
   NamespaceId,
   PermissionActionSchema,
-  ProviderId,
+  BackendId,
   RepositoryBindingSelectionSchema,
   RepositoryBindingSelectionsSchema,
   RepositoryAccessSchema,
@@ -190,7 +190,7 @@ export const AgentSchema = Type.Object(
     name: Name,
     servicePrincipalId: Type.String({ minLength: 1, maxLength: 200 }),
     configurationId: ConfigurationId,
-    providerId: Type.Union([ProviderId, Type.Null()]),
+    backendId: Type.Union([BackendId, Type.Null()]),
     harnessAuth: Type.Union([HarnessAuthBindingSchema, Type.Null()]),
     executionMode: HarnessExecutionModeSchema,
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
@@ -397,9 +397,9 @@ export const ServiceAccountSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ProviderSummarySchema = Type.Object(
+export const BackendSummarySchema = Type.Object(
   {
-    id: ProviderId,
+    id: BackendId,
     type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github")]),
   },
   { additionalProperties: false },
@@ -514,8 +514,8 @@ export const AgentListResponse = Type.Object(
   { additionalProperties: false },
 );
 
-export const ProviderListResponse = Type.Object(
-  { data: Type.Array(ProviderSummarySchema), meta: Meta },
+export const BackendListResponse = Type.Object(
+  { data: Type.Array(BackendSummarySchema), meta: Meta },
   { additionalProperties: false },
 );
 
@@ -546,7 +546,7 @@ export const AgentRevisionSchema = Type.Object(
     namespaceId: NamespaceId,
     agentId: AgentId,
     revision: Type.Integer({ minimum: 1 }),
-    providerId: Type.Union([ProviderId, Type.Null()]),
+    backendId: Type.Union([BackendId, Type.Null()]),
     configurationId: ConfigurationId,
     configurationKind: ConfigurationKindSchema,
     configurationGeneration: ConfigurationGeneration,
@@ -700,7 +700,7 @@ export type NamespaceWire = Type.Static<typeof NamespaceSchema>;
 export type ConfigurationWire = Type.Static<typeof ConfigurationSchema>;
 export type SecretWire = Type.Static<typeof SecretSchema>;
 export type ServiceAccountWire = Type.Static<typeof ServiceAccountSchema>;
-export type ProviderSummaryWire = Type.Static<typeof ProviderSummarySchema>;
+export type BackendSummaryWire = Type.Static<typeof BackendSummarySchema>;
 export type AgentWire = Type.Static<typeof AgentSchema>;
 export type AgentRuntimeCredentialStatusWire = Type.Static<
   typeof AgentRuntimeCredentialStatusSchema
@@ -726,7 +726,7 @@ export type IAMRoleListResponse = Type.Static<typeof IAMRoleListResponse>;
 export type IAMAccessBindingResponse = Type.Static<typeof IAMAccessBindingResponse>;
 export type IAMAccessBindingListResponse = Type.Static<typeof IAMAccessBindingListResponse>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
-export type ProviderListResponse = Type.Static<typeof ProviderListResponse>;
+export type BackendListResponse = Type.Static<typeof BackendListResponse>;
 export type AgentProvisioningResponse = Type.Static<typeof AgentProvisioningResponse>;
 export type AgentProvisioningStatusResponse = Type.Static<typeof AgentProvisioningStatusResponse>;
 export type RepositoryOptionListResponse = Type.Static<typeof RepositoryOptionListResponse>;

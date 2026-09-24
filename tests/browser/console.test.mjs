@@ -91,7 +91,7 @@ async function login(page, fixture, path = "/console/") {
   await page.getByLabel("Username").fill(fixture.credentials.email);
   await page.getByLabel("Password").fill(fixture.credentials.password);
   await page.getByRole("button", { name: "Login" }).click();
-  await page.waitForURL(/\/console\/(agents|providers|namespaces|settings)/);
+  await page.waitForURL(/\/console\/(agents|backends|namespaces|settings)/);
 }
 
 async function openShellMenu(page) {
@@ -248,15 +248,16 @@ test("console browser flow keeps Namespace URL state across global pages and log
   await page.getByRole("heading", { name: "Agents" }).waitFor();
   await page.getByText("Beta agent").waitFor();
   assert.match(page.url(), new RegExp(`/console/agents\\?namespace=${beta.id}$`));
-  assert.equal(await page.locator("img").count(), 0);
+  // Resource content must remain text; the shared shell includes the OCE mascot.
+  assert.equal(await page.locator(".content img").count(), 0);
   assert.equal(await page.locator(".sidebar .brand").textContent(), "OCE");
   assert.equal(await page.locator(".occ-version").count(), 0);
   assert.equal(await page.locator(".runtime-debug").count(), 0);
 
-  assert.equal(await page.getByRole("link", { name: "Providers", exact: true }).count(), 0);
-  await page.goto(`${fixture.origin}/console/providers?namespace=${beta.id}`);
-  await page.getByRole("heading", { name: "Providers" }).waitFor();
-  assert.match(page.url(), new RegExp(`/console/providers\\?namespace=${beta.id}$`));
+  assert.equal(await page.getByRole("link", { name: "Backends", exact: true }).count(), 0);
+  await page.goto(`${fixture.origin}/console/backends?namespace=${beta.id}`);
+  await page.getByRole("heading", { name: "Backends" }).waitFor();
+  assert.match(page.url(), new RegExp(`/console/backends\\?namespace=${beta.id}$`));
   await page.getByText("openai-primary").waitFor();
   await expectNoText(page, /apiKeyPath|workspaceId|credentialTtlSeconds/);
 
@@ -267,8 +268,8 @@ test("console browser flow keeps Namespace URL state across global pages and log
   await page.reload();
   await page.getByText(fixture.credentials.email.toLowerCase()).waitFor();
   await page.goBack();
-  await page.getByRole("heading", { name: "Providers" }).waitFor();
-  assert.match(page.url(), new RegExp(`/console/providers\\?namespace=${beta.id}$`));
+  await page.getByRole("heading", { name: "Backends" }).waitFor();
+  assert.match(page.url(), new RegExp(`/console/backends\\?namespace=${beta.id}$`));
 
   await page.getByRole("link", { name: "Agents" }).click();
   await chooseNamespace(page, "Alpha");

@@ -82,7 +82,12 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       element(
         "main",
         { className: "auth" },
-        element("p", { className: "brand" }, "OpenClaw Enterprise"),
+        element(
+          "p",
+          { className: "brand" },
+          element("img", { src: "/console/oce-mascot.png", alt: "", width: "40", height: "40" }),
+          "OpenClaw Enterprise",
+        ),
         element("h1", {}, title),
         element("p", { role: "status", className: "muted" }, description),
         action ? button(actionLabel, action) : null,
@@ -261,6 +266,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       element(
         "p",
         { className: "brand" },
+        element("img", { src: "/console/oce-mascot.png", alt: "", width: "40", height: "40" }),
         "OCE",
         debug
           ? element(
@@ -284,7 +290,9 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
         ? `Namespace · ${session ? (selected?.name ?? "No available selection") : "Checking access"}`
         : feature === "settings"
           ? "Your account"
-          : "Installation-wide";
+          : feature === "backends"
+            ? "Installation-wide · Experimental"
+            : "Installation-wide";
     const refresh = button("Refresh", () => void loadPage());
     refresh.disabled = true;
     const header = element(
@@ -348,11 +356,11 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
     if (!items.length) {
       panel(
         view,
-        feature === "providers"
-          ? "No providers configured"
+        feature === "backends"
+          ? "No backends configured"
           : `No accessible ${pages[feature].toLowerCase()}`,
-        feature === "providers"
-          ? "No Providers are configured for this Installation."
+        feature === "backends"
+          ? "No experimental Backends are configured for this Installation."
           : "Ask an administrator to provision resources or grant access, then refresh.",
         "Refresh",
         () => void loadPage(),
@@ -369,14 +377,14 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
             "div",
             {},
             element("p", { className: "resource-name" }, item.name ?? item.id),
-            feature === "providers" ? null : element("span", { className: "resource-id" }, item.id),
+            feature === "backends" ? null : element("span", { className: "resource-id" }, item.id),
           ),
           feature === "agents"
             ? null
             : element(
                 "span",
                 { className: "badge" },
-                feature === "providers" ? item.type : item.status,
+                feature === "backends" ? item.type : item.status,
               ),
         ),
       );
