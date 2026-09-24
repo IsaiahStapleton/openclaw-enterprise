@@ -3234,6 +3234,24 @@ test("Agent detail preserves admitted revision history while draft edits change 
     (await page.locator("body").textContent()).includes(agent.harnessAuth.source.id),
     false,
   );
+  // Cancel discards the retained baseline too: reopening uses the freshly read saved document.
+  await page.getByRole("button", { name: "Edit current Configuration" }).click();
+  await page.getByRole("button", { name: "Edit Configuration" }).click();
+  await editor.fill(JSON.stringify(nativeValues("discard-this-edit")));
+  await page.getByRole("link", { name: "Namespaces", exact: true }).click();
+  await page.getByRole("heading", { name: "Namespaces", exact: true }).waitFor();
+  await fixture.updateConfiguration(
+    namespace.id,
+    agent.configurationId,
+    nativeValues("cancel-server"),
+  );
+  await page.goBack();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Configuration" }).click();
+  assert.match(await editor.inputValue(), /"marker": "cancel-server"/);
+  await editor.fill(JSON.stringify(nativeValues("after-cancel")));
+  await page.getByRole("button", { name: "Save Configuration" }).click();
+  await page.getByText(/generation 7/).waitFor();
 });
 
 test("Agent detail blocks repeat Configuration saves after an uncertain draft update", async (t) => {

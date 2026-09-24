@@ -885,12 +885,12 @@ export async function renderAgentDetail(context) {
     const { snapshot, values, setDraftEditorState } = data;
     const container = element("div", { className: "configuration-draft-editor" });
     const retained = context.drafts.get("configuration");
-    const baseline = retained?.baseline ?? { id: snapshot.id, generation: snapshot.generation };
+    let baseline = retained?.baseline ?? { id: snapshot.id, generation: snapshot.generation };
     let editing = Boolean(retained);
     let pending = false;
     let outcomeUnknown = retained?.outcomeUnknown ?? false;
     let reloadRequired = retained?.reloadRequired ?? false;
-    const initialText = retained?.initialText ?? JSON.stringify(values, null, 2);
+    let initialText = retained?.initialText ?? JSON.stringify(values, null, 2);
     const editor = element("textarea", {
       id: "configuration-json",
       name: "configuration",
@@ -922,6 +922,8 @@ export async function renderAgentDetail(context) {
       className: "primary",
     });
     const cancel = button("Cancel", () => {
+      baseline = { id: snapshot.id, generation: snapshot.generation };
+      initialText = JSON.stringify(values, null, 2);
       editing = false;
       editor.value = initialText;
       editor.setCustomValidity("");
