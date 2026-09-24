@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { loadTestSuites } from "../../scripts/ci/test-suites.mjs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
