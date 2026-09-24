@@ -217,6 +217,30 @@
     },
     {
       "path": "tests/integration/postgres-repository-sessions.test.mjs"
+    },
+    {
+      "path": "tests/integration/postgres-github-sign-in.test.mjs",
+      "expectedTests": [
+        "PostgreSQL GitHub sign-in preserves an existing account through the ordinary Console"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-human-authentication.test.mjs",
+      "expectedTests": [
+        "PostgreSQL human authentication preserves exact identity and transactional currentness"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-github-cookie-commit.test.mjs",
+      "expectedTests": [
+        "opted-in HTTP login and logout preserve cookies until real State commit acknowledgement"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-github-session-cookie.test.mjs",
+      "expectedTests": [
+        "production GitHub-profile sessions reject cookies planted by a sibling domain"
+      ]
     }
   ]
 }

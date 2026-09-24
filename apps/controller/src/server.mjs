@@ -1,3 +1,4 @@
+import { githubLoginConfiguration } from "./auth/index.ts";
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
@@ -195,11 +196,13 @@ function configuration() {
     throw new Error("Development OCC_AUTH_BASE_URL must identify a loopback host.");
   }
 
+  const github = githubLoginConfiguration(process.env);
   if (mode === "production") {
     return Object.freeze({
       ...settings,
       authSecret: requiredEnvironment("OCC_AUTH_SECRET"),
       authBaseURL,
+      ...(github === undefined ? {} : { github }),
       ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
       ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
     });
@@ -216,6 +219,7 @@ function configuration() {
     ...settings,
     authSecret,
     authBaseURL,
+    ...(github === undefined ? {} : { github }),
     ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),

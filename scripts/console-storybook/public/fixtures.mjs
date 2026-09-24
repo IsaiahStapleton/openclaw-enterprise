@@ -278,6 +278,13 @@ export function installFixture(scenario, evidence) {
       return error(rule.status, rule.code);
     }
     const body = options.body ? JSON.parse(options.body) : {};
+    if (path === "/api/auth/providers" && method === "GET") {
+      return response({ github: scenario.githubEnabled === true });
+    }
+    if (path === "/api/auth/providers/github/start" && method === "POST") {
+      // Keep the preview local; provider navigation needs real backend verification.
+      return error(503);
+    }
     if (path === "/api/auth/session") {
       return response(signedIn ? session : null);
     }

@@ -293,7 +293,7 @@ function errorSchema(document) {
       .flatMap((operation) => Object.entries(operation.responses))
       .find(([status, response]) => {
         const schema = resolveSchema(response.content?.["application/json"]?.schema, document);
-        return !status.startsWith("2") && schema.properties?.error?.properties?.details;
+        return !status.startsWith("2") && schema?.properties?.error?.properties?.details;
       })
       ?.at(1).content["application/json"].schema ??
     operations

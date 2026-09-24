@@ -10,8 +10,22 @@ import { apiKey } from "@better-auth/api-key";
 import type { ApiKey } from "@better-auth/api-key/types";
 import { parse as parseDomain } from "tldts";
 import type { ServicePrincipal } from "@openclaw-enterprise/contracts";
-import { createAuthPrincipalSeed, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
-import type { PostgresPool } from "@openclaw-enterprise/occ";
+import {
+  NativeIAMDriver,
+  createAuthPrincipalSeed,
+  type AuthPrincipalSeed,
+} from "@openclaw-enterprise/iam";
+import {
+  PostgresHumanAuthentication,
+  type HumanAuthenticationActor,
+  type HumanAuthenticationAccount,
+  type PostgresPool,
+  type PostgresPlatformState,
+} from "@openclaw-enterprise/occ";
+import type { IAMDriver } from "@openclaw-enterprise/contracts";
+import { createHumanLogin, type GitHubLoginConfiguration } from "./github.ts";
+
+export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
 import type {
   AdmissionHeaders,
   AdmissionRequest,
@@ -28,7 +42,10 @@ export const OCC_SERVICE_KEY_HEADER = "x-api-key";
 const SERVICE_KEY_CONFIG = "occ-service";
 const SAFE_COOKIE_DOMAIN =
   /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-type ControllerBetterAuth = Auth<BetterAuthOptions & { plugins: ReturnType<typeof apiKey>[] }>;
+type ControllerPlugins = (
+  ReturnType<typeof apiKey> | ReturnType<typeof createHumanLogin>["plugin"]
+)[];
+type ControllerBetterAuth = Auth<BetterAuthOptions & { plugins: ControllerPlugins }>;
 
 export interface ServiceKey {
   readonly id: string;
@@ -47,6 +64,7 @@ export interface ControllerAuthOptions {
   readonly memoryDatabase?: MemoryDB;
   readonly secureCookies?: boolean;
   readonly sharedCookieDomain?: string;
+  readonly humanLogin?: ReturnType<typeof createHumanLogin>;
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
@@ -54,6 +72,9 @@ export interface PostgresControllerAuthOptions extends Omit<
   "database" | "memoryDatabase"
 > {
   readonly pool: PostgresPool;
+  readonly state?: PostgresPlatformState;
+  readonly iamDriver?: IAMDriver;
+  readonly github?: GitHubLoginConfiguration;
 }
 
 export interface AuthenticatedAccount {
@@ -82,6 +103,25 @@ export interface ControllerAuth {
   readonly sessionCookieName: string;
   readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
+  readonly githubEnabled: boolean;
+  githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  readAccount?(
+    userId: string,
+    actor: HumanAuthenticationActor,
+  ): Promise<HumanAuthenticationAccount>;
+  attachGitHub?(
+    userId: string,
+    subject: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<unknown>;
+  changeAccount?(
+    userId: string,
+    operation: "disable" | "revoke",
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<void>;
   createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount>;
   deleteAccount(account: Pick<AuthenticatedAccount, "id">): Promise<void>;
   principalSeed(
@@ -108,6 +148,8 @@ function validHttpBaseURL(value: string): boolean {
       (parsed.protocol === "http:" || parsed.protocol === "https:") &&
       parsed.username.length === 0 &&
       parsed.password.length === 0 &&
+      parsed.pathname === "/" &&
+      parsed.search.length === 0 &&
       parsed.hash.length === 0
     );
   } catch {
@@ -179,6 +221,18 @@ function sessionHeaders(
 
 function sessionCookieNames(prefix: string): readonly string[] {
   return [`${prefix}.session_token`, `__Secure-${prefix}.session_token`];
+}
+
+function activeSessionCookieName(
+  prefix: string,
+  secureOrigin: boolean,
+  humanLogin: boolean,
+): string {
+  const name = `${prefix}.session_token`;
+  if (!secureOrigin) {
+    return name;
+  }
+  return `${humanLogin ? "__Host-" : "__Secure-"}${name}`;
 }
 
 function hostOnlySessionCookieClearance(enabled: boolean, activePrefix: string): readonly string[] {
@@ -503,7 +557,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     throw new Error("OCC_AUTH_SECRET must contain at least 256 bits of secret material.");
   }
   if (!validHttpBaseURL(options.baseURL)) {
-    throw new Error("OCC_AUTH_BASE_URL must be an HTTP URL.");
+    throw new Error("OCC_AUTH_BASE_URL must be an absolute HTTP origin URL.");
   }
 
   const expectedBrowserOrigin = new URL(options.baseURL).origin;
@@ -520,25 +574,33 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   ) {
     throw new Error("OCC_AUTH_COOKIE_DOMAIN requires secure HTTPS session cookies.");
   }
+  const humanLogin = options.humanLogin;
+  const secureOrigin = new URL(options.baseURL).protocol === "https:";
+  const hostBoundSession = humanLogin !== undefined && secureOrigin;
   const cookiePrefix =
     sharedCookieDomain === undefined ? OCC_AUTH_COOKIE_PREFIX : OCC_SHARED_AUTH_COOKIE_PREFIX;
-  const sessionCookieBaseName = `${cookiePrefix}.session_token`;
-  const sessionCookieName =
-    new URL(options.baseURL).protocol === "https:"
-      ? `__Secure-${sessionCookieBaseName}`
-      : sessionCookieBaseName;
+  const sessionCookieName = activeSessionCookieName(
+    cookiePrefix,
+    secureOrigin,
+    humanLogin !== undefined,
+  );
   const hostOnlySessionCookieCleanup = hostOnlySessionCookieClearance(
     sharedCookieDomain !== undefined,
     cookiePrefix,
   );
   const issuer = betterAuthIssuer(options.installationId);
-  const auth = betterAuth<BetterAuthOptions & { plugins: ReturnType<typeof apiKey>[] }>({
+  if (humanLogin !== undefined && typeof options.database !== "function") {
+    throw new Error("The human authentication profile requires its guarded State adapter.");
+  }
+  const auth = betterAuth<BetterAuthOptions & { plugins: ControllerPlugins }>({
     appName: "OpenClaw Enterprise Controller",
     baseURL: options.baseURL,
     basePath: "/auth",
     secret: options.secret,
     database:
-      options.database ??
+      (humanLogin && typeof options.database === "function"
+        ? humanLogin.database(options.database)
+        : options.database) ??
       memoryAdapter(
         options.memoryDatabase ?? {
           user: [],
@@ -548,7 +610,28 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           apikey: [],
         },
       ),
+    ...(humanLogin === undefined
+      ? {}
+      : {
+          session: {
+            expiresIn: 8 * 60 * 60,
+            disableSessionRefresh: true,
+            cookieCache: { enabled: false },
+          },
+          logger: { disabled: true },
+          onAPIError: {
+            onError(error) {
+              // Better Call logs unclassified exceptions even when the auth logger is disabled.
+              throw error instanceof APIError
+                ? error
+                : APIError.fromStatus("SERVICE_UNAVAILABLE", {
+                    message: "Authentication dependency unavailable.",
+                  });
+            },
+          },
+        }),
     plugins: [
+      ...(humanLogin === undefined ? [] : [humanLogin.plugin]),
       apiKey({
         configId: SERVICE_KEY_CONFIG,
         defaultPrefix: "occ_",
@@ -567,9 +650,17 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       maxPasswordLength: 128,
     },
     trustedOrigins: [options.baseURL],
-    rateLimit: { enabled: true },
+    rateLimit: { enabled: humanLogin === undefined },
     advanced: {
+      ...(humanLogin === undefined ? {} : { ipAddress: { ipAddressHeaders: ["x-occ-client-ip"] } }),
       cookiePrefix,
+      ...(hostBoundSession
+        ? {
+            // Better Auth otherwise prepends __Secure- even to an explicit __Host- name.
+            useSecureCookies: false,
+            cookies: { session_token: { name: sessionCookieName } },
+          }
+        : {}),
       ...(sharedCookieDomain === undefined
         ? {}
         : { crossSubDomainCookies: { enabled: true, domain: sharedCookieDomain } }),
@@ -578,6 +669,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         path: "/",
         sameSite: "lax",
         secure:
+          hostBoundSession ||
           sharedCookieDomain !== undefined ||
           (options.secureCookies ?? options.mode === "production"),
       },
@@ -586,6 +678,12 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   const api = auth.api;
 
   async function createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount> {
+    // TODO(human-account-provisioning): join acknowledged provisioning to currentness before enabling creation after activation.
+    if (humanLogin) {
+      throw APIError.fromStatus("CONFLICT", {
+        message: "Provision accounts before activating GitHub sign-in.",
+      });
+    }
     const email = input.email.trim().toLowerCase();
     const password = input.password;
     if (!isNonEmptyString(email) || !isNonEmptyString(password)) {
@@ -650,6 +748,79 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await context.internalAdapter.deleteUser(account.id);
   }
 
+  async function runPrivateEndpoint(
+    request: FastifyRequest,
+    path: string,
+    body?: Record<string, unknown>,
+  ) {
+    const url = new URL(`/auth${path}`, options.baseURL);
+    if (request.method === "GET") {
+      url.search = new URL(request.url, options.baseURL).search;
+    }
+    const headers = authHeaders(request.headers);
+    headers.set("host", new URL(options.baseURL).host);
+    headers.set("x-occ-client-ip", request.ip);
+    // The public wrapper already applies the established browser/CLI origin contract.
+    if (!headers.has("origin") && (path === "/oce/password" || path === "/oce/sign-out")) {
+      headers.set("origin", expectedBrowserOrigin);
+    }
+    if (body !== undefined) {
+      headers.set("content-type", "application/json");
+    }
+    const response = await auth.handler(
+      new Request(url, {
+        method: request.method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
+    if (!response.ok) {
+      if (response.status === 429) {
+        throw APIError.fromStatus("TOO_MANY_REQUESTS", {
+          message: "Authentication rate limit exceeded.",
+        });
+      }
+      if (response.status >= 500) {
+        throw new Error("Authentication dependency unavailable.");
+      }
+      throw new AdmissionFailure(401, "UNAUTHENTICATED", "Authentication was not accepted.");
+    }
+    return { response: await response.json(), headers: response.headers, status: response.status };
+  }
+
+  async function githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    await sendAuthEndpoint(
+      request,
+      reply,
+      () => {
+        if (!humanLogin) {
+          throw new AdmissionFailure(403, "FORBIDDEN", "GitHub sign-in is unavailable.");
+        }
+        if (request.headers.origin !== expectedBrowserOrigin) {
+          throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+        }
+        return runPrivateEndpoint(request, "/oce/providers/github/start");
+      },
+      (value) => value,
+      "GitHub sign-in could not be started.",
+    );
+  }
+
+  async function githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    reply.header("cache-control", "no-store");
+    reply.header("referrer-policy", "no-referrer");
+    try {
+      if (!humanLogin) {
+        throw new Error("GitHub sign-in unavailable.");
+      }
+      const result = await runPrivateEndpoint(request, "/oce/providers/github/callback");
+      setAuthHeaders(reply, result.headers);
+      reply.redirect("/console/");
+    } catch {
+      reply.redirect("/console/?authError=github");
+    }
+  }
+
   async function signInEmail(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     await sendAuthEndpoint(
       request,
@@ -658,6 +829,9 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         // Better Auth server API calls skip origin middleware without a Request context.
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
         const body = ensureEmailPassword(authBody(request));
+        if (humanLogin) {
+          return runPrivateEndpoint(request, "/oce/password", body);
+        }
         return api.signInEmail({
           body: { ...body, rememberMe: true },
           headers: authHeaders(request.headers),
@@ -679,8 +853,12 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       () => {
         // Better Auth server API calls skip origin middleware without a Request context.
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
+        const headers = sessionHeaders(request.headers, sessionCookieName);
+        if (humanLogin) {
+          return runPrivateEndpoint(request, "/oce/sign-out");
+        }
         return api.signOut({
-          headers: sessionHeaders(request.headers, sessionCookieName),
+          headers,
           asResponse: false,
           returnHeaders: true,
           returnStatus: true,
@@ -744,6 +922,9 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         account,
         seedOptions,
       ),
+    githubEnabled: humanLogin !== undefined,
+    githubStart,
+    githubCallback,
     signInEmail,
     signOut,
     session,
@@ -793,9 +974,86 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, ...controllerOptions } = options;
-  return createControllerAuth({
+  const { pool, state, iamDriver, github, ...controllerOptions } = options;
+  const persistence =
+    state === undefined
+      ? undefined
+      : new PostgresHumanAuthentication(
+          state,
+          options.installationId,
+          betterAuthIssuer(options.installationId),
+        );
+  if (github === undefined && persistence && (await persistence.recoveryDesignation())) {
+    throw new Error("An activated human authentication profile requires its GitHub configuration.");
+  }
+  if (github !== undefined) {
+    if (!persistence || !(iamDriver instanceof NativeIAMDriver)) {
+      throw new Error(
+        "GitHub sign-in requires original PostgreSQL State and the native IAM Driver.",
+      );
+    }
+    if (options.sharedCookieDomain !== undefined) {
+      throw new Error(
+        "GitHub sign-in supports host-only cookies without shared native administration.",
+      );
+    }
+    if (options.mode === "production" && new URL(options.baseURL).protocol !== "https:") {
+      throw new Error("Production GitHub sign-in requires HTTPS.");
+    }
+  }
+  const humanLogin =
+    github === undefined ? undefined : createHumanLogin(persistence!, github, options.baseURL);
+  const auth = createControllerAuth({
     ...controllerOptions,
+    ...(humanLogin === undefined ? {} : { humanLogin }),
     database: await createOccAuthDatabase(pool),
   });
+  // Finish static auth initialization before the one-way activation transaction.
+  await auth.auth.$context;
+  if (github !== undefined) {
+    const principal = await iamDriver!.lookupIdentity({
+      issuer: betterAuthIssuer(options.installationId),
+      subject: github.recoveryUserId,
+    });
+    if (!principal || principal.kind !== "principal") {
+      throw new Error("Recovery Principal is unavailable.");
+    }
+    const decision = await iamDriver!.authorize({
+      principalId: principal.id,
+      action: "administer",
+      resource: { kind: "installation", id: options.installationId },
+    });
+    if (!decision.allowed || decision.driverId !== iamDriver!.id) {
+      throw new Error("Recovery account must administer the Installation.");
+    }
+    await persistence!.activateRecovery(github.recoveryUserId, principal.id);
+  }
+  return {
+    ...auth,
+    ...(humanLogin === undefined
+      ? {}
+      : {
+          readAccount: (userId: string, actor: HumanAuthenticationActor) =>
+            persistence!.readAccount(userId, actor),
+          attachGitHub: (
+            userId: string,
+            subject: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) =>
+            persistence!.attachExternal(
+              userId,
+              humanLogin.providerId,
+              subject,
+              actor,
+              expectedVersion,
+            ),
+          changeAccount: (
+            userId: string,
+            operation: "disable" | "revoke",
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
+        }),
+  };
 }

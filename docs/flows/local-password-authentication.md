@@ -1,10 +1,10 @@
 ---
 created: 2026-08-24
-updated: 2026-09-01
-last_updated_session: codex/01a05f95-dd80-7011-990f-d1c46b5bb3cc
+updated: 2026-09-23
+last_updated_session: public-pr/305
 ---
 
-# Bootstrap and Local Password Authentication Flow
+# Bootstrap and human authentication flow
 
 ## Overview
 
@@ -20,7 +20,8 @@ service-key verification, rotation, and revocation continue in the
 ## Entry Points
 
 - Trigger: `node scripts/bootstrap-installation.mjs` with `NODE_ENV=development`
-  or `production`, `POST /api/auth/sign-in/email`, or a protected controller request.
+  or `production`, `POST /api/auth/sign-in/email`, `POST /api/auth/providers/github/start`,
+  `GET /api/auth/providers/github/callback`, or a protected controller request.
 - Source: [`scripts/bootstrap-installation.mjs`](../../scripts/bootstrap-installation.mjs),
   [`apps/controller/src/auth/index.ts:createControllerAuth`](../../apps/controller/src/auth/index.ts),
   and [`apps/controller/src/index.ts:createFastifyApp`](../../apps/controller/src/index.ts).
@@ -44,7 +45,11 @@ graph TD
   B --> G
   Bootstrap -->|Any error| H["Exit unsuccessfully; preserve tracked artifacts for manual repair"]
   subgraph Request["Human controller request"]
-    G --> J["Sign in and receive session cookie"]
+    G --> P["Verify password or enrolled GitHub identity"]
+    P -->|GitHub profile enabled| Q["State rechecks account and method; commits session and audit"]
+    Q --> J["Release session cookie"]
+    P -->|Password-only profile| J
+    Q -->|Disabled, stale proof, or commit failure| N["Reject login; no cookie"]
     J --> K["Resolve current IAM identity and exact authority"]
     K -->|Allowed| L["Run and audit OCC operation"]
     K -->|Invalid session or denied authority| M["Return 401 or 403"]
@@ -125,6 +130,67 @@ storage. Sign-in returns only `{ authenticated: true }`; the session token stays
 in its HttpOnly cookie and is omitted from session-inspection responses. Sign-out
 revokes the session, and public signup is disabled.
 
+When GitHub is configured, `apps/controller/src/auth/github.ts:createHumanLogin`
+wraps the Better Auth adapter and provides curated password, GitHub, and logout
+endpoints. `packages/occ/src/state/human-authentication.ts:PostgresHumanAuthentication`
+owns persisted account/method checks and the original State transaction.
+Password verification captures the credential and account version before the
+session transaction rechecks them. Both methods pass a controller-private proof
+to the same guarded session creation path; the session and required audit commit
+before Better Auth releases its cookie. Session reads check the current account,
+method, version, and Principal, with an eight-hour absolute lifetime and no refresh.
+HTTPS uses a `__Host-` session cookie so a sibling host cannot plant the active
+cookie through a parent-domain `Domain` attribute. Session readers and logout
+reject ambiguous duplicate active-session cookies.
+
+For GitHub, the Console reads `GET /api/auth/providers` and sends a same-origin
+`POST /api/auth/providers/github/start`. The server stores a five-minute attempt with state and browser
+secret digests, provider instance, callback, and PKCE verifier. A host-only
+HttpOnly cookie binds the browser; this profile rejects shared-domain sessions.
+Authorization requests omit OAuth scopes. Callback consumption commits before
+exchange; a losing, expired, or invalid attempt does not exchange a code.
+`apps/controller/src/auth/github.ts:exchangeGithubSubject` exchanges the code
+with the GitHub App client ID and secret, uses the returned user access token
+only for `/user`, and returns the numeric subject. Access and refresh tokens,
+expiry, and scope data are discarded; the App private key remains with the
+repository credential consumer. The subject selects an exact existing enrollment;
+email, login name, and tokens do not become identity or policy. Success redirects
+to `/console/`; failure redirects to the fixed
+Console URL with a sanitized error marker. Expected protocol or identity rejection is
+audited separately from State dependency failure or uncertain session completion.
+Neither path automatically retries.
+
+Password and GitHub work have separate bounded process-local admission. GitHub token/profile HTTP shares a deadline and
+limits streamed response bytes; State bounds pending attempts and expired cleanup.
+State sets the five-minute attempt and eight-hour session deadlines. Cookie
+Max-Age subtracts monotonic elapsed work from that persisted lifetime; expired
+completion cannot release a cookie.
+
+Before activation the deployment stops admission, drains or terminates admitted
+requests, and stops every old controller. Both PostgreSQL compositions reject
+GitHub with enabled native administration, even when its cookie domain is missing.
+`apps/controller/src/auth/index.ts:createPostgresControllerAuth` constructs and
+initializes authentication before activation, checking the secret, canonical HTTP
+origin, and supported profile. Invalid static configuration leaves legacy sessions,
+account enrollment, and the recovery designation unchanged.
+`PostgresHumanAuthentication.activateRecovery` then validates and enrolls the complete existing password-user/Principal population,
+fixes the usable recovery administrator, and removes unbound historical sessions
+in one State transaction before serving resumes. Unsupported or incomplete
+populations fail activation. This is a stopped-maintenance contract; startup does
+not fence an old live reader. See the
+[deployment procedure](../guides/deploy/production-installation.md#enable-github-browser-sign-in).
+
+The controller's account routes authorize native IAM Installation `administer`
+and require a current human session and the configured Origin. State locks both
+actor and target, rechecks the actor session, and applies the caller's
+`expectedVersion`. Attachment, disablement, and account-wide revocation advance
+that version and invalidate target sessions and proofs without changing IAM.
+A guarded read returns current account and method state, not a prior operation
+receipt. Unknown completion returns an explicit dependency failure without
+replay or compensation; operators must resolve uncertainty before a new action.
+Logout commits deletion and audit before clearing the cookie. The [authentication reference](../reference/authentication.md#github-sign-in-for-existing-accounts)
+owns configuration, recovery limits, and operator-visible behavior.
+
 ### 4. Admit and authorize protected API calls
 
 `apps/controller/src/index.ts:createFastifyApp` validates the session, resolves
@@ -137,12 +203,17 @@ closed. Bearer credentials and caller-supplied identity headers are rejected.
 
 ### 5. Provision additional accounts
 
-`apps/controller/src/index.ts:createFastifyApp` permits only an authorized
-Installation administrator to create another account. The operation creates its
-Better Auth user and IAM Principal, binds an explicitly selected existing role,
-and records the mutation without creating a session or replacing the IAM Driver.
-IAM or audit failure rolls back the provisioning; accounts never receive
-implicit permissions.
+`apps/controller/src/index.ts:createFastifyApp` permits an authorized human
+Installation administrator to create another account only before GitHub
+activation. The activated route and auth helper refuse creation before the first
+user/password/IAM write. This temporary freeze ends when the provisioning owner
+adds acknowledged currentness enrollment.
+
+The unconfigured password-only path creates a Better Auth user, then provisions
+its Principal, explicit existing-role binding, and audit through State. These are
+separate transactions; its existing cleanup on provisioning failure is not an
+atomic end-to-end rollback guarantee. Account creation issues no session and
+infers no grants.
 
 ## Debugging and Verification
 
@@ -187,6 +258,18 @@ implicit permissions.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-23 18:50: Trace shared GitHub App login without OAuth scopes and discarded App credential data in the accompanying source change. (public-pr/305 - e9a16a23f1c3a5bc9a26e1ca13022b769bae5e7a)
+
+- 2026-09-23 04:25: Trace the nested GitHub provider start and callback routes in the accompanying route change. (public-pr/305 - 16756fbf1197601f0cc7eef2143389952fd1959e)
+
+- 2026-09-23 04:05: Trace host-bound HTTPS sessions, ambiguous-cookie rejection, and preserved callback completion uncertainty in the accompanying security repair. (public-pr/305 - 140f82a08e82c852e0c7ca5071f45a64f6dce596)
+
+- 2026-09-23 01:46: Trace static authentication validation before activation and unchanged state on invalid configuration in the accompanying source repair. (public-pr/305 - ed1a4a2f719ad6bd28239f61f1213cce4c2d94fb)
+
+- 2026-09-23 00:36: Trace stopped activation, guarded actor/version administration, finite work, and the temporary provisioning freeze in the accompanying source change. (public-pr/305 - bc3a8652bd60423a5c5749429628f55ab8329513)
+
+- 2026-09-22 23:02: Trace existing-account GitHub login and shared guarded session admission in the accompanying source change. (public-pr/305 - 311bc23012d0fd269483168b865adf79df630542)
 
 - 2026-09-01 19:09: Update links to consolidated runtime flows. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-31 22:29: Remove automatic bootstrap recovery; preserve artifacts after any error and require manual repair. (01a05a3d-526f-7553-8cd8-070bd1847acb - 94a5440898bf331987148d7733f0075506af64a6)

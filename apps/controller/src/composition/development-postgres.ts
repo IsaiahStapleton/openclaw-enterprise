@@ -15,7 +15,7 @@ import {
   OpenClawController,
   PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { createPostgresControllerAuth } from "../auth/index.ts";
+import { createPostgresControllerAuth, type GitHubLoginConfiguration } from "../auth/index.ts";
 import { createDockerDevelopmentComputeDriverFromEnv } from "../drivers/compute/docker/index.ts";
 import { createFilesystemDevelopmentConfigurationDriverFromEnv } from "../drivers/configuration/filesystem/index.ts";
 import { createFastifyApp } from "../index.ts";
@@ -44,6 +44,7 @@ export interface PostgresDevelopmentConfig {
   readonly databaseUrl: string;
   readonly authSecret: string;
   readonly authBaseURL: string;
+  readonly github?: GitHubLoginConfiguration;
   readonly poolMax?: number;
   readonly logger?: OccLogger;
   readonly logging?: LoggingConfiguration;
@@ -83,6 +84,10 @@ export async function composePostgresDevelopment(
     );
   }
 
+  if (config.github !== undefined && config.nativeAdmin?.enabled === true) {
+    throw new Error("GitHub sign-in does not support native administration.");
+  }
+
   const pool = await createPostgresPool(config.databaseUrl, {
     ...(config.poolMax === undefined ? {} : { max: config.poolMax }),
   });
@@ -95,17 +100,7 @@ export async function composePostgresDevelopment(
       throw new Error("The platform Installation must be bootstrapped before development startup.");
     }
     const installationId = persistedInstallation.id;
-    const auth = await createPostgresControllerAuth({
-      mode: config.mode,
-      installationId,
-      secret: config.authSecret,
-      baseURL: config.authBaseURL,
-      pool,
-      secureCookies: config.nativeAdmin?.enabled === true,
-      ...(config.nativeAdmin?.enabled === true
-        ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
-        : {}),
-    });
+
     const computeDriver = options.computeDriver ?? createDevelopmentDockerComputeDriver();
     const sandboxDriver = drivers?.sandboxDriver;
     const configurationDriver =
@@ -120,6 +115,20 @@ export async function composePostgresDevelopment(
       drivers === undefined
         ? new NativeIAMDriver(state, { id: driverId, implementation: "native" })
         : drivers.createIAMDriver(state);
+    const auth = await createPostgresControllerAuth({
+      mode: config.mode,
+      installationId,
+      secret: config.authSecret,
+      baseURL: config.authBaseURL,
+      pool,
+      state,
+      iamDriver,
+      ...(config.github === undefined ? {} : { github: config.github }),
+      secureCookies: config.nativeAdmin?.enabled === true,
+      ...(config.nativeAdmin?.enabled === true
+        ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
+        : {}),
+    });
 
     const bootstrapPrincipal = iamState.identities.find(
       (identity) => identity.kind === "principal",

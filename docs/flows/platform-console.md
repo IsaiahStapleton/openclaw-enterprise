@@ -39,7 +39,9 @@ owns user-visible behavior, while API and IAM retain resource authority.
 graph TD
   subgraph Browser["Browser"]
     A["Open console or change page"] --> B["Clear old rows and check session"]
-    B -->|no session| C["Login"]
+    B -->|no session| C["Login and discover sign-in methods"]
+    C -->|GitHub offered and selected| C1["POST start and navigate to GitHub"]
+    C1 -->|Fixed callback redirect| B
     B -->|authenticated| D["Read readable Namespaces and validate selection"]
     D --> E["Request current page resource"]
     E --> E1["Edit starter JSON and select associations"]
@@ -117,8 +119,21 @@ beside OCE with the full revision in a tooltip; missing or invalid metadata show
 `apps/controller/src/console/console.mjs:loadPage`
 
 The browser clears the prior view, advances its navigation generation, and
-requests `GET /api/auth/session`. No session opens login; unavailable inspection
-blocks private reads and offers Retry. Login submits exactly email and password.
+requests `GET /api/auth/session`. No session opens login; unavailable session
+inspection blocks private reads and offers Retry. Login submits exactly email
+and password to the existing sign-in route. `showLogin` independently requests
+`GET /api/auth/providers`; only `github: true` adds **Continue with GitHub**.
+Discovery failure leaves the password form usable. The button sends
+`POST /api/auth/providers/github/start` with same-origin credentials, then navigates to the
+returned GitHub authorization URL. Pending sign-in disables both actions, and
+view-generation checks prevent a late result from redirecting a newer page.
+
+The callback returns to `/console/`, which resolves the ordinary session before
+reading resources. A literal `authError=github` without a session becomes a
+local generic error on the login screen; history replacement removes the marker.
+The Console neither copies provider errors nor restarts OAuth automatically.
+The [authentication flow](local-password-authentication.md#3-construct-session-authentication)
+owns provider verification and session commit.
 `apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` compares browser
 Origin to the configured controller origin before sign-in or sign-out. Server SDK
 calls bypass Better Auth's request-origin middleware, so this HTTP boundary keeps
@@ -336,6 +351,7 @@ uncertain response disables replay until refresh and inspection.
 
 - 2026-09-23 19:52: Trace channel-scoped Slack sender access and leave direct-message access outside the drawer. (01a0d150-104a-71a3-9e56-6c5e3ee510ea - 77aedc620f443056f9ee859050b8dc657a9c3133)
 
+- 2026-09-23 19:32: Preserve GitHub sign-in and Namespace Secret flows when merging the current RFC. (public-pr/305 - 6cf7de15a8437b8bbdb9c7db451fb74bb2e3b569)
 - 2026-09-23 19:09: Trace image-baked OCC revision metadata and OCE sidebar branding. (01a0cfaa-2b68-7e61-b8ff-a7eb82f1edc5 - 150ec08f059cebc4897b839d8318f7b1e3aba0e3)
 
 - 2026-09-23 11:20: Distinguished worker-owned first-time provisioning and Secret grants from ordinary Console draft creation. (01a0cc7f-028b-7803-acf5-803c3d799d75 - f2dd1d3f)
@@ -347,6 +363,14 @@ uncertain response disables replay until refresh and inspection.
 - 2026-09-23 07:20: Discover API-key model choices during Agent creation without saving credentials or selecting a hardcoded model. (01a0cce9-23e3-7072-aa3f-a2e26d2dbf11 - 553423dd2419ec19d2d71a2d1f8de75839a1642b)
 
 - 2026-09-23 06:27: Move two-provider API-key setup into Agent creation using existing Secret and IAM operations. (01a0cce9-23e3-7072-aa3f-a2e26d2dbf11 - a8272f4e2760e5ff06dc09c5658f48bea382c790)
+
+- 2026-09-23 07:54: Preserve GitHub sign-in while receiving native Configuration editing and Control UI defaults. (public-pr/305 - f11b681bf7bcaa5a916cc965660b7e16f8945fad)
+
+- 2026-09-23 06:58: Preserve GitHub sign-in while receiving the current Console revision and stop flows. (public-pr/305 - 5187bdaf55047334672168918ffdf6587fa606bd)
+
+- 2026-09-23 04:25: Trace the Console start request through the nested GitHub provider route in the accompanying route change. (public-pr/305 - 16756fbf1197601f0cc7eef2143389952fd1959e)
+
+- 2026-09-22 23:02: Trace GitHub discovery, user-initiated redirect, and callback failure recovery in the accompanying source change. (public-pr/305 - 311bc23012d0fd269483168b865adf79df630542)
 
 - 2026-09-22 23:19: Enable native Control UI in Console starters with explicit loopback origins; preserve Preset and edited configuration. (01a0ccc0-00fa-7173-ab45-f7a5fb55b3b6 - 6d23cef977270fdf8ced6ea54ac8e1302cf8acd6)
 

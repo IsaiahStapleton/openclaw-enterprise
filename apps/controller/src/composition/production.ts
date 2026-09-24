@@ -9,7 +9,7 @@ import {
   OpenClawController,
   PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { createPostgresControllerAuth } from "../auth/index.ts";
+import { createPostgresControllerAuth, type GitHubLoginConfiguration } from "../auth/index.ts";
 import { createFastifyApp } from "../index.ts";
 import type {
   InstallationRuntimeDrivers,
@@ -36,6 +36,7 @@ export interface ProductionConfig {
   readonly databaseUrl: string;
   readonly authSecret: string;
   readonly authBaseURL: string;
+  readonly github?: GitHubLoginConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly logger?: OccLogger;
@@ -69,6 +70,10 @@ export async function composeProduction(config: ProductionConfig) {
   }
 
   const driverId = installation.drivers.iam.id;
+  if (config.github !== undefined && config.nativeAdmin?.enabled === true) {
+    throw new Error("GitHub sign-in does not support native administration.");
+  }
+
   const pool = await createPostgresPool(config.databaseUrl, {
     ...(config.poolMax === undefined ? {} : { max: config.poolMax }),
   });
@@ -79,6 +84,10 @@ export async function composeProduction(config: ProductionConfig) {
     if (persistedInstallation === undefined) {
       throw new Error("The singleton Installation must be bootstrapped before production startup.");
     }
+
+    const iamState = await state.loadNativeIAMState(persistedInstallation.id);
+    validatePersistedNativeIAMState(iamState);
+    const iamDriver = createIAMDriver(state);
     const auth = await createPostgresControllerAuth({
       mode: config.mode,
       installationId: persistedInstallation.id,
@@ -88,11 +97,10 @@ export async function composeProduction(config: ProductionConfig) {
         ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
         : {}),
       pool,
+      state,
+      iamDriver,
+      ...(config.github === undefined ? {} : { github: config.github }),
     });
-
-    const iamState = await state.loadNativeIAMState(persistedInstallation.id);
-    validatePersistedNativeIAMState(iamState);
-    const iamDriver = createIAMDriver(state);
     const provisionAuthAccount = async (seed: AuthPrincipalSeed, auditEvent: AuditEvent) => {
       const current = await state.loadNativeIAMState(persistedInstallation.id);
       validateAuthAccountPrincipalSeed(seed, current, persistedInstallation.id);

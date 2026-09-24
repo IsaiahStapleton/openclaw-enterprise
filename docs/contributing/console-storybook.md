@@ -38,7 +38,7 @@ those states by interacting with the real controls after loading fixture data.
 
 | Group                   | Coverage                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sign in                 | Signed out, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                                                                            |
+| Sign in                 | Password-only and GitHub-enabled sign-in, provider discovery failure, GitHub unavailable/rate limited/rejected callback, rejected password, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                            |
 | Agents                  | Populated and empty collections, no search matches, inaccessible Namespace, no readable Namespaces, permission denial, read failure, loading.                                                                                                                                                                                                                              |
 | Providers               | Configured, empty, and discovery failure.                                                                                                                                                                                                                                                                                                                                  |
 | Namespaces              | Ready and provisioning, empty, permission denial.                                                                                                                                                                                                                                                                                                                          |
@@ -61,6 +61,19 @@ reset them to replay loading.
 ## Agent flows and UI gaps
 
 Each flow includes steps above an interactive console frame.
+
+### Sign in
+
+The GitHub-enabled story adds **Continue with GitHub** through provider discovery.
+Its click returns a simulated outage; the rate-limit and rejected-callback stories
+show the real console messages. Password sign-in remains available when discovery
+or GitHub fails. The fixture never redirects to GitHub or issues a real session.
+
+Attaching a numeric GitHub identity to an existing account and administering
+recovery require the API and operator procedure; the console has no controls for
+these tasks. See [GitHub browser sign-in](../reference/authentication.md#github-sign-in-for-existing-accounts)
+for the supported profile. Use the connected authentication checks described in
+[PostgreSQL testing](../testing/postgresql.md) for backend proof.
 
 ### Create and deploy
 

@@ -130,6 +130,10 @@ p {
   width: 100%;
   margin-top: 28px;
 }
+.auth-providers button {
+  width: 100%;
+  margin-top: 16px;
+}
 .error {
   color: #a13f34;
   margin-top: 18px;

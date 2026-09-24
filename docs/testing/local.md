@@ -127,6 +127,12 @@ bodyless operations through the compiled OCC CLI. See
 [PostgreSQL tests](postgresql.md#service-key-persistence) for database-backed
 verification.
 
+GitHub's opted-in profile requires real PostgreSQL; the memory-backed suites do
+not prove its account/method versions, one-use attempts, or atomic session/audit
+commit. Run the [GitHub PostgreSQL and browser proof](postgresql.md#github-human-sign-in)
+for that path. Keep provider discovery failure and callback-error recovery
+separate from successful provider authentication when reporting Console results.
+
 ## Packaged-driver integration
 
 `tests/integration/driver-plugin-installation.test.mjs` installs scoped,

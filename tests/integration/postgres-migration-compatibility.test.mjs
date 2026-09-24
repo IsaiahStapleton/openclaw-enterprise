@@ -1162,6 +1162,7 @@ test(
       [28, "repositoryRetention"],
       [29, "workspaceSetup"],
       [30, "agentProvisioning"],
+      [31, "codexPatHarnessAuth"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1270,6 +1271,7 @@ test(
       [28, "repositoryRetention"],
       [29, "workspaceSetup"],
       [30, "agentProvisioning"],
+      [31, "codexPatHarnessAuth"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });
@@ -1379,6 +1381,30 @@ test(
       await assertHistoryRefused(db);
       assert.deepEqual(await canonicalData(db), before);
     });
+    await context.test(
+      "unpublished authentication at the occupied migration slot",
+      async (child) => {
+        const db = await historyDatabase(child, fixture, "oldauth");
+        const journal = JSON.parse(
+          await readFile(join(migrationsDirectory, "meta/_journal.json"), "utf8"),
+        );
+        // The unpublished authentication branch used main's later Codex PAT slot.
+        // Install its unchanged SQL with its original receipt, then prove that
+        // neither migration command relabels it or changes the populated database.
+        const authentication = journal.entries.find(
+          (entry) => entry.tag === "0031_human_authentication",
+        );
+        const entries = [
+          ...journal.entries.slice(0, 30),
+          { ...authentication, idx: 30, when: journal.entries[30].when },
+        ];
+        await installCanonicalPrefix(db, entries.length, { entries });
+        await seedCanonicalData(db, { preset: true });
+        const before = await canonicalData(db);
+        await assertHistoryRefused(db);
+        assert.deepEqual(await canonicalData(db), before);
+      },
+    );
     await context.test("application credential", async (child) => {
       const db = await historyDatabase(child, fixture, "app");
       const before = await historySnapshot(db);
