@@ -286,7 +286,7 @@ export const scenarios = {
       click("Apply channel settings"),
     ],
     description:
-      "Applying channel settings copies staged Slack Secret bindings into the create form's Configuration Secret bindings JSON without exposing token values.",
+      "Applying channel settings retains staged Slack Secret bindings for creation. The raw Secret bindings JSON editor is hidden; token values stay masked.",
   },
   createWorkspaceFiles: {
     group: "Pages/Create Agent",
@@ -444,7 +444,7 @@ export const scenarios = {
     standardCodexPreset: true,
     actions: passwordPresetForm,
     description:
-      "The password remains masked in the editable draft; Configuration JSON contains no model key.",
+      "The password remains masked in the editable draft; Configuration JSON contains no model key. The raw Secret bindings JSON editor is hidden.",
   },
   createPasswordPresetDenied: {
     group: "Pages/Create Agent",

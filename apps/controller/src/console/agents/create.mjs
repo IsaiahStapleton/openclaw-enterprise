@@ -799,10 +799,14 @@ function renderAgentForm(context, rendered) {
       "Provider and model selections update this JSON. Supported Dedicated runtimes provision and deploy from this form. Embedded and unsupported runtimes save a draft for later deployment. Slack token Secrets can be selected or created from the channel editor.",
     ),
     reset,
-    field(
-      "Secret bindings JSON",
-      secretBindings,
-      "Map environment names to existing Secret references in this Namespace. Do not enter credentials.",
+    element(
+      "div",
+      { hidden: true },
+      field(
+        "Secret bindings JSON",
+        secretBindings,
+        "Map environment names to existing Secret references in this Namespace. Do not enter credentials.",
+      ),
     ),
     field("Plugin selections JSON", plugins, "Desired plugin selections and policies."),
     workspaceSection,

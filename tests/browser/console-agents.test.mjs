@@ -1815,11 +1815,6 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
     harnessId: "codex",
     providerModel: "gpt-5.1",
   });
-  const staleSlackSecret = await fixture.createSecret(
-    namespace.id,
-    "Stale Slack app token",
-    "hidden-stale-slack-token",
-  );
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
   await routeInstallationWithoutProvisioning(page, fixture);
@@ -1838,10 +1833,8 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
   await page.getByRole("button", { name: "Configure Slack" }).click();
   const channelDialog = page.getByRole("dialog", { name: "Configure Slack" });
-  await channelDialog.getByLabel("Slack app token").selectOption(staleSlackSecret.id);
   await channelDialog.getByLabel("Slack channel IDs").fill("CUNSUPPORTED123");
   await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
-  await page.getByLabel("Secret bindings JSON").fill("{}");
   const createdResponse = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
@@ -1860,10 +1853,6 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
   });
   assert.equal(Object.hasOwn(configurationWrites[0].body, "secretBindings"), false);
   assert.equal(accessBindingPostRequests(requests, namespace.id).length, 1);
-  assert.notEqual(
-    accessBindingPostRequests(requests, namespace.id)[0].body.resourceId,
-    staleSlackSecret.id,
-  );
   assert.deepEqual(
     agentPostRequests(requests, namespace.id).map((request) => request.body),
     [
@@ -4711,6 +4700,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     JSON.parse(await page.getByLabel("Plugin selections JSON").inputValue()),
     plugins,
   );
+  assert.equal(await page.getByLabel("Secret bindings JSON").isVisible(), false);
   assert.deepEqual(
     JSON.parse(await page.getByLabel("Secret bindings JSON").inputValue()),
     secretBindings,
