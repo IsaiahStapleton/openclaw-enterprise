@@ -1394,7 +1394,7 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
             (call) =>
               call.operations.includes("readBase") && call.completion.commitShas.includes(baseSha),
           ),
-          "the fetch must be followed by a successful read of the independently observed base",
+          "a successful read identifies the independently observed base",
         );
         assert.ok(
           paired.some(
