@@ -65,6 +65,24 @@ that is still running. The command rejects queued or claimed deployment work and
 a running Agent without an active revision instead of guessing whether either
 belongs in the baseline.
 
+### Bind the Installation once
+
+After initial production bootstrap, annotate the operator-owned startup Secret
+with the Installation ID retained in the bootstrap key. Repeat this only when
+repairing a missing marker; do not replace a different existing ID:
+
+```bash
+export OCC_INSTALLATION_ID="$(jq -er '.meta.installationId' "$OCC_BOOTSTRAP_KEY_FILE")"
+export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName' /secure/occ/values.yaml)"
+kubectl --kubeconfig /secure/occ/kubeconfig \
+  --context '<reviewed-context>' --namespace openclaw-system \
+  annotate secret "$OCC_INSTALLATION_SECRET" \
+  openclaw.dev/installation-id="$OCC_INSTALLATION_ID"
+```
+
+The coordinated command requires this live marker to match authenticated OCC
+before changing either system.
+
 ### Bootstrap the inventory API once
 
 Skip this section when
