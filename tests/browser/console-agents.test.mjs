@@ -5035,7 +5035,7 @@ for (const action of ["disable", "drawer"]) {
     assert.equal(
       await page.locator(".channels-section").evaluate((section) =>
         [...section.childNodes].some(
-          (node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim() === "null",
+          (node) => node.nodeType === globalThis.Node.TEXT_NODE && node.textContent.trim() === "null",
         ),
       ),
       false,
