@@ -7,7 +7,7 @@
   src: url("./fonts/instrument-sans-latin.woff2") format("woff2");
 }
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font-family:
     "Instrument Sans",
     -apple-system,
@@ -44,31 +44,6 @@
   --radius-sm: 6px;
   --radius: 10px;
   --radius-lg: 14px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1015;
-    --surface: #161920;
-    --surface-muted: #191c24;
-    --hover: #1f2330;
-    --text: #bcbcc0;
-    --text-strong: #f4f4f5;
-    --muted: #8b8b94;
-    --line: #2e3040;
-    --input-border: #6b6e7c;
-    --accent: #ff5c5c;
-    --accent-subtle: rgba(255, 92, 92, 0.1);
-    --primary: #d13c3c;
-    --primary-hover: #c22e2e;
-    --success: #4ade80;
-    --success-subtle: rgba(74, 222, 128, 0.08);
-    --danger: #f87171;
-    --danger-subtle: rgba(248, 113, 113, 0.08);
-    --warning: #fbbf24;
-    --warning-subtle: rgba(251, 191, 36, 0.08);
-    --overlay: rgba(0, 0, 0, 0.6);
-    --shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  }
 }
 * {
   box-sizing: border-box;

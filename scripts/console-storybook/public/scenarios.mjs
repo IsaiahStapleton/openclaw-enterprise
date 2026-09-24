@@ -121,7 +121,7 @@ export const scenarios = {
     description:
       "Searchable Agent table with draft and deployed Agents. Open an Agent to explore its tabs. The shared shell, table, and controls use the Claw palette and typography.",
     steps: [
-      "Select Light and Dark using Preview theme. Check text, search input, buttons, and the current navigation item.",
+      "Check text, search input, buttons, and the current navigation item. The console stays light with either system appearance preference.",
       "Tab through the search and creation controls, then search for an Agent and open its detail page.",
       "At a narrow viewport, use Open navigation and choose a page; the drawer must close and return focus to the page.",
     ],

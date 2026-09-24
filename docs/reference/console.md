@@ -48,7 +48,7 @@ Providers tab is hidden. Namespace rows remain read-only collection entries.
 | Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |
 | Namespaces | Installation-wide collection filtered by exact Namespace `read`.         |
 
-The console follows your system light or dark appearance. Its fonts are served by OCC;
+The console uses a light appearance. Its fonts are served by OCC;
 no external font service is required.
 
 Use the bottom **OpenClaw Enterprise** menu for **Namespace**, **Settings**, or

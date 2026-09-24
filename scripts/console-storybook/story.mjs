@@ -1,6 +1,6 @@
 import { scenarios } from "./public/scenarios.mjs";
 
-export function story(id, { colorScheme = "light dark" } = {}) {
+export function story(id) {
   const scenario = scenarios[id];
   return {
     name: scenario.name,
@@ -35,26 +35,6 @@ export function story(id, { colorScheme = "light dark" } = {}) {
       frame.title = `${scenario.name}: interactive console`;
       frame.src = `/storybook-fixtures/frame.html?story=${encodeURIComponent(id)}`;
       frame.style.cssText = `display:block;width:100%;max-width:${scenario.mobile ? "390px" : "1600px"};height:min(900px, calc(100vh - 80px));min-height:480px;border:1px solid #d6d0c5;background:white`;
-      frame.style.colorScheme = colorScheme;
-      const themeLabel = document.createElement("label");
-      themeLabel.textContent = "Preview theme ";
-      const theme = document.createElement("select");
-      for (const [value, label] of [
-        ["light dark", "System"],
-        ["light", "Light"],
-        ["dark", "Dark"],
-      ]) {
-        const option = document.createElement("option");
-        option.value = value;
-        option.textContent = label;
-        theme.append(option);
-      }
-      theme.value = colorScheme;
-      theme.addEventListener("change", () => {
-        frame.style.colorScheme = theme.value;
-      });
-      themeLabel.append(theme);
-      themeLabel.style.cssText = "display:inline-block;margin:0 16px 12px";
       frame.setAttribute(
         "sandbox",
         "allow-scripts allow-same-origin allow-forms allow-modals allow-popups",
@@ -65,7 +45,7 @@ export function story(id, { colorScheme = "light dark" } = {}) {
       reset.addEventListener("click", () => {
         frame.src = `/storybook-fixtures/frame.html?story=${encodeURIComponent(id)}`;
       });
-      root.append(reset, themeLabel, frame);
+      root.append(reset, frame);
       return root;
     },
   };
