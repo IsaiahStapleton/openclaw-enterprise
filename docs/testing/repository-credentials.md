@@ -48,6 +48,11 @@ require explicit security review: identify the authority, caller, scope and
 protecting negative test. Never substitute wildcard allowances. The [guard regression test](../../tests/conformance/repository-credentials-source-boundary.test.mjs)
 adds forbidden capabilities to a disposable copy of the real source tree.
 
+The native hook dispatcher can inspect Git configuration and executable hooks,
+read Git's hook input and delegate ordinary hooks. It has no direct credential-file
+reader or network sender. The detached client includes the pure private
+client-contract validator; negative checks protect these specific I/O boundaries.
+
 This is an accidental-regression guard for reviewed source. It does not perform
 whole-program dataflow analysis, prove that allowed owners handle secrets
 correctly, or sandbox malicious code. It does not replace capability design,
@@ -109,11 +114,11 @@ for prerequisites, commands and proof limits.
 ## What the controlled service tests prove
 
 The Git upstream runs the actual `git-http-backend` against a disposable bare
-repository. The `git-write` case proves clone, fetch, branch checkout and push,
-with assertions on remote refs. The `git-read` case proves the read operations,
-rejects push and API requests before token acquisition or upstream access, and
-checks that a denied push leaves remote refs unchanged. API and combined
-workflow coverage selects `git-full`.
+repository. Contributor (`git-write`) coverage exercises clone, fetch, branch
+checkout, push and PR work. Reader (`git-read`) coverage admits reads, rejects
+push and REST writes before token acquisition or upstream access, and checks
+that a denied push leaves remote refs unchanged. Collaborator (`git-full`)
+adds ordinary issue management.
 A fault case drops the response after receive-pack finishes and checks that the
 service sends the push once while the remote ref records the accepted commit.
 
@@ -124,6 +129,13 @@ paginated comments and issues using native repository-ID links and opaque issue
 cursors, individual comment operations and native GraphQL PR
 creation. It checks bodyless deletion and unchanged human text. Unknown routes
 and lost mutation responses exercise denial and no-replay behavior.
+
+The access-level cases send requests through the real TLS listener, acquisition
+and forwarding path. They cover exact permission maps, rejection of an older
+grant through the private control API, bounded README/diff replies and
+possible-write/no-replay accounting for Reader GraphQL. The controlled upstream
+models GitHub responses; it does not establish live GitHub authorization or
+installed-Agent qualification.
 
 The alternate adapter uses a nonnumeric repository ID, nested repository path,
 different native authentication and permissions, short access expiry, and a
@@ -246,6 +258,23 @@ Passing it proves emitted-artifact composition and forwarding. The Compose case
 renders `deploy/examples/repository-credentials/compose.yaml` and checks declared
 mount separation; it does not start those services.
 
+## Check the runtime image's private material volume
+
+Run the separate [runtime volume test](images.md#repository-runtime-volume-test-environment)
+against an image built from the candidate source:
+
+```sh
+OCC_TEST_RUNTIME_IMAGE=openclaw-enterprise-runtime:test \
+  node --test tests/integration/repository-runtime-volume.test.mjs
+```
+
+The required `images-packaging` lane runs this case with the image-installed
+client and no detached bundle overlay. It checks both initializers, a root-owned
+fsGroup-style tmpfs parent, private subPath mounts, ownership rejection, retry
+and read-only delivery. An unset selector skips standalone execution; the CI
+lane rejects skips. See the linked image guide for Docker prerequisites and
+proof limits.
+
 ## Verify separate running containers
 
 Select both delivered images to run the distinct isolation case:
@@ -271,14 +300,15 @@ qualification image and rendered Compose check.
 
 ## Record each evidence boundary
 
-| Check                         | Evidence it can establish                                                                                     |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Source tests and source guard | Behavior of real owners against named protocol fixtures; reviewed import/I/O boundaries.                      |
-| Detached package check        | Emitted entrypoints and runtime dependency closure without source fallback.                                   |
-| Combined qualification image  | Emitted service/client composition, controlled hour-13 push/API operations and alternate-backend conformance. |
-| Rendered Compose              | Declared paths and mount separation.                                                                          |
-| Separate running containers   | Delivered image identity and observed client/service custody for the exercised commands.                      |
-| Authorized live smoke         | Real provider behavior and cleanup for the selected repository, grant and client version.                     |
+| Check                         | Evidence it can establish                                                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Source tests and source guard | Behavior of real owners against named protocol fixtures; reviewed import/I/O boundaries.                           |
+| Detached package check        | Emitted entrypoints and runtime dependency closure without source fallback.                                        |
+| Runtime private volume        | Image-installed client with real Docker tmpfs and private subPath mounts; ownership, retry and read-only delivery. |
+| Combined qualification image  | Emitted service/client composition, controlled hour-13 push/API operations and alternate-backend conformance.      |
+| Rendered Compose              | Declared paths and mount separation.                                                                               |
+| Separate running containers   | Delivered image identity and observed client/service custody for the exercised commands.                           |
+| Authorized live smoke         | Real provider behavior and cleanup for the selected repository, grant and client version.                          |
 
 Retain selectors, versions, source/artifact/image identities, pass/fail/skip counts
 and cleanup results. Missing selectors leave evidence unavailable; they do not

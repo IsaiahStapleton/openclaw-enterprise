@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { loadTestSuites } from "../../scripts/ci/test-suites.mjs";
 import {
   codexBwrapAdditionalSyscalls,
   deriveCodexBwrapProfile,
@@ -144,6 +145,12 @@ if (command === "docker" || command === "podman") {
     const alias = state.aliases?.[node];
     if (equals(args.slice(2), ["ip", "route", "get", "10.42.7.0"])) {
       assert.ok(node.endsWith("-server-0"));
+      // Node readiness can precede Flannel's cross-node route. The first lookup
+      // then selects the container network, which must never become the allowlist.
+      state.routeLookups = (state.routeLookups ?? 0) + 1;
+      if (scenario === "delayed-overlay-route" && state.routeLookups === 1) {
+        finish("10.42.7.0 via 172.19.0.1 dev eth0 src 172.19.0.2\n");
+      }
       finish(scenario === "missing-proxy-source"
         ? "10.42.7.0 dev flannel.1\n"
         : "10.42.7.0 via 10.42.7.0 dev flannel.1 src 10.42.3.0\n");
@@ -329,6 +336,7 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
 for (const { scenario, error } of [
   { scenario: "success" },
   { scenario: "podman-success" },
+  { scenario: "delayed-overlay-route" },
   { scenario: "missing-tag", error: /Unable to find imported OCI manifest digest/ },
   {
     scenario: "missing-alias",
@@ -565,6 +573,22 @@ test("repository platform preparation binds runtime clients, an owned gateway an
   const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform");
   const prepared = commands.prepare();
   assert.equal(prepared.status, 0, prepared.stderr);
+  for (const phase of [
+    "postgres-start",
+    "k3d-create",
+    "runtime-image-build",
+    "platform-fixture-build",
+    "image-archive-save",
+    "image-archive-import",
+    "platform-image-import",
+  ]) {
+    assert.match(
+      prepared.stderr,
+      new RegExp(
+        `\\[ci-timing\\] lane=repository-credentials-platform phase=${phase} duration_ms=\\d+`,
+      ),
+    );
+  }
   const state = JSON.parse(await readFile(commands.statePath, "utf8"));
   const cluster = state.resources.find(({ kind }) => kind === "k3d-cluster");
   assert.equal(state.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM, "1");
@@ -669,9 +693,7 @@ test("installed repository preparation requires explicit authorization and prote
 });
 
 test("ordinary CI groups require platform proof and exclude installed live repository writes", async () => {
-  const manifest = JSON.parse(
-    await readFile(join(repositoryRoot, "scripts/ci/test-suites.json"), "utf8"),
-  );
+  const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
   for (const name of ["ci", "full"]) {
     assert.ok(manifest.groups[name].includes("repository-credentials-platform"));
     assert.ok(!manifest.groups[name].includes("repository-credentials-installed"));

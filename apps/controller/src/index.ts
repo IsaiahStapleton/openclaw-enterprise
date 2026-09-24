@@ -33,8 +33,8 @@ import {
   PluginToolPolicySchema,
   SecretResponse,
   occApiRoutes,
-  type AccessBinding,
   type Agent,
+  type ProvisionAgentBody,
   type AgentRevision,
   type AgentRuntimeCredentialsBody,
   type AuditEvent,
@@ -46,20 +46,13 @@ import {
   type IAMDriver,
   type Installation,
   type OccApiRoute,
-  type OpenClawConfigurationDocument,
   type PermissionAction,
-  type PresetTemplate,
   type ProviderSummary,
   type RepositoryBindingRequest,
   type ResourceKind,
   type ResourceRef,
-  type Role,
   type SandboxDriver,
   type SecretDriver,
-  type SecretBindings,
-  type SecretMetadata,
-  type ServiceAccount,
-  type ServiceAccountCredential,
   type UpdateWorkspaceFileBody,
   type WorkspaceFileName,
 } from "@openclaw-enterprise/contracts";
@@ -68,12 +61,16 @@ import {
   AuthorizationDeniedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   DependencyUnavailableError,
+  ModelDiscoveryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
+  RepositoryOptionsUnavailableError,
   ResourceConflictError,
   ScopeViolationError,
   type DeploymentStatusResult,
+  type AgentProvisioningProgress,
+  type ProvisionAgentInput,
   type HarnessResolver,
   type OpenClawController,
 } from "@openclaw-enterprise/occ";
@@ -112,6 +109,12 @@ import {
   type NativeAdminWebSocketCloseCause,
   type NativeAdminWebSocketCloseReason,
 } from "./gateway/native-admin-proxy.ts";
+import { configurationHandlers } from "./http/configurations.ts";
+import { presetHandlers } from "./http/presets.ts";
+import { secretHandlers } from "./http/secrets.ts";
+import { iamHandlers } from "./http/iam.ts";
+import { serviceAccountHandlers } from "./http/service-accounts.ts";
+import type { RequestContext, ResourceHandlers } from "./http/types.ts";
 
 export interface DevelopmentAdmission {
   readonly enabled: boolean;
@@ -149,14 +152,6 @@ export interface ControllerAppOptions {
 
 export interface ControllerApp {
   fetch(request: Request): Promise<Response>;
-}
-
-interface RequestContext {
-  readonly actorId: string;
-  readonly issuer: string;
-  readonly subject: string;
-  readonly admissionDecisionId: string;
-  readonly operation: OccApiRoute;
 }
 
 interface NativeAdminProxyResolution {
@@ -205,7 +200,11 @@ interface RequiredPermission {
   readonly resourceKind: ResourceKind;
   readonly scope: "requested" | "installation" | "namespace" | "each_returned" | "request_body";
   readonly condition?:
-    "associated_service_account" | "existing_namespace" | "bound_secret" | "iam_binding_target";
+    | "associated_service_account"
+    | "existing_namespace"
+    | "bound_secret"
+    | "iam_binding_target"
+    | "provisioning_work";
 }
 
 interface DocumentedFastifySchema extends FastifySchema {
@@ -227,6 +226,14 @@ class RequestFailure extends Error {
     }
   }
 }
+
+const resourceHandlers: ResourceHandlers = {
+  ...configurationHandlers,
+  ...presetHandlers,
+  ...secretHandlers,
+  ...iamHandlers,
+  ...serviceAccountHandlers,
+};
 
 const DEFAULT_BODY_LIMIT = 64 * 1024;
 // Four 16 KiB documents can expand sixfold in JSON, plus the ordinary create fields.
@@ -409,8 +416,21 @@ function operationTarget(
   if (secretId && namespaceId) {
     return { kind: "secret", id: secretId, namespaceId };
   }
-  if (operation.operationId === "createAgent" && namespaceId) {
+  if (
+    (operation.operationId === "createAgent" ||
+      operation.operationId === "provisionAgent" ||
+      operation.operationId === "listRepositoryOptions") &&
+    namespaceId
+  ) {
     return { kind: "agent", id: namespaceId, namespaceId };
+  }
+  if (
+    (operation.operationId === "getAgentProvisioning" ||
+      operation.operationId === "retryAgentProvisioning") &&
+    namespaceId &&
+    typeof params.workId === "string"
+  ) {
+    return { kind: "agent", id: params.workId, namespaceId };
   }
   if (operation.operationId === "getAgentRevision" && namespaceId && revisionId) {
     return { kind: "agent_revision", id: revisionId, namespaceId };
@@ -517,13 +537,34 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
   }
 
   if (
+    operation.operationId === "provisionAgent" ||
     operation.operationId === "createAgent" ||
     operation.operationId === "updateAgent" ||
     operation.operationId === "deployAgent"
   ) {
     return [
-      { ...permission, scope: operation.operationId === "createAgent" ? "namespace" : "requested" },
-      { action: "read", resourceKind: "configuration", scope: "requested" },
+      {
+        ...permission,
+        scope:
+          operation.operationId === "createAgent" || operation.operationId === "provisionAgent"
+            ? "namespace"
+            : "requested",
+      },
+      ...(operation.operationId === "provisionAgent"
+        ? [
+            {
+              action: "create" as const,
+              resourceKind: "configuration" as const,
+              scope: "namespace" as const,
+            },
+          ]
+        : [
+            {
+              action: "read" as const,
+              resourceKind: "configuration" as const,
+              scope: "requested" as const,
+            },
+          ]),
       {
         action: "read",
         resourceKind: "service_account",
@@ -535,6 +576,20 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
         resourceKind: "secret",
         scope: "requested",
         condition: "bound_secret",
+      },
+    ];
+  }
+
+  if (
+    operation.operationId === "getAgentProvisioning" ||
+    operation.operationId === "retryAgentProvisioning"
+  ) {
+    return [
+      {
+        action: permission.action,
+        resourceKind: "agent",
+        scope: "requested",
+        condition: "provisioning_work",
       },
     ];
   }
@@ -597,6 +652,9 @@ function permissionDescription(
         return `Requires ${action} permission on the ${name} when selecting an existing Kubernetes namespace.`;
       }
       if (condition === "bound_secret") {
+        if (operation?.operationId === "provisionAgent") {
+          return `Requires ${action} permission on each existing ${name} reference supplied in provisioning inputs.`;
+        }
         if (operation?.operationId === "createConfiguration") {
           return `Requires ${action} permission on each ${name} supplied in request body Secret bindings.`;
         }
@@ -604,6 +662,9 @@ function permissionDescription(
           return `Requires ${action} permission on each ${name} bound by the resulting Configuration.`;
         }
         return `Requires ${action} permission on each bound ${name} when Secret bindings are present or selected.`;
+      }
+      if (condition === "provisioning_work") {
+        return `Requires current ${action} authorization for the accepted Agent provisioning record. Before Agent creation, only the initiating actor in the exact Namespace can use the work item.`;
       }
       if (condition === "iam_binding_target") {
         return `Requires ${action} permission on the request body ${name} when the AccessBinding targets that resource kind.`;
@@ -627,33 +688,24 @@ function permissionDescription(
   return description;
 }
 
-function clientServiceAccount(account: Readonly<ServiceAccount>): Record<string, unknown> {
+function clientInstallation(
+  installation: Readonly<Installation>,
+  computeDriver: Readonly<ComputeDriver> | undefined,
+): Record<string, unknown> {
+  const agentProvisioning = computeDriver?.agentProvisioning;
   return {
-    id: account.id,
-    namespaceId: account.namespaceId,
-    name: account.name,
-    ...(account.credential === undefined ? {} : { credential: { kind: account.credential.kind } }),
-  };
-}
-
-function clientIAMRole(role: Readonly<Role>): Record<string, unknown> {
-  return {
-    id: role.id,
-    namespaceId: role.namespaceId,
-    ...(role.name === undefined ? {} : { name: role.name }),
-    permissions: role.permissions,
-  };
-}
-
-function clientIAMAccessBinding(binding: Readonly<AccessBinding>): Record<string, unknown> {
-  return {
-    id: binding.id,
-    namespaceId: binding.namespaceId,
-    subjectKind: binding.subjectKind,
-    subjectId: binding.subjectId,
-    roleId: binding.roleId,
-    ...(binding.resourceKind === undefined ? {} : { resourceKind: binding.resourceKind }),
-    ...(binding.resourceId === undefined ? {} : { resourceId: binding.resourceId }),
+    id: installation.id,
+    name: installation.name,
+    createdAt: installation.createdAt,
+    ...(agentProvisioning === undefined
+      ? {}
+      : {
+          capabilities: {
+            agentProvisioning: {
+              executionModes: [...agentProvisioning.executionModes],
+            },
+          },
+        }),
   };
 }
 
@@ -678,12 +730,27 @@ function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
   };
 }
 
-function clientSecret(secret: Readonly<SecretMetadata>): Record<string, unknown> {
+function agentProvisioningUrl(namespaceId: string, workId: string): string {
+  return `/namespaces/${encodeURIComponent(namespaceId)}/agents/provision/${encodeURIComponent(workId)}`;
+}
+
+function clientAgentProvisioning(
+  provisioning: Readonly<AgentProvisioningProgress>,
+  namespaceId: string,
+): Record<string, unknown> {
   return {
-    id: secret.id,
-    namespaceId: secret.namespaceId,
-    name: secret.name,
-    ref: secret.ref,
+    workId: provisioning.workId,
+    status: provisioning.status,
+    phase: provisioning.phase,
+    attemptCount: provisioning.attemptCount,
+    updatedAt: provisioning.updatedAt,
+    ...(provisioning.agentId === undefined ? {} : { agentId: provisioning.agentId }),
+    ...(provisioning.configurationId === undefined
+      ? {}
+      : { configurationId: provisioning.configurationId }),
+    ...(provisioning.revisionId === undefined ? {} : { revisionId: provisioning.revisionId }),
+    url: provisioning.url ?? agentProvisioningUrl(namespaceId, provisioning.workId),
+    ...(provisioning.error === undefined ? {} : { error: provisioning.error }),
   };
 }
 
@@ -807,6 +874,34 @@ function isDependencyUnavailable(error: unknown): boolean {
 function requestFailure(error: unknown): RequestFailure {
   if (error instanceof RequestFailure) {
     return error;
+  }
+  if (error instanceof ModelDiscoveryError) {
+    switch (error.reason) {
+      case "credentials_rejected":
+        return failure(
+          400,
+          "MODEL_DISCOVERY_CREDENTIALS_REJECTED",
+          "The provider rejected model discovery. Check the selected credential and its permission to list models, then retry or enter a model ID manually.",
+        );
+      case "rate_limited":
+        return failure(
+          429,
+          "MODEL_DISCOVERY_RATE_LIMITED",
+          "The provider rate-limited model discovery. Wait and retry, or enter a model ID manually.",
+        );
+      case "invalid_response":
+        return failure(
+          503,
+          "MODEL_DISCOVERY_INVALID_RESPONSE",
+          "The provider returned an invalid model list. Retry or enter a model ID manually.",
+        );
+      case "unavailable":
+        return failure(
+          503,
+          "MODEL_DISCOVERY_UNAVAILABLE",
+          "The provider model service is unavailable. Retry or enter a model ID manually.",
+        );
+    }
   }
   if (error instanceof PresetValidationError) {
     return failure(400, "INVALID_REQUEST", "The supplied Preset template is invalid.");
@@ -1989,7 +2084,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           );
         });
         controller = created;
-        reply.status(201).send({ data: created.installation, meta: { requestId: request.id } });
+        reply.status(201).send({
+          data: clientInstallation(created.installation, options.computeDriver),
+          meta: { requestId: request.id },
+        });
         return;
       } finally {
         bootstrapping = false;
@@ -2002,7 +2100,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     if (operation.operationId === "getInstallation") {
       reply.send({
-        data: await controller.getInstallation(context.actorId),
+        data: clientInstallation(
+          await controller.getInstallation(context.actorId),
+          options.computeDriver,
+        ),
         meta: { requestId: request.id },
       });
       return;
@@ -2083,469 +2184,132 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
-    if (operation.operationId === "createConfiguration") {
-      const configuration = await controller.transact(async (unit) => {
-        const created = await controller!.createConfiguration(context.actorId, {
+    if (operation.operationId === "discoverAgentModels") {
+      const models = await controller.discoverAgentModels(context.actorId, namespaceId, {
+        provider: body?.provider as string,
+        authMethod: body?.authMethod as "api_key" | "codex_pat",
+        apiKey: body?.apiKey as string,
+      });
+      reply.header("cache-control", "no-store");
+      reply.send({ data: models, meta: { requestId: request.id } });
+      return;
+    }
+
+    const resourceHandler = resourceHandlers[operation.operationId];
+    if (resourceHandler) {
+      await resourceHandler({
+        controller,
+        context,
+        request,
+        reply,
+        params,
+        body,
+        namespaceId,
+        mutationEvent: (resource) => event(operation, request, resource, "mutation", context),
+      });
+      return;
+    }
+
+    if (operation.operationId === "provisionAgent") {
+      const provisionBody = body as unknown as ProvisionAgentBody;
+      try {
+        normalizeInitialWorkspaceFiles(provisionBody.initialWorkspaceFiles);
+      } catch {
+        throw failure(
+          400,
+          "INVALID_REQUEST",
+          "Initial workspace files must use the four allowed names and valid Unicode without NUL, within 16 KiB per file.",
+        );
+      }
+      if (
+        provisionBody.workspaceDefaultsId !== undefined &&
+        provisionBody.workspaceDefaultsId !== WORKSPACE_DEFAULTS_ID
+      ) {
+        throw failure(
+          409,
+          "RESOURCE_CONFLICT",
+          "Workspace defaults changed. Reload the create form before submitting.",
+        );
+      }
+      const result = await controller.transact(async (unit) => {
+        const provisioned = await controller!.provisionAgent(context.actorId, {
+          requestId: provisionBody.requestId,
           namespaceId,
-          kind: body?.kind as "agent",
-          values: body?.values as OpenClawConfigurationDocument,
-          ...(body?.secretBindings === undefined
+          name: provisionBody.name,
+          configuration: provisionBody.configuration as ProvisionAgentInput["configuration"],
+          ...(provisionBody.initialWorkspaceFiles === undefined
             ? {}
-            : { secretBindings: body.secretBindings as SecretBindings }),
-        });
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "configuration", id: created.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return created;
-      });
-      reply.status(201).send({ data: configuration, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "getConfiguration") {
-      const configuration = await controller.getConfiguration(
-        context.actorId,
-        namespaceId,
-        params.configurationId as string,
-      );
-      reply.send({ data: configuration, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "updateConfiguration") {
-      const configuration = await controller.transact(async (unit) => {
-        const updated = await controller!.updateConfiguration(context.actorId, {
-          namespaceId,
-          configurationId: params.configurationId as string,
-          values: body?.values as OpenClawConfigurationDocument,
-          ...(body?.secretBindings === undefined
+            : {
+                initialWorkspaceFiles: provisionBody.initialWorkspaceFiles as InitialWorkspaceFiles,
+              }),
+          ...(provisionBody.workspaceDefaultsId === undefined
             ? {}
-            : { secretBindings: body.secretBindings as SecretBindings }),
-        });
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "configuration", id: updated.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return updated;
-      });
-      reply.send({ data: configuration, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "deleteConfiguration") {
-      await controller.transact(async (unit) => {
-        await controller!.deleteConfiguration(
-          context.actorId,
-          namespaceId,
-          params.configurationId as string,
-        );
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "configuration", id: params.configurationId as string, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-      });
-      reply.status(204).send();
-      return;
-    }
-
-    if (operation.operationId === "createPreset") {
-      const preset = await controller.transact(async (unit) => {
-        const created = await controller!.createPreset(context.actorId, {
-          namespaceId,
-          name: body?.name as string,
-          template: body?.template as PresetTemplate,
-        });
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "preset", id: created.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return created;
-      });
-      reply.status(201).send({ data: preset, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "listPresets") {
-      const presets = await controller.listPresets(context.actorId, namespaceId);
-      reply.send({ data: presets, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "getPreset") {
-      const preset = await controller.getPreset(
-        context.actorId,
-        namespaceId,
-        params.presetId as string,
-      );
-      reply.send({ data: preset, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "updatePreset") {
-      const preset = await controller.transact(async (unit) => {
-        const updated = await controller!.updatePreset(context.actorId, {
-          namespaceId,
-          presetId: params.presetId as string,
-          ...(body?.name === undefined ? {} : { name: body.name as string }),
-          ...(body?.template === undefined ? {} : { template: body.template as PresetTemplate }),
-        });
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "preset", id: updated.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return updated;
-      });
-      reply.send({ data: preset, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "deletePreset") {
-      await controller.transact(async (unit) => {
-        await controller!.deletePreset(context.actorId, namespaceId, params.presetId as string);
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "preset", id: params.presetId as string, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-      });
-      reply.status(204).send();
-      return;
-    }
-
-    if (operation.operationId === "createSecret") {
-      const secret = await controller.transact(async (unit) => {
-        const created = await controller!.createSecret(context.actorId, {
-          namespaceId,
-          name: body?.name as string,
-          value: body?.value as string,
-        });
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "secret", id: created.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return clientSecret(created);
-      });
-      reply.status(201).send({ data: secret, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "listSecrets") {
-      const secrets = await controller.listSecrets(context.actorId, namespaceId);
-      reply.send({ data: secrets.map(clientSecret), meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "getSecret") {
-      const secret = await controller.readSecret(
-        context.actorId,
-        namespaceId,
-        params.secretId as string,
-      );
-      reply.send({ data: clientSecret(secret), meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "updateSecret") {
-      const secret = await controller.transact(async (unit) => {
-        const updated = await controller!.updateSecret(context.actorId, {
-          namespaceId,
-          secretId: params.secretId as string,
-          value: body?.value as string,
-        });
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "secret", id: updated.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return clientSecret(updated);
-      });
-      reply.send({ data: secret, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "deleteSecret") {
-      await controller.transact(async (unit) => {
-        await controller!.deleteSecret(context.actorId, namespaceId, params.secretId as string);
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "secret", id: params.secretId as string, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-      });
-      reply.status(204).send();
-      return;
-    }
-
-    if (operation.operationId === "listIAMRoles") {
-      const roles = await controller.listIAMRoles(context.actorId, namespaceId);
-      reply.send({ data: roles.map(clientIAMRole), meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "createIAMRole") {
-      const role = await controller.transact(async (unit) => {
-        const created = await controller!.createIAMRole(context.actorId, {
-          namespaceId,
-          ...(body?.name === undefined ? {} : { name: body.name as string }),
-          permissions: body?.permissions as never,
-        });
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "namespace", id: namespaceId, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return clientIAMRole(created);
-      });
-      reply.status(201).send({ data: role, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "getIAMRole") {
-      const role = await controller.getIAMRole(
-        context.actorId,
-        namespaceId,
-        params.roleId as string,
-      );
-      reply.send({ data: clientIAMRole(role), meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "deleteIAMRole") {
-      await controller.transact(async (unit) => {
-        await controller!.deleteIAMRole(context.actorId, namespaceId, params.roleId as string);
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "namespace", id: namespaceId, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-      });
-      reply.status(204).send();
-      return;
-    }
-
-    if (operation.operationId === "listIAMAccessBindings") {
-      const bindings = await controller.listIAMAccessBindings(context.actorId, namespaceId);
-      reply.send({
-        data: bindings.map(clientIAMAccessBinding),
-        meta: { requestId: request.id },
-      });
-      return;
-    }
-
-    if (operation.operationId === "createIAMAccessBinding") {
-      const binding = await controller.transact(async (unit) => {
-        const created = await controller!.createIAMAccessBinding(context.actorId, {
-          namespaceId,
-          subjectKind: body?.subjectKind as "identity",
-          subjectId: body?.subjectId as string,
-          roleId: body?.roleId as string,
-          resourceKind: body?.resourceKind as ResourceKind,
-          resourceId: body?.resourceId as string,
+            : { workspaceDefaultsId: provisionBody.workspaceDefaultsId }),
+          ...(provisionBody.providerId === undefined
+            ? {}
+            : { providerId: provisionBody.providerId }),
+          ...(provisionBody.executionMode === undefined
+            ? {}
+            : { executionMode: provisionBody.executionMode as HarnessExecutionMode }),
+          ...(provisionBody.harnessAuth === undefined
+            ? {}
+            : {
+                harnessAuth: provisionBody.harnessAuth as NonNullable<
+                  ProvisionAgentInput["harnessAuth"]
+                >,
+              }),
+          ...(provisionBody.plugins === undefined
+            ? {}
+            : { plugins: provisionBody.plugins as never }),
+          ...(provisionBody.repositoryBindings === undefined
+            ? {}
+            : {
+                repositoryBindings:
+                  provisionBody.repositoryBindings as readonly RepositoryBindingRequest[],
+              }),
         });
         await unit.audit.append(
           event(
             operation,
             request,
             {
-              kind: body?.resourceKind as ResourceKind,
-              id: body?.resourceId as string,
+              kind: "agent",
+              id: provisioned.provisioning.agentId ?? provisioned.provisioning.workId,
               namespaceId,
             },
             "mutation",
             context,
           ),
         );
-        return clientIAMAccessBinding(created);
+        return {
+          provisioning: clientAgentProvisioning(provisioned.provisioning, namespaceId),
+        };
       });
-      reply.status(201).send({ data: binding, meta: { requestId: request.id } });
+      reply.status(202).send({ data: result, meta: { requestId: request.id } });
       return;
     }
 
-    if (operation.operationId === "getIAMAccessBinding") {
-      const binding = await controller.getIAMAccessBinding(
-        context.actorId,
-        namespaceId,
-        params.bindingId as string,
-      );
+    if (operation.operationId === "listRepositoryOptions") {
+      const options = await controller!
+        .listRepositoryOptions(context.actorId, namespaceId)
+        .catch((error: unknown) => {
+          if (error instanceof RepositoryOptionsUnavailableError) {
+            throw failure(
+              503,
+              "REPOSITORY_OPTIONS_UNAVAILABLE",
+              "Repository options are unavailable.",
+            );
+          }
+          throw error;
+        });
       reply.send({
-        data: clientIAMAccessBinding(binding),
+        data: options.map(({ repositoryRef, displayName, allowedProfiles }) => ({
+          repositoryRef,
+          displayName,
+          allowedProfiles,
+        })),
         meta: { requestId: request.id },
       });
-      return;
-    }
-
-    if (operation.operationId === "deleteIAMAccessBinding") {
-      await controller.transact(async (unit) => {
-        await controller!.deleteIAMAccessBinding(
-          context.actorId,
-          namespaceId,
-          params.bindingId as string,
-        );
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "namespace", id: namespaceId, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-      });
-      reply.status(204).send();
-      return;
-    }
-
-    if (operation.operationId === "createServiceAccount") {
-      const account = await controller.transact(async (unit) => {
-        const created = await controller!.createServiceAccount(context.actorId, {
-          namespaceId,
-          name: body?.name as string,
-        });
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "service_account", id: created.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return clientServiceAccount(created);
-      });
-      reply.status(201).send({ data: account, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "listServiceAccounts") {
-      const accounts = await controller.listServiceAccounts(context.actorId, namespaceId);
-      reply.send({ data: accounts.map(clientServiceAccount), meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "getServiceAccount") {
-      const account = await controller.getServiceAccount(
-        context.actorId,
-        namespaceId,
-        params.serviceAccountId as string,
-      );
-      reply.send({ data: clientServiceAccount(account), meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "createServiceAccountCredential") {
-      const account = await controller.transact(async (unit) => {
-        const updated = await controller!.createServiceAccountCredential(
-          context.actorId,
-          namespaceId,
-          params.serviceAccountId as string,
-        );
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "service_account", id: updated.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return clientServiceAccount(updated);
-      });
-      reply.status(201).send({ data: account, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "updateServiceAccountCredential") {
-      const account = await controller.transact(async (unit) => {
-        const updated = await controller!.updateServiceAccountCredential(
-          context.actorId,
-          namespaceId,
-          params.serviceAccountId as string,
-          body as unknown as ServiceAccountCredential,
-        );
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "service_account", id: updated.id, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-        return clientServiceAccount(updated);
-      });
-      reply.send({ data: account, meta: { requestId: request.id } });
-      return;
-    }
-
-    if (operation.operationId === "deleteServiceAccount") {
-      await controller.transact(async (unit) => {
-        await controller!.deleteServiceAccount(
-          context.actorId,
-          namespaceId,
-          params.serviceAccountId as string,
-        );
-        await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "service_account", id: params.serviceAccountId as string, namespaceId },
-            "mutation",
-            context,
-          ),
-        );
-      });
-      reply.status(204).send();
       return;
     }
 
@@ -2614,6 +2378,56 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     if (operation.operationId === "listAgents") {
       const agents = await controller.listAgents(context.actorId, namespaceId);
       reply.send({ data: agents.map(clientAgent), meta: { requestId: request.id } });
+      return;
+    }
+
+    if (operation.operationId === "getAgentProvisioning") {
+      const workId = params.workId;
+      if (!workId) {
+        throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
+      }
+      const provisioned = await controller.getAgentProvisioning(
+        context.actorId,
+        namespaceId,
+        workId,
+      );
+      reply.send({
+        data: clientAgentProvisioning(provisioned.provisioning, namespaceId),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "retryAgentProvisioning") {
+      const workId = params.workId;
+      if (!workId) {
+        throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
+      }
+      const provisioning = await controller.transact(async (unit) => {
+        const retried = await controller!.retryAgentProvisioning(
+          context.actorId,
+          namespaceId,
+          workId,
+        );
+        await unit.audit.append(
+          event(
+            operation,
+            request,
+            {
+              kind: "agent",
+              id: retried.provisioning.agentId ?? retried.provisioning.workId,
+              namespaceId,
+            },
+            "mutation",
+            context,
+          ),
+        );
+        return retried.provisioning;
+      });
+      reply.status(202).send({
+        data: clientAgentProvisioning(provisioning, namespaceId),
+        meta: { requestId: request.id },
+      });
       return;
     }
 
@@ -3609,7 +3423,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         url: operation.path,
         ...(operation.operationId === "putAgentWorkspaceFile"
           ? { bodyLimit: WORKSPACE_FILE_BODY_LIMIT }
-          : operation.operationId === "createAgent"
+          : operation.operationId === "createAgent" || operation.operationId === "provisionAgent"
             ? { bodyLimit: options.maxBodyBytes ?? AGENT_CREATE_BODY_LIMIT }
             : {}),
         schema,

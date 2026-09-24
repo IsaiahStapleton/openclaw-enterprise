@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-22
-last_updated_session: codex/01a0c70f-8a8f-7c62-ac81-ee1a3e99f48b
+updated: 2026-09-24
+last_updated_session: public-pr/348
 ---
 
 # Container publication flow
@@ -53,11 +53,48 @@ also checks the main-only environment branch policy. No-push preparation has no 
 permission or protected-environment credentials.
 
 `.github/workflows/container-publish.yml:jobs.prepare` runs once per image. It
-registers ARM64 QEMU support and asks Buildx for `linux/amd64,linux/arm64`, with
-provenance disabled, in a single OCI archive. The approved Node base index must
+registers ARM64 QEMU support and builds `linux/amd64` and `linux/arm64`
+separately with provenance disabled, then assembles a single OCI archive. The approved Node base index must
 provide both platforms. The controller and runtime use their existing recipes.
-After OCI export, the job prunes only its dedicated Buildx builder's cache so
-the cache and unpacked smoke images do not exhaust the runner's disk together.
+`deploy/runtime/Dockerfile:openclaw-source` downloads the pinned public OpenClaw
+source archive, rejects a SHA-256 mismatch, installs its frozen dependency graph,
+and follows the upstream Docker build and production-dependency assembly with
+Codex and Slack selected. Plugin-local dependencies retain their own versions.
+Missing package-root dependencies are linked from those plugin installations so
+shared compiled chunks resolve them; existing core versions remain unchanged.
+The runtime stage verifies the assembled runtime archive checksum before extraction and
+retains `/opt/oce/runtime/provenance.json`; this archive is not an npm package.
+Matching bundled plugins replace
+independently installed plugin packages; the Dedicated Codex executable remains
+separately pinned. See the [runtime recipe](../../deploy/runtime/README.md) for
+source identity and installed-image checks.
+Runtime preparation uses the existing `blacksmith-8vcpu-ubuntu-2404` runner,
+also used by repository-platform CI, for the disk capacity needed by both
+architectures' source-build layers and the OCI export. The standard GitHub runner
+exhausted disk even after unused toolchains were removed. Controller preparation
+uses `ubuntu-24.04`. The repository must retain access to the Blacksmith runner
+label; container preparation does not delete preinstalled SDKs. The hosted-runner
+cleanup helper remains available to its existing CI callers and is not used on
+this runner.
+
+Before installing QEMU, the job mounts `binfmt_misc` on the host so emulator
+registrations survive the installer container. It then runs ARM64 Node from the
+pinned base image and asserts its architecture before starting the build. BuildKit
+can emulate builds itself, so a successful cross-build alone does not establish
+that Docker can execute the resulting ARM64 image.
+
+BuildKit runs one build step at a time to avoid overlapping dependency-install
+peaks. Each runtime dependency-install stage removes its temporary pnpm store
+in the same layer; installed dependencies and frozen lockfiles remain unchanged.
+
+Each image job exports amd64 to an OCI directory, prunes only its dedicated
+Buildx builder's cache, then repeats for arm64. This keeps one architecture's
+build snapshots on disk at a time, alongside the earlier compressed export.
+`scripts/ci/container-release.mjs:assemble` checks each action's output digest,
+blob sizes and hashes, and platform configuration before linking both sets of
+blobs into one OCI layout. It writes one multi-platform index and archive, then
+removes the temporary layouts. The existing smoke and seal steps consume that
+archive and its new index digest. No registry is involved in assembly.
 
 ### 2. Verify and execute both platform variants
 
@@ -68,11 +105,12 @@ config must agree with the index's platform; missing, duplicate, unsupported, or
 corrupt entries stop preparation.
 
 `scripts/ci/container-release.mjs:smoke` binds the archive's root digest to the
-Buildx output, then uses Skopeo's explicit platform selection to load one variant
+assembly output, then uses Skopeo's explicit platform selection to load one variant
 at a time. Docker's loaded config ID must match the selected index entry before
 the existing controller or runtime startup suite runs against that ID. AMD64 runs
-natively and ARM64 under QEMU. The ARM64 invocation scales smoke command and
-probe deadlines by six; native deadlines and all outcome assertions stay unchanged.
+natively and ARM64 under QEMU. The ARM64 invocation selects an emulation timeout
+multiplier of six for timeout-aware commands; explicit unscaled test limits retain
+their own deadlines. Native deadlines and all outcome assertions stay unchanged.
 Both must pass, and the archive hash must remain
 unchanged. A failure prevents sealing and artifact upload for that image.
 After each successful platform smoke, the loaded image tag is removed before
@@ -83,7 +121,8 @@ the next variant is loaded. The exported archive remains the publication input.
 `scripts/ci/container-release.mjs:seal` rechecks the platform contents and records
 the archive hash, multi-platform index digest, platform list, source, workflow,
 run attempt, CI identity, and approved base. Both prepared artifacts must exist
-before `.github/workflows/container-publish.yml:jobs.publish` can start.
+before `.github/workflows/container-publish.yml:jobs.publish` can start. The
+publish job runs only when the operator selected `publish: true`.
 
 No-push runs end with artifacts. Publishing runs proceed directly to automated
 validation. Archive retention and package access requirements are owned
@@ -128,6 +167,24 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-24 04:45: Keep host emulator registrations mounted and execute an ARM64 container before building. (public-pr/348 - 467bcc83)
+- 2026-09-24 03:50: Use the existing Blacksmith runner for runtime preparation after GitHub-hosted builds exhausted disk; keep both platforms and all smoke checks. (public-pr/348 - ee6a5a3d)
+- 2026-09-24 05:30: Retain the updated main source and manual-only publication gate while applying sequential platform assembly. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - b3469cc4)
+
+- 2026-09-24 04:30: Return Enterprise container builds to reviewed manual dispatch and update the runtime source to OpenClaw `2765f7a3341b8be4835afacbff3d04c6e3c3c79b` with its verified archive checksum. (codex/01a0d171-59c4-7b42-95ab-4050d18eab79 - 0224b638)
+
+- 2026-09-24 04:03: Export architectures sequentially, release build snapshots between them, and assemble validated OCI blobs before startup checks. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - bac4602c)
+
+- 2026-09-24 03:01: Limit concurrent BuildKit steps and remove temporary pnpm stores before committing dependency layers. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - 1a126137)
+
+- 2026-09-24 00:30: Reclaim unused hosted Android SDK space before the runtime source build, retaining both platforms and all startup checks. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - ae96345b)
+
+- 2026-09-24 00:05: Build and smoke PR merge commits without release artifacts or publication; keep manual main release validation. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - 75ce7de8)
+
+- 2026-09-23 20:39: Link missing plugin dependencies for shared compiled runtime chunks without replacing core versions. (public-pr/295 - cf486a31)
+
+- 2026-09-23 19:47: Build the runtime from verified public source with matching bundled plugins and retained runtime archive provenance. (public-pr/295 - 7f6d9107)
 
 - 2026-09-22 03:04: Use manual dispatch without an independent approval or linkage comment (codex/01a0c70f-8a8f-7c62-ac81-ee1a3e99f48b - 149ac0fe)
 

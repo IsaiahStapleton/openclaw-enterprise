@@ -51,19 +51,16 @@ and exporting the image references.
 
 Repository maintainers can use the separately approved
 [private container publication workflow](../../../.github/containers.md).
-The commands below publish to your own registry.
+Build these images for a registry your cluster can access:
 
-Build and push two images to a registry your cluster can access:
+| Image      | Source                                                                                                         | Used by                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Controller | Root [`Dockerfile`](../../../Dockerfile), target `runtime`                                                     | API, worker, migration, and bootstrap            |
+| Runtime    | [`deploy/runtime/Dockerfile`](../../../deploy/runtime/Dockerfile), assembling pinned OpenClaw source and Codex | Gateways and Agents (the same image serves both) |
 
-| Image      | Source                                                                                                    | Used by                                          |
-| ---------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| Controller | Root [`Dockerfile`](../../../Dockerfile), target `runtime`                                                | API, worker, migration, and bootstrap            |
-| Runtime    | [`deploy/runtime/Dockerfile`](../../../deploy/runtime/Dockerfile), installing OpenClaw and Codex from npm | Gateways and Agents (the same image serves both) |
-
-You need Docker with Buildx and registry push access. Replace the example
-registry and repository, and select the platform matching your Kubernetes
-nodes. The base image below matches the [runtime recipe](../../../deploy/runtime/README.md),
-which also documents package-version overrides.
+With Docker Buildx and registry push access, replace the example registry and
+repository and select your Kubernetes nodes’ platform. The base image below
+matches the [runtime recipe](../../../deploy/runtime/README.md).
 
 Authenticate the builder before running the build block. For a standard registry,
 run `docker login <registry-host>` using your approved credentials; for private
@@ -80,6 +77,7 @@ verified the gateway/Codex image pair. Runtime package installation at gateway
 startup is not part of this deployment procedure.
 
 ```bash
+# Build from a clean checkout.
 export OCC_IMAGE_REGISTRY="${OCC_IMAGE_REGISTRY:-registry.example.com}"
 export OCC_IMAGE_REPOSITORY="${OCC_IMAGE_REPOSITORY:-$OCC_IMAGE_REGISTRY/your-team/openclaw-enterprise}"
 export OCC_IMAGE_TAG="$(git rev-parse HEAD)"
@@ -88,6 +86,8 @@ export NODE_BASE_IMAGE='docker.io/library/node:24-bookworm@sha256:934240a162082f
 
 docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
   --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
+  --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
+  --label "org.opencontainers.image.revision=$OCC_IMAGE_TAG" \
   -t "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" .
 docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" \
   --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
@@ -186,6 +186,8 @@ Edit the protected YAML copies before provisioning anything:
   blocks user namespaces, install a reviewed compatibility profile on every
   eligible node and set `runtime.codexSeccompProfile` to its relative kubelet
   profile path. See the [Kubernetes runtime requirements](../../reference/drivers/kubernetes-compute.md#requirements).
+  Set `presets.includeDefaults: false` to disable the example's
+  [bundled Presets](../../reference/presets.md#installation-defaults).
 - `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
   namespace, size, and protected `storageClassName` for the cluster.
 

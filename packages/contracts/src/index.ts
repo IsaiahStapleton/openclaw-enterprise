@@ -28,6 +28,7 @@ export type {
   OpenRepositorySessionResult,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
+  RepositoryOption,
   RepoDriver,
   RepositoryCredentialGrantIdentity,
   RepositoryCredentialMaterialRef,
@@ -81,6 +82,10 @@ export type ProviderDefinition =
 export interface ProviderSummary {
   readonly id: string;
   readonly type: ProviderType;
+}
+
+export interface InstallationCapabilities {
+  readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
 }
 
 export interface Provider<Client = unknown> {
@@ -141,6 +146,7 @@ export interface Installation {
   readonly id: string;
   readonly name: string;
   readonly createdAt: string;
+  readonly capabilities?: InstallationCapabilities;
 }
 
 export type NamespaceStatus = "provisioning" | "ready" | "failed" | "deleting";
@@ -213,6 +219,7 @@ export interface SecretEnvironmentProjection {
 
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
+  | { readonly method: "codex_pat"; readonly source: SecretReference }
   | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
   | { readonly method: "runtime" };
 
@@ -221,6 +228,11 @@ export type HarnessAuthSnapshot =
   | { readonly method: "runtime" }
   | {
       readonly method: "api_key";
+      readonly source: SecretReference;
+      readonly secretDriverId: string;
+    }
+  | {
+      readonly method: "codex_pat";
       readonly source: SecretReference;
       readonly secretDriverId: string;
     }
@@ -238,7 +250,7 @@ export type HarnessAuthSnapshot =
 
 /** Authoritative delivery references, resolved again at dispatch; never secret values. */
 export type ResolvedHarnessAuth =
-  | (Extract<HarnessAuthSnapshot, { method: "api_key" }> & {
+  | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" }> & {
       readonly backendRef: SecretBackendRef;
     })
   | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" | "runtime" }>;
@@ -664,6 +676,7 @@ export interface DriverImplementation {
 
 export interface IAMDriver extends Driver {
   readonly capability: "iam";
+  readonly namespacePolicyTransaction?: "platform-unit-of-work";
   lookupIdentity(input: IdentityLookup): Promise<Identity | undefined>;
   authorize(request: AuthorizationRequest): Promise<AuthorizationDecision>;
   listNamespaceRoles?(
@@ -835,6 +848,15 @@ export interface ComputeAgentBinding {
   readonly agent: Readonly<Agent>;
 }
 
+export interface ComputeAgentProvisioningInput {
+  readonly executionMode: HarnessExecutionMode;
+  readonly configuration: Readonly<OpenClawConfigurationDocument>;
+}
+
+export interface ComputeAgentProvisioningCapabilities {
+  readonly executionModes: readonly HarnessExecutionMode[];
+}
+
 export type AgentRuntimeCredentialsInput = Readonly<Record<never, never>>;
 
 export interface AgentRuntimeCredentialStatus {
@@ -855,14 +877,24 @@ export interface ComputeDriver extends Driver {
   readonly capability: "compute";
   /** Default: platform admission policy. Driver ownership preserves native logging settings. */
   readonly runtimeLogging?: "platform" | "driver";
+  readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
   readonly activationOrder?: "beforeCommit" | "afterCommit";
   readonly maintenanceIntervalMs?: number;
+  /** Read-only native model discovery; supplied credentials must never be persisted. */
+  discoverHarnessModels?(input: {
+    readonly authMethod: "api_key" | "codex_pat";
+    readonly provider: string;
+    readonly apiKey: string;
+  }): Promise<readonly { readonly id: string; readonly name: string }[]>;
+  validateAgentProvisioning?(input: ComputeAgentProvisioningInput): void;
   validateHarnessAuth?(
     harness: RevisionHarnessDescriptor,
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
     secretBindings?: SecretBindings,
   ): void;
+  /** Discovery availability; deployment must still validate its exact Harness. */
+  validateRepositoryCredentialSupport?(sandboxDriverId?: string): void;
   validateRepositoryCredentials?(
     harness: RevisionHarnessDescriptor,
     sandboxDriverId?: string,
@@ -896,6 +928,8 @@ export interface ConfigurationDriver extends Driver {
   /** Side-effect-free admission of partial native values before Preset storage. */
   validateValues?(values: OpenClawConfigurationDocument): Promise<void>;
   create(configuration: Configuration): Promise<Configuration>;
+  createExact?(configuration: Configuration): Promise<Configuration>;
+  inspectExact?(configuration: Configuration): Promise<Configuration | undefined>;
   read(reference: ConfigurationReference): Promise<Configuration>;
   update(configuration: Configuration): Promise<Configuration>;
   delete(reference: ConfigurationReference): Promise<void>;

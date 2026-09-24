@@ -10,6 +10,7 @@ import type {
   AuthorizationRequest,
   ComputeDriver,
   PluginDeploymentWarning,
+  PluginDriver,
   ComputeReadiness,
   RepoDriver,
   RepositoryCredentialMaterialRef,
@@ -38,9 +39,12 @@ import {
 import {
   PostgresPlatformState,
   PostgresWorkQueue,
+  OpenClawController,
   WorkClaimLostError,
   isRepositoryCleanupWork,
   isRepositoryRuntimeRetirementWork,
+  provisioningEffectReceipt as provisioningEffectReceiptForRecord,
+  provisioningPendingEffect,
   type ClaimedWork,
   type PlatformUnitOfWork,
   type PostgresPool,
@@ -359,6 +363,9 @@ export class ControllerWorker {
   private readonly iamDriverId: string;
   private readonly iam: IAMDriver;
   private readonly secretDriverId: string | undefined;
+  private readonly configuredServiceAccountDriverId: string | undefined;
+  private readonly secretDriver: SecretDriver | undefined;
+  private provisioningController: OpenClawController | undefined;
   private readonly sandbox: SandboxDriver | undefined;
   private readonly providers: readonly ProviderDefinition[];
   private readonly providerMap: ReadonlyMap<string, ProviderDefinition>;
@@ -369,6 +376,7 @@ export class ControllerWorker {
   private readonly convergenceTimeoutMs: number;
   private readonly maintenanceIntervalMs: number | undefined;
   private readonly repoDriver: RepoDriver | undefined;
+  private readonly pluginDriver: PluginDriver | undefined;
   private readonly repositoryCredentials: RepositoryCredentialLifecycle;
   private readonly mode: "development" | "production";
   private readonly emit: (event: Readonly<Record<string, unknown>>) => void;
@@ -394,6 +402,7 @@ export class ControllerWorker {
       "Worker convergence timeout",
     );
     const drivers = options.drivers;
+    this.configuredServiceAccountDriverId = drivers?.installation.drivers.service_account?.id;
     if (this.mode === "production" && drivers === undefined) {
       throw new Error("Production controller workers require Installation startup configuration.");
     }
@@ -401,7 +410,7 @@ export class ControllerWorker {
       leaseDurationMs: this.leaseDurationMs,
       maxAttempts: this.maxAttempts,
     };
-    this.state = new PostgresPlatformState(options.pool);
+    this.state = new PostgresPlatformState(options.pool, { workQueue: this.queueOptions });
     this.queue = new PostgresWorkQueue(options.pool, this.queueOptions);
     this.providers = validateProviderDefinitions(drivers?.installation.provider ?? []);
     this.providerMap = providerDefinitionMap(this.providers);
@@ -428,6 +437,7 @@ export class ControllerWorker {
     }
     this.compute = computeDriver;
     const selectedSecretDriver = drivers?.secretDriver;
+    this.secretDriver = selectedSecretDriver;
     const selectedSecretConfiguration = drivers?.installation.drivers.secret;
     this.secretDriverId = selectedSecretDriver?.id ?? selectedSecretConfiguration?.id;
     if (selectedSecretConfiguration !== undefined) {
@@ -470,6 +480,7 @@ export class ControllerWorker {
       });
     this.onHealthy = options.onHealthy;
     this.repoDriver = drivers?.repoDriver;
+    this.pluginDriver = drivers?.pluginDriver;
     if (this.repoDriver !== undefined) {
       const driver = this.repoDriver;
       if (
@@ -503,6 +514,29 @@ export class ControllerWorker {
     this.installation = installation;
     validatePersistedNativeIAMState(await this.loadIAMState());
     this.attachLifecycleDrivers(this.iam);
+    const provisioning = new OpenClawController(installation, {
+      state: this.state,
+      providers: this.providers,
+      recordOperations: true,
+      ...(this.configuredServiceAccountDriverId === undefined
+        ? {}
+        : { configuredServiceAccountDriverId: this.configuredServiceAccountDriverId }),
+    });
+    for (const driver of [
+      this.configuration,
+      this.sandbox,
+      this.iam,
+      this.secretDriver,
+      this.repoDriver,
+      this.pluginDriver,
+      this.compute,
+    ] as const) {
+      if (driver !== undefined) {
+        provisioning.registerDriver(driver);
+        provisioning.selectDriver(driver.capability, driver.id);
+      }
+    }
+    this.provisioningController = provisioning;
     if (this.mode === "production") {
       const compute = this.compute;
       if (typeof compute.preflight === "function") {
@@ -554,7 +588,9 @@ export class ControllerWorker {
             throw error;
           } finally {
             let kind: WorkKind = "namespace_ensure";
-            if (claim.agentTarget === "deleted") {
+            if (claim.kind === "provisioning") {
+              kind = "agent_provisioning";
+            } else if (claim.agentTarget === "deleted") {
               kind = "agent_delete";
             } else if (claim.agentTarget === "stopped") {
               kind = "agent_stop";
@@ -963,6 +999,10 @@ export class ControllerWorker {
   }
 
   private async process(claim: ClaimedWork): Promise<void> {
+    if (claim.kind === "provisioning") {
+      await this.processAgentProvisioning(claim);
+      return;
+    }
     if (isRepositoryCleanupWork(claim)) {
       await this.processRepositoryCleanup(claim);
       return;
@@ -1010,6 +1050,26 @@ export class ControllerWorker {
     await this.finalize(claim, namespace, result);
   }
 
+  private async processAgentProvisioning(claim: ClaimedWork): Promise<void> {
+    const controller = this.provisioningController;
+    if (controller === undefined) {
+      throw new Error("The provisioning controller is unavailable.");
+    }
+    const result = await controller.processAgentProvisioning(claim, resolveApprovedHarness, {
+      runEffect: (operation) => this.withClaimHeartbeat(claim, operation),
+    });
+    this.passOutcome = result.outcome === "succeeded" ? "success" : result.outcome;
+    this.emit({
+      event: "worker.completed",
+      ...workLogFields(claim),
+      namespaceId: claim.namespaceId,
+      agentId: claim.agentId,
+      outcome: this.passOutcome,
+      code: result.outcome === "succeeded" ? "PROVISIONING_HANDED_OFF" : result.code,
+      ...(result.outcome === "succeeded" ? { revisionId: result.revisionId } : {}),
+    });
+  }
+
   private async processAgentStop(claim: ClaimedWork): Promise<void> {
     let result: AgentStopDispatchResult;
     try {
@@ -1031,7 +1091,7 @@ export class ControllerWorker {
         });
         return;
       }
-      const denied = await this.authorizeAgentStop(claim, authorizedAgent);
+      const denied = await this.authorizeAgentAction(claim, authorizedAgent, "operate");
       if (denied !== undefined) {
         await this.finalizeAgentStop(claim, { ...denied, agent: authorizedAgent });
         return;
@@ -1190,9 +1250,13 @@ export class ControllerWorker {
           agent === undefined
             ? []
             : await view.revisions.listRevisions(claim.namespaceId, claim.agentId!);
-        return { namespace, agent, revisions };
+        const provisioning =
+          agent === undefined
+            ? undefined
+            : await view.provisioning.findByAgent(claim.namespaceId, claim.agentId!);
+        return { namespace, agent, revisions, provisioning };
       });
-      const { namespace, agent, revisions } = resources;
+      const { namespace, agent, revisions, provisioning } = resources;
       if (namespace === undefined || agent === undefined) {
         await this.finalizeAgentDeletion(claim, {
           outcome: "permanent",
@@ -1210,7 +1274,7 @@ export class ControllerWorker {
         });
         return;
       }
-      const denied = await this.authorizeAgentDeletion(claim, agent);
+      const denied = await this.authorizeAgentAction(claim, agent, "delete");
       if (denied !== undefined) {
         await this.finalizeAgentDeletion(claim, { ...denied, namespace, agent, revisions });
         return;
@@ -1261,6 +1325,30 @@ export class ControllerWorker {
         });
         return;
       }
+      const pendingProvisioningEffect =
+        provisioning === undefined ? undefined : provisioningPendingEffect(provisioning);
+      const settledProvisioningEffect =
+        pendingProvisioningEffect === undefined
+          ? undefined
+          : provisioningEffectReceiptForRecord(provisioning!);
+      if (
+        provisioning?.progress.pendingEffect !== undefined &&
+        (pendingProvisioningEffect === undefined ||
+          !pendingProvisioningEffect.ownerPresent ||
+          settledProvisioningEffect === undefined ||
+          settledProvisioningEffect.kind !== pendingProvisioningEffect.kind ||
+          settledProvisioningEffect.owner !== pendingProvisioningEffect.owner ||
+          settledProvisioningEffect.targetId !== pendingProvisioningEffect.targetId)
+      ) {
+        await this.finalizeAgentDeletion(claim, {
+          outcome: "pending",
+          code: "PROVISIONING_EFFECT_PENDING",
+          namespace,
+          agent,
+          revisions,
+        });
+        return;
+      }
       if (revisions.length > 0 && this.compute.bindAgent !== undefined) {
         await this.withClaimHeartbeat(claim, async () => {
           await this.compute.bindAgent!({ namespace, agent });
@@ -1291,16 +1379,18 @@ export class ControllerWorker {
     await this.finalizeAgentDeletion(claim, result);
   }
 
-  private async authorizeAgentDeletion(
+  private async authorizeAgentAction(
     claim: ClaimedWork,
     agent: Readonly<Agent>,
-  ): Promise<AgentDeletionDispatchResult | undefined> {
+    action: "delete" | "operate",
+  ): Promise<DispatchResult | undefined> {
     const authorization: AuthorizationRequest = {
       principalId: claim.actorId,
-      action: "delete",
+      action,
       resource: { kind: "agent", id: agent.id, namespaceId: agent.namespaceId },
     };
     const state = await this.loadIAMState();
+    // Consult IAM before classifying a revoked actor so Driver failures still retry.
     const decision = await this.iamDecision(this.iam, authorization);
     if (!state.identities.some((identity) => identity.id === claim.actorId)) {
       return { outcome: "permanent", code: "ACTOR_REVOKED", authorization, decision };
@@ -1433,31 +1523,6 @@ export class ControllerWorker {
       reasonCode: result.code,
       outcome: "denied",
     });
-  }
-
-  private async authorizeAgentStop(
-    claim: ClaimedWork,
-    agent: Readonly<Agent>,
-  ): Promise<AgentStopDispatchResult | undefined> {
-    const authorization: AuthorizationRequest = {
-      principalId: claim.actorId,
-      action: "operate",
-      resource: { kind: "agent", id: agent.id, namespaceId: agent.namespaceId },
-    };
-    const state = await this.loadIAMState();
-    const decision = await this.iamDecision(this.iam, authorization);
-    if (!state.identities.some((identity) => identity.id === claim.actorId)) {
-      return { outcome: "permanent", code: "ACTOR_REVOKED", authorization, decision };
-    }
-    if (!decision.allowed) {
-      return {
-        outcome: "permanent",
-        code: "AUTHORIZATION_DENIED",
-        authorization,
-        decision,
-      };
-    }
-    return undefined;
   }
 
   private async finalizeAgentStop(
@@ -1891,7 +1956,7 @@ export class ControllerWorker {
     }
     const refs = uniqueSecretRefs(secretBindings.bindings);
     const auth = revision.harnessAuth;
-    if (auth.method === "api_key") {
+    if (auth.method === "api_key" || auth.method === "codex_pat") {
       if (auth.source?.kind !== "secret" || auth.source.namespaceId !== revision.namespaceId) {
         return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
       }
@@ -2105,7 +2170,7 @@ export class ControllerWorker {
     }
 
     let harnessAuth: ResolvedHarnessAuth;
-    if (revision.harnessAuth.method === "api_key") {
+    if (revision.harnessAuth.method === "api_key" || revision.harnessAuth.method === "codex_pat") {
       const auth = revision.harnessAuth;
       if (typeof secretDriverId !== "string" || auth.secretDriverId !== secretDriverId) {
         return { result: { outcome: "permanent", code: "SECRET_DRIVER_MISMATCH" } };

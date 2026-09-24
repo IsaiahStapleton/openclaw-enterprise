@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,11 +14,17 @@ import {
   WORKSPACE_DEFAULTS,
   WORKSPACE_DEFAULTS_ID,
 } from "../../packages/contracts/src/workspace-defaults.mjs";
+import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
+import { validateGitHubRepositoryRegistry } from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
+import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
+import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture, providerFixtures } from "../helpers/console-app.mjs";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
+import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 
 const STARTER_CONTROL_UI = {
   enabled: true,
@@ -71,7 +77,9 @@ async function newPage(t, fixture, options = {}) {
     }
   });
   context = await browser.newContext();
-  return { page: await context.newPage(), artifacts };
+  const page = await context.newPage();
+  page.setDefaultTimeout(10_000);
+  return { page, artifacts };
 }
 
 async function login(page, fixture, path = "/console/agents", credentials = fixture.credentials) {
@@ -101,6 +109,24 @@ function nonAuthWriteRequests(requests) {
   return requests.filter(
     (request) => request.method !== "GET" && !request.path.startsWith("/api/auth/sign-"),
   );
+}
+
+async function enterManualModel(page, apiKey, modelId = "gpt-4.1") {
+  await page.getByLabel("API key", { exact: true }).fill(apiKey);
+  await page.getByLabel("API key", { exact: true }).press("Tab");
+  const model = page.getByLabel("Model ID", { exact: true });
+  if (!(await model.isVisible())) {
+    await page.getByRole("button", { name: "Enter model ID manually", exact: true }).click();
+  }
+  await model.fill(modelId);
+  await model.press("Tab");
+}
+
+async function openAdvancedSettings(page) {
+  const summary = page.locator(".launch-advanced:not([open]) > summary");
+  if (await summary.count()) {
+    await summary.click();
+  }
 }
 
 async function expectNoText(page, pattern) {
@@ -138,6 +164,49 @@ function pathRequests(requests, method, path) {
 
 function configurationPostRequests(requests, namespaceId) {
   return pathRequests(requests, "POST", `/namespaces/${namespaceId}/configurations`);
+}
+
+function agentProvisionPostRequests(requests, namespaceId) {
+  return pathRequests(requests, "POST", `/namespaces/${namespaceId}/agents/provision`);
+}
+
+function secretPostRequests(requests, namespaceId) {
+  return pathRequests(requests, "POST", `/namespaces/${namespaceId}/secrets`);
+}
+
+async function routeInstallationProvisioning(page, fixture, executionModes = ["dedicated"]) {
+  await page.route(`${fixture.origin}/installation`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          id: "ins_00000000-0000-4000-8000-000000000001",
+          name: "Console test installation",
+          createdAt: new Date().toISOString(),
+          capabilities: { agentProvisioning: { executionModes } },
+        },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+      }),
+    });
+  });
+}
+
+async function routeInstallationWithoutProvisioning(page, fixture) {
+  await page.route(`${fixture.origin}/installation`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          id: "ins_00000000-0000-4000-8000-000000000001",
+          name: "Console test installation",
+          createdAt: new Date().toISOString(),
+        },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+      }),
+    });
+  });
 }
 
 function agentPostRequests(requests, namespaceId) {
@@ -200,24 +269,6 @@ async function optionValues(locator) {
   );
 }
 
-async function seedServiceAccount(state, namespaceId, name, issued = true) {
-  return state.transact((unit) =>
-    unit.serviceAccounts.createServiceAccount({
-      id: `sa_${randomUUID()}`,
-      namespaceId,
-      name,
-      ...(issued
-        ? {
-            credential: {
-              kind: "access_token",
-              secretRef: { name: "issued-credential", key: "token" },
-            },
-          }
-        : {}),
-    }),
-  );
-}
-
 function nativeAdminComputeDriver(endpoint) {
   const driver = createTestKubernetesComputeDriver("console-native-admin-compute");
 
@@ -266,6 +317,79 @@ function nativeValues(marker, options = {}) {
   };
 }
 
+const repositoryProviderFixture = Object.freeze({
+  id: "console-repositories",
+  type: "github",
+  configuration: Object.freeze({ registryPath: "/unused/console/repositories.json" }),
+  drivers: Object.freeze({ repo: "console-repository-driver" }),
+});
+
+async function createRepositoryLaunchFixture(
+  t,
+  buildRepositories,
+  { reloadablePolicy = false } = {},
+) {
+  const fixture = await createConsoleAppFixture(t, {
+    providers: [...providerFixtures, repositoryProviderFixture],
+    repositoryCredentials: true,
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Repository launch", { ready: true });
+  let currentPolicy = repositoryPolicyDriver(buildRepositories(namespace.id));
+  // Simulate replacing mounted policy between requests while keeping all projection and resolution
+  // decisions in the actual GitHub Driver. This does not prove production configuration reload.
+  const repoDriver = reloadablePolicy
+    ? {
+        id: currentPolicy.id,
+        capability: currentPolicy.capability,
+        implementation: "test-reloadable-github-policy",
+        maintenanceIntervalMs: currentPolicy.maintenanceIntervalMs,
+        listOptions: (input) => currentPolicy.listOptions(input),
+        resolve: (input) => currentPolicy.resolve(input),
+        open: (input, signal) => currentPolicy.open(input, signal),
+        status: (id, signal) => currentPolicy.status(id, signal),
+        close: (id, signal) => currentPolicy.close(id, signal),
+      }
+    : currentPolicy;
+  fixture.controller.registerDriver(repoDriver);
+  fixture.controller.selectDriver("repo", repoDriver.id);
+  return {
+    fixture,
+    namespace,
+    replacePolicy(repositories) {
+      assert.equal(reloadablePolicy, true);
+      currentPolicy = repositoryPolicyDriver(repositories);
+    },
+  };
+}
+
+function repositoryPolicyDriver(repositories) {
+  const provider = repositoryProviderFixture;
+  const registry = validateGitHubRepositoryRegistry(
+    {
+      version: 1,
+      providerId: provider.id,
+      providerInstanceId: "console-repository-provider",
+      appId: "123",
+      githubInstallationId: "456",
+      maximumDurationSeconds: 3600,
+      repositories,
+    },
+    provider.id,
+  );
+  return new GitHubRepoDriver(
+    {
+      id: provider.id,
+      client: new UnixRepositoryCredentialControlClient({
+        controlSocket: "/unused/console/repository-control.sock",
+      }),
+      drivers: provider.drivers,
+    },
+    registry,
+    { sessionDurationSeconds: 600 },
+  );
+}
+
 function nativeAdminValues(marker, origin) {
   const values = nativeValues(marker);
   return {
@@ -292,58 +416,108 @@ function nativeAdminValues(marker, origin) {
   };
 }
 
-test("Agent creation saves native Configuration JSON and a draft Agent without admitting a revision", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
+test("Agent creation stores its API key separately, grants exact access, and saves a draft without a revision", async (t) => {
+  const audit = new InMemoryAuditSink();
+  const state = new InMemoryPlatformState({ auditSink: audit });
+  const secretDriver = createTestSecretDriver();
+  const fixture = await createConsoleAppFixture(t, { state, secretDriver });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Agent authoring", { ready: true });
-  const secret = await fixture.createSecret(
-    namespace.id,
-    "Existing model credential",
-    "never-visible-model-secret",
-  );
+  const key = "at-explicit-api-key-not-auto-detected";
   const existingSlackAppSecret = await fixture.createSecret(
     namespace.id,
     "Existing Slack app token",
     "never-visible-existing-slack-app-token",
   );
-  const createdSlackBotSecretValue = "never-visible-created-slack-bot-token";
-  // Selecting an exact Secret requires operate, not permission to read its metadata.
-  fixture.policy.restrictions.push({
-    id: "deny-harness-secret-read",
-    namespaceId: namespace.id,
-    resourceKind: "secret",
-    resourceId: secret.id,
-    action: "read",
-    effect: "deny",
-  });
-  assert.equal(
-    (await fixture.request("GET", `/namespaces/${namespace.id}/secrets/${secret.id}`)).status,
-    403,
+  const replacementSlackAppSecret = await fixture.createSecret(
+    namespace.id,
+    "Replacement Slack app token",
+    "never-visible-replacement-slack-app-token",
   );
+  const createdSlackBotSecretValue = "never-visible-created-slack-bot-token";
   const values = nativeValues("create", { harnessId: "codex", providerModel: "gpt-5.1" });
   const { page } = await newPage(t, fixture);
+  // Exercise the supported draft path; dedicated provisioning has separate workflow coverage.
+  await routeInstallationWithoutProvisioning(page, fixture);
   const requests = apiRequests(page, fixture.origin);
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  await page.getByText("Choose an installed Provider.").waitFor();
-  await page.getByLabel("Authentication source").selectOption("api_key");
-  const secretInput = page.getByLabel("OpenAI API key Secret ID");
-  assert.equal(await secretInput.getAttribute("type"), "password");
-  await secretInput.fill(secret.id);
+  assert.equal(await page.getByRole("link", { name: "Providers", exact: true }).count(), 0);
+  assert.deepEqual(await optionValues(page.getByLabel("Provider", { exact: true })), [
+    { value: "openai", text: "OpenAI" },
+    { value: "anthropic", text: "Anthropic" },
+  ]);
+  const harness = page.getByLabel("Harness", { exact: true });
+  assert.deepEqual(await optionValues(harness), [
+    { value: "codex", text: "Codex" },
+    { value: "openclaw", text: "OpenClaw" },
+  ]);
+  assert.equal(await harness.inputValue(), "codex");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
+  assert.equal(await page.getByLabel("Execution mode").isDisabled(), true);
+  assert.deepEqual(await optionValues(page.getByLabel("Authentication method", { exact: true })), [
+    { value: "api_key", text: "OpenAI API key" },
+    { value: "codex_pat", text: "Service Accounts" },
+  ]);
+  const keyInput = page.getByLabel("API key", { exact: true });
+  assert.equal(await keyInput.getAttribute("type"), "password");
+  assert.equal(await keyInput.getAttribute("placeholder"), "sk-…");
+  assert.equal(
+    await page.getByRole("link", { name: "Create an API key", exact: true }).getAttribute("href"),
+    "https://platform.openai.com/api-keys",
+  );
+  await keyInput.fill("discarded-api-key");
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
+  assert.equal(await page.getByLabel("Service account token", { exact: true }).inputValue(), "");
+  assert.equal(
+    await page.getByLabel("Service account token", { exact: true }).getAttribute("placeholder"),
+    "at-…",
+  );
+  assert.equal(
+    await page.getByRole("link", { name: "OpenAI admin", exact: true }).getAttribute("href"),
+    "https://admin.openai.com/",
+  );
+  await page
+    .getByText(
+      "choose your workspace, open Service accounts, and create a token with Codex scope.",
+      { exact: false },
+    )
+    .waitFor();
+  assert.equal(await page.getByRole("link", { name: "Create an API key", exact: true }).count(), 0);
+  assert.equal(await page.getByLabel("Execution mode").isDisabled(), true);
+  assert.equal(await page.getByLabel("Model", { exact: true }).isVisible(), true);
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("api_key");
+  assert.equal(await page.getByLabel("Harness", { exact: true }).isEnabled(), true);
+  assert.equal(await keyInput.getAttribute("placeholder"), "sk-…");
+  assert.equal(await page.getByRole("link", { name: "OpenAI admin", exact: true }).count(), 0);
+  await enterManualModel(page, key, "gpt-5.1");
   for (const [filename, content] of Object.entries(WORKSPACE_DEFAULTS)) {
     assert.equal(await page.getByLabel(filename, { exact: true }).inputValue(), content);
   }
   // Textareas preserve literal markup as content and normalize browser newlines to LF.
   const customIdentity = "# Identity\r\n<em>Workspace author</em>\r\n";
+  await page.getByText("Advanced settings", { exact: true }).click();
   await page.getByLabel("IDENTITY.md", { exact: true }).fill(customIdentity);
   await page.getByLabel("USER.md", { exact: true }).fill("");
   await page.getByLabel("Agent name").fill("Console-created Agent");
-  await page.getByLabel("Execution mode").selectOption("dedicated");
+  await page.getByLabel("Harness", { exact: true }).selectOption("codex");
+  await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
+  // Invalid manual bindings must not be replaced by a channel editor's empty snapshot.
+  await page.getByLabel("Secret bindings JSON").fill("[]");
+  await page
+    .getByText("Enter a valid Secret bindings JSON object before configuring channels.")
+    .waitFor();
+  assert.equal(await page.getByRole("button", { name: "Configure Slack" }).count(), 0);
+  // Applying Slack must preserve independent bindings authored in Advanced settings.
+  const manualBinding = { source: replacementSlackAppSecret.ref, delivery: { type: "env" } };
+  await page
+    .getByLabel("Secret bindings JSON")
+    .fill(JSON.stringify({ CUSTOM_CONTEXT: manualBinding }));
   await page.getByRole("button", { name: "Configure Slack" }).click();
-  const createChannelDialog = page.getByRole("dialog", { name: "Configure Slack" });
+  const createChannelDialog = page.getByRole("dialog", { name: /^(Configure|Edit) Slack$/ });
   await createChannelDialog
     .getByText("Choose existing Slack token Secrets or create them here before creating the Agent.")
     .waitFor();
@@ -357,6 +531,10 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   await createChannelDialog
     .getByText("Secret binding staged. Apply the channel settings to save it.")
     .waitFor();
+  // Separate applications must retain grants for every final selected Secret.
+  await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
+  await createChannelDialog.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Edit Slack" }).click();
   await createChannelDialog
     .getByLabel("Slack bot token")
     .selectOption({ label: "Create new Secret..." });
@@ -390,18 +568,26 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     .click();
   await createChannelDialog
     .getByText("Secret binding staged. Apply the channel settings to save it.")
-    .nth(1)
+
     .waitFor();
   assert.equal(
     JSON.parse(await page.getByLabel("Secret bindings JSON").inputValue()).SLACK_BOT_TOKEN,
     undefined,
   );
   await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
+  await createChannelDialog.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Edit Slack" }).click();
+  // Replacing an earlier selection must not grant the superseded Secret to the Agent.
+  await createChannelDialog
+    .getByLabel("Slack app token")
+    .selectOption(replacementSlackAppSecret.id);
+  await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   const stagedSecretBindings = JSON.parse(
     await page.getByLabel("Secret bindings JSON").inputValue(),
   );
+  assert.deepEqual(stagedSecretBindings.CUSTOM_CONTEXT, manualBinding);
   assert.deepEqual(stagedSecretBindings.SLACK_APP_TOKEN, {
-    source: existingSlackAppSecret.ref,
+    source: replacementSlackAppSecret.ref,
     delivery: { type: "env" },
   });
   const stagedBotSecretId = secretIdForBinding(stagedSecretBindings.SLACK_BOT_TOKEN);
@@ -409,8 +595,15 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     stagedBotSecretId,
     /^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   );
+  await openAdvancedSettings(page);
   const stagedValues = JSON.parse(await page.getByLabel("Configuration JSON").inputValue());
+  await page.getByLabel("Agent name").fill("A".repeat(200));
 
+  const secretResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/secrets` &&
+      response.request().method() === "POST",
+  );
   const configurationResponse = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/configurations` &&
@@ -422,26 +615,37 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
       response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Create Agent" }).click();
+  const secret = (await (await secretResponse).json()).data;
   const configuration = await (await configurationResponse).json();
   const created = await (await createResponse).json();
+  assert.equal(secretDriver.valueFor(secret), key);
+  assert.equal(secretDriver.calls.filter((call) => call.operation === "create").length, 4);
+  for (const payload of [secret, configuration, created]) {
+    assert.equal(JSON.stringify(payload).includes(key), false);
+  }
   assert.equal(configuration.data.kind, "agent");
   assert.deepEqual(configuration.data.values, stagedValues);
   assert.deepEqual(configuration.data.secretBindings, stagedSecretBindings);
+  assert.equal(created.data.name, "A".repeat(200));
   assert.equal(created.data.namespaceId, namespace.id);
   assert.equal(created.data.configurationId, configuration.data.id);
   assert.equal(created.data.executionMode, "dedicated");
+  assert.deepEqual(agentProvisionPostRequests(requests, namespace.id), []);
   assert.equal(created.data.providerId, null);
   assert.deepEqual(created.data.harnessAuth, { method: "api_key", source: secret.ref });
-  assert.equal(
-    (await page.locator("body").textContent()).includes("never-visible-model-secret"),
-    false,
-  );
+  assert.equal((await page.locator("body").textContent()).includes(key), false);
   assert.equal(
     (await page.locator("body").textContent()).includes("never-visible-existing-slack-app-token"),
     false,
   );
   assert.equal(
     (await page.locator("body").textContent()).includes(createdSlackBotSecretValue),
+    false,
+  );
+  assert.equal(
+    (await page.locator("body").textContent()).includes(
+      "never-visible-replacement-slack-app-token",
+    ),
     false,
   );
   assert.equal(created.data.activeRevisionId, undefined);
@@ -469,10 +673,9 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
   // Neither the summary nor expanded native Configuration reveals the credential or its ID.
   const visibleConfiguration = await page.locator("body").textContent();
   assert.equal(visibleConfiguration.includes(secret.id), false);
-  assert.equal(visibleConfiguration.includes("never-visible-model-secret"), false);
   assert.equal(visibleConfiguration.includes("never-visible-existing-slack-app-token"), false);
   assert.equal(visibleConfiguration.includes(createdSlackBotSecretValue), false);
-  await page.getByText("OpenAI API key · Secret configured", { exact: true }).waitFor();
+  await page.getByText("API key · Secret configured", { exact: true }).waitFor();
 
   const savedConfiguration = await fixture.request(
     "GET",
@@ -490,9 +693,11 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     nonAuthWriteRequests(requests).map((request) => [request.method, request.path]),
     [
       ["POST", `/namespaces/${namespace.id}/secrets`],
+      ["POST", `/namespaces/${namespace.id}/secrets`],
       ["POST", `/namespaces/${namespace.id}/configurations`],
       ["POST", `/namespaces/${namespace.id}/agents`],
       ["POST", `/namespaces/${namespace.id}/iam/roles`],
+      ["POST", `/namespaces/${namespace.id}/iam/access-bindings`],
       ["POST", `/namespaces/${namespace.id}/iam/access-bindings`],
       ["POST", `/namespaces/${namespace.id}/iam/access-bindings`],
     ],
@@ -502,6 +707,28 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     values: stagedValues,
     secretBindings: stagedSecretBindings,
   });
+
+  const roles = await fixture.request("GET", `/namespaces/${namespace.id}/iam/roles`);
+  const access = await fixture.request("GET", `/namespaces/${namespace.id}/iam/access-bindings`);
+  assert.equal(roles.status, 200);
+  assert.equal(access.status, 200);
+  assert.equal(roles.data.length, 1);
+  assert.deepEqual(roles.data[0].permissions, [{ action: "operate", resourceKind: "secret" }]);
+  assert.deepEqual(
+    access.data
+      .map(({ id, ...binding }) => binding)
+      .sort((a, b) => a.resourceId.localeCompare(b.resourceId)),
+    [secret.id, replacementSlackAppSecret.id, stagedBotSecretId].sort().map((resourceId) => ({
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: created.data.servicePrincipalId,
+      roleId: roles.data[0].id,
+      resourceKind: "secret",
+      resourceId,
+    })),
+  );
+  assert.ok(audit.events.some((event) => event.resource.id === created.data.id));
+  assert.equal(JSON.stringify(audit.events).includes(key), false);
 
   // The server still enforces the exact source grant when the form is saved.
   fixture.policy.restrictions.push({
@@ -513,7 +740,7 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     effect: "deny",
   });
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
-  const savedSecretInput = page.getByLabel("OpenAI API key Secret ID");
+  const savedSecretInput = page.getByLabel("API key Secret ID");
   assert.equal(await savedSecretInput.getAttribute("type"), "password");
   assert.equal(await savedSecretInput.inputValue(), secret.id);
   const deniedBinding = page.waitForResponse(
@@ -537,21 +764,1420 @@ test("Agent creation saves native Configuration JSON and a draft Agent without a
     action: "create",
     effect: "deny",
   });
+  requests.length = 0;
   await page.goto(`${fixture.origin}/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  await page.getByText("Choose an installed Provider.").waitFor();
+  await page.getByText(/Repository choices are denied/).waitFor();
+  await enterManualModel(page, "denied-agent-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Denied Agent");
+  await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
-  const deniedResponse = page.waitForResponse(
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+  assert.match(page.url(), new RegExp(`/console/agents/new\\?namespace=${namespace.id}$`));
+});
+
+test("Agent creation selects approved repositories with one common explicit profile", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "application",
+      repositoryId: "789",
+      repository: "example/application",
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+    },
+    {
+      repositoryRef: "documentation",
+      repositoryId: "790",
+      repository: "example/documentation",
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-write"] }],
+    },
+    {
+      repositoryRef: "release",
+      repositoryId: "791",
+      repository: "example/release",
+      namespaces: [{ namespaceId, profiles: ["git-full"] }],
+    },
+  ]);
+
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
+  const accessDetails = page.locator(".repository-access-details");
+  const accessSummary = accessDetails.locator("summary");
+  const apiScope = accessDetails.getByText(/GraphQL can also return public information/);
+  assert.equal(await apiScope.isVisible(), false);
+  await accessSummary.focus();
+  await accessSummary.press("Enter");
+  assert.equal(await apiScope.isVisible(), true);
+  await accessSummary.press("Enter");
+  assert.equal(await apiScope.isVisible(), false);
+  const application = page.locator("#repository-application");
+  await application.focus();
+  await application.press("Space");
+  assert.equal(await application.isChecked(), true);
+  assert.deepEqual(
+    await application.evaluate((node) => ({
+      id: node.ownerDocument.activeElement?.id,
+      connected: node.ownerDocument.activeElement?.isConnected,
+    })),
+    { id: "repository-application", connected: true },
+  );
+  assert.equal(await page.getByRole("radio", { name: /^Read-only / }).count(), 1);
+  assert.equal(await page.getByRole("radio", { name: /^Contributor / }).count(), 1);
+  assert.equal(await page.getByRole("radio").count(), 2);
+  assert.equal(await page.locator('[name="repository-profile"]:checked').count(), 0);
+  const writeAccess = page.locator(".repository-write-access");
+  assert.equal(await writeAccess.isVisible(), false);
+  await page.getByRole("radio", { name: /^Read-only / }).check();
+  assert.equal(await writeAccess.isVisible(), false);
+  await page.getByRole("radio", { name: /^Contributor / }).check();
+  assert.equal(await writeAccess.isVisible(), false);
+  await page.getByText("Customize access", { exact: true }).click();
+  assert.equal(await writeAccess.isVisible(), true);
+  assert.match(await writeAccess.innerText(), /can permit merges and branch changes/);
+  assert.match(await writeAccess.innerText(), /best effort and does not restrict GraphQL/);
+  assert.match(await writeAccess.innerText(), /administration and workflow permissions/);
+  await page.locator("#repository-documentation").check();
+  // Adding a repository that disallows the selected level clears that choice.
+  assert.equal(await page.locator('[name="repository-profile"]:checked').count(), 0);
+  assert.equal(await writeAccess.isVisible(), false);
+  assert.equal(await page.locator("#repository-profile-git-full").count(), 0);
+  assert.equal(await page.locator("#repository-profile-git-read").count(), 1);
+  assert.equal(await page.locator("#repository-profile-git-write").count(), 1);
+  await page.locator("#repository-release").check();
+  await page.getByText(/no authorization level in common/i).waitFor();
+  assert.equal(await page.locator('[name="repository-profile"]').count(), 0);
+  await page.locator("#repository-release").uncheck();
+  assert.equal(await page.locator("#repository-profile-git-write").count(), 1);
+  await page.locator("#repository-profile-git-write").check();
+  await page.getByText("Customize access", { exact: true }).click();
+  assert.equal(await writeAccess.isVisible(), true);
+  await page.getByText(/Does not grant ordinary issue management/).waitFor();
+  assert.equal(await page.locator("#repository-issue-access").isDisabled(), true);
+  assert.equal(await page.locator("#repository-issue-access").isChecked(), false);
+  await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+  await page.getByLabel("Agent name").fill("Repository Agent");
+
+  await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  const configurationResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/configurations` &&
+      response.request().method() === "POST",
+  );
+  const createResponse = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
       response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Create Agent" }).click();
-  assert.equal((await deniedResponse).status(), 403);
-  await page.getByText(/Access denied|not authorized|permission/i).waitFor();
-  assert.match(page.url(), new RegExp(`/console/agents/new\\?namespace=${namespace.id}$`));
+  await configurationResponse;
+  const created = await (await createResponse).json();
+  assert.equal(created.data.executionMode, "embedded");
+  assert.deepEqual(created.data.repositoryBindings, [
+    { repositoryRef: "application", profile: "git-write" },
+    { repositoryRef: "documentation", profile: "git-write" },
+  ]);
+  await page
+    .getByText(
+      "application · Contributor · no issue management, documentation · Contributor · no issue management",
+      {
+        exact: true,
+      },
+    )
+    .waitFor();
+  assert.equal(await page.locator(".repository-write-access").isVisible(), true);
+});
+
+test("Agent creation keeps loading and empty repository discovery safe for an ordinary Agent", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, () => [
+    {
+      repositoryRef: "other-team",
+      repositoryId: "801",
+      repository: "example/other-team",
+      namespaces: [{ namespaceId: `ns_${randomUUID()}`, profiles: ["git-read", "git-write"] }],
+    },
+  ]);
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  let releaseOptions;
+  const optionsGate = new Promise((resolve) => {
+    releaseOptions = resolve;
+  });
+  t.after(() => releaseOptions());
+  await page.route(`**/namespaces/${namespace.id}/agents/repository-options`, async (route) => {
+    await optionsGate;
+    await route.continue();
+  });
+
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText("Loading approved repositories…").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  releaseOptions();
+  await page.getByText(/No approved repositories are available/).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isEnabled(), true);
+
+  await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+  await page.getByLabel("Agent name").fill("Ordinary Agent");
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const created = await (await createdResponse).json();
+  assert.equal(Object.hasOwn(created.data, "repositoryBindings"), false);
+  assert.equal(
+    Object.hasOwn(agentPostRequests(requests, namespace.id).at(-1).body, "repositoryBindings"),
+    false,
+  );
+});
+
+test("Dedicated repository Agent keeps its bindings through Slack save and the deployment credential gate", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "application",
+      repositoryId: "807",
+      repository: "example/application",
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+    },
+  ]);
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const modelSecret = await fixture.createSecret(
+    namespace.id,
+    "Dedicated model",
+    "fixture-model-key",
+  );
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+  await page.getByLabel("Agent name").fill("Dedicated repository Agent");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
+  await page.locator("#repository-application").check();
+  await page.locator("#repository-profile-git-full").check();
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const response = await createdResponse;
+  assert.equal(response.status(), 201);
+  const agent = (await response.json()).data;
+  assert.equal(agent.executionMode, "dedicated");
+  assert.deepEqual(agent.repositoryBindings, [
+    { repositoryRef: "application", profile: "git-full" },
+  ]);
+  assert.equal(agent.harnessAuth.method, "api_key");
+  assert.equal(agent.harnessAuth.source.namespaceId, namespace.id);
+  assert.notEqual(agent.harnessAuth.source.id, modelSecret.id);
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await page.getByRole("button", { name: "Configure Slack", exact: true }).click();
+  await page.getByLabel("Slack channel IDs").fill("CREPOSITORY123");
+  await page.getByLabel("Allow everyone in these channels to mention the agent").check();
+  const savedResponse = page.waitForResponse(
+    (result) =>
+      result.url().endsWith(`/configurations/${agent.configurationId}`) &&
+      result.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+  assert.equal((await savedResponse).status(), 200);
+  const saved = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.equal(saved.data.values.channels.slack.enabled, true);
+  assert.deepEqual(saved.data.values.channels.slack.channels.CREPOSITORY123, {
+    requireMention: true,
+    users: ["*"],
+  });
+  assert.equal(Object.hasOwn(saved.data.values.channels.slack, "allowFrom"), false);
+  assert.equal(saved.data.values.plugins.entries.codex.enabled, true);
+  const sameAgent = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
+  assert.deepEqual(sameAgent.data.repositoryBindings, agent.repositoryBindings);
+
+  // This fixture has no Kubernetes API client: real credential discovery must block deployment.
+  const credentialsResponse = page.waitForResponse((result) =>
+    result.url().endsWith(`/agents/${agent.id}/runtime-credentials`),
+  );
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  assert.equal((await credentialsResponse).status(), 503);
+  await page
+    .getByText("Credential metadata unavailable. Refresh status before deploying.")
+    .waitFor();
+  assert.equal(await page.getByRole("button", { name: "Deploy new revision" }).isDisabled(), true);
+  assert.equal(await page.getByLabel("Slack app token").isDisabled(), true);
+  assert.equal(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/${agent.id}/deploy`).length,
+    0,
+  );
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+});
+
+test("Agent creation distinguishes unavailable repository choices from denied Agent creation", async (t) => {
+  const unavailableFixture = await createConsoleAppFixture(t);
+  await unavailableFixture.bootstrap();
+  const unavailableNamespace = await unavailableFixture.createNamespace("No Repo Driver", {
+    ready: true,
+  });
+  const { page: unavailablePage } = await newPage(t, unavailableFixture);
+  await login(
+    unavailablePage,
+    unavailableFixture,
+    `/console/agents/new?namespace=${unavailableNamespace.id}`,
+  );
+  const optionsResponse = unavailablePage.waitForResponse((response) =>
+    response.url().endsWith("/agents/repository-options"),
+  );
+  await unavailablePage.getByRole("button", { name: "Start without Preset" }).click();
+  const options = await optionsResponse;
+  assert.equal(options.status(), 503);
+  assert.equal((await options.json()).error.code, "REPOSITORY_OPTIONS_UNAVAILABLE");
+  await unavailablePage.getByText(/Repository choices are unavailable/).waitFor();
+  assert.equal(
+    await unavailablePage.getByRole("button", { name: "Create Agent" }).isEnabled(),
+    true,
+  );
+  const unavailableRequests = apiRequests(unavailablePage, unavailableFixture.origin);
+  await enterManualModel(unavailablePage, "repository-fixture-model-key", "gpt-5.1");
+  await unavailablePage.getByLabel("Agent name").fill("Authorized ordinary Agent");
+  const ordinaryResponse = unavailablePage.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${unavailableNamespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await unavailablePage.getByRole("button", { name: "Create Agent" }).click();
+  const ordinary = await ordinaryResponse;
+  assert.equal(ordinary.status(), 201);
+  assert.equal(Object.hasOwn((await ordinary.json()).data, "repositoryBindings"), false);
+  assert.equal(configurationPostRequests(unavailableRequests, unavailableNamespace.id).length, 1);
+
+  const { fixture: deniedFixture, namespace: deniedNamespace } =
+    await createRepositoryLaunchFixture(t, (namespaceId) => [
+      {
+        repositoryRef: "application",
+        repositoryId: "802",
+        repository: "example/application",
+        namespaces: [{ namespaceId, profiles: ["git-read"] }],
+      },
+    ]);
+  deniedFixture.policy.restrictions.push({
+    id: "deny-repository-discovery",
+    namespaceId: deniedNamespace.id,
+    resourceKind: "agent",
+    action: "create",
+    effect: "deny",
+  });
+  const { page: deniedPage } = await newPage(t, deniedFixture);
+  const deniedRequests = apiRequests(deniedPage, deniedFixture.origin);
+  await login(deniedPage, deniedFixture, `/console/agents/new?namespace=${deniedNamespace.id}`);
+  await deniedPage.getByRole("button", { name: "Start without Preset" }).click();
+  await deniedPage.getByText(/Repository choices are denied/).waitFor();
+  assert.equal(await deniedPage.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await deniedPage.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  assert.equal(configurationPostRequests(deniedRequests, deniedNamespace.id).length, 0);
+  assert.equal(agentPostRequests(deniedRequests, deniedNamespace.id).length, 0);
+});
+
+test("Agent creation blocks a repository-options Namespace conflict before any write", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Conflicted repository options", { ready: true });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await page.route(`**/namespaces/${namespace.id}/agents/repository-options`, (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "RESOURCE_CONFLICT", message: "Namespace lifecycle conflict" },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
+      }),
+    }),
+  );
+
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText("This Namespace no longer accepts new Agents.").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+});
+
+test("Agent creation blocks selective Agent-create IAM unavailability even when Configuration creation is allowed", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "application",
+      repositoryId: "808",
+      repository: "example/application",
+      namespaces: [{ namespaceId, profiles: ["git-read"] }],
+    },
+  ]);
+  const originalIAM = fixture.controller.selectedDriver("iam");
+  const id = "selective-native-state-iam";
+  const healthyIAM = new NativeIAMDriver(
+    { loadNativeIAMState: async () => fixture.policy },
+    { id },
+  );
+  const unavailableIAM = new NativeIAMDriver(
+    {
+      loadNativeIAMState: async () => {
+        throw new Error("Native IAM state unavailable");
+      },
+    },
+    { id },
+  );
+  // Fault only the state dependency for Agent-create authorization. Every actual decision and
+  // identity lookup still runs Native IAM, so a healthy Configuration write is independently proved.
+  fixture.controller.registerDriver({
+    id,
+    capability: "iam",
+    implementation: "test-selective-native-state",
+    lookupIdentity: (input) => healthyIAM.lookupIdentity(input),
+    authorize: (request) =>
+      request.action === "create" && request.resource.kind === "agent"
+        ? unavailableIAM.authorize(request)
+        : healthyIAM.authorize(request),
+  });
+  fixture.controller.selectDriver("iam", id);
+  const allowed = await fixture.request("POST", `/namespaces/${namespace.id}/configurations`, {
+    body: { kind: "agent", values: nativeValues("independent-configuration") },
+  });
+  assert.equal(allowed.status, 201);
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  const optionsResponse = page.waitForResponse((response) =>
+    response.url().endsWith("/agents/repository-options"),
+  );
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  const options = await optionsResponse;
+  assert.equal(options.status(), 503);
+  assert.equal((await options.json()).error.code, "DEPENDENCY_UNAVAILABLE");
+  await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+  await page.getByLabel("Agent name").fill("Authorization unavailable Agent");
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  await page.waitForTimeout(100);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+  fixture.controller.selectDriver("iam", originalIAM.id);
+  await page.getByRole("button", { name: "Retry repository choices", exact: true }).click();
+  await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isEnabled(), true);
+});
+
+for (const failure of [
+  { name: "not found", status: 404, code: "NOT_FOUND" },
+  { name: "rate limited", status: 429, code: "RATE_LIMITED" },
+  { name: "internal error", status: 500, code: "INTERNAL_ERROR" },
+  { name: "dependency unavailable", status: 503, code: "DEPENDENCY_UNAVAILABLE" },
+  { name: "missing error code", status: 503 },
+  { name: "unknown error code", status: 503, code: "UNKNOWN_FAILURE" },
+  { name: "optional code with wrong status", status: 500, code: "REPOSITORY_OPTIONS_UNAVAILABLE" },
+  { name: "malformed envelope", status: 200, body: {} },
+  { name: "malformed options", status: 200, body: { data: {} } },
+  { name: "unexpected success status", status: 201, body: { data: [] } },
+  {
+    name: "malformed option fields",
+    status: 200,
+    body: { data: [{ repositoryRef: "application" }] },
+  },
+  { name: "transport failure" },
+]) {
+  test(`Agent creation blocks ${failure.name} discovery and retries before any write`, async (t) => {
+    const { fixture, namespace } = await createRepositoryLaunchFixture(t, () => [
+      {
+        repositoryRef: "other-team",
+        repositoryId: "805",
+        repository: "example/other-team",
+        namespaces: [{ namespaceId: `ns_${randomUUID()}`, profiles: ["git-read"] }],
+      },
+    ]);
+    const { page } = await newPage(t, fixture);
+    const requests = apiRequests(page, fixture.origin);
+    const path = `**/namespaces/${namespace.id}/agents/repository-options`;
+    // These responses exercise the browser's HTTP boundary, not server authorization decisions.
+    const failDiscovery = (route) =>
+      failure.status === undefined
+        ? route.abort("failed")
+        : route.fulfill({
+            status: failure.status,
+            contentType: "application/json",
+            body: JSON.stringify(
+              failure.body ?? {
+                error: { code: failure.code, message: "untrusted-server-detail" },
+              },
+            ),
+          });
+    await page.route(path, failDiscovery);
+    await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+    await page.getByRole("button", { name: "Start without Preset" }).click();
+    await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+    await page.getByLabel("Agent name").fill("Discovery retry Agent");
+    await page.locator('.repository-options[aria-busy="false"]').waitFor({ state: "attached" });
+    assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+    await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+    await page.waitForTimeout(100);
+    assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+    assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+    assert.doesNotMatch(await page.locator("body").innerText(), /untrusted-server-detail/);
+
+    await page.unroute(path, failDiscovery);
+    await page.getByRole("button", { name: "Retry repository choices", exact: true }).click();
+    await page.getByText(/No approved repositories are available/).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Create Agent" }).isEnabled(), true);
+    const createdResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+        response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Create Agent" }).click();
+    assert.equal((await createdResponse).status(), 201);
+    assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+    assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+  });
+}
+
+test("Agent repository selection enforces the 16-item limit without narrow viewport overflow", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) =>
+    Array.from({ length: 17 }, (_, index) => ({
+      repositoryRef: `repository-${index + 1}`,
+      repositoryId: String(900 + index),
+      repository: `example/repository-${index + 1}`,
+      namespaces: [{ namespaceId, profiles: ["git-read"] }],
+    })),
+  );
+  const { page } = await newPage(t, fixture);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
+
+  for (let index = 1; index <= 16; index += 1) {
+    await page.locator(`#repository-repository-${index}`).check();
+  }
+  assert.equal(await page.locator("#repository-repository-17").isDisabled(), true);
+  assert.deepEqual(
+    await page.locator("html").evaluate((node) => ({
+      clientWidth: node.clientWidth,
+      scrollWidth: node.scrollWidth,
+    })),
+    { clientWidth: 360, scrollWidth: 360 },
+  );
+});
+
+test("Agent creation recovers from stale authoritative admission without replacing its Configuration", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "application",
+      repositoryId: "803",
+      repository: "example/application",
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-write"] }],
+    },
+  ]);
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
+  await page.locator("#repository-application").check();
+  await page.locator("#repository-profile-git-read").check();
+  await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+  await page.getByLabel("Agent name").fill("Recovered Repository Agent");
+
+  fixture.policy.restrictions.push({
+    id: "stale-agent-create-authorization",
+    namespaceId: namespace.id,
+    resourceKind: "agent",
+    action: "create",
+    effect: "deny",
+  });
+  const savedConfigurationResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/configurations` &&
+      response.request().method() === "POST",
+  );
+  const rejected = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const savedConfiguration = await (await savedConfigurationResponse).json();
+  assert.equal((await rejected).status(), 403);
+  await page.getByRole("heading", { name: "Recover from a rejected Agent save" }).waitFor();
+  await page
+    .getByText(
+      /Repository-scoped Agent creation returned a known rejection.*Configuration .* remains saved/,
+    )
+    .waitFor();
+  assert.equal(await page.locator("#repository-application").isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Start a new draft" }).isEnabled(), true);
+
+  await page.getByRole("button", { name: "Reload repository choices" }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /could not be reloaded because Agent creation is denied/ })
+    .waitFor();
+  assert.equal(
+    await page.getByRole("heading", { name: "Recover from a rejected Agent save" }).isVisible(),
+    true,
+  );
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Start a new draft" }).isEnabled(), true);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+
+  fixture.policy.restrictions.pop();
+  const repositoryOptionsPath = `**/namespaces/${namespace.id}/agents/repository-options`;
+  const failRepositoryReload = (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "DEPENDENCY_UNAVAILABLE", message: "repository policy unavailable" },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000503" },
+      }),
+    });
+  await page.route(repositoryOptionsPath, failRepositoryReload);
+
+  await page.getByRole("button", { name: "Reload repository choices" }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /Repository choices could not be reloaded/ })
+    .waitFor();
+  await page.unroute(repositoryOptionsPath, failRepositoryReload);
+  assert.equal(
+    await page.getByRole("heading", { name: "Recover from a rejected Agent save" }).isVisible(),
+    true,
+  );
+  await page
+    .getByText(`Configuration saved: ${savedConfiguration.data.id}.`, { exact: false })
+    .waitFor();
+  assert.equal(await page.locator(".repository-options input").count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Start a new draft" }).isEnabled(), true);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+
+  // Even a post-authorization optional outage cannot satisfy a repository-scoped retry.
+  const optionalRepositoryOutage = (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "REPOSITORY_OPTIONS_UNAVAILABLE",
+          message: "Repository choices are unavailable.",
+        },
+      }),
+    });
+  await page.route(repositoryOptionsPath, optionalRepositoryOutage);
+  await page.getByRole("button", { name: "Reload repository choices" }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /Repository choices could not be reloaded/ })
+    .waitFor();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  await page.waitForTimeout(100);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+  await page.unroute(repositoryOptionsPath, optionalRepositoryOutage);
+
+  const conflictRepositoryReload = (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "RESOURCE_CONFLICT", message: "Namespace lifecycle conflict" },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
+      }),
+    });
+  await page.route(repositoryOptionsPath, conflictRepositoryReload);
+  await page.getByRole("button", { name: "Reload repository choices" }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /Namespace no longer accepts new Agents/ })
+    .waitFor();
+  await page
+    .getByRole("status")
+    .getByText("This Namespace no longer accepts new Agents.", { exact: true })
+    .waitFor();
+  await page.unroute(repositoryOptionsPath, conflictRepositoryReload);
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+
+  await page.getByRole("button", { name: "Reload repository choices" }).click();
+  await page.getByText(/Repository choices reloaded/).waitFor();
+  assert.equal(await page.locator("#repository-application").isEnabled(), true);
+  assert.equal(await page.locator("#repository-application").isChecked(), false);
+  // Refreshing policy permits editing; it must not turn this saved attempt into an ordinary Agent.
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Start a new draft" }).isVisible(), true);
+  await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  await page.waitForTimeout(100);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  await page.locator("#repository-application").check();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.locator("#repository-profile-git-read").check();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isEnabled(), true);
+  await page.locator("#repository-application").uncheck();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  await page.waitForTimeout(100);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+  await page.locator("#repository-application").check();
+  await page.locator("#repository-profile-git-read").check();
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const created = await (await createdResponse).json();
+  assert.deepEqual(created.data.repositoryBindings, [
+    { repositoryRef: "application", profile: "git-read" },
+  ]);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 2);
+  assert.equal(created.data.configurationId, savedConfiguration.data.id);
+});
+
+test("Agent creation does not expose recovery actions after an unknown admission outcome", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "application",
+      repositoryId: "804",
+      repository: "example/application",
+      namespaces: [{ namespaceId, profiles: ["git-read"] }],
+    },
+  ]);
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await page.route(`**/namespaces/${namespace.id}/agents`, async (route) => {
+    if (route.request().method() === "POST") {
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
+  await page.locator("#repository-application").check();
+  await page.locator("#repository-profile-git-read").check();
+  await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+  await page.getByLabel("Agent name").fill("Unknown Outcome Agent");
+
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page.getByText(/Outcome unknown/).waitFor();
+  assert.equal(
+    await page
+      .getByRole("heading", {
+        name: "Recover from a rejected Agent save",
+        includeHidden: true,
+      })
+      .isVisible(),
+    false,
+  );
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), true);
+  assert.equal(
+    await page.getByRole("button", { name: "Start a new draft", includeHidden: true }).isDisabled(),
+    true,
+  );
+  assert.equal(await page.locator("#repository-application").isDisabled(), true);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+  await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  await page.waitForTimeout(100);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+});
+
+test("Agent repository recovery with empty current policy requires an explicit new draft", async (t) => {
+  const { fixture, namespace, replacePolicy } = await createRepositoryLaunchFixture(
+    t,
+    (namespaceId) => [
+      {
+        repositoryRef: "application",
+        repositoryId: "806",
+        repository: "example/application",
+        namespaces: [{ namespaceId, profiles: ["git-read"] }],
+      },
+    ],
+    { reloadablePolicy: true },
+  );
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.locator("#repository-application").check();
+  await page.locator("#repository-profile-git-read").check();
+  await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+  await page.getByLabel("Agent name").fill("Repository policy removed");
+  fixture.policy.restrictions.push({
+    id: "reject-before-policy-refresh",
+    namespaceId: namespace.id,
+    resourceKind: "agent",
+    action: "create",
+    effect: "deny",
+  });
+  const savedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/configurations`) &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const saved = (await (await savedResponse).json()).data;
+  await page.getByRole("heading", { name: "Recover from a rejected Agent save" }).waitFor();
+  fixture.policy.restrictions.pop();
+  // The real registry policy now approves only another Namespace.
+  replacePolicy([
+    {
+      repositoryRef: "application",
+      repositoryId: "806",
+      repository: "example/application",
+      namespaces: [{ namespaceId: `ns_${randomUUID()}`, profiles: ["git-read"] }],
+    },
+  ]);
+  await page.getByRole("button", { name: "Reload repository choices" }).click();
+  await page.getByText(/Repository choices reloaded/).waitFor();
+  assert.equal(await page.locator(".repository-options input").count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+  await page.waitForTimeout(100);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Start a new draft" }).click();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText(/No approved repositories are available/).waitFor();
+  await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
+  await page.getByLabel("Agent name").fill("Explicit ordinary draft");
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const created = (await (await createdResponse).json()).data;
+  assert.equal(Object.hasOwn(created, "repositoryBindings"), false);
+  assert.notEqual(created.configurationId, saved.id);
+  assert.equal(
+    (await fixture.request("GET", `/namespaces/${namespace.id}/configurations/${saved.id}`)).status,
+    200,
+  );
+});
+
+test("Dedicated Agent creation provisions inline Configuration and masked new Secrets", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Provisioned create", { ready: true });
+  const values = nativeValues("provision", { harnessId: "codex", providerModel: "gpt-5.1" });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const agentId = "agt_00000000-0000-4000-8000-00000000feed";
+  const revisionId = "rev_00000000-0000-4000-8000-00000000feed";
+  let allowProvisioningSuccess = false;
+  let provisioningReads = 0;
+  let deploymentReads = 0;
+  let provisionBody;
+  const savedSecrets = new Map();
+  await routeInstallationProvisioning(page, fixture);
+  await page.route(`**/namespaces/${namespace.id}/agents/repository-options`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [
+          {
+            repositoryRef: "application",
+            displayName: "example/application",
+            allowedProfiles: ["git-write"],
+          },
+        ],
+        meta: { requestId: "req_repository_choices" },
+      }),
+    }),
+  );
+
+  const agent = {
+    id: agentId,
+    namespaceId: namespace.id,
+    name: "Provisioned Agent",
+    status: "active",
+    desiredRuntimeState: "running",
+    configurationId: "cfg_00000000-0000-4000-8000-00000000feed",
+    executionMode: "dedicated",
+    harnessAuth: {
+      method: "api_key",
+      source: null,
+    },
+    servicePrincipalId: "identity_provisioned_agent",
+    createdAt: new Date().toISOString(),
+    activeRevisionId: revisionId,
+  };
+  const revision = {
+    id: revisionId,
+    namespaceId: namespace.id,
+    agentId,
+    revision: 1,
+    providerId: null,
+    configurationId: agent.configurationId,
+    configurationKind: "agent",
+    configurationGeneration: 2,
+    createdAt: agent.createdAt,
+    configuration: values,
+    harnessAuth: agent.harnessAuth,
+    harness: { id: "codex", version: "test", mode: "dedicated" },
+    compute: { id: "kubernetes-test", implementation: "kubernetes" },
+    servicePrincipalId: agent.servicePrincipalId,
+  };
+  const json = (data, status = 200) => ({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify({
+      data,
+      meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+    }),
+  });
+
+  await page.route(`**/namespaces/${namespace.id}/secrets`, async (route, request) => {
+    if (request.method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    const body = request.postDataJSON();
+    // Secrets use the real API; only provisioning and deployment progression are simulated.
+    const response = await route.fetch();
+    const saved = (await response.json()).data;
+    savedSecrets.set(body.name, saved);
+    if (!body.name.endsWith("Slack app token") && !body.name.endsWith("Slack bot token")) {
+      agent.harnessAuth.source = saved.ref;
+    }
+    await route.fulfill({ response });
+  });
+  await page.route(`**/namespaces/${namespace.id}/agents/provision`, async (route, request) => {
+    provisionBody = request.postDataJSON();
+    await route.fulfill(
+      json(
+        {
+          provisioning: {
+            workId: "work_create",
+            status: "queued",
+            phase: "admitted",
+            attemptCount: 1,
+            updatedAt: agent.createdAt,
+            url: `/namespaces/${namespace.id}/agents/provision/work_create`,
+          },
+        },
+        202,
+      ),
+    );
+  });
+  await page.route(`**/namespaces/${namespace.id}/agents/${agentId}`, async (route, request) => {
+    if (request.method() === "GET") {
+      await route.fulfill(json(agent));
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route(`**/namespaces/${namespace.id}/agents/provision/work_create`, async (route) => {
+    provisioningReads += 1;
+    await route.fulfill(
+      json({
+        provisioning: {
+          workId: "work_create",
+          status: allowProvisioningSuccess ? "succeeded" : "running",
+          phase: allowProvisioningSuccess ? "handoff" : "configuration",
+          attemptCount: 1,
+          updatedAt: agent.createdAt,
+          url: `/namespaces/${namespace.id}/agents/provision/work_create`,
+          ...(allowProvisioningSuccess
+            ? { configurationId: agent.configurationId, agentId, revisionId }
+            : {}),
+        },
+      }),
+    );
+  });
+  await page.route(
+    `**/namespaces/${namespace.id}/agents/${agentId}/deployments/${revisionId}`,
+    async (route) => {
+      deploymentReads += 1;
+      await route.fulfill(
+        json({
+          deploymentId: `dep_${revisionId}`,
+          revisionId,
+          status: deploymentReads > 1 ? "succeeded" : "queued",
+          error: null,
+        }),
+      );
+    },
+  );
+  await page.route(`**/namespaces/${namespace.id}/agents/${agentId}/revisions`, async (route) => {
+    await route.fulfill(json([revision]));
+  });
+  await page.route(
+    `**/namespaces/${namespace.id}/agents/${agentId}/revisions/${revisionId}`,
+    async (route) => {
+      await route.fulfill(json(revision));
+    },
+  );
+  await page.route(
+    `**/namespaces/${namespace.id}/agents/${agentId}/native-admin`,
+    async (route) => {
+      await route.fulfill(json({ status: "unsupported" }));
+    },
+  );
+  await page.route(
+    `**/namespaces/${namespace.id}/agents/${agentId}/workspace/files/*`,
+    async (route) => {
+      const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
+      await route.fulfill(json({ name, content: `# ${name}\n` }));
+    },
+  );
+
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill(agent.name);
+  await page.locator("#repository-application").check();
+  await page.locator("#repository-profile-git-write").check();
+  await page.getByLabel("API key", { exact: true }).fill("model-secret-value");
+  await openAdvancedSettings(page);
+  await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
+  await page.getByRole("button", { name: "Configure Slack" }).click();
+  const channelDialog = page.getByRole("dialog", { name: "Configure Slack" });
+  await channelDialog
+    .getByText("Choose existing Slack token Secrets or create them here before creating the Agent.")
+    .waitFor();
+  await channelDialog.getByLabel("Slack app token").selectOption("__openclaw_create_secret__");
+  const appSecretDialog = page.getByRole("dialog", { name: "Create Slack app token Secret" });
+  await appSecretDialog.getByLabel("Secret value").fill("slack-app-secret");
+  await appSecretDialog.getByRole("button", { name: "Create Secret" }).click();
+  await appSecretDialog.waitFor({ state: "hidden" });
+  await channelDialog.getByLabel("Slack bot token").selectOption("__openclaw_create_secret__");
+  const botSecretDialog = page.getByRole("dialog", { name: "Create Slack bot token Secret" });
+  await botSecretDialog.getByLabel("Secret value").fill("slack-bot-secret");
+  await botSecretDialog.getByRole("button", { name: "Create Secret" }).click();
+  await botSecretDialog.waitFor({ state: "hidden" });
+  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
+  await channelDialog
+    .getByText("Enter at least one Slack channel ID for these access settings.")
+    .waitFor();
+  await channelDialog.getByLabel("Slack channel IDs").fill("C0123456789");
+  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").uncheck();
+  await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
+  await channelDialog
+    .getByText("Enter allowed channel user IDs or allow everyone in these channels.")
+    .waitFor();
+  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
+
+  const provisionResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/provision` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await provisionResponse).status(), 202);
+  assert.equal(await page.getByLabel("Harness", { exact: true }).isDisabled(), true);
+  allowProvisioningSuccess = true;
+  await page.waitForURL((url) => {
+    return (
+      url.pathname === `/console/agents/${agentId}` &&
+      url.searchParams.get("namespace") === namespace.id &&
+      url.searchParams.get("revision") === revisionId &&
+      url.searchParams.get("tab") === "workspace"
+    );
+  });
+
+  assert.match(provisionBody.requestId, /^req_[0-9a-f-]{36}$/);
+  assert.equal(provisionBody.name, agent.name);
+  assert.deepEqual(provisionBody.repositoryBindings, [
+    { repositoryRef: "application", profile: "git-write" },
+  ]);
+  assert.equal(provisionBody.executionMode, "dedicated");
+  assert.deepEqual(provisionBody.harnessAuth, agent.harnessAuth);
+  assert.deepEqual(provisionBody.configuration.values.channels.slack, {
+    enabled: true,
+    mode: "socket",
+    appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+    botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+    channels: { C0123456789: { requireMention: true, users: ["*"] } },
+    dmPolicy: "allowlist",
+    groupPolicy: "allowlist",
+  });
+  assert.deepEqual(provisionBody.configuration, {
+    kind: "agent",
+    values: provisionBody.configuration.values,
+    secretBindings: {
+      SLACK_APP_TOKEN: {
+        source: savedSecrets.get("Provisioned Agent Slack app token").ref,
+        delivery: { type: "env" },
+      },
+      SLACK_BOT_TOKEN: {
+        source: savedSecrets.get("Provisioned Agent Slack bot token").ref,
+        delivery: { type: "env" },
+      },
+    },
+  });
+  assert.equal(Object.hasOwn(provisionBody, "secrets"), false);
+  assert.deepEqual(
+    secretPostRequests(requests, namespace.id).map((request) => request.body),
+    [
+      { name: "Provisioned Agent Slack app token", value: "slack-app-secret" },
+      { name: "Provisioned Agent Slack bot token", value: "slack-bot-secret" },
+      { name: "Provisioned Agent", value: "model-secret-value" },
+    ],
+  );
+  assert.equal(agentProvisionPostRequests(requests, namespace.id).length, 1);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+  assert.ok(provisioningReads >= 1);
+  assert.ok(deploymentReads >= 2);
+});
+
+test("Dedicated Agent creation uses regular create when provisioning is unsupported", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Unsupported provision", { ready: true });
+  const values = nativeValues("unsupported-provision", {
+    harnessId: "codex",
+    providerModel: "gpt-5.1",
+  });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await routeInstallationWithoutProvisioning(page, fixture);
+
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText("This installation creates draft Agents for later deployment.").waitFor();
+  await assert.rejects(
+    page.getByRole("heading", { name: "Secrets" }).waitFor({ state: "visible", timeout: 300 }),
+    /Timeout/,
+  );
+
+  await page.getByLabel("Agent name").fill("Unsupported Dedicated Agent");
+  await page.getByLabel("API key", { exact: true }).fill("unsupported-model-key");
+  await openAdvancedSettings(page);
+  await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
+  await page.getByRole("button", { name: "Configure Slack" }).click();
+  const channelDialog = page.getByRole("dialog", { name: "Configure Slack" });
+  await channelDialog.getByLabel("Slack channel IDs").fill("CUNSUPPORTED123");
+  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await createdResponse).status(), 201);
+  // Navigation follows the model Secret grant; the Agent POST alone does not finish creation.
+  await page.waitForURL((url) => url.pathname.startsWith("/console/agents/agt_"));
+
+  assert.equal(agentProvisionPostRequests(requests, namespace.id).length, 0);
+  const configurationWrites = configurationPostRequests(requests, namespace.id);
+  assert.equal(configurationWrites.length, 1);
+  assert.deepEqual(configurationWrites[0].body.values.channels.slack.channels, {
+    CUNSUPPORTED123: { requireMention: true, users: ["*"] },
+  });
+  assert.equal(Object.hasOwn(configurationWrites[0].body, "secretBindings"), false);
+  assert.equal(accessBindingPostRequests(requests, namespace.id).length, 1);
+  assert.deepEqual(
+    agentPostRequests(requests, namespace.id).map((request) => request.body),
+    [
+      {
+        name: "Unsupported Dedicated Agent",
+        executionMode: "dedicated",
+        initialWorkspaceFiles: WORKSPACE_DEFAULTS,
+        workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
+        harnessAuth: agentPostRequests(requests, namespace.id)[0].body.harnessAuth,
+        configurationId: requests.find(
+          (request) =>
+            request.method === "POST" && request.path === `/namespaces/${namespace.id}/agents`,
+        )?.body.configurationId,
+      },
+    ],
+  );
+  // Read the created draft through the real API, then verify both access choices
+  // survive a new page load rather than only remaining in the create form.
+  const createdAgent = (await (await createdResponse).json()).data;
+  await page.goto(detailUrl(fixture, namespace.id, createdAgent.id, "draft", "channels").href);
+  await page.getByRole("button", { name: "Edit Slack", exact: true }).click();
+  let savedDialog = page.getByRole("dialog", { name: "Edit Slack" });
+  const everyone = savedDialog.getByLabel("Allow everyone in these channels to mention the agent");
+  assert.equal(await everyone.isChecked(), true);
+  assert.equal(await savedDialog.getByLabel("Allowed channel user IDs").isDisabled(), true);
+  await everyone.uncheck();
+  await savedDialog.getByLabel("Allowed channel user IDs").fill("USENDER123");
+  const saved = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      response.url().endsWith(`/configurations/${createdAgent.configurationId}`),
+  );
+  await savedDialog.getByRole("button", { name: "Save configuration", exact: true }).click();
+  assert.equal((await saved).status(), 200);
+  await page.reload();
+  await page.getByRole("button", { name: "Edit Slack", exact: true }).click();
+  savedDialog = page.getByRole("dialog", { name: "Edit Slack" });
+  assert.equal(await savedDialog.getByLabel("Allowed channel user IDs").inputValue(), "USENDER123");
+  assert.equal(
+    await savedDialog
+      .getByLabel("Allow everyone in these channels to mention the agent")
+      .isDisabled(),
+    true,
+  );
+  const savedConfiguration = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${createdAgent.configurationId}`,
+  );
+  assert.deepEqual(savedConfiguration.data.values.channels.slack.channels, {
+    CUNSUPPORTED123: { requireMention: true, users: ["USENDER123"] },
+  });
+  assert.equal(savedConfiguration.data.values.channels.slack.groupPolicy, "allowlist");
+  assert.equal(savedConfiguration.data.values.channels.slack.dmPolicy, "allowlist");
+  assert.equal(Object.hasOwn(savedConfiguration.data.values.channels.slack, "allowFrom"), false);
+});
+
+test("Dedicated Agent creation reuses separately saved Secret references after provisioning failure", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Provision retry", { ready: true });
+  const values = nativeValues("provision-retry", {
+    harnessId: "codex",
+    providerModel: "gpt-5.1",
+  });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await routeInstallationProvisioning(page, fixture);
+  await page.route(`**/namespaces/${namespace.id}/agents/repository-options`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: [], meta: { requestId: "req_repository_choices" } }),
+    }),
+  );
+  const agentId = "agt_00000000-0000-4000-8000-00000000babe";
+  const revisionId = "rev_00000000-0000-4000-8000-00000000babe";
+  const createdAt = new Date().toISOString();
+  const bodies = [];
+  const savedSecrets = new Map();
+  const agent = {
+    id: agentId,
+    namespaceId: namespace.id,
+    name: "Retried Agent",
+    status: "active",
+    desiredRuntimeState: "running",
+    configurationId: "cfg_00000000-0000-4000-8000-00000000babe",
+    executionMode: "dedicated",
+    harnessAuth: {
+      method: "codex_pat",
+      source: null,
+    },
+    servicePrincipalId: "identity_retried_agent",
+    createdAt,
+    activeRevisionId: revisionId,
+  };
+  const revision = {
+    id: revisionId,
+    namespaceId: namespace.id,
+    agentId,
+    revision: 1,
+    providerId: null,
+    configurationId: agent.configurationId,
+    configurationKind: "agent",
+    configurationGeneration: 1,
+    createdAt,
+    configuration: values,
+    harnessAuth: agent.harnessAuth,
+    harness: { id: "codex", version: "test", mode: "dedicated" },
+    compute: { id: "kubernetes-test", implementation: "kubernetes" },
+    servicePrincipalId: agent.servicePrincipalId,
+  };
+  const json = (data, status = 200) => ({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify({
+      data,
+      meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+    }),
+  });
+
+  await page.route(`**/namespaces/${namespace.id}/secrets`, async (route, request) => {
+    if (request.method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    const body = request.postDataJSON();
+    // Keep Secret persistence real while simulating an uncertain provisioning response.
+    const response = await route.fetch();
+    const saved = (await response.json()).data;
+    savedSecrets.set(body.name, saved);
+    if (!body.name.endsWith("Slack app token") && !body.name.endsWith("Slack bot token")) {
+      agent.harnessAuth.source = saved.ref;
+    }
+    await route.fulfill({ response });
+  });
+  await page.route(`**/namespaces/${namespace.id}/agents/provision`, async (route, request) => {
+    bodies.push(request.postDataJSON());
+    if (bodies.length === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "DEPENDENCY_UNAVAILABLE",
+            message: "masked provisioning response",
+          },
+          meta: { requestId: "req_00000000-0000-4000-8000-000000000503" },
+        }),
+      });
+      return;
+    }
+    await route.fulfill(
+      json(
+        {
+          provisioning: {
+            workId: "work_retry",
+            status: "succeeded",
+            phase: "handoff",
+            attemptCount: 1,
+            updatedAt: createdAt,
+            configurationId: agent.configurationId,
+            agentId,
+            revisionId,
+            url: `/namespaces/${namespace.id}/agents/provision/work_retry`,
+          },
+        },
+        202,
+      ),
+    );
+  });
+  await page.route(
+    `**/namespaces/${namespace.id}/agents/${agentId}/deployments/${revisionId}`,
+    async (route) => {
+      await route.fulfill(
+        json({ deploymentId: `dep_${revisionId}`, revisionId, status: "succeeded" }),
+      );
+    },
+  );
+  await page.route(`**/namespaces/${namespace.id}/agents/${agentId}`, async (route, request) => {
+    if (request.method() === "GET") {
+      await route.fulfill(json(agent));
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route(`**/namespaces/${namespace.id}/agents/${agentId}/revisions`, async (route) => {
+    await route.fulfill(json([revision]));
+  });
+  await page.route(
+    `**/namespaces/${namespace.id}/agents/${agentId}/revisions/${revisionId}`,
+    async (route) => {
+      await route.fulfill(json(revision));
+    },
+  );
+  await page.route(
+    `**/namespaces/${namespace.id}/agents/${agentId}/native-admin`,
+    async (route) => {
+      await route.fulfill(json({ status: "unsupported" }));
+    },
+  );
+  await page.route(
+    `**/namespaces/${namespace.id}/agents/${agentId}/workspace/files/*`,
+    async (route) => {
+      const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
+      await route.fulfill(json({ name, content: `# ${name}\n` }));
+    },
+  );
+
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill(agent.name);
+  await page.getByLabel("Authentication method").selectOption("codex_pat");
+  await page.getByLabel("Service account token", { exact: true }).fill("model-secret-value");
+  await openAdvancedSettings(page);
+  await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
+  await page.getByRole("button", { name: "Configure Slack" }).click();
+  const channelDialog = page.getByRole("dialog", { name: "Configure Slack" });
+  await channelDialog.getByLabel("Slack app token").selectOption("__openclaw_create_secret__");
+  const appSecretDialog = page.getByRole("dialog", { name: "Create Slack app token Secret" });
+  await appSecretDialog.getByLabel("Secret value").fill("retry-slack-app-secret");
+  await appSecretDialog.getByRole("button", { name: "Create Secret" }).click();
+  await appSecretDialog.waitFor({ state: "hidden" });
+  await channelDialog.getByLabel("Slack bot token").selectOption("__openclaw_create_secret__");
+  const botSecretDialog = page.getByRole("dialog", { name: "Create Slack bot token Secret" });
+  await botSecretDialog.getByLabel("Secret value").fill("retry-slack-bot-secret");
+  await botSecretDialog.getByRole("button", { name: "Create Secret" }).click();
+  await botSecretDialog.waitFor({ state: "hidden" });
+  await channelDialog.getByLabel("Slack channel IDs").fill("CRETRY123");
+  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
+  const firstProvisionResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/provision` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await firstProvisionResponse).status(), 503);
+  await page
+    .getByText("Outcome unknown. Retry resubmits the same request ID and saved references")
+    .waitFor();
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
+  assert.equal(await page.getByLabel("Configuration JSON").isDisabled(), true);
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "codex");
+  assert.equal(await page.getByLabel("Harness", { exact: true }).isDisabled(), true);
+  await page.getByRole("button", { name: "Retry provisioning request" }).click();
+
+  await page.waitForURL((url) => {
+    return (
+      url.pathname === `/console/agents/${agentId}` &&
+      url.searchParams.get("namespace") === namespace.id &&
+      url.searchParams.get("revision") === revisionId &&
+      url.searchParams.get("tab") === "workspace"
+    );
+  });
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(bodies[1], bodies[0]);
+  assert.equal(bodies[0].requestId, bodies[1].requestId);
+  assert.equal(bodies[0].name, agent.name);
+  assert.deepEqual(bodies[0].configuration.values.channels.slack.channels, {
+    CRETRY123: { requireMention: true, users: ["*"] },
+  });
+  assert.deepEqual(bodies[0].harnessAuth, agent.harnessAuth);
+  assert.equal(Object.hasOwn(bodies[0], "secrets"), false);
+  assert.deepEqual(bodies[0].configuration.secretBindings, {
+    SLACK_APP_TOKEN: {
+      source: savedSecrets.get("Retried Agent Slack app token").ref,
+      delivery: { type: "env" },
+    },
+    SLACK_BOT_TOKEN: {
+      source: savedSecrets.get("Retried Agent Slack bot token").ref,
+      delivery: { type: "env" },
+    },
+  });
+  assert.deepEqual(
+    secretPostRequests(requests, namespace.id).map((request) => request.body),
+    [
+      { name: "Retried Agent Slack app token", value: "retry-slack-app-secret" },
+      { name: "Retried Agent Slack bot token", value: "retry-slack-bot-secret" },
+      { name: "Retried Agent", value: "model-secret-value" },
+    ],
+  );
 });
 
 test("Agent creation rejects non-object native Configuration JSON before any write request", async (t) => {
@@ -566,145 +2192,345 @@ test("Agent creation rejects non-object native Configuration JSON before any wri
   await page.getByRole("button", { name: "Start without Preset" }).click();
   requests.length = 0;
 
+  await enterManualModel(page, "unused-invalid-config-key", "gpt-4.1");
   await page.getByLabel("Agent name").fill("Broken Agent");
+  await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON").fill("[]");
+  await page.getByText("Advanced settings", { exact: true }).click();
   await page.getByRole("button", { name: "Create Agent" }).click();
 
   const validation = await page
     .getByLabel("Configuration JSON")
     .evaluate((node) => node.validationMessage);
   assert.equal(validation, "Enter a valid JSON object.");
+  assert.equal(await page.getByLabel("Configuration JSON").isVisible(), true);
   assert.deepEqual(nonAuthWriteRequests(requests), []);
 });
 
-test("Agent creation renders provider and service account choices and saves selected associations", async (t) => {
-  const state = new InMemoryPlatformState();
-  const fixture = await createConsoleAppFixture(t, { state });
-  await fixture.bootstrap();
-  const namespace = await fixture.createNamespace("Dropdown choices", { ready: true });
-  const firstAccount = await seedServiceAccount(state, namespace.id, "Console Primary Account");
-  const secondAccount = await seedServiceAccount(
+test("Agent creation offers mainline Anthropic models before credentials and saves an explicit selection", async (t) => {
+  const audit = new InMemoryAuditSink();
+  const state = new InMemoryPlatformState({ auditSink: audit });
+  const secretDriver = createTestSecretDriver();
+  const fixture = await createConsoleAppFixture(t, {
     state,
-    namespace.id,
-    "Console Unissued Account",
-    false,
-  );
-  const values = nativeValues("dropdown", { harnessId: "codex", providerModel: "gpt-5.1" });
+    secretDriver,
+    providerSummaries: undefined,
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Anthropic authoring", { ready: true });
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
-
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
-  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  const provider = page.getByLabel("Provider (optional)");
-  await page.getByLabel("Authentication source").selectOption("chatgpt_service_account");
-  const account = page.getByLabel("Issued ChatGPT service account");
-  await page.getByText("Choose an installed Provider.").waitFor();
-  await page.getByText("Issued accounts in this Namespace are available.").waitFor();
-  assert.equal(await provider.isDisabled(), false);
-  assert.equal(await account.isDisabled(), false);
-
-  const providerOptions = await optionValues(provider);
-  assert.ok(providerOptions.some((option) => option.value === ""));
-  assert.ok(providerOptions.some((option) => option.value === providerFixtures[0].id));
-  const accountOptions = await optionValues(account);
-  assert.ok(accountOptions.some((option) => option.value === ""));
-  assert.ok(accountOptions.some((option) => option.value === firstAccount.id));
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
+  await page
+    .getByLabel("Service account token", { exact: true })
+    .fill("at-discarded-before-anthropic");
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "openclaw");
+  assert.deepEqual(
+    await page
+      .getByLabel("Harness", { exact: true })
+      .locator("option:not([disabled])")
+      .evaluateAll((options) => options.map((option) => option.value)),
+    ["openclaw"],
+  );
   assert.equal(
-    accountOptions.some((option) => option.value === secondAccount.id),
-    false,
+    await page.getByLabel("API key", { exact: true }).getAttribute("placeholder"),
+    "sk-ant-…",
   );
-  assert.equal(JSON.stringify(accountOptions).includes("workspaceId"), false);
-  assert.equal(JSON.stringify(accountOptions).includes("providerId"), false);
-
-  await provider.selectOption(providerFixtures[0].id);
-  const accountOptionsAfterProviderSelection = await optionValues(account);
-  assert.ok(
-    accountOptionsAfterProviderSelection.some((option) => option.value === firstAccount.id),
-    "provider selection must not hide independently readable service accounts",
+  assert.equal(await page.getByRole("link", { name: "OpenAI admin", exact: true }).count(), 0);
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "embedded");
+  assert.equal(
+    await page.getByLabel("Authentication method", { exact: true }).inputValue(),
+    "api_key",
   );
-
-  await page.getByLabel("Agent name").fill("Associated Agent");
-  await account.selectOption(firstAccount.id);
-  await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
-  const createResponse = page.waitForResponse(
+  assert.equal(await page.getByLabel("Authentication method", { exact: true }).isDisabled(), true);
+  assert.equal(await page.getByLabel("API key", { exact: true }).inputValue(), "");
+  assert.equal(await page.getByLabel("Execution mode").isDisabled(), true);
+  assert.equal(await page.getByLabel("Authentication source").count(), 0);
+  assert.equal(await page.getByLabel("Model", { exact: true }).isVisible(), true);
+  assert.equal(await page.getByLabel("Model ID", { exact: true }).isVisible(), false);
+  assert.equal(
+    JSON.parse(await page.getByLabel("Configuration JSON").inputValue()).agents?.defaults?.model,
+    undefined,
+  );
+  const choice = page.getByLabel("Model", { exact: true });
+  assert.deepEqual(
+    (await optionValues(choice)).map(({ value }) => value),
+    [
+      "",
+      "claude-opus-5-5",
+      "claude-fable-5-1",
+      "claude-mythos-5-1",
+      "claude-opus-5",
+      "claude-fable-5",
+      "claude-mythos-5",
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-opus-4-5-20251101",
+      "claude-sonnet-4-6",
+      "claude-sonnet-4-5-20250929",
+      "claude-mythos-preview",
+    ],
+  );
+  assert.equal(await choice.inputValue(), "");
+  await choice.selectOption("claude-fable-5-1");
+  const selectedConfiguration = await page.getByLabel("Configuration JSON").inputValue();
+  await page.getByLabel("Agent name").fill("Anthropic Agent");
+  await page.getByLabel("API key", { exact: true }).fill("test-anthropic-api-key");
+  await page.getByLabel("API key", { exact: true }).press("Tab");
+  assert.equal(await choice.inputValue(), "claude-fable-5-1");
+  assert.equal(await page.getByLabel("Configuration JSON").inputValue(), selectedConfiguration);
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  assert.equal(secretDriver.calls.length, 0);
+  assert.equal(JSON.stringify(audit.events).includes("test-anthropic-api-key"), false);
+  assert.equal(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`).length,
+    0,
+  );
+  const saved = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
       response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Create Agent" }).click();
-  const created = await (await createResponse).json();
-
-  assert.equal(created.data.providerId, providerFixtures[0].id);
-  assert.deepEqual(created.data.harnessAuth, {
-    method: "chatgpt_service_account",
-    serviceAccountId: firstAccount.id,
-  });
-  assert.equal(created.data.activeRevisionId, undefined);
-  assert.deepEqual(agentPostRequests(requests, namespace.id).at(-1).body, {
-    name: "Associated Agent",
-    executionMode: "dedicated",
-    initialWorkspaceFiles: WORKSPACE_DEFAULTS,
-    workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
-    providerId: providerFixtures[0].id,
-    harnessAuth: { method: "chatgpt_service_account", serviceAccountId: firstAccount.id },
-    configurationId: created.data.configurationId,
-  });
-  const savedConfiguration = await fixture.request(
+  const response = await saved;
+  assert.equal(response.status(), 201);
+  const agent = (await response.json()).data;
+  await page.waitForURL((url) => url.pathname === `/console/agents/${agent.id}`);
+  assert.equal(agent.executionMode, "embedded");
+  assert.equal(agent.providerId, null);
+  assert.equal(agent.harnessAuth.method, "api_key");
+  const configuration = await fixture.request(
     "GET",
-    `/namespaces/${namespace.id}/configurations/${created.data.configurationId}`,
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
   );
-  assert.deepEqual(savedConfiguration.data.values, values);
-  const listedAccount = await fixture.request(
-    "GET",
-    `/namespaces/${namespace.id}/service-accounts/${firstAccount.id}`,
+  assert.equal(configuration.data.values.agents.defaults.model, "anthropic/claude-fable-5-1");
+  assert.deepEqual(configuration.data.values.models.providers.anthropic, {
+    baseUrl: "https://api.anthropic.com",
+    api: "anthropic-messages",
+    models: [{ id: "claude-fable-5-1", name: "claude-fable-5-1" }],
+  });
+  assert.equal(
+    configuration.data.values.agents.defaults.models["anthropic/claude-fable-5-1"].agentRuntime.id,
+    "openclaw",
   );
-  assert.equal(Object.hasOwn(listedAccount.data, "providerId"), false);
-  assert.deepEqual(listedAccount.data.credential, { kind: "access_token" });
-  assert.doesNotMatch(
-    JSON.stringify(listedAccount.data),
-    /issued-credential|secretRef|workspaceId/,
+  assert.equal(pathRequests(requests, "GET", "/providers").length, 0);
+  assert.equal(
+    pathRequests(requests, "GET", `/namespaces/${namespace.id}/service-accounts`).length,
+    0,
   );
+  assert.equal(JSON.stringify(configuration.data).includes("test-anthropic-api-key"), false);
 });
 
-test("Agent creation leaves optional lists disabled when discovery is inaccessible", async (t) => {
-  const fixture = await createConsoleAppFixture(t, { providerSummaries: undefined });
+test("Static model selection survives credential edits and resets for provider or authentication changes", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
-  const namespace = await fixture.createNamespace("Unavailable lists", { ready: true });
+  const namespace = await fixture.createNamespace("Static model choices", { ready: true });
   const { page } = await newPage(t, fixture);
-  const serviceAccounts = `**/namespaces/${namespace.id}/service-accounts`;
-  await page.route(serviceAccounts, async (route) => {
-    await route.abort("failed");
-  });
-
+  const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
-  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  await page.getByText(/Providers unavailable\./).waitFor();
-  await page.getByText(/Service accounts unavailable\./).waitFor();
-  assert.equal(await page.getByLabel("Provider (optional)").isDisabled(), true);
-  assert.equal(await page.getByLabel("Issued ChatGPT service account").isDisabled(), true);
-  assert.equal(await page.getByLabel("Provider (optional)").inputValue(), "");
-  assert.equal(await page.getByLabel("Issued ChatGPT service account").inputValue(), "");
+  const key = page.getByLabel("API key", { exact: true });
+  const choice = page.getByLabel("Model", { exact: true });
+  const configuration = page.getByLabel("Configuration JSON");
+  assert.equal(await key.inputValue(), "");
+  assert.equal(await choice.isVisible(), true);
+  assert.equal(await choice.isEnabled(), true);
+  assert.deepEqual(
+    (await optionValues(choice)).map(({ value }) => value),
+    ["", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+  );
+  assert.equal(await choice.locator('option[value=""]').textContent(), "Choose a model");
+  assert.equal(await choice.inputValue(), "");
+  assert.equal(JSON.parse(await configuration.inputValue()).agents?.defaults?.model, undefined);
+  await choice.selectOption("gpt-6-astra");
+  const selectedConfiguration = await configuration.inputValue();
+  assert.equal(JSON.parse(selectedConfiguration).agents.defaults.model, "codex/gpt-6-astra");
+  for (const credential of ["first-openai-key", "replacement-openai-key", ""]) {
+    await key.fill(credential);
+    await key.press("Tab");
+    assert.equal(await choice.inputValue(), "gpt-6-astra");
+    assert.equal(await configuration.inputValue(), selectedConfiguration);
+  }
+
+  // Switching compatible harnesses changes the native transport without clearing the model.
+  await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  assert.equal(await choice.inputValue(), "gpt-6-astra");
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "openai/gpt-6-astra",
+  );
+  await page.getByLabel("Harness", { exact: true }).selectOption("codex");
+  assert.equal(await choice.inputValue(), "gpt-6-astra");
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "codex/gpt-6-astra",
+  );
+
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
+  assert.equal(await page.getByLabel("Service account token", { exact: true }).inputValue(), "");
+  assert.equal(await choice.isVisible(), true);
+  assert.equal(await choice.inputValue(), "");
+  assert.equal(JSON.parse(await configuration.inputValue()).agents.defaults.model, undefined);
+  await choice.selectOption("gpt-5.6-terra");
+  await page.getByLabel("Service account token", { exact: true }).fill("at-static-model-token");
+  await page.getByLabel("Service account token", { exact: true }).press("Tab");
+  assert.equal(await choice.inputValue(), "gpt-5.6-terra");
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "codex/gpt-5.6-terra",
+  );
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("api_key");
+  assert.equal(await key.inputValue(), "");
+  assert.equal(await choice.inputValue(), "");
+  assert.equal(JSON.parse(await configuration.inputValue()).agents.defaults.model, undefined);
+
+  await choice.selectOption("gpt-5.6-luna");
+  await key.fill("discarded-openai-key");
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  assert.equal(await key.inputValue(), "");
+  assert.equal(await choice.isVisible(), true);
+  assert.equal(await choice.inputValue(), "");
+  assert.equal(JSON.parse(await configuration.inputValue()).agents.defaults.model, undefined);
+  await choice.selectOption("claude-opus-5-5");
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "anthropic/claude-opus-5-5",
+  );
+  await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+  assert.equal(await choice.inputValue(), "");
+  assert.equal(JSON.parse(await configuration.inputValue()).agents.defaults.model, undefined);
+  await choice.selectOption("gpt-5.6-luna");
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "codex/gpt-5.6-luna",
+  );
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  assert.equal(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`).length,
+    0,
+  );
 });
 
-test("Agent creation reuses the saved Configuration after an Agent creation conflict", async (t) => {
+test("Agent creation accepts a manual model outside the static list and saves through the real Agent API", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Manual model override", { ready: true });
+  const { page } = await newPage(t, fixture);
+  // Exercise the supported draft path; dedicated provisioning has separate workflow coverage.
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Manual model Agent");
+  await enterManualModel(page, "manual-model-key", "gpt-manual-account-model");
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const response = await saved;
+  assert.equal(response.status(), 201);
+  const agent = (await response.json()).data;
+  await page.waitForURL((url) => url.pathname === `/console/agents/${agent.id}`);
+  const configuration = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.equal(configuration.data.values.agents.defaults.model, "codex/gpt-manual-account-model");
+  assert.equal(JSON.stringify(configuration.data).includes("manual-model-key"), false);
+});
+
+test("Agent creation reports unavailable Secret storage before creating Configuration or Agent", async (t) => {
+  const fixture = await createConsoleAppFixture(t, { secretDriver: null });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Missing Secret storage", { ready: true });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Unavailable Agent");
+  await enterManualModel(page, "unused-no-driver-key", "gpt-4.1");
+  const failed = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/secrets` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await failed).status(), 503);
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /unavailable|unknown|configured/i })
+    .waitFor();
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+});
+
+test("Agent creation reuses its saved Secret and Configuration after an Agent creation conflict", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Partial save retry", { ready: true });
   await fixture.createAgent(namespace.id, "Retry Agent");
   const values = nativeValues("partial-save", { harnessId: "codex", providerModel: "gpt-5.1" });
   const { page } = await newPage(t, fixture);
+  // Exercise the supported draft path; dedicated provisioning has separate workflow coverage.
+  await routeInstallationWithoutProvisioning(page, fixture);
   const requests = apiRequests(page, fixture.origin);
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  await page.getByText("Choose an installed Provider.").waitFor();
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
+  await page.getByLabel("Service account token", { exact: true }).fill("at-discarded-pat");
+  await page.getByLabel("Service account token", { exact: true }).press("Tab");
+  await page.getByRole("button", { name: "Enter model ID manually", exact: true }).click();
+  await page.getByLabel("Model ID", { exact: true }).fill("discarded-pat-model");
+  await page.getByLabel("Model ID", { exact: true }).press("Tab");
+  // OpenClaw requires a new API key, never the previous service account token.
+  await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "embedded");
+  assert.equal(
+    await page.getByLabel("Authentication method", { exact: true }).inputValue(),
+    "api_key",
+  );
+  assert.equal(await page.getByLabel("API key", { exact: true }).inputValue(), "");
+  assert.equal(await page.getByLabel("Model ID", { exact: true }).isVisible(), false);
+  assert.equal(
+    JSON.parse(await page.getByLabel("Configuration JSON").inputValue()).agents.defaults.model,
+    undefined,
+  );
+  assert.equal(
+    await page
+      .getByLabel("Authentication method", { exact: true })
+      .locator('[value="codex_pat"]')
+      .isDisabled(),
+    true,
+  );
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  assert.deepEqual(pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`), []);
+  await page.getByLabel("Harness", { exact: true }).selectOption("codex");
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
+  assert.equal(await page.getByLabel("Execution mode").isDisabled(), true);
+  const credential = page.getByLabel("Service account token", { exact: true });
+  await credential.fill("at-browser-pat");
+  await credential.press("Tab");
+  await page.getByRole("button", { name: "Enter model ID manually", exact: true }).click();
+  await page.getByLabel("Model ID", { exact: true }).fill("gpt-5.1");
+  await page.getByLabel("Model ID", { exact: true }).press("Tab");
+  assert.deepEqual(pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`), []);
   requests.length = 0;
+  await page.getByText("Advanced settings", { exact: true }).click();
   await page.getByLabel("SOUL.md", { exact: true }).fill("# Keep this draft\n");
   await page.getByLabel("Agent name").fill("Retry Agent");
-  await page.getByLabel("Execution mode").selectOption("dedicated");
+  await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(values, null, 2));
 
   const configurationResponse = page.waitForResponse(
@@ -720,10 +2546,32 @@ test("Agent creation reuses the saved Configuration after an Agent creation conf
   await page.getByRole("button", { name: "Create Agent" }).click();
   const savedConfiguration = await (await configurationResponse).json();
   assert.equal((await deniedAgentResponse).status(), 409);
-  await page.getByText(`Configuration saved: ${savedConfiguration.data.id}.`).waitFor();
+  await page
+    .getByText(`Configuration saved: ${savedConfiguration.data.id}.`, { exact: false })
+    .waitFor();
   await page.getByText(/conflicts with the saved state/i).waitFor();
-  assert.equal(await page.getByLabel("Configuration JSON").evaluate((node) => node.readOnly), true);
+  assert.equal(
+    await page
+      .getByRole("heading", {
+        name: "Recover from a rejected Agent save",
+        includeHidden: true,
+      })
+      .isVisible(),
+    false,
+  );
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Reload repository choices", includeHidden: true })
+      .isVisible(),
+    false,
+  );
+  assert.equal(await page.getByLabel("Configuration JSON").isDisabled(), true);
+  assert.equal(await page.getByLabel("Service account token", { exact: true }).inputValue(), "");
+  assert.equal(await page.getByLabel("Service account token", { exact: true }).isDisabled(), true);
   assert.equal(await page.getByLabel("Execution mode").isDisabled(), true);
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "codex");
+  assert.equal(await page.getByLabel("Harness", { exact: true }).isDisabled(), true);
+  assert.equal(await page.getByLabel("Authentication method", { exact: true }).isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Reset template" }).isDisabled(), true);
   assert.deepEqual(
     configurationPostRequests(requests, namespace.id).map((request) => request.body),
@@ -735,6 +2583,15 @@ test("Agent creation reuses the saved Configuration after an Agent creation conf
     await page.getByLabel("SOUL.md", { exact: true }).inputValue(),
     "# Keep this draft\n",
   );
+  assert.equal(await page.getByLabel("SOUL.md", { exact: true }).isEnabled(), true);
+  assert.equal(await page.getByLabel("Plugin selections JSON").isEnabled(), true);
+  await page.getByLabel("SOUL.md", { exact: true }).fill("# Corrected draft\n");
+  await openAdvancedSettings(page);
+  await page.getByLabel("Plugin selections JSON").fill(
+    JSON.stringify({
+      "occ-plugin:diffs": { enabled: true, approvalMode: "always" },
+    }),
+  );
   await page.getByLabel("Agent name").fill("Retry Agent Corrected");
   const retryResponse = page.waitForResponse(
     (response) =>
@@ -744,17 +2601,154 @@ test("Agent creation reuses the saved Configuration after an Agent creation conf
   await page.getByRole("button", { name: "Create Agent" }).click();
   const retried = await (await retryResponse).json();
   assert.equal(retried.data.name, "Retry Agent Corrected");
+  assert.equal(retried.data.harnessAuth.method, "codex_pat");
   assert.equal(retried.data.configurationId, savedConfiguration.data.id);
   assert.equal(retried.data.activeRevisionId, undefined);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.deepEqual(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`).map(
+      ({ body }) => body.value,
+    ),
+    ["at-browser-pat"],
+  );
   assert.equal(agentPostRequests(requests, namespace.id).length, 2);
-  for (const request of agentPostRequests(requests, namespace.id)) {
-    assert.equal(request.body.initialWorkspaceFiles["SOUL.md"], "# Keep this draft\n");
+  assert.deepEqual(
+    agentPostRequests(requests, namespace.id)[0].body.harnessAuth,
+    retried.data.harnessAuth,
+  );
+  const attempts = agentPostRequests(requests, namespace.id);
+  assert.equal(attempts[0].body.initialWorkspaceFiles["SOUL.md"], "# Keep this draft\n");
+  assert.equal(attempts[1].body.initialWorkspaceFiles["SOUL.md"], "# Corrected draft\n");
+  assert.deepEqual(retried.data.plugins, {
+    "occ-plugin:diffs": { enabled: true, approvalMode: "always" },
+  });
+  for (const request of attempts) {
     assert.equal(request.body.workspaceDefaultsId, WORKSPACE_DEFAULTS_ID);
   }
 });
 
-test("Agent creation preserves edited JSON across mode changes and resets to the selected template", async (t) => {
+test("Agent creation retries a denied credential grant without duplicating its saved resources", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  const installation = await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Credential grant retry", { ready: true });
+  fixture.policy.restrictions.push({
+    id: "deny-credential-grant",
+    resourceKind: "installation",
+    resourceId: installation.id,
+    action: "administer",
+    effect: "deny",
+  });
+  const { page } = await newPage(t, fixture);
+  // Exercise the supported draft path; dedicated provisioning has separate workflow coverage.
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Grant retry Agent");
+  await enterManualModel(page, "grant-retry-key", "gpt-4.1");
+  const created = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const response = await created;
+  assert.equal(response.status(), 201);
+  const agent = (await response.json()).data;
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /Agent was created, but credential access is not confirmed/ })
+    .waitFor();
+  assert.match(
+    await page.getByRole("link", { name: "Open saved Agent" }).getAttribute("href"),
+    new RegExp(agent.id),
+  );
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
+  const bindingPath = `/namespaces/${namespace.id}/iam/access-bindings`;
+  assert.equal(pathRequests(requests, "POST", bindingPath).length, 0);
+  fixture.policy.restrictions.splice(
+    fixture.policy.restrictions.findIndex((item) => item.id === "deny-credential-grant"),
+    1,
+  );
+
+  // The binding is really committed; only its response is lost before the browser sees it.
+  await page.route(`**${bindingPath}`, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    assert.equal(response.status(), 201);
+    await route.abort("failed");
+  });
+  await page.getByRole("button", { name: "Retry credential access" }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /credential access is not confirmed.*interrupted/ })
+    .waitFor();
+  await page.unroute(`**${bindingPath}`);
+  await page.getByRole("button", { name: "Retry credential access" }).click();
+  await page.waitForURL((url) => url.pathname === `/console/agents/${agent.id}`);
+  const bindings = await fixture.request("GET", bindingPath);
+  assert.equal(bindings.status, 200);
+  assert.equal(bindings.data.length, 1);
+  assert.equal(bindings.data[0].subjectId, agent.servicePrincipalId);
+  assert.equal(bindings.data[0].resourceId, agent.harnessAuth.source.id);
+  assert.equal(pathRequests(requests, "POST", bindingPath).length, 1);
+  assert.equal(pathRequests(requests, "POST", `/namespaces/${namespace.id}/iam/roles`).length, 1);
+  assert.equal(pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`).length, 1);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+});
+
+for (const collection of ["secrets", "configurations", "agents"]) {
+  test(`Agent creation blocks duplicate writes after losing the committed ${collection} response`, async (t) => {
+    const fixture = await createConsoleAppFixture(t);
+    await fixture.bootstrap();
+    const namespace = await fixture.createNamespace(`Uncertain ${collection}`, { ready: true });
+    const { page } = await newPage(t, fixture);
+    // Exercise the supported draft path; dedicated provisioning has separate workflow coverage.
+    await routeInstallationWithoutProvisioning(page, fixture);
+    const requests = apiRequests(page, fixture.origin);
+    const path = `/namespaces/${namespace.id}/${collection}`;
+    let committed;
+    await page.route(`**${path}`, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      assert.equal(response.status(), 201);
+      committed = (await response.json()).data;
+      await route.abort("failed");
+    });
+    await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+    await page.getByRole("button", { name: "Start without Preset" }).click();
+    await page.getByLabel("Agent name").fill(`Uncertain ${collection} Agent`);
+    await enterManualModel(page, "uncertain-artifact-key", "gpt-4.1");
+    await page.getByRole("button", { name: "Create Agent" }).click();
+    await page
+      .getByRole("alert")
+      .filter({ hasText: /Outcome unknown/ })
+      .waitFor();
+    assert.ok(committed?.id);
+    assert.equal((await fixture.request("GET", `${path}/${committed.id}`)).status, 200);
+    assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), true);
+    // Even programmatic form resubmission must respect the unknown-commit boundary.
+    await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
+    assert.equal(pathRequests(requests, "POST", path).length, 1);
+    const sequence = ["secrets", "configurations", "agents"];
+    for (const later of sequence.slice(sequence.indexOf(collection) + 1)) {
+      assert.equal(
+        pathRequests(requests, "POST", `/namespaces/${namespace.id}/${later}`).length,
+        0,
+      );
+    }
+  });
+}
+
+test("Agent creation preserves unrelated edited JSON across model changes and resets to the selected template", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Template edits", { ready: true });
@@ -763,68 +2757,235 @@ test("Agent creation preserves edited JSON across mode changes and resets to the
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
-  const mode = page.getByLabel("Execution mode");
+  const harness = page.getByLabel("Harness", { exact: true });
+  await openAdvancedSettings(page);
   const configuration = page.getByLabel("Configuration JSON");
+  assert.equal(JSON.parse(await configuration.inputValue()).agents?.defaults?.model, undefined);
+  await enterManualModel(page, "template-edit-key", "gpt-5.1");
   const dedicatedTemplate = JSON.parse(await configuration.inputValue());
-  assert.equal(dedicatedTemplate.agents.defaults.model, "codex/gpt-6-astra");
+  assert.equal(dedicatedTemplate.agents.defaults.model, "codex/gpt-5.1");
   assert.deepEqual(dedicatedTemplate.models.providers.codex.models, [
-    { id: "gpt-6-astra", name: "gpt-6-astra" },
+    { id: "gpt-5.1", name: "gpt-5.1" },
   ]);
   assert.ok(dedicatedTemplate.plugins.entries.codex);
 
-  await mode.selectOption("embedded");
+  await harness.selectOption("openclaw");
   const embeddedTemplate = JSON.parse(await configuration.inputValue());
-  assert.equal(embeddedTemplate.agents.defaults.model, "openai/gpt-6-astra");
+  assert.equal(embeddedTemplate.agents.defaults.model, "openai/gpt-5.1");
   assert.deepEqual(embeddedTemplate.models.providers.openai.models, [
-    { id: "gpt-6-astra", name: "gpt-6-astra" },
+    { id: "gpt-5.1", name: "gpt-5.1" },
   ]);
-  assert.equal(Object.hasOwn(embeddedTemplate, "plugins"), false);
+  assert.equal(embeddedTemplate.plugins?.entries?.codex, undefined);
 
-  const editedValues = nativeValues("manual-edit");
-  editedValues.gateway.controlUi = {
+  const custom = nativeValues("manual-edit");
+  custom.agents.defaults.models["openai/gpt-4.1"].alias = "Primary assistant";
+  custom.agents.defaults.models["openai/gpt-4.1"].params = { temperature: 0.4 };
+  const extraModel = { id: "additional-model", name: "Additional model", contextWindow: 64000 };
+  Object.assign(custom.models.providers.openai, {
+    baseUrl: "https://models.example.test/v1",
+    api: "openai-completions",
+    headers: { "X-Custom-Transport": "enterprise-route" },
+    models: [...custom.models.providers.openai.models, extraModel],
+  });
+  custom.gateway.controlUi = {
     enabled: false,
     allowedOrigins: ["https://custom-control.example.test"],
   };
-  const edited = JSON.stringify(editedValues, null, 2);
+  const edited = JSON.stringify(custom, null, 2);
   await configuration.fill(edited);
-  await mode.selectOption("dedicated");
-  assert.equal(await configuration.inputValue(), edited);
+  const modelInput = page.getByLabel("Model ID", { exact: true });
+  await modelInput.fill("gpt-4.1-updated");
+  await modelInput.press("Tab");
+  const assertCustomTransport = async () => {
+    const provider = JSON.parse(await configuration.inputValue()).models.providers.openai;
+    assert.equal(provider.baseUrl, custom.models.providers.openai.baseUrl);
+    assert.equal(provider.api, custom.models.providers.openai.api);
+    assert.deepEqual(provider.headers, custom.models.providers.openai.headers);
+    assert.deepEqual(
+      provider.models.find((entry) => entry.id === extraModel.id),
+      extraModel,
+    );
+  };
+  await assertCustomTransport();
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "openai/gpt-4.1-updated",
+  );
 
+  await page.getByLabel("API key", { exact: true }).fill("same-provider-replacement-key");
+  await page.getByLabel("API key", { exact: true }).press("Tab");
+  await modelInput.waitFor();
+  assert.equal(await modelInput.inputValue(), "gpt-4.1-updated");
+  await assertCustomTransport();
+  await modelInput.fill("gpt-4.1");
+  await modelInput.press("Tab");
+  await assertCustomTransport();
+  assert.equal(await harness.inputValue(), "openclaw");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "embedded");
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.models["openai/gpt-4.1"]
+      .agentRuntime.id,
+    "openclaw",
+  );
+
+  await harness.selectOption("codex");
+  const retained = JSON.parse(await configuration.inputValue());
+  assert.equal(retained.agents.defaults.model, "codex/gpt-4.1");
+  assert.deepEqual(retained.models.providers.codex, {
+    baseUrl: "http://127.0.0.1:9",
+    api: "openai-responses",
+    models: [{ id: "gpt-4.1", name: "gpt-4.1" }],
+  });
+  assert.equal(retained.models.providers.openai, undefined);
+  assert.equal(retained.plugins.entries.knowledge.config.marker, "manual-edit");
+  assert.deepEqual(retained.agents.defaults.models["codex/gpt-4.1"], {
+    alias: "Primary assistant",
+    params: { temperature: 0.4 },
+    agentRuntime: { id: "codex" },
+  });
+
+  // Model and key edits must preserve the operator's existing Codex execution policy.
+  const customCodex = structuredClone(retained.plugins.entries.codex);
+  Object.assign(customCodex.config.appServer, {
+    sandbox: "workspace-write",
+    approvalPolicy: "never",
+    remoteWorkspaceRoot: "/workspace/custom-agent",
+  });
+  retained.plugins.entries.codex = customCodex;
+  await configuration.fill(JSON.stringify(retained));
+  await modelInput.fill("gpt-4.1-codex-updated");
+  await modelInput.press("Tab");
+  assert.deepEqual(JSON.parse(await configuration.inputValue()).plugins.entries.codex, customCodex);
+
+  // Replacing the credential preserves the selected model and custom execution policy.
+  await page.getByLabel("API key", { exact: true }).fill("replacement-template-key");
+  await page.getByLabel("API key", { exact: true }).press("Tab");
+  const nextModel = page.getByLabel("Model ID", { exact: true });
+  await nextModel.waitFor();
+  assert.equal(await nextModel.inputValue(), "gpt-4.1-codex-updated");
+  assert.deepEqual(JSON.parse(await configuration.inputValue()).plugins.entries.codex, customCodex);
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Reset template" }).click();
   const resetTemplate = JSON.parse(await configuration.inputValue());
-  assert.equal(resetTemplate.agents.defaults.model, "codex/gpt-6-astra");
+  assert.equal(resetTemplate.agents.defaults.model, "codex/gpt-4.1-codex-updated");
   assert.ok(resetTemplate.plugins.entries.codex);
+  await nextModel.fill("gpt-reset-model");
+  await nextModel.press("Tab");
+  assert.deepEqual(
+    JSON.parse(await configuration.inputValue()).agents.defaults.models["codex/gpt-reset-model"],
+    {
+      agentRuntime: { id: "codex" },
+    },
+  );
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  await enterManualModel(page, "anthropic-template-key", "claude-template-model");
+  const anthropicTemplate = JSON.parse(await configuration.inputValue());
+  assert.deepEqual(anthropicTemplate.models.providers.anthropic, {
+    baseUrl: "https://api.anthropic.com",
+    api: "anthropic-messages",
+    models: [{ id: "claude-template-model", name: "claude-template-model" }],
+  });
+  assert.equal(anthropicTemplate.models.providers.codex, undefined);
+  await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+  assert.equal(await harness.inputValue(), "codex");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
+  assert.equal(await page.getByLabel("API key", { exact: true }).inputValue(), "");
+  assert.equal(JSON.parse(await configuration.inputValue()).agents.defaults.model, undefined);
+  await enterManualModel(page, "returned-openai-key", "gpt-returned-model");
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "codex/gpt-returned-model",
+  );
   await page.getByLabel("Agent name").fill("Discarded draft");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Start over" }).click();
   await page.getByRole("button", { name: "Start without Preset" }).click();
   assert.equal(await page.getByLabel("Agent name").inputValue(), "");
-  assert.deepEqual(JSON.parse(await configuration.inputValue()), dedicatedTemplate);
+  assert.equal(JSON.parse(await configuration.inputValue()).agents?.defaults?.model, undefined);
+  assert.equal(await page.getByLabel("API key", { exact: true }).inputValue(), "");
 });
 
-test("Agent creation saves the default model for both harnesses without changing an explicit selection", async (t) => {
+test("Agent creation blocks an incompatible fallback after changing provider until the configuration is corrected", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Provider fallback change", { ready: true });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await enterManualModel(page, "fallback-openai-key", "gpt-5.1");
+  await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  await openAdvancedSettings(page);
+  const configuration = page.getByLabel("Configuration JSON");
+  const values = JSON.parse(await configuration.inputValue());
+  values.agents.defaults.model = {
+    primary: "openai/gpt-5.1",
+    fallbacks: ["openai/gpt-4.1"],
+  };
+  await configuration.fill(JSON.stringify(values));
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  assert.equal(await page.getByLabel("API key", { exact: true }).inputValue(), "");
+  await enterManualModel(page, "test-fallback-anthropic-key", "claude-sonnet-4-6");
+  assert.deepEqual(JSON.parse(await configuration.inputValue()).agents.defaults.model, {
+    primary: "anthropic/claude-sonnet-4-6",
+    fallbacks: ["openai/gpt-4.1"],
+  });
+  await page.getByLabel("Agent name").fill("Corrected fallback Agent");
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /fallback.*provider|provider.*fallback/i })
+    .waitFor();
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+
+  // A provider change preserves edited fallbacks; resetting is an explicit correction.
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Reset template" }).click();
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "anthropic/claude-sonnet-4-6",
+  );
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const response = await saved;
+  assert.equal(response.status(), 201);
+  const agent = (await response.json()).data;
+  await page.waitForURL((url) => url.pathname === `/console/agents/${agent.id}`);
+  assert.equal(agent.executionMode, "embedded");
+  const persisted = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.equal(persisted.data.values.agents.defaults.model, "anthropic/claude-sonnet-4-6");
+  assert.equal(pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`).length, 1);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 1);
+});
+
+test("Agent creation saves explicitly selected models for both harnesses", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Starter model", { ready: true });
   const { page } = await newPage(t, fixture);
+  // Exercise the supported draft path; dedicated provisioning has separate workflow coverage.
+  await routeInstallationWithoutProvisioning(page, fixture);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
 
   for (const [mode, provider, harness, selectedModel] of [
     ["dedicated", "codex", "codex", "gpt-6-astra"],
-    ["embedded", "openai", "openclaw", "gpt-6-astra"],
-    ["embedded", "openai", "openclaw", "gpt-4.1"],
+    ["embedded", "openai", "openclaw", "gpt-5.6-luna"],
   ]) {
     await page.goto(`${fixture.origin}/console/agents/new?namespace=${namespace.id}`);
     await page.getByRole("heading", { name: "Create Agent" }).waitFor();
     await page.getByRole("button", { name: "Start without Preset" }).click();
+    await page.getByLabel("Harness", { exact: true }).selectOption(harness);
+    await page.getByLabel("Model", { exact: true }).selectOption(selectedModel);
+    await page.getByLabel("API key", { exact: true }).fill(`test-${mode}-${selectedModel}-key`);
     await page.getByLabel("Agent name").fill(`${mode}-${selectedModel}`);
-    await page.getByLabel("Execution mode").selectOption(mode);
-    if (selectedModel !== "gpt-6-astra") {
-      const input = page.getByLabel("Configuration JSON");
-      const edited = (await input.inputValue()).replaceAll("gpt-6-astra", selectedModel);
-      await input.fill(edited);
-    }
     const saved = page.waitForResponse(
       (response) =>
         response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
@@ -834,6 +2995,7 @@ test("Agent creation saves the default model for both harnesses without changing
     const response = await saved;
     assert.equal(response.status(), 201);
     const agent = (await response.json()).data;
+    assert.equal(agent.executionMode, mode);
     const configuration = await fixture.request(
       "GET",
       `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
@@ -929,6 +3091,7 @@ test("Agent detail preserves admitted revision history while draft edits change 
   assertRevisionUrl(page, "draft");
 
   await page.getByRole("button", { name: "Edit Configuration" }).click();
+  await openAdvancedSettings(page);
   const editor = page.getByLabel("Configuration JSON");
   assert.match(await editor.inputValue(), /"marker": "draft-current"/);
   for (const invalidJson of ["{ invalid", "[]"]) {
@@ -953,6 +3116,7 @@ test("Agent detail preserves admitted revision history while draft edits change 
   await page.getByRole("heading", { name: "Revisioned Agent" }).waitFor();
   await page.getByRole("button", { name: "Edit Configuration" }).click();
   const editedValues = nativeValues("draft-edited");
+  await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(editedValues, null, 2));
   await page.getByText("Save or cancel these Configuration edits before deploying.").waitFor();
   await page.getByText("Save or cancel Configuration edits before deploying.").waitFor();
@@ -1026,7 +3190,7 @@ test("Agent detail preserves admitted revision history while draft edits change 
   const current = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
   assert.equal(current.data.harnessAuth, null);
   await page.getByLabel("AgentRevision").selectOption(first.revision.id);
-  await page.getByText("OpenAI API key · Secret configured", { exact: true }).waitFor();
+  await page.getByText("API key · Secret configured", { exact: true }).waitFor();
   assert.equal(
     (await page.locator("body").textContent()).includes(agent.harnessAuth.source.id),
     false,
@@ -1077,6 +3241,7 @@ test("Agent detail blocks repeat Configuration saves after an uncertain draft up
   await page.getByText("Configured on the runtime host").waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy new revision" }).isDisabled(), false);
   await page.getByRole("button", { name: "Edit Configuration" }).click();
+  await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON").fill(JSON.stringify(nextValues, null, 2));
   await page.getByText("Save or cancel Configuration edits before deploying.").waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy new revision" }).isDisabled(), true);
@@ -1515,7 +3680,8 @@ test("Agent deletion recovery returns a missing Agent detail to its Namespace li
     (url) =>
       url.pathname === "/console/agents" && url.searchParams.get("namespace") === namespace.id,
   );
-  await page.getByRole("heading", { name: "Agents" }).waitFor();
+  await page.getByRole("heading", { name: "No Agents yet", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
 });
 
 test("Agent delete denial keeps the Agent visible with permission feedback", async (t) => {
@@ -1908,9 +4074,22 @@ test("Channel drawer saves channel edits without exposing Secret values or dropp
   await dialog.getByText("Secret menu changes are saved with these channel settings.").waitFor();
 
   const channelIds = page.getByLabel("Slack channel IDs");
-  const allowedUsers = page.getByLabel("Allowed user IDs");
+  const allowedUsers = page.getByLabel("Allowed channel user IDs");
+  const allowEveryone = page.getByLabel("Allow everyone in these channels to mention the agent");
+  assert.equal(await allowedUsers.inputValue(), "UOLD123");
+  assert.equal(await allowedUsers.isDisabled(), false);
+  assert.equal(await allowEveryone.isDisabled(), true);
   await channelIds.fill("COLD123, CNEW123");
   await allowedUsers.fill("UNEW123");
+  assert.equal(await allowEveryone.isDisabled(), true);
+  await allowedUsers.fill("");
+  assert.equal(await allowEveryone.isEnabled(), true);
+  await allowEveryone.check();
+  assert.equal(await allowedUsers.isDisabled(), true);
+  await allowEveryone.uncheck();
+  assert.equal(await allowedUsers.isEnabled(), true);
+  await allowedUsers.fill("UNEW123");
+  assert.equal(await allowEveryone.isDisabled(), true);
   await dialog
     .getByRole("link", { name: "Open Agent Credentials (opens in new tab)" })
     .scrollIntoViewIfNeeded();
@@ -1967,11 +4146,11 @@ test("Channel drawer saves channel edits without exposing Secret values or dropp
     id: "SLACK_BOT_TOKEN",
   });
   assert.deepEqual(configuration.data.values.channels.slack.channels, {
-    COLD123: { requireMention: true, users: ["UOLD123"] },
-    CNEW123: { requireMention: true },
+    COLD123: { requireMention: true, users: ["UNEW123"] },
+    CNEW123: { requireMention: true, users: ["UNEW123"] },
   });
   assert.equal(configuration.data.values.channels.slack.dmPolicy, "allowlist");
-  assert.deepEqual(configuration.data.values.channels.slack.allowFrom, ["UNEW123"]);
+  assert.deepEqual(configuration.data.values.channels.slack.allowFrom, ["UOLD123"]);
   assert.equal(
     configuration.data.values.channels.msteams.appId,
     "00000000-0000-4000-8000-000000000000",
@@ -1994,6 +4173,63 @@ test("Channel drawer saves channel edits without exposing Secret values or dropp
 
   await page.screenshot({ path: join(artifacts, "agent-channels.png"), fullPage: true });
 });
+
+for (const [name, channels, reason] of [
+  [
+    "wildcard channel map",
+    { "*": { requireMention: true, users: ["*"] } },
+    "Slack wildcard channels must be edited in native Configuration JSON.",
+  ],
+  [
+    "mixed channel sender lists",
+    {
+      CMIXED123: { requireMention: true, users: ["UONE123"] },
+      CMIXED456: { requireMention: true, users: ["UTWO456"] },
+    },
+    "Existing Slack channels use different allowed channel users. Edit native Configuration JSON to preserve those restrictions.",
+  ],
+  [
+    "comma channel sender ID",
+    { CCOMMA123: { requireMention: true, users: ["UONE123,UTWO456"] } },
+    "Slack channel users or Require mention values use an unsupported native shape.",
+  ],
+  [
+    "newline channel sender ID",
+    { CNEWLINE123: { requireMention: true, users: ["UONE123\nUTWO456"] } },
+    "Slack channel users or Require mention values use an unsupported native shape.",
+  ],
+]) {
+  test(`Channel drawer keeps Slack ${name} in native JSON`, async (t) => {
+    const fixture = await createConsoleAppFixture(t);
+    await fixture.bootstrap();
+    const namespace = await fixture.createNamespace("Unsupported Slack native", { ready: true });
+    const slack = {
+      enabled: true,
+      mode: "socket",
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      channels,
+    };
+    const agent = await fixture.createAgent(
+      namespace.id,
+      `Unsupported Slack ${name}`,
+      nativeValues(`unsupported-slack-${name}`, { harnessId: "codex", channels: { slack } }),
+      { executionMode: "dedicated" },
+    );
+    const { page } = await newPage(t, fixture);
+    const requests = apiRequests(page, fixture.origin);
+    const url = detailUrl(fixture, namespace.id, agent.id, "draft", "channels");
+
+    await login(page, fixture, url.pathname + url.search);
+    await page.getByRole("heading", { name: `Unsupported Slack ${name}` }).waitFor();
+    await page.getByText(reason).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Edit Slack" }).isDisabled(), true);
+    await revealNativeConfiguration(page, "Slack native configuration");
+    const nativeJson = JSON.parse(await page.locator(".channel-native pre").textContent());
+    assert.deepEqual(nativeJson, slack);
+    assert.deepEqual(nonAuthWriteRequests(requests), []);
+  });
+}
 
 test("Channel drawer binds existing Slack Secrets without dropping unsaved channel edits", async (t) => {
   const fixture = await createConsoleAppFixture(t);
@@ -2059,8 +4295,8 @@ test("Channel drawer binds existing Slack Secrets without dropping unsaved chann
     SLACK_BOT_TOKEN: { source: slackBotSecret.ref, delivery: { type: "env" } },
   });
   assert.deepEqual(configuration.data.values.channels.slack.channels, {
-    CUNBOUND123: { requireMention: true },
-    CBOUND456: { requireMention: true },
+    CUNBOUND123: { requireMention: true, users: ["*"] },
+    CBOUND456: { requireMention: true, users: ["*"] },
   });
   const pageText = await page.locator("body").textContent();
   assert.equal(pageText.includes(slackAppSecretValue), false);
@@ -2212,14 +4448,84 @@ test("Channel drawer does not grant Slack Secret access when Configuration save 
   requests.length = 0;
   await page.getByRole("button", { name: "Edit Slack" }).click();
   const dialog = page.getByRole("dialog", { name: "Edit Slack" });
+  const allowedUsers = dialog.getByLabel("Allowed channel user IDs");
+  const allowEveryone = dialog.getByLabel("Allow everyone in these channels to mention the agent");
+  assert.equal(await allowEveryone.isChecked(), true);
+  assert.equal(await allowedUsers.isDisabled(), true);
   await dialog.getByLabel("Slack app token").selectOption(slackAppSecret.id);
   await page.getByRole("button", { name: "Save configuration" }).click();
   await dialog.getByText(/Access denied|permission/i).waitFor();
+  assert.equal(await allowEveryone.isChecked(), true);
+  assert.equal(await allowEveryone.isEnabled(), true);
+  assert.equal(await allowedUsers.isDisabled(), true);
 
   const configuration = await fixture.request("GET", configurationPath);
   assert.equal(configuration.status, 200);
   assert.deepEqual(configuration.data.secretBindings ?? {}, {});
   assert.deepEqual(accessBindingPostRequests(requests, namespace.id), []);
+});
+
+test("Channel drawer round trips existing Slack everyone channel access", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Slack everyone access", { ready: true });
+  const slack = {
+    enabled: true,
+    mode: "socket",
+    appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+    botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+    dmPolicy: "allowlist",
+    groupPolicy: "allowlist",
+    allowFrom: ["UDM123"],
+    channels: { CEVERY123: { requireMention: true, users: ["*"], allowBots: "mentions" } },
+  };
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Slack Everyone Agent",
+    nativeValues("slack-everyone", { harnessId: "codex", channels: { slack } }),
+    { executionMode: "dedicated" },
+  );
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "channels");
+
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Slack Everyone Agent" }).waitFor();
+  await page.getByRole("button", { name: "Edit Slack" }).click();
+  let dialog = page.getByRole("dialog", { name: "Edit Slack" });
+  await dialog.getByLabel("Slack channel IDs").fill("CEVERY123, CSECOND123");
+  const allowedUsers = dialog.getByLabel("Allowed channel user IDs");
+  const allowEveryone = dialog.getByLabel("Allow everyone in these channels to mention the agent");
+  assert.equal(await allowEveryone.isChecked(), true);
+  assert.equal(await allowedUsers.isDisabled(), true);
+  await dialog.getByLabel("Require a mention", { exact: true }).uncheck();
+  const saved = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      response.url().endsWith(`/configurations/${agent.configurationId}`),
+  );
+  await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+  assert.equal((await saved).status(), 200);
+
+  const configuration = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.deepEqual(configuration.data.values.channels.slack, {
+    ...slack,
+    channels: {
+      CEVERY123: { requireMention: false, users: ["*"], allowBots: "mentions" },
+      CSECOND123: { requireMention: false, users: ["*"] },
+    },
+  });
+
+  await page.getByRole("button", { name: "Edit Slack" }).click();
+  dialog = page.getByRole("dialog", { name: "Edit Slack" });
+  assert.equal(
+    await dialog.getByLabel("Allow everyone in these channels to mention the agent").isChecked(),
+    true,
+  );
+  assert.equal(await dialog.getByLabel("Allowed channel user IDs").isDisabled(), true);
+  assert.equal(await dialog.getByLabel("Require a mention", { exact: true }).isChecked(), false);
 });
 
 test("Channel drawer reports partial save when post-PATCH Secret grant is rejected", async (t) => {
@@ -2299,6 +4605,153 @@ test("Channel drawer reports partial save when post-PATCH Secret grant is reject
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
 });
 
+test("Runtime-auth Presets retain OpenClaw when changing from Anthropic to OpenAI", async (t) => {
+  const { fixture, namespace } = await createRuntimeAuthFixture(t, "Runtime Preset providers");
+  const root = await mkdtemp(join(tmpdir(), "occ-runtime-provider-preset-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const primary = "anthropic/claude-runtime-model";
+  const values = nativeValues("runtime-preset");
+  values.agents.defaults.model = primary;
+  values.agents.defaults.models = { [primary]: { agentRuntime: { id: "openclaw" } } };
+  values.models.providers = {
+    anthropic: {
+      baseUrl: "https://api.anthropic.com",
+      api: "anthropic-messages",
+      models: [{ id: "claude-runtime-model", name: "claude-runtime-model" }],
+    },
+  };
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: {
+      name: "Operator-managed credentials",
+      template: {
+        agent: {
+          name: "Runtime provider Agent",
+          executionMode: "embedded",
+          harnessAuth: { method: "runtime" },
+        },
+        configuration: { values },
+      },
+    },
+  });
+  assert.equal(preset.status, 201);
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  assert.equal(await page.getByLabel("Provider", { exact: true }).inputValue(), "anthropic");
+  await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+  // SSH's fixed runtime credential binding requires embedded OpenClaw for either provider.
+  assert.equal(await page.getByLabel("Harness", { exact: true }).isDisabled(), true);
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "openclaw");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "embedded");
+  await page.getByLabel("Model ID", { exact: true }).fill("gpt-4.1");
+  await page.getByLabel("Model ID", { exact: true }).press("Tab");
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  const response = await createdResponse;
+  assert.equal(response.status(), 201);
+  const created = (await response.json()).data;
+  assert.equal(created.executionMode, "embedded");
+  assert.deepEqual(created.harnessAuth, { method: "runtime" });
+  const saved = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${created.configurationId}`,
+  );
+  assert.equal(saved.data.values.agents.defaults.model, "openai/gpt-4.1");
+  assert.deepEqual(saved.data.values.agents.defaults.models["openai/gpt-4.1"].agentRuntime, {
+    id: "openclaw",
+  });
+  assert.equal(pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`).length, 0);
+  assert.equal(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`).length,
+    0,
+  );
+});
+
+test("API-key Presets keep their credential provider fixed while allowing model and runtime changes", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const root = await mkdtemp(join(tmpdir(), "occ-bound-provider-preset-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const namespace = await fixture.createNamespace("Bound provider Preset", { ready: true });
+  const secret = await fixture.createSecret(namespace.id, "OpenAI model key", "preset-model-key");
+  const harnessAuth = { method: "api_key", source: secret.ref };
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: {
+      name: "Saved OpenAI credential",
+      template: {
+        agent: { name: "Bound provider Agent", executionMode: "embedded", harnessAuth },
+        configuration: { values: nativeValues("bound-provider") },
+      },
+    },
+  });
+  assert.equal(preset.status, 201);
+  const { page } = await newPage(t, fixture);
+  // Exercise the supported draft path; dedicated provisioning has separate workflow coverage.
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  await openAdvancedSettings(page);
+  const configuration = page.getByLabel("Configuration JSON", { exact: true });
+  const original = JSON.parse(await configuration.inputValue());
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "openclaw");
+  assert.equal(await page.getByLabel("Harness", { exact: true }).isEnabled(), true);
+  // Editing JSON must not silently retarget the saved OpenAI Secret to Anthropic.
+  const changed = structuredClone(original);
+  changed.agents.defaults.model = "anthropic/claude-account-model";
+  await configuration.fill(JSON.stringify(changed));
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "Configuration must use the selected provider" })
+    .waitFor();
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  const provider = page.getByLabel("Provider", { exact: true });
+  assert.equal(await provider.inputValue(), "openai");
+  assert.equal(await provider.isDisabled(), true);
+
+  // Same-provider model and embedded-to-dedicated edits retain the original credential binding.
+  await configuration.fill(JSON.stringify(original));
+  await page.getByLabel("Model ID", { exact: true }).fill("gpt-5.1");
+  await page.getByLabel("Model ID", { exact: true }).press("Tab");
+  await page.getByLabel("Harness", { exact: true }).selectOption("codex");
+  const dedicated = JSON.parse(await configuration.inputValue());
+  assert.equal(dedicated.agents.defaults.model, "codex/gpt-5.1");
+  // Existing dedicated Presets may also use the supported OpenAI model prefix.
+  dedicated.agents.defaults.model = "openai/gpt-5.1";
+  await configuration.fill(JSON.stringify(dedicated));
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  const response = await createdResponse;
+  assert.equal(response.status(), 201);
+  const created = (await response.json()).data;
+  assert.deepEqual(created.harnessAuth, harnessAuth);
+  assert.equal(created.executionMode, "dedicated");
+  const saved = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${created.configurationId}`,
+  );
+  assert.equal(saved.data.values.agents.defaults.model, "openai/gpt-5.1");
+  assert.equal(pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`).length, 0);
+});
+
 test("Presets render variables into independent Agent drafts and keep partial-save retries fixed", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -2338,7 +4791,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
           name: "{{ vars.name }}",
           executionMode: "{{ vars.execution }}",
           providerId: providerFixtures[0].id,
-          harnessAuth: { method: "api_key", source: secret.ref },
+          harnessAuth: { method: "codex_pat", source: secret.ref },
           plugins,
         },
         configuration: { values, secretBindings },
@@ -2347,6 +4800,8 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   });
   assert.equal(preset.status, 201, JSON.stringify(preset.body));
   const { page } = await newPage(t, fixture);
+  // Exercise the supported draft path; dedicated provisioning has separate workflow coverage.
+  await routeInstallationWithoutProvisioning(page, fixture);
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByLabel("Preset template").selectOption(preset.data.id);
@@ -2371,9 +4826,13 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByLabel("Agent name", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Preset template").count(), 0);
   assert.equal(await page.getByLabel("Variable: marker", { exact: true }).count(), 0);
-  const presetSecretInput = page.getByLabel("OpenAI API key Secret ID");
-  assert.equal(await presetSecretInput.getAttribute("type"), "password");
-  assert.equal(await presetSecretInput.inputValue(), secret.id);
+  await page
+    .getByText("Preset authentication: Service Accounts · Secret configured", { exact: true })
+    .waitFor();
+  assert.equal(await page.getByLabel("Service account token", { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel("Execution mode").isDisabled(), true);
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "codex");
+  assert.equal(await page.getByLabel("Harness", { exact: true }).isDisabled(), true);
   assert.equal(
     (await page.getByLabel("Configuration JSON", { exact: true }).inputValue()).includes(
       "test-channel-token",
@@ -2395,6 +4854,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     JSON.parse(await page.getByLabel("Plugin selections JSON").inputValue()),
     plugins,
   );
+  assert.equal(await page.getByLabel("Secret bindings JSON").isVisible(), false);
   assert.deepEqual(
     JSON.parse(await page.getByLabel("Secret bindings JSON").inputValue()),
     secretBindings,
@@ -2413,6 +4873,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
   );
   edited.plugins.entries.knowledge.config.thresholds = [5, 6];
+  await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON", { exact: true }).fill(JSON.stringify(edited));
   // Canceling Start over keeps the ordinary draft and its ability to save.
   page.once("dialog", (dialog) => dialog.dismiss());
@@ -2432,10 +4893,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   assert.equal((await conflict).status(), 409);
   await page.getByText(/conflicts with the saved state/).waitFor();
   assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), true);
-  assert.equal(
-    await page.getByLabel("Secret bindings JSON").evaluate((node) => node.readOnly),
-    true,
-  );
+  assert.equal(await page.getByLabel("Secret bindings JSON").isDisabled(), true);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
   await page.getByLabel("Agent name", { exact: true }).fill("Preset Agent");
   const createdResponse = page.waitForResponse(
@@ -2445,10 +4903,14 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   );
   await save.click();
   const created = await (await createdResponse).json();
+  assert.equal(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`).length,
+    0,
+  );
   assert.equal(created.data.name, "Preset Agent");
   assert.deepEqual(created.data.plugins, plugins);
   assert.equal(created.data.providerId, providerFixtures[0].id);
-  assert.deepEqual(created.data.harnessAuth, { method: "api_key", source: secret.ref });
+  assert.deepEqual(created.data.harnessAuth, { method: "codex_pat", source: secret.ref });
   const saved = await fixture.request(
     "GET",
     `/namespaces/${namespace.id}/configurations/${created.data.configurationId}`,
@@ -2461,6 +4923,65 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   assert.equal(
     pathRequests(requests, "GET", `/namespaces/${namespace.id}/presets/${preset.data.id}`).length,
     1,
+  );
+
+  await page.waitForURL((url) => url.pathname === `/console/agents/${created.data.id}`);
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  await page.getByLabel("Service account token Secret ID").waitFor();
+  assert.equal(await page.getByLabel("Authentication source").inputValue(), "codex_pat");
+  assert.equal(await page.getByLabel("Service account token Secret ID").inputValue(), secret.id);
+  const patched = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/agents/${created.data.id}`) &&
+      response.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save authentication source", exact: true }).click();
+  assert.deepEqual((await (await patched).json()).data.harnessAuth, {
+    method: "codex_pat",
+    source: secret.ref,
+  });
+
+  // A Preset can supply an explicit model while requiring the operator to enter its key.
+  await page.waitForURL((url) => url.pathname === `/console/agents/${created.data.id}`);
+  const keyEntryPreset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: {
+      name: "Preset requiring an API key",
+      template: {
+        agent: { name: "Preset key entry", executionMode: "embedded" },
+        configuration: { values: nativeValues("preset-key-entry") },
+      },
+    },
+  });
+  assert.equal(keyEntryPreset.status, 201);
+  await page.goto(`${fixture.origin}/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(keyEntryPreset.data.id);
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  const presetKey = page.getByLabel("API key", { exact: true });
+  assert.equal(await page.getByLabel("Model ID", { exact: true }).inputValue(), "gpt-4.1");
+  await presetKey.fill("preset-openai-key");
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  assert.equal(await presetKey.inputValue(), "");
+  await presetKey.fill("preset-anthropic-key");
+  await openAdvancedSettings(page);
+  const native = page.getByLabel("Configuration JSON");
+  const changedProvider = JSON.parse(await native.inputValue());
+  changedProvider.agents.defaults.model = "openai/gpt-4.1";
+  await native.fill(JSON.stringify(changedProvider));
+  assert.equal(await page.getByLabel("Provider", { exact: true }).inputValue(), "openai");
+  assert.equal(await presetKey.inputValue(), "");
+  const mode = page.getByLabel("Execution mode");
+  await page.getByLabel("Harness", { exact: true }).selectOption("codex");
+  await presetKey.fill("preset-dedicated-openai-key");
+  const anthropicConfiguration = JSON.parse(await native.inputValue());
+  anthropicConfiguration.agents.defaults.model = "anthropic/claude-account-model";
+  await native.fill(JSON.stringify(anthropicConfiguration));
+  assert.equal(await page.getByLabel("Provider", { exact: true }).inputValue(), "anthropic");
+  assert.equal(await mode.inputValue(), "embedded");
+  assert.equal(await mode.isDisabled(), true);
+  assert.equal(await presetKey.inputValue(), "");
+  assert.equal(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`).length,
+    0,
   );
 });
 
@@ -2500,8 +5021,15 @@ for (const [dmPolicy, groupPolicy] of [
     await edit.waitFor();
     assert.equal(await edit.isEnabled(), true);
     await edit.click();
-    await page.getByLabel("Slack channel IDs").fill("CKEEP123, CNEW123");
-    await page.getByLabel("Require a mention", { exact: true }).uncheck();
+    const dialog = page.getByRole("dialog", { name: "Edit Slack" });
+    const allowedUsers = dialog.getByLabel("Allowed channel user IDs");
+    const allowEveryone = dialog.getByLabel(
+      "Allow everyone in these channels to mention the agent",
+    );
+    assert.equal(await allowedUsers.inputValue(), "UKEEP123");
+    assert.equal(await allowEveryone.isDisabled(), true);
+    await dialog.getByLabel("Slack channel IDs").fill("CKEEP123, CNEW123");
+    await dialog.getByLabel("Require a mention", { exact: true }).uncheck();
     const saved = page.waitForResponse(
       (response) =>
         response.request().method() === "PATCH" &&
@@ -2518,7 +5046,7 @@ for (const [dmPolicy, groupPolicy] of [
       ...slack,
       channels: {
         CKEEP123: { requireMention: false, users: ["UKEEP123"] },
-        CNEW123: { requireMention: false },
+        CNEW123: { requireMention: false, users: ["UKEEP123"] },
       },
     });
     assert.equal(
@@ -2559,7 +5087,7 @@ test("Agent tabs replace only their content and preserve surrounding panels and 
   }
   assert.ok(Math.abs((await page.evaluate(() => globalThis.scrollY)) - top) < 2);
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
-  const secret = page.getByLabel("OpenAI API key Secret ID");
+  const secret = page.getByLabel("API key Secret ID");
   await secret.waitFor();
   const secretElement = await secret.elementHandle();
   await page.getByRole("button", { name: "Workspace files", exact: true }).click();
@@ -2571,7 +5099,7 @@ test("Agent tabs replace only their content and preserve surrounding panels and 
   assert.equal(await secretElement.evaluate((node) => node.value), "");
   assert.equal(await secretElement.evaluate((node) => node.isConnected), false);
   await page.goBack();
-  await page.getByLabel("OpenAI API key Secret ID").waitFor();
+  await page.getByLabel("API key Secret ID").waitFor();
   assert.equal(new URL(page.url()).searchParams.get("tab"), "credentials");
   await page.goForward();
   await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
@@ -2654,4 +5182,91 @@ test("Agent tab switches ignore late configuration reads and keep direct workspa
   await page.getByRole("button", { name: "Channels", exact: true }).click();
   await page.getByRole("button", { name: "Configure Slack", exact: true }).waitFor();
   assert.equal(requests.filter((request) => request.path === configurationPath).length, 1);
+});
+
+test("standard Codex password Preset creates one scoped Secret and reuses it after an Agent conflict", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const root = await mkdtemp(join(tmpdir(), "occ-password-preset-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const namespace = await fixture.createNamespace("Password Preset", { ready: true });
+  await fixture.createAgent(namespace.id, "Existing Agent");
+  const artifact = JSON.parse(
+    await readFile(new URL("../../deploy/presets/standard-codex.json", import.meta.url), "utf8"),
+  );
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: artifact,
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.body));
+  const { page } = await newPage(t, fixture);
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByLabel("Variable: name", { exact: true }).fill("Existing Agent");
+  await page.getByLabel("Variable: model", { exact: true }).fill("gpt-5.1");
+  const password = page.getByLabel("Variable: modelSecret", { exact: true });
+  assert.equal(await password.getAttribute("type"), "password");
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  assert.equal(await password.evaluate((input) => input.validity.valueMissing), true);
+  const key = "synthetic-password-key-{{ vars.name }}";
+  await password.fill(key);
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  const apiKey = page.getByLabel("API key", { exact: true });
+  assert.equal(await apiKey.getAttribute("type"), "password");
+  assert.equal(await apiKey.inputValue(), key);
+  assert.equal(
+    (await page.getByLabel("Configuration JSON", { exact: true }).inputValue()).includes(key),
+    false,
+  );
+  assert.equal(nonAuthWriteRequests(requests).length, 0);
+  const save = page.getByRole("button", { name: "Create Agent", exact: true });
+  const conflict = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await save.click();
+  assert.equal((await conflict).status(), 409);
+  await page.getByText(/conflicts with the saved state/).waitFor();
+  assert.equal(await apiKey.inputValue(), "");
+  assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), true);
+  await page.getByLabel("Agent name", { exact: true }).fill("Password Agent");
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await save.click();
+  const created = await (await createdResponse).json();
+  await page.waitForURL((url) => url.pathname === `/console/agents/${created.data.id}`);
+  const secretWrites = pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`);
+  assert.equal(secretWrites.length, 1);
+  assert.equal(secretWrites[0].body.value, key);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.equal(
+    JSON.stringify(requests.filter((request) => !request.path.endsWith("/secrets"))).includes(key),
+    false,
+  );
+  assert.equal(created.data.executionMode, "dedicated");
+  assert.equal(created.data.harnessAuth.source.namespaceId, namespace.id);
+  const secrets = await fixture.request("GET", `/namespaces/${namespace.id}/secrets`);
+  assert.ok(secrets.data.some((secret) => secret.id === created.data.harnessAuth.source.id));
+  assert.equal(JSON.stringify(secrets.body).includes(key), false);
+  const retained = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/presets/${preset.data.id}`,
+  );
+  assert.deepEqual(retained.data.template, artifact.template);
+  const access = await fixture.request("GET", `/namespaces/${namespace.id}/iam/access-bindings`);
+  assert.ok(
+    access.data.some(
+      (binding) =>
+        binding.subjectId === created.data.servicePrincipalId &&
+        binding.resourceId === created.data.harnessAuth.source.id,
+    ),
+  );
 });
