@@ -6,12 +6,8 @@ import { lstat, readFile, realpath, statfs } from "node:fs/promises";
 // These fixed runner-image components are unused by their selected jobs. Never
 // derive deletion targets from workflow inputs or tool environment values.
 const androidRoot = "/usr/local/lib/android";
-const runtimeToolRoots = [
-  "/usr/share/dotnet",
-  "/usr/local/.ghcup",
-  "/usr/share/swift",
-  "/opt/hostedtoolcache/CodeQL",
-];
+const codeqlRoot = "/opt/hostedtoolcache/CodeQL";
+const runtimeToolRoots = ["/usr/share/dotnet", "/usr/local/.ghcup", "/usr/share/swift", codeqlRoot];
 const receipt = {
   kind: "repository-platform-capacity",
   lane: process.env.OPENCLAW_CI_HEADROOM_LANE,
@@ -160,7 +156,10 @@ async function main() {
       }),
     };
     receipt.checkedDirectories.push(check);
-    assert(check.directory && !check.symbolicLink && check.ownerUid === 0);
+    // GitHub's tool cache belongs to the runner; system SDKs belong to root.
+    const expectedOwner =
+      check.ownerUid === 0 || (root === codeqlRoot && check.ownerUid === process.getuid());
+    assert(check.directory && !check.symbolicLink && expectedOwner);
     assert(check.canonical && check.rootFilesystem && !check.mount);
     presentRoots.push(root);
   }

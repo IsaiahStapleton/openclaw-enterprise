@@ -84,9 +84,9 @@ source identity and installed-image checks.
 Before starting the runtime build,
 `scripts/ci/repository-platform-headroom.mjs:main` verifies it is running on the
 Ubuntu 24 GitHub-hosted runner and removes its unused Android SDK, .NET, Haskell,
-Swift, and CodeQL installations from fixed paths. All existing targets must be
-root-owned directories on the root filesystem, without symlinks or nested mounts;
-every target is checked before removal begins. Optional tool installations may
+Swift, and CodeQL installations from fixed paths. Targets must be owned by root
+(or the runner for CodeQL) and lie on the root filesystem, without symlinks or
+nested mounts; every target is checked before removal begins. Optional tools may
 be absent. The helper logs removed paths and free bytes and inodes before and
 after cleanup. This makes room for both architectures' source-build dependency
 layers before OCI export; local and self-hosted runners are rejected. Controller
