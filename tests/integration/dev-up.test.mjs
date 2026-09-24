@@ -739,6 +739,8 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
 test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before reporting readiness", async (t) => {
   const fixture = await kubernetesFixture(t);
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
+  fixture.env.DEV_UP_EXISTING_CONTROLLER_IMAGE = "1";
+  fixture.env.DEV_UP_EXISTING_RUNTIME_IMAGE = "1";
 
   // Exercise the supported Kubernetes-only lifecycle. Compose options are not
   // accepted because PostgreSQL and the OCE control plane live inside k3d.
@@ -775,6 +777,29 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
   // The selected profile must use only the pinned cluster and imported images;
   // no Compose command may participate in startup or cleanup.
   const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  // The default tag may belong to an older checkout. Rebuild it before import
+  // so the in-cluster control plane always matches the source being launched.
+  assert.ok(
+    commands.some(
+      ({ command, args }) =>
+        command === "docker" &&
+        args[0] === "build" &&
+        args.includes("--target") &&
+        args.includes("runtime") &&
+        args.includes("--tag") &&
+        args.includes("openclaw-enterprise-controller:kubernetes-quickstart"),
+    ),
+  );
+  assert.ok(
+    commands.some(
+      ({ command, args }) =>
+        command === "docker" &&
+        args[0] === "build" &&
+        args.includes("-f") &&
+        args.includes("deploy/runtime/Dockerfile") &&
+        args.includes("openclaw-enterprise-runtime:kubernetes-quickstart"),
+    ),
+  );
   assert.equal(
     commands.some(({ args }) => args[0] === "compose"),
     false,

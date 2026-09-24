@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: "2026-09-24"
-last_updated_session: "authoring-run/3903cc3f-3260-4dfa-9706-5d622cb9e151"
+last_updated_session: "authoring-run/7e5d6b66-1359-4dfd-94be-9a156cc2bccc"
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -88,7 +88,9 @@ The CLI records the exact engine endpoint, cluster,
 platform Namespace, API port, and key destination before creating resources.
 It creates k3d without a Compose network, imports the OCE controller, Agent
 runtime, PostgreSQL, and three OpenShell images, and resolves their in-cluster
-digests.
+digests. Unless the developer selects existing images explicitly, startup
+rebuilds the controller and Agent runtime from the current checkout before
+importing them.
 
 `installKubernetesControlPlane` creates protected PostgreSQL and bootstrap PVCs,
 runs migration and bootstrap through the production OCE Helm chart, and deploys
@@ -127,7 +129,7 @@ namespace name. It reads the Workspace, creates it when missing, or rereads it
 after a concurrent `ALREADY_EXISTS`. Adoption requires the expected name, OCC
 Namespace ID label, managed-by label, and active phase. Any conflict fails the
 Namespace operation. Kubernetes Compute uses `oce-` plus a 15-character digest
-so the same name satisfies OpenShell pre.5's 19-character limit.
+so the same name satisfies OpenShell pre.7's 19-character limit.
 
 ### 2. Derive the provider-owned Harness request
 
@@ -163,7 +165,7 @@ the gateway client.
 `apps/controller/src/drivers/sandbox/openshell-gateway-client.ts:createSandbox`
 
 The client sends the stable Sandbox name, labels, annotations, spec, and a
-`workspace_scope` containing the configured workspace. It also sends the
+`workspace_scope` containing the Namespace Workspace. It also sends the
 revision's UUID as `request_id` and an unnamed `service_exposures` entry for the
 literal `APP_SERVER_PORT`. OpenShell registers the endpoint during Create and
 returns its URL in `service_urls`; replaying the same Create request returns the
@@ -188,14 +190,14 @@ binary through the Sandbox network policy.
 
 After a successful create, Compute verifies that the returned reference belongs
 to the revision and waits for the provider-owned Harness Pod. On revision
-shutdown, `shutdownRevisionRuntime` calls `cleanup` with the revision. The Gateway client
-sends `DeleteSandbox` with the same `workspace_scope`; a missing Sandbox is an
-idempotent success.
+shutdown, `shutdownRevisionRuntime` calls `cleanup` with the revision. The
+Gateway client sends `DeleteSandbox` with the same `workspace_scope`; a missing
+Sandbox is an idempotent success.
 
 The current unified `cleanup` contract receives the immutable revision during
 revision shutdown and no revision during Namespace deletion. Namespace deletion
-runs it after revision resources are gone.
-OpenShell verifies exact Workspace ownership, sends idempotent
+runs it after revision resources are gone. OpenShell verifies exact Workspace
+ownership, sends idempotent
 `DeleteWorkspace`, and then removes configured workspace-chart resources and
 NetworkPolicies in reverse order. A terminating Workspace remains eligible for
 retry after a lost response. Only after Sandbox cleanup succeeds does
@@ -229,9 +231,9 @@ Kubernetes Compute delete the Kubernetes namespace.
   pre.7 containment, the Compute-created node route, Helm NetworkPolicy
   enforcement, exposed-route reachability, and lifecycle behavior. It does not
   prove native workload projection or an authenticated model turn through the
-  exposed route. The tested runtime image pins OpenClaw `2026.9.6` because the
-  workspace-node entrypoint uses `--pair-if-needed` and `--commands`; earlier
-  2026.9 releases do not provide both options.
+  exposed route. The tested runtime uses the OpenClaw source commit pinned by
+  `deploy/runtime/Dockerfile`; that source provides the workspace-node
+  `--pair-if-needed` and `--commands` options required by the test.
 - `OpenShell v0.1.0-pre.7 cannot receive secretKeyRef environment ...` identifies
   the current fail-closed boundary.
 
@@ -248,6 +250,7 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Changelog
 
+- 2026-09-24 09:43: Rebased the development profile onto current Kubernetes lifecycle behavior, documented current source-pinned runtime packaging, and made default controller and runtime images rebuild from the checkout. (authoring-run/7e5d6b66-1359-4dfd-94be-9a156cc2bccc - d74e1dcf79d4763c9137a8f9d8087f4ca4da6c47)
 - 2026-09-24 07:02: Consolidated reusable OpenShell startup and cleanup under the common development scripts. (authoring-run/3903cc3f-3260-4dfa-9706-5d622cb9e151 - d972d1ac64847c428ba334a7c12b6ddf4fefb317)
 - 2026-09-24 06:37: Documented the verified pre.7 model-turn path, the OpenShell supervisor-to-Envoy policy boundary, and the required workspace-node CLI flags. (authoring-run/c524c9aa-b229-42cf-9bc8-b47f7a92075e - d972d1ac64847c428ba334a7c12b6ddf4fefb317)
 - 2026-09-23 10:48: Combined the operator Workspace lifecycle with pre.7 create-time service exposure and clarified the stock fail-closed versus CI compatibility paths. (authoring-run/9b10135a-a94c-4761-9e07-6c49b19f7c90 - 10d8805b0b3a52d87febc4ba9b923eb569d046ff)

@@ -169,15 +169,18 @@ to its node; adding another node does not replicate existing workspace data.
 Use a portable StorageClass if workloads must move between nodes.
 
 The `local-path` StorageClass uses reclaim policy `Delete`, so deleting a claim
-also permits deletion of its backing directory. PostgreSQL's Compose volume
-stores control-plane records separately; retaining it does not back up workspaces.
-Use a durable private state directory instead of `/tmp` for a long-lived demo.
+also permits deletion of its backing directory. The ordinary profile stores
+PostgreSQL in a Compose volume; the OpenShell profile stores it in the owned
+cluster. Neither location backs up Agent workspaces. Use a durable private state
+directory instead of `/tmp` for a long-lived demo.
 
 ## Rebuild after a source edit
 
 The environment registers immutable image digests, so running containers do not
-silently pick up source edits. Recreate the environment after controller,
-runtime, migration, Helm, or OpenShell integration changes:
+silently pick up source edits. Recreate it after controller, runtime, migration,
+Helm, or OpenShell integration changes. Unless an existing controller or runtime
+image was selected explicitly, startup rebuilds both images from the current
+checkout:
 
 ```bash
 ./scripts/dev-down

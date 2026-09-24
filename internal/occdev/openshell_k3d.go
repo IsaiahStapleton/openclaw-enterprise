@@ -215,10 +215,11 @@ func upOpenShellK3d(ctx context.Context, opts Options) (result error) {
 
 func (r *runner) importDevelopmentController(ctx context.Context, state *developmentState) (string, error) {
 	image := r.setting("OCC_DEVELOPMENT_CONTROLLER_IMAGE", developmentController)
-	if _, err := r.output(ctx, r.engine, "image", "inspect", image); err != nil {
-		if r.env["OCC_DEVELOPMENT_CONTROLLER_IMAGE"] != "" {
+	if r.env["OCC_DEVELOPMENT_CONTROLLER_IMAGE"] != "" {
+		if _, err := r.output(ctx, r.engine, "image", "inspect", image); err != nil {
 			return "", fmt.Errorf("explicitly selected controller image must already exist locally: %s", image)
 		}
+	} else {
 		base := r.setting("OCC_DEVELOPMENT_NODE_BASE_IMAGE", developmentNodeBase)
 		if err := r.run(ctx, r.engine, "build", "--target", "runtime", "--build-arg", "NODE_BASE_IMAGE="+base, "--tag", image, "."); err != nil {
 			return "", err

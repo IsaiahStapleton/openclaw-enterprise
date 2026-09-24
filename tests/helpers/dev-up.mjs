@@ -480,6 +480,8 @@ if (command === "docker") {
   }
   else if (args[0] === "image" && args[1] === "inspect" && args.includes("--format")) output("linux/amd64");
   else if (args[0] === "image" && args[1] === "save") fs.writeFileSync(args[args.indexOf("--output") + 1], "fixture image archive\\n");
+  else if (args[0] === "image" && args[1] === "inspect" && args[2] === "openclaw-enterprise-controller:kubernetes-quickstart" && process.env.DEV_UP_EXISTING_CONTROLLER_IMAGE === "1") {}
+  else if (args[0] === "image" && args[1] === "inspect" && args[2] === "openclaw-enterprise-runtime:kubernetes-quickstart" && process.env.DEV_UP_EXISTING_RUNTIME_IMAGE === "1") {}
   else if (["volume", "network", "image"].includes(args[0]) && args[1] === "inspect") process.exit(1);
   else if (args[0] === "ps" || (["volume", "network"].includes(args[0]) && args[1] === "ls") || args[0] === "build" || args[0] === "pull" || args[0] === "tag" || (args[0] === "image" && args[1] === "rm")) {}
   else if (args[0] === "inspect") {

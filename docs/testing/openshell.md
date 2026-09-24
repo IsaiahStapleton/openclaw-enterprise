@@ -116,9 +116,9 @@ privileges, denied secret exposure, allowed and denied tool egress, replacement,
 and cleanup. It separately checks the OpenClaw Control Plane (OCC) Agent Service
 selector. Missing prerequisites fail rather than skip.
 
-Use the OCE runtime image pinned to OpenClaw `2026.9.6`. The workspace node uses
-the `--pair-if-needed` and `--commands` CLI options, which are unavailable in
-earlier 2026.9 images. The test configures
+Use an OCE runtime image built from the OpenClaw source commit pinned by
+`deploy/runtime/Dockerfile`. The test requires the workspace-node
+`--pair-if-needed` and `--commands` CLI options. The test configures
 the private Gateway with its fully qualified `.svc.cluster.local` hostname so
 OpenShell policy DNS, the listener certificate, the HTTPRoute, and node pairing
 use the same name.

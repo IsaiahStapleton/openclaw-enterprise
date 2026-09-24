@@ -90,10 +90,11 @@ var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 func (r *runner) importRuntime(ctx context.Context, s *developmentState) (string, error) {
 	image := r.setting("OCC_KUBERNETES_RUNTIME_IMAGE", "openclaw-enterprise-runtime:kubernetes-quickstart")
-	if _, err := r.output(ctx, r.engine, "image", "inspect", image); err != nil {
-		if r.env["OCC_KUBERNETES_RUNTIME_IMAGE"] != "" {
+	if r.env["OCC_KUBERNETES_RUNTIME_IMAGE"] != "" {
+		if _, err := r.output(ctx, r.engine, "image", "inspect", image); err != nil {
 			return "", fmt.Errorf("explicitly selected runtime image must already exist locally: %s", image)
 		}
+	} else {
 		if err := r.run(ctx, r.engine, "build", "-f", "deploy/runtime/Dockerfile", "--tag", image, "."); err != nil {
 			return "", err
 		}

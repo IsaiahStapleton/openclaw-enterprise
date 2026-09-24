@@ -181,7 +181,7 @@ project configuration.
 Selecting `OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell` branches before Compose
 rendering into `internal/occdev/openshell_k3d.go:upOpenShellK3d`. That profile
 uses the engine only for k3d and image operations; the
-[OpenShell provisioning flow](../openshell-sandbox-provisioning.md#create-the-kubernetes-only-development-control-plane)
+[OpenShell provisioning flow](../openshell-sandbox-provisioning.md#0-create-the-kubernetes-only-development-control-plane)
 owns its Kubernetes-only control-plane sequence.
 
 ### 13. Bootstrap OCC, create k3d, and prepare runtime configuration

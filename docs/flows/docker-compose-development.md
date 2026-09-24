@@ -140,7 +140,7 @@ loopback. The worker creates the bootstrap Namespace through the regular Compute
 workflow. The Sandbox Driver applies rendered workspace resources and the
 operator label before creating the corresponding Gateway Workspace. Startup
 waits until the OCC Namespace becomes ready. See the
-[OpenShell flow](openshell-sandbox-provisioning.md#create-the-kubernetes-only-development-control-plane).
+[OpenShell flow](openshell-sandbox-provisioning.md#0-create-the-kubernetes-only-development-control-plane).
 
 ## Debugging and Verification
 
