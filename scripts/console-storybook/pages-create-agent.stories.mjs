@@ -120,5 +120,6 @@ export const RepositoryOne = story("createRepositories1");
 export const RepositoryFive = story("createRepositories5");
 export const RepositoryTwentyFive = story("createRepositories25");
 export const RepositoryLargeCatalog = story("createRepositories140");
+export const RepositoryExactSearch = story("createRepositoriesExactSearch");
 export const RepositoryCustom = story("createRepositoriesCustom");
 export const RepositoryPolicyConflict = story("createRepositoriesPolicyConflict");

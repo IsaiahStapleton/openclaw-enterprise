@@ -73,6 +73,15 @@ for (const issuesEnabled of [true, false]) {
       true,
     );
     await page.getByRole("checkbox", { name: /^Create and manage issues/ }).uncheck();
+    assert.equal(
+      await page
+        .getByRole("radio", {
+          name: "Contributor Push code and work with pull requests.",
+          exact: true,
+        })
+        .isChecked(),
+      true,
+    );
     await page
       .getByText(
         "Contributor · no issue management applies to repositories using the Agent default.",

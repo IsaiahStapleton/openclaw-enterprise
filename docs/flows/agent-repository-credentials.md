@@ -1,24 +1,23 @@
 ---
 created: "2026-09-18"
-updated: "2026-09-23"
-last_updated_session: "public-pr/295"
+updated: "2026-09-24"
+last_updated_session: "public-change/repository-picker"
 ---
 
 # Agent repository credential flow
 
 ## Overview
 
-The Console lists approved repositories; admission saves selections; deployment
-freezes grants. The worker delivers sessions to Kubernetes-owned embedded OpenClaw
-or dedicated Codex, with compatible Harness authentication and no Sandbox Driver.
+Console discovers approved repositories; admission saves access; deployment
+freezes grants. Workers deliver sessions to Kubernetes embedded OpenClaw
+or dedicated Codex with compatible authentication and no Sandbox Driver.
 See [service forwarding and retirement](repository-credentials.md) and
 [runtime qualification](../testing/repository-credentials.md).
 
 ## Entry Points
 
 - `apps/controller/src/index.ts:createFastifyApp` registers repository-option and
-  Agent lifecycle routes. Options and creation share Namespace-scoped Agent-create
-  authorization.
+  Agent lifecycle routes. Discovery requires Agent-create or exact-Agent update.
 - `apps/controller/src/console/agents/repositories.mjs:createRepositoryFields`
   renders adaptive discovery, selected cards, and inherited or custom access.
 - `apps/controller/src/worker.ts:ControllerWorker.prepareRevision` prepares
@@ -94,7 +93,7 @@ creation, or exact-Agent update for editing, checks Compute-owned availability,
 then projects opaque references,
 names and profiles through `GitHubRepoDriver.listOptions`. Exact Harness validation
 remains at deployment. No approvals yields an empty list; a closed Namespace conflicts.
-Only classified optional discovery failure after authorization becomes
+Classified optional discovery failure after authorization becomes
 `RepositoryOptionsUnavailableError`, mapped by the options route to
 `503 REPOSITORY_OPTIONS_UNAVAILABLE`. Generic failures do not establish authorization.
 
@@ -107,7 +106,7 @@ classified optional discovery outage; other failures block saves.
 The form saves Configuration first. Known Agent rejections (400, 403, 404, 409, 429) preserve it. Ordinary retries reuse it; repository-scoped retries require
 successful reload, which clears stale selections, then nonempty reselection and
 approved access. Empty selections cannot downgrade the attempt. Recovery
-stays visible; starting a new draft preserves the Configuration. Failed reloads
+stays visible; new drafts preserve the Configuration. Failed reloads
 block creation, expiry signs out, and obsolete completions cannot mutate the view.
 Unknown outcomes require stored Agent and Configuration reads.
 
@@ -357,6 +356,8 @@ Slack or GitHub execution; Ready Pods and local commands do not prove live write
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 07:53: Trace discovery, inheritance, and per-repository overrides. (public-change/repository-picker - 81b18912)
 
 - 2026-09-23 08:33: Condense the combined flow without changing its contracts. (public-pr/295 - acd86266)
 

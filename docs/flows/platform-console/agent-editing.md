@@ -1,15 +1,10 @@
 ---
 created: 2026-09-09
-updated: 2026-09-23
-last_updated_session: 01a0d150-104a-71a3-9e56-6c5e3ee510ea
+updated: 2026-09-24
+last_updated_session: public-change/repository-picker
 ---
 
 # Console Agent editing and runtime requests
-
-The draft **Repositories** tab uses `createRepositoryFields` with exact-Agent
-update discovery. It retains inheritance intent, checks for intervening changes,
-and saves `repositoryAccess` through Agent PATCH. Dirty, pending, and uncertain
-saves block tab changes and deployment until saved, cancelled, or reloaded.
 
 ## Overview
 
@@ -81,6 +76,12 @@ editor text. An uncertain mutation outcome blocks another save until successful
 readback. Unsaved or unresolved edits block deployment of the old saved values and tab or revision
 navigation until save, cancel, or the required reload resolves them.
 Saving and deploying remain separate explicit actions.
+
+The draft **Repositories** tab uses `createRepositoryFields` with exact-Agent
+update discovery. It retains inheritance intent, checks for intervening changes,
+and saves `repositoryAccess` through Agent PATCH. Like Configuration edits, these
+preflight reads cannot prevent a later concurrent write. Dirty, pending, and
+uncertain saves block tab changes and deployment until saved, cancelled, or reloaded.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders supported
 Slack channel settings in **New revision** only. Slack uses fixed unresolved
@@ -279,6 +280,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 07:53: Trace draft repository editing and save guards. (public-change/repository-picker - 81b18912)
 
 - 2026-09-23 19:52: Record unsupported mixed Slack sender lists, unrepresentable sender IDs, and channel wildcard maps in the simple drawer. (01a0d150-104a-71a3-9e56-6c5e3ee510ea - 77aedc620f443056f9ee859050b8dc657a9c3133)
 

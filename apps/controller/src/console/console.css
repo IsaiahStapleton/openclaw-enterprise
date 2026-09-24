@@ -441,6 +441,7 @@ select {
 .form-field input,
 .form-field select,
 .form-field textarea,
+.repository-discovery input[type="search"],
 .revision-selector select {
   width: 100%;
   border: 1px solid #bbc7c0;
@@ -864,9 +865,10 @@ summary:focus-visible {
 .repository-discovery > label {
   display: block;
   margin-bottom: 8px;
+  font-weight: 550;
 }
 .repository-discovery input[type="search"] {
-  width: 100%;
+  min-height: 44px;
 }
 .repository-selected {
   margin-top: 24px;

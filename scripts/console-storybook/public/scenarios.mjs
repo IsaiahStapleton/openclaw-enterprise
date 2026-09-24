@@ -365,7 +365,7 @@ export const scenarios = {
       { selector: "#repository-default-issues", click: true },
     ],
     description:
-      "Customize Contributor access to turn off issue management while keeping push and pull request access. The collapsed summary retains that restriction.",
+      "Customize Contributor access to turn off issue management while keeping push and pull request access. The Contributor description and collapsed summary retain that restriction.",
   },
   createRepositoriesCollaborator: {
     group: "Pages/Create Agent",
@@ -399,6 +399,27 @@ export const scenarios = {
       },
     ]),
   ),
+  createRepositoriesExactSearch: {
+    group: "Pages/Create Agent",
+    name: "Exact repository names before prefix matches",
+    path: create,
+    actions: [...repositoryForm, { selector: "#repository-search", value: "application" }],
+    repositoryOptions: [
+      "alpha/application-api",
+      "beta/my-application",
+      "omega/application",
+      "zeta/application",
+      "tools/cli",
+      "docs/handbook",
+      "ops/infrastructure",
+    ].map((displayName, index) => ({
+      repositoryRef: `catalog-${index}`,
+      displayName,
+      allowedProfiles: ["git-read", "git-write", "git-full"],
+    })),
+    description:
+      "Search a short repository name. Exact names appear first with their owners visible, followed by prefixes and substrings. Press Enter to add the first match; the query stays available for another addition.",
+  },
   createRepositoriesCustom: {
     group: "Pages/Create Agent",
     name: "Custom access survives default changes",

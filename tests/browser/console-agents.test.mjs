@@ -1402,6 +1402,43 @@ for (const count of [1, 5, 25, 140]) {
   });
 }
 
+test("Agent repository search prioritizes exact names before prefix matches", async (t) => {
+  const repositories = [
+    "alpha/application-api",
+    "beta/my-application",
+    "omega/application",
+    "zeta/application",
+    "tools/cli",
+    "docs/handbook",
+    "ops/infrastructure",
+  ];
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) =>
+    repositories.map((repository, index) => ({
+      repositoryRef: `catalog-${index}`,
+      repositoryId: String(1400 + index),
+      repository,
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+    })),
+  );
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  const search = page.getByLabel("Find a repository");
+  await search.fill("ApPlIcAtIoN");
+  // Enter adds the first match, so exact short names must outrank a different owner's prefix.
+  assert.deepEqual(
+    await page.locator("#repository-results .repository-identity strong").allTextContents(),
+    ["omega/application", "zeta/application", "alpha/application-api", "beta/my-application"],
+  );
+  await search.press("Enter");
+  await page.getByRole("button", { name: "Added omega/application", exact: true }).waitFor();
+  assert.equal(
+    await page.locator(".repository-card .repository-identity strong").innerText(),
+    "omega/application",
+  );
+  assert.equal(await search.inputValue(), "ApPlIcAtIoN");
+});
+
 test("Agent repository selection enforces the 16-item limit without narrow viewport overflow", async (t) => {
   const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) =>
     Array.from({ length: 17 }, (_, index) => ({

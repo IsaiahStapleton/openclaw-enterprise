@@ -137,7 +137,13 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     const group = element("div", { className: "repository-profiles" });
     for (const [value, title, help] of [
       ["git-read", "Read-only", "Read code, pull requests, and issues."],
-      ["git-full", "Contributor", "Push code, work with pull requests, and manage issues."],
+      [
+        "git-full",
+        "Contributor",
+        profile === "git-write" || !allowed.includes("git-full")
+          ? "Push code and work with pull requests."
+          : "Push code, work with pull requests, and manage issues.",
+      ],
     ]) {
       const writable = value !== "git-read";
       const input = element("input", {
@@ -295,15 +301,11 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     const small = state.options.length <= 5;
     const query = state.query.trim().toLocaleLowerCase();
     const rank = (entry) => {
-      const names = [
-        entry.displayName.toLocaleLowerCase(),
-        entry.repositoryRef.toLocaleLowerCase(),
-      ];
-      return names.includes(query)
-        ? 0
-        : names.some((n) => n.startsWith(query) || n.split("/").at(-1).startsWith(query))
-          ? 1
-          : 2;
+      const names = [entry.displayName, entry.repositoryRef].flatMap((value) => {
+        const name = value.toLocaleLowerCase();
+        return [name, name.split("/").at(-1)];
+      });
+      return names.includes(query) ? 0 : names.some((name) => name.startsWith(query)) ? 1 : 2;
     };
     const matches = state.options
       .filter(
@@ -336,7 +338,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           "p",
           { className: "hint", role: "status" },
           query
-            ? `${matches.length} matching repositories`
+            ? `${matches.length} matching ${matches.length === 1 ? "repository" : "repositories"}`
             : !state.browsing && matches.some((entry) => recent.includes(entry.repositoryRef))
               ? `Recently used · ${state.options.length} repositories available`
               : `${state.options.length} repositories available`,

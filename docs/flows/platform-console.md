@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-24
-last_updated_session: public-pr/348
+last_updated_session: public-change/repository-picker
 ---
 
 # Platform console request flow
@@ -181,15 +181,15 @@ discards selections but retains Secrets already created in the Namespace.
 Pending grants accumulate across drawer applications.
 
 `GET /namespaces/:namespaceId/agents/repository-options` discovers approved choices.
-Read-only and Contributor submit approved profiles; customization disables issues. Only
+`createRepositoryFields` adds search and cards with inherited or custom access;
+submission sends `repositoryAccess`. [Repository admission](agent-repository-credentials.md)
+resolves concrete profiles. Only
 `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh draft without bindings;
 it never enables provisioning. Other failures block submission until retry succeeds.
 
-For supported Dedicated runtimes with successful repository discovery, submission
-sends the inline Configuration, selected repository bindings and ordinary Secret references to the [provisioning API](agent-provisioning.md).
-Console polls the job, then opens the returned revision.
-The worker creates resources and exact Secret grants before
-admitting deployment; Console does not duplicate those grants.
+Supported Dedicated runtimes send inline Configuration, repository access, and Secret
+references to [provisioning](agent-provisioning.md). Console polls the job and opens
+its revision. The worker creates resources and exact Secret grants before deployment.
 
 Ordinary draft creation posts `{kind: "agent", values, secretBindings}` to
 `POST /namespaces/:namespaceId/configurations`, then sends its returned ID to
@@ -315,6 +315,8 @@ uncertain response disables replay until refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 07:53: Trace inherited repository access. (public-change/repository-picker - 81b18912)
 
 - 2026-09-24 06:19: Replace Console model discovery with an intentional static starter list and preserve manual entry. (01a0d20c-dc1b-7d22-a965-60b9c244b29d - 24ecb94b)
 

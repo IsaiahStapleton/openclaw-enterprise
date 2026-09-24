@@ -1,6 +1,6 @@
 # Repository selection and inherited access
 
-Status: Implementing. Browser polish and persistence verification are in progress.
+Status: Implemented; review and publication pending.
 
 Let an operator find repositories, add them to an Agent, and inspect the resulting
 access without working through a long checklist. Keep Read-only and Contributor
