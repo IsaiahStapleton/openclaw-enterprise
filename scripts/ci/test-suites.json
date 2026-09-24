@@ -265,6 +265,9 @@
           "path": "tests/conformance/repository-credentials-ownership-boundaries.test.mjs"
         },
         {
+          "path": "tests/conformance/repository-credentials-tool-evidence.test.mjs"
+        },
+        {
           "path": "tests/conformance/repository-credentials-fixture-ownership.test.mjs",
           "expectedTests": [
             "runner timeout cancels and joins commands before teardown admits cleanup",

@@ -265,6 +265,8 @@ export async function createInstalledRepositoryFixture(
     codexImage: images.runtime,
     cluster: system,
   });
+  // Match the installed native Gateway fixture budget for first-request plugin loading.
+  configuration.drivers.compute.configuration.resources.gateway.limits.memory = "2Gi";
   if (dedicated) {
     // Use the same authenticated route for native node enrollment and task
     // submission. The production Driver owns enrollment and shared storage.
@@ -585,25 +587,50 @@ export async function createInstalledRepositoryFixture(
     return list.items[0]?.metadata.name ?? false;
   });
   names.push(tenant);
-  for (const [name, role, account] of [
-    ["worker", "worker", "worker"],
-    ["configuration", "configuration", "api"],
-    ["secrets", "api", "api"],
-  ]) {
-    await apply({
-      apiVersion: "rbac.authorization.k8s.io/v1",
-      kind: "RoleBinding",
-      metadata: metadata(`repository-${name}`, tenant),
-      roleRef: {
-        apiGroup: "rbac.authorization.k8s.io",
-        kind: "ClusterRole",
-        name: `${release}-openclaw-tenant-${role}`,
-      },
-      subjects: [
-        { kind: "ServiceAccount", name: `openclaw-enterprise-${account}`, namespace: system },
-      ],
-    });
-  }
+  const grantNamespaceAccess = async (target) => {
+    for (const [name, role, account] of [
+      ["worker", "worker", "worker"],
+      ["configuration", "configuration", "api"],
+      ["secrets", "api", "api"],
+    ]) {
+      await apply({
+        apiVersion: "rbac.authorization.k8s.io/v1",
+        kind: "RoleBinding",
+        metadata: metadata(`repository-${name}`, target),
+        roleRef: {
+          apiGroup: "rbac.authorization.k8s.io",
+          kind: "ClusterRole",
+          name: `${release}-openclaw-tenant-${role}`,
+        },
+        subjects: [
+          { kind: "ServiceAccount", name: `openclaw-enterprise-${account}`, namespace: system },
+        ],
+      });
+    }
+  };
+  await grantNamespaceAccess(tenant);
+  // Namespace preparation also creates the separate trusted Gateway target.
+  // Bind the existing worker and canonical store roles only in the two owned targets.
+  const gatewayNamespace = await waitFor("backing Gateway namespace", async () => {
+    const list = JSON.parse(
+      await kubectl(
+        "get",
+        "namespaces",
+        "-l",
+        `openclaw.dev/gateway-namespace=${namespace.id}`,
+        "-o",
+        "json",
+      ),
+    );
+    assert.ok(list.items.length <= 1);
+    return list.items[0]?.metadata.name ?? false;
+  });
+  names.push(gatewayNamespace);
+  await grantNamespaceAccess(gatewayNamespace);
+  await record("Operator granted exact tenant and control-plane namespace access", {
+    tenant,
+    gatewayNamespace,
+  });
   await waitFor(
     "OCC Namespace ready",
     async () => (await api("GET", `/namespaces/${namespace.id}`)).status === "ready",
