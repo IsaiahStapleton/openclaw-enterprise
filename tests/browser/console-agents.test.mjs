@@ -1111,6 +1111,125 @@ test("Preset repository access and plugin policies remain independent during Age
   assert.deepEqual(created.repositoryBindings, [{ repositoryRef: "project", profile: "git-full" }]);
 });
 
+test("Repository recovery preserves and updates hosted plugin policy before retry", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "project",
+      repositoryId: "790",
+      repository: "example/project",
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-full"] }],
+    },
+  ]);
+  const pluginDriver = new CodexPluginDriver();
+  fixture.controller.registerDriver(pluginDriver);
+  fixture.controller.selectDriver("plugin", pluginDriver.id);
+  const root = await mkdtemp(join(tmpdir(), "occ-repository-plugin-recovery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const secret = await fixture.createSecret(namespace.id, "Model key", "preset-plugin-model-key");
+  const pluginId = "codex-plugin:knowledge@openai-curated-remote";
+  const initialPlugins = { [pluginId]: { enabled: true, toolDefaults: { approval: "native" } } };
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: {
+      name: "Repository and hosted plugin recovery",
+      template: {
+        agent: {
+          name: "Recovered repository and plugin Agent",
+          executionMode: "embedded",
+          harnessAuth: { method: "api_key", source: secret.ref },
+          repositoryAccess: {
+            defaultProfile: "git-read",
+            repositories: [{ repositoryRef: "project" }],
+          },
+          plugins: initialPlugins,
+        },
+        configuration: { values: nativeValues("repository-plugin-recovery") },
+      },
+    },
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.body));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  await page.getByText("Read-only · Agent default", { exact: true }).waitFor();
+  assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), initialPlugins);
+
+  fixture.policy.restrictions.push({
+    id: "deny-repository-plugin-create",
+    namespaceId: namespace.id,
+    resourceKind: "agent",
+    action: "create",
+    effect: "deny",
+  });
+  const savedConfigurationResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/configurations` &&
+      response.request().method() === "POST",
+  );
+  const rejectedResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  const savedConfiguration = (await (await savedConfigurationResponse).json()).data;
+  assert.equal((await rejectedResponse).status(), 403);
+  await page.getByRole("heading", { name: "Recover from a rejected Agent save" }).waitFor();
+  assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), initialPlugins);
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.getByRole("button", { name: "Reload repository choices" }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /could not be reloaded because Agent creation is denied/ })
+    .waitFor();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+
+  fixture.policy.restrictions.pop();
+  await page.getByRole("button", { name: "Reload repository choices" }).click();
+  await page.getByText(/Repository choices reloaded/).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  await dialog.getByRole("button", { name: "Configured plugins", exact: true }).click();
+  await dialog.getByRole("button", { name: pluginId, exact: true }).click();
+  await dialog.getByLabel(`${pluginId} default approval`, { exact: true }).selectOption("approve");
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  const updatedPlugins = { [pluginId]: { enabled: true, toolDefaults: { approval: "approve" } } };
+  assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), updatedPlugins);
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+
+  await page.getByRole("button", { name: "Add example/project", exact: true }).click();
+  await page.locator("#repository-default-git-full").check();
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  const response = await createdResponse;
+  assert.equal(response.status(), 201);
+  const created = (await response.json()).data;
+  assert.deepEqual(created.plugins, updatedPlugins);
+  assert.deepEqual(created.repositoryAccess, {
+    defaultProfile: "git-full",
+    repositories: [{ repositoryRef: "project" }],
+  });
+  assert.deepEqual(created.repositoryBindings, [{ repositoryRef: "project", profile: "git-full" }]);
+  assert.equal(created.configurationId, savedConfiguration.id);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.equal(pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`).length, 0);
+  const agentRequests = agentPostRequests(requests, namespace.id);
+  assert.equal(agentRequests.length, 2);
+  assert.deepEqual(agentRequests[0].body.plugins, initialPlugins);
+  assert.deepEqual(agentRequests[1].body.plugins, updatedPlugins);
+  assert.deepEqual(agentRequests[1].body.repositoryAccess, created.repositoryAccess);
+  assert.equal(agentRequests[1].body.configurationId, savedConfiguration.id);
+});
+
 test("Agent deployment requires a reload after repository access changes", async (t) => {
   const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
     {
