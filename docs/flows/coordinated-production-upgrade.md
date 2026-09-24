@@ -10,10 +10,11 @@ last_updated_session: "authoring-run/0fc7c19b-0e15-498c-8328-e436bc702f37"
 
 An operator runs `scripts/upgrade-production-images` to replace the matched
 controller and runtime image pair for a production Kubernetes Installation.
-The script establishes a running-Agent baseline, lets Helm replace the OCC API
-and worker, then submits exact-Agent deployments concurrently and waits for all
-new revisions. The flow ends after image and deployment convergence; model,
-channel, and data-recovery proof remain operator checks.
+The script establishes a running-Agent baseline, which may be empty, lets Helm
+replace the OCC API and worker, then submits exact-Agent deployments
+concurrently and waits for all new revisions. The flow ends after image and
+deployment convergence; model, channel, and data-recovery proof remain operator
+checks.
 
 ## Entry Points
 
@@ -36,7 +37,11 @@ graph TD
     Q --> R["Verify controller digest, authentication, and inventory operation"]
     R --> B["OCC authorizes Installation administration and exact access to the complete fleet"]
     P -->|Yes| B
-    B --> C{"Inventory complete and free of nonterminal deployment work?"}
+    B --> U{"Authenticated OCC ID matches the live Installation Secret marker?"}
+    U -->|No| T
+    U -->|Yes| S{"Protected inputs match live state outside target image fields?"}
+    S -->|No| T["Preserve evidence and stop before mutation"]
+    S -->|Yes| C{"Inventory complete and free of nonterminal deployment work?"}
     C -->|No| D["Reject the whole inventory and stop before mutation"]
     C -->|Yes| E["Script records the baseline, renders the candidate, and runs Helm server-side dry run"]
     E --> F["Update protected inputs and Installation startup Secret"]
@@ -71,8 +76,15 @@ automatic fallback and does not redeploy Agents.
 
 The script requires owner-only kubeconfig, values, Installation, service-key,
 and optional CA files. It rejects mutable image tags, abbreviated source SHAs,
-an existing evidence path, unavailable dependencies, and a fleet with no
-running Agent. It saves live and protected inputs before mutation.
+an existing evidence path, and unavailable dependencies. It saves live and
+protected inputs before mutation. The live Installation startup Secret must
+carry the `openclaw.dev/installation-id` marker established after production
+bootstrap. The script requires that marker to equal the authenticated OCC
+Installation ID, binding API operations to the selected kube context and
+namespace. It then canonicalizes the protected and live Helm values without the
+controller image and the protected and live Installation configuration without
+the two runtime images. Any other difference stops the upgrade before rendering
+or mutation, so stale recovery files cannot overwrite live configuration.
 
 The script calls `occ installation deployment-inventory`. OCC requires
 Installation `administer`, then checks exact `read` access to every Namespace
@@ -118,6 +130,9 @@ request process. OCC handles each as an independent exact-Agent mutation:
 reads the current draft, freezes a new immutable revision, records attributable
 work, and returns its revision ID. Failed or unknown responses remain separate;
 the script never converts the group into one unauditable bulk mutation.
+An empty target set skips this fan-out and continues to final Helm evidence. It
+updates the persisted runtime selection but does not prove that runtime image
+can start.
 
 ### 6. Fan in on durable results
 
@@ -126,8 +141,10 @@ the script never converts the group into one unauditable bulk mutation.
 The `occ agent deployment-status` command reads the existing durable deployment
 resource. The script polls all returned revision IDs until each succeeds, one
 fails, or the shared timeout expires. It then verifies every Agent selected its
-returned revision and that revision-labeled gateway and Agent containers use
-the runtime digest. It preserves before/after workload inventories and every
+returned revision and waits for every revision-labeled Pod to report `Running`
+and `Ready`. Gateway and Agent containers must use the runtime digest; a wrong
+image fails immediately, while missing or unready Pods share the bounded upgrade
+deadline. The script preserves before/after workload inventories and every
 response under the private evidence directory.
 
 ### 7. Hand off runtime acceptance
@@ -170,5 +187,6 @@ success.
 
 ## Changelog
 
+- 2026-09-24: Record cluster/OCC identity binding, live/protected input equivalence, the supported empty-fleet path, and runtime Pod readiness discovered by the production rehearsal.
 - 2026-09-24 13:43: Trace fail-closed inventory admission, nonterminal deployment rejection, and the one-time controller-only bootstrap for older OCC versions. (authoring-run/0fc7c19b-0e15-498c-8328-e436bc702f37 - a7a609d5867398dd0dfd3bb77cfebf91b2cad116)
 - 2026-09-23 12:32: Trace matched image replacement and concurrent exact-Agent deployment through durable status convergence. (authoring-run/d29bdbc5-2a6a-46fa-a8e5-6ad78ea2e486 - 78cf9fd25f08e91158617fbd0ae3e42a22e54361)

@@ -58,6 +58,13 @@ json_file_name() {
   printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
 }
 
+normalize_yaml_without() {
+  local path=$1
+  local filter=$2
+  local output=$3
+  yq -o=json '.' "$path" | jq -S "$filter" >"$output"
+}
+
 kubeconfig=
 context=
 namespace=
@@ -123,7 +130,7 @@ require_private_file "$OCC_SERVICE_KEY_FILE"
 if [[ -n "${OCC_CA_BUNDLE:-}" ]]; then
   require_regular_file "$OCC_CA_BUNDLE"
 fi
-for command in helm jq kubectl python3 yq; do
+for command in cmp helm jq kubectl python3 yq; do
   require_command "$command"
 done
 [[ -x "$occ" ]] || command -v "$occ" >/dev/null 2>&1 || die "the OCC CLI is unavailable."
@@ -140,22 +147,55 @@ cp "$installation" "$evidence_dir/before-installation.yaml"
 kube=(kubectl --kubeconfig "$kubeconfig" --context "$context")
 helm_args=(--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace")
 occ_json=("$occ" --output json)
-installation_secret=$(yq -er '.installation.secretName // "occ-installation-startup"' "$values")
-installation_key=$(yq -er '.installation.key // "installation.yaml"' "$values")
 
 "${kube[@]}" --request-timeout=15s get --raw=/readyz >"$evidence_dir/kubernetes-readyz"
 helm status "$release" "${helm_args[@]}" >"$evidence_dir/before-helm-status.txt"
 helm get values "$release" "${helm_args[@]}" --output yaml >"$evidence_dir/before-live-values.yaml"
-"${kube[@]}" --namespace "$namespace" get secret "$installation_secret" --output json |
-  jq -er --arg key "$installation_key" '.data[$key]' |
+installation_secret=$(
+  yq -er '.installation.secretName // "occ-installation-startup"' \
+    "$evidence_dir/before-live-values.yaml"
+)
+installation_key=$(
+  yq -er '.installation.key // "installation.yaml"' \
+    "$evidence_dir/before-live-values.yaml"
+)
+live_installation_secret="$evidence_dir/before-live-installation-secret.json"
+"${kube[@]}" --namespace "$namespace" get secret "$installation_secret" --output json \
+  >"$live_installation_secret"
+if ! cluster_installation_id=$(
+  jq -er '.metadata.annotations["openclaw.dev/installation-id"]' "$live_installation_secret"
+); then
+  die "the live Installation Secret must carry the openclaw.dev/installation-id annotation."
+fi
+jq -er --arg key "$installation_key" '.data[$key]' "$live_installation_secret" |
   python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))' \
     >"$evidence_dir/before-live-installation.yaml"
+
+normalize_yaml_without "$values" 'del(.images.controller)' \
+  "$evidence_dir/before-values-without-controller.json"
+normalize_yaml_without "$evidence_dir/before-live-values.yaml" 'del(.images.controller)' \
+  "$evidence_dir/before-live-values-without-controller.json"
+cmp -s "$evidence_dir/before-values-without-controller.json" \
+  "$evidence_dir/before-live-values-without-controller.json" ||
+  die "the protected Helm values differ from the live release outside the controller image; refresh --values before upgrading."
+
+runtime_filter='del(.drivers.compute.configuration.images.gateway, .drivers.compute.configuration.images.agent)'
+normalize_yaml_without "$installation" "$runtime_filter" \
+  "$evidence_dir/before-installation-without-runtime-images.json"
+normalize_yaml_without "$evidence_dir/before-live-installation.yaml" "$runtime_filter" \
+  "$evidence_dir/before-live-installation-without-runtime-images.json"
+cmp -s "$evidence_dir/before-installation-without-runtime-images.json" \
+  "$evidence_dir/before-live-installation-without-runtime-images.json" ||
+  die "the protected Installation YAML differs from the live Secret outside the runtime images; refresh --installation before upgrading."
+
 "${kube[@]}" get deployments,statefulsets,pods,persistentvolumeclaims --all-namespaces \
   --output json >"$evidence_dir/before-workloads.json"
 "${occ_json[@]}" installation get >"$evidence_dir/installation.json"
 inventory="$evidence_dir/inventory/deployment-inventory.json"
 "${occ_json[@]}" installation deployment-inventory >"$inventory"
 installation_id=$(jq -er '.id' "$evidence_dir/installation.json")
+[[ "$installation_id" == "$cluster_installation_id" ]] ||
+  die "OCC Installation $installation_id does not match Kubernetes Installation $cluster_installation_id."
 jq -e --arg installationId "$installation_id" '.installationId == $installationId' \
   "$inventory" >/dev/null || die "the deployment inventory belongs to another Installation."
 
@@ -191,7 +231,6 @@ jq -c '
 ' "$inventory" >"$targets"
 
 target_count=$(wc -l <"$targets" | tr -d ' ')
-((target_count > 0)) || die "the authenticated baseline contains no running Agents to upgrade."
 
 current_controller=$(yq -er '.images.controller' "$values")
 current_gateway=$(yq -er '.drivers.compute.configuration.images.gateway' "$installation")
@@ -223,6 +262,8 @@ install -m 600 "$candidate_installation" "$installation"
 
 "${kube[@]}" --namespace "$namespace" create secret generic "$installation_secret" \
   --from-file="$installation_key=$installation" --dry-run=client --output yaml |
+  INSTALLATION_ID="$installation_id" yq \
+    '.metadata.annotations."openclaw.dev/installation-id" = strenv(INSTALLATION_ID)' |
   "${kube[@]}" --namespace "$namespace" apply --filename - \
   >"$evidence_dir/installation-secret-apply.txt"
 
@@ -245,20 +286,22 @@ until "${occ_json[@]}" installation get >"$evidence_dir/installation-after.json"
 done
 rm -f "$evidence_dir/occ-recovery-error.txt"
 
-pids=()
-while IFS= read -r target; do
-  namespace_id=$(jq -r '.namespaceId' <<<"$target")
-  agent_id=$(jq -r '.agentId' <<<"$target")
-  output="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").json"
-  error="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").error"
-  ("${occ_json[@]}" --namespace "$namespace_id" agent deploy "$agent_id" >"$output" 2>"$error") &
-  pids+=("$!")
-done <"$targets"
-
 dispatch_failed=0
-for pid in "${pids[@]}"; do
-  wait "$pid" || dispatch_failed=1
-done
+if ((target_count > 0)); then
+  pids=()
+  while IFS= read -r target; do
+    namespace_id=$(jq -r '.namespaceId' <<<"$target")
+    agent_id=$(jq -r '.agentId' <<<"$target")
+    output="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").json"
+    error="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").error"
+    ("${occ_json[@]}" --namespace "$namespace_id" agent deploy "$agent_id" >"$output" 2>"$error") &
+    pids+=("$!")
+  done <"$targets"
+
+  for pid in "${pids[@]}"; do
+    wait "$pid" || dispatch_failed=1
+  done
+fi
 ((dispatch_failed == 0)) || die "at least one Agent deployment request failed; inspect $evidence_dir/dispatch before retrying."
 
 deployments="$evidence_dir/deployments.jsonl"
@@ -305,13 +348,29 @@ while IFS= read -r deployment; do
   [[ "$selected" == "$deployment_id" ]] ||
     die "Agent $agent_id selected $selected instead of deployment $deployment_id."
   pods="$evidence_dir/status/$(json_file_name "$namespace_id--$agent_id--$deployment_id").pods.json"
-  "${kube[@]}" get pods --all-namespaces --selector "openclaw.dev/revision=$deployment_id" \
-    --output json >"$pods"
-  jq -e --arg image "$runtime_image" '
-    [.items[].spec.containers[] | select(.name == "gateway" or .name == "agent")] as $runtime |
-    ($runtime | length) > 0 and all($runtime[]; .image == $image)
-  ' "$pods" >/dev/null ||
-    die "Agent $agent_id does not expose ready revision Pods on the candidate runtime image."
+  while true; do
+    "${kube[@]}" get pods --all-namespaces --selector "openclaw.dev/revision=$deployment_id" \
+      --output json >"$pods"
+    runtime_count=$(jq '[.items[].spec.containers[] | select(.name == "gateway" or .name == "agent")] | length' "$pods")
+    if ((runtime_count > 0)); then
+      jq -e --arg image "$runtime_image" '
+        all(.items[].spec.containers[] | select(.name == "gateway" or .name == "agent"); .image == $image)
+      ' "$pods" >/dev/null ||
+        die "Agent $agent_id exposes revision Pods on an unexpected runtime image."
+      if jq -e '
+        (.items | length) > 0 and
+        all(.items[];
+          .status.phase == "Running" and
+          any(.status.conditions[]?; .type == "Ready" and .status == "True")
+        )
+      ' "$pods" >/dev/null; then
+        break
+      fi
+    fi
+    ((SECONDS < deadline)) ||
+      die "Agent $agent_id revision Pods did not become ready before the upgrade timeout."
+    sleep 2
+  done
 done <"$deployments"
 
 helm status "$release" "${helm_args[@]}" >"$evidence_dir/after-helm-status.txt"

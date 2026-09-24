@@ -441,9 +441,22 @@ prepare_occ_service_key
 ```
 
 Expect the displayed `ID` to match the key file's
-`meta.installationId`. A completed initialization Job is not an exec endpoint,
-and neither the API nor worker mounts the bootstrap PVC. Keep the protected
-source after ending the session; initialization does not reissue a lost key.
+`meta.installationId`. Record that identity on the operator-owned Installation
+startup Secret so later upgrades can bind their authenticated OCC endpoint to
+this Kubernetes Installation:
+
+```bash
+export OCC_INSTALLATION_ID="$(jq -er '.meta.installationId' "$OCC_BOOTSTRAP_KEY_FILE")"
+kubectl --kubeconfig "$OCC_INPUT_DIRECTORY/kubeconfig" \
+  --context '<reviewed-context>' \
+  --namespace openclaw-system \
+  annotate secret "$(yq -er '.installation.secretName' "$OCC_INPUT_DIRECTORY/values.yaml")" \
+  openclaw.dev/installation-id="$OCC_INSTALLATION_ID" --overwrite
+```
+
+A completed initialization Job is not an exec endpoint, and neither the API nor
+worker mounts the bootstrap PVC. Keep the protected source after ending the
+session; initialization does not reissue a lost key.
 The [operator cleanup](production-agents.md#end-the-operator-session) removes
 only the disposable copy created above.
 

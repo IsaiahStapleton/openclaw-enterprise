@@ -9,6 +9,9 @@ window with enough capacity for overlapping Agent revisions.
 The command supports the production Helm and Kubernetes Compute path. It is not
 an Amazon EKS-specific workflow. It does not provision infrastructure, build or
 publish images, take backups, or verify a model response after the restart.
+When the baseline contains no running Agents, it still updates the controller
+and persisted runtime image selections and reports that zero Agent revisions
+were deployed. That outcome does not prove the runtime image starts correctly.
 
 ## Prepare the release and recovery inputs
 
@@ -38,7 +41,12 @@ Run from the checkout containing the reviewed chart. Keep the protected Helm
 values, Installation YAML, kubeconfig, and service key in owner-only files. The
 optional public CA bundle must be a regular file, not a symbolic link. The
 evidence directory must not exist yet; the command creates
-it with mode `0700` and stores inventory and rollout results there.
+it with mode `0700` and stores inventory and rollout results there. Refresh the
+protected Helm values and Installation YAML from their live owners before the
+upgrade. The command rejects any live/protected difference outside the
+controller and runtime image fields before it mutates the cluster. The live
+Installation startup Secret must carry the `openclaw.dev/installation-id`
+annotation created during production installation.
 
 ```bash
 umask 077
@@ -140,6 +148,12 @@ Before mutation, the command saves the complete deployment inventory returned by
 OCC under `inventory/deployment-inventory.json`. It checks the Installation ID,
 rejects nonterminal Agent deployment work, and selects every active Agent that
 desires `running`, has an active revision, and belongs to a ready Namespace.
+It also compares canonical protected inputs with the live Helm release and
+Installation Secret after removing only the image fields that this command
+owns. The authenticated OCC Installation ID must equal the live Secret's
+`openclaw.dev/installation-id` annotation. Any mismatch fails before rendering
+or mutation, preventing one cluster from being upgraded while another OCC
+Installation receives the Agent deployments.
 
 The command performs these mutations only after that inventory, candidate
 rendering, and Helm server-side dry run succeed:
@@ -155,8 +169,9 @@ rendering, and Helm server-side dry run succeed:
    recovers, it concurrently submits the bodyless deployment operation for all
    baseline running Agents.
 5. It waits for every returned revision's durable deployment status, confirms
-   each Agent selected that revision, and checks the revision Pods' gateway and
-   Agent containers use the candidate runtime digest.
+   each Agent selected that revision, and waits for the revision Pods to report
+   `Running` and `Ready`. Their gateway and Agent containers must use the
+   candidate runtime digest.
 
 Stopped and deleting Agents remain untouched. The command succeeds only after
 every baseline running Agent reaches the new revision. It does not send a model
