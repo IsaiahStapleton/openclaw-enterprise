@@ -24,19 +24,19 @@ import (
 )
 
 const (
-	openShellVersion                = "0.1.0-pre.5"
+	openShellVersion                = "0.1.0-pre.7"
 	openShellRuntimeClass           = "openshell-sandbox"
 	openShellGatewayService         = "openshell-gateway"
 	openShellGatewayNamespace       = "openshell-system"
 	openShellOperatorNamespaceLabel = "openshell.ai/openclaw-workspace"
 	openShellOperatorNamespaceValue = "true"
 	openShellNodePort               = 30051
-	openShellSourceSHA256           = "24e4bca1884075ca5706bd78a1c5efa13be167668bff0afb301bcb98248b3b1e"
+	openShellSourceSHA256           = "48b474ba93692331246acde00e8ca641503714c3250bbe50db5fe4f8f7a1e453"
 	agentSandboxManifestSHA256      = "230ee446d6035f631577e1c6b857f6973a8f09a0a853675d3cc34ebfe47abd6b"
 	openShellK3sImage               = "docker.io/rancher/k3s:v1.36.4-k3s1@sha256:edad48e12bf81c3a09ac1c05c0c0ffaaa22145980b989d6fae84543a76b83657"
-	openShellGatewayImage           = "ghcr.io/nvidia/openshell/gateway:484f0768fc6a0d93e0a2be295c1679aed24e18a9@sha256:0d58d9bb9fbad1f5bceafaea0f5af2e57e9b520809fef85cfc6d10027f095bba"
-	openShellSandboxImage           = "ghcr.io/nvidia/openshell/sandbox:484f0768fc6a0d93e0a2be295c1679aed24e18a9@sha256:6b133b8e97083f6e6218811401b6c1e11d127484c83c3818730f9cd465146c2f"
-	openShellSupervisorImage        = "ghcr.io/nvidia/openshell/supervisor:484f0768fc6a0d93e0a2be295c1679aed24e18a9@sha256:40febe95703b2a810f264003499a8e094de7c54020328d17c1c0279b4e09e6f9"
+	openShellGatewayImage           = "ghcr.io/nvidia/openshell/gateway:f8002d19ad2f948abf48bd2f5ca4f8ebd388e3c8@sha256:270f91a163ae3958803493a49c8a68bd5efb9ebca6aa33ca4730a1bcbd957929"
+	openShellSandboxImage           = "ghcr.io/nvidia/openshell/sandbox:f8002d19ad2f948abf48bd2f5ca4f8ebd388e3c8@sha256:4e6387d7073919dfb8b100fac810012e09413601313c163490ef42100364a155"
+	openShellSupervisorImage        = "ghcr.io/nvidia/openshell/supervisor:f8002d19ad2f948abf48bd2f5ca4f8ebd388e3c8@sha256:922d95e7ff7af1e643f01ed194d9ac265b0d342d9dc9d15ba8c4271d4373fc83"
 	openShellSourceArchiveURL       = "https://github.com/NVIDIA/OpenShell/archive/refs/tags/v" + openShellVersion + ".tar.gz"
 	agentSandboxManifestURL         = "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml"
 	openShellAdmissionContainerPath = "/etc/openclaw-development/openshell-pod-security-admission.yaml"

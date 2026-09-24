@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: "2026-09-24"
-last_updated_session: "authoring-run/6c779a54-4d36-4317-827c-84931cf01ace"
+last_updated_session: "authoring-run/12db753e-0ea9-497a-b9bf-e2fdbe9b7fad"
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -84,6 +84,9 @@ graph TD
 
 The environment selects Kubernetes Compute and OpenShell. `scripts/dev-up`
 validates that combination and delegates lifecycle ownership to `occ dev up`.
+The default profile verifies the `v0.1.0-pre.7` source archive before packaging
+its Gateway and Workspace charts, and imports the matching digest-pinned
+Gateway, Sandbox, and supervisor images.
 The CLI records the exact engine endpoint, cluster,
 platform Namespace, API port, and key destination before creating resources.
 It creates k3d without a Compose network, imports the OCE controller, Agent
@@ -253,6 +256,7 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Changelog
 
+- 2026-09-24 15:58: Aligned the development profile's verified charts and runtime images with OpenShell v0.1.0-pre.7 and documented its release pin. (authoring-run/12db753e-0ea9-497a-b9bf-e2fdbe9b7fad - 1364f08511f0771f9221f92bfc5a3cd28c57175f)
 - 2026-09-24 11:08: Updated the source-pinned Codex binary identity after the runtime dependency layout changed, preserving fail-closed model egress and the real startup probe. (authoring-run/6c779a54-4d36-4317-827c-84931cf01ace - d89c609e6712dbc6501fcaed5cfefec8d311c9be)
 - 2026-09-24 09:43: Rebased the development profile onto current Kubernetes lifecycle behavior, documented current source-pinned runtime packaging, and made default controller and runtime images rebuild from the checkout. (authoring-run/7e5d6b66-1359-4dfd-94be-9a156cc2bccc - d74e1dcf79d4763c9137a8f9d8087f4ca4da6c47)
 - 2026-09-24 07:02: Consolidated reusable OpenShell startup and cleanup under the common development scripts. (authoring-run/3903cc3f-3260-4dfa-9706-5d622cb9e151 - d972d1ac64847c428ba334a7c12b6ddf4fefb317)

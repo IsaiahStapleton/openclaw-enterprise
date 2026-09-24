@@ -144,19 +144,24 @@ test(
     // Cleanup reuses the state and engine endpoint recorded by this invocation;
     // it must not discover or remove an unrelated cluster.
     t.after(async () => {
+      if (!(await exists(stateDirectory))) {
+        await rm(root, { recursive: true, force: true });
+        return;
+      }
       try {
-        if (!(await exists(stateDirectory))) {
-          return;
-        }
         await execute(devDown, [], {
           cwd: repository,
           env: environment,
           timeout: 300_000,
           maxBuffer: 8 * 1024 * 1024,
         });
-      } finally {
-        await rm(root, { recursive: true, force: true });
+      } catch (error) {
+        throw new Error(
+          `OpenShell development cleanup failed; recovery state preserved at ${stateDirectory}.`,
+          { cause: error },
+        );
       }
+      await rm(root, { recursive: true, force: true });
     });
 
     const result = await execute(devUp, [], {
@@ -182,6 +187,30 @@ test(
       "--context",
       `k3d-${cluster}`,
     ];
+    const releases = JSON.parse(
+      (
+        await execute(
+          "helm",
+          [
+            "list",
+            "--kubeconfig",
+            join(stateDirectory, "kubeconfig"),
+            "--kube-context",
+            `k3d-${cluster}`,
+            "--namespace",
+            "oce-system",
+            "--output",
+            "json",
+          ],
+          { cwd: repository, env: environment, maxBuffer: 4 * 1024 * 1024 },
+        )
+      ).stdout,
+    );
+    assert.match(
+      releases.find(({ name }) => name === "openshell-gateway")?.chart ?? "",
+      /-0\.1\.0-pre\.7$/,
+      "the default development profile must install the documented OpenShell chart",
+    );
     const namespaceList = JSON.parse(
       (
         await execute(
