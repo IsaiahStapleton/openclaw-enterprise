@@ -25,6 +25,10 @@ the Actions step timestamps to separate preparation, tests, and runner overhead.
 The timing fields are diagnostic; lane pass/fail and required-test accounting
 remain authoritative.
 
+Image transport records `image-archive-save` for Docker archive creation and
+`image-archive-import` for loading that archive into k3d. When an enclosing image
+preparation phase is timed, its duration already includes these operations.
+
 The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible words
 are flagged for review and pages above 2,500 fail, except the approved single-page
 [API reference](../reference/api.md) and `AGENTS.md` instruction files (see the

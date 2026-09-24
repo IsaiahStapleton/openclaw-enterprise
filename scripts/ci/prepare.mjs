@@ -1273,23 +1273,27 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
     // k3d can exit successfully after containerd rejects missing index content.
     // Export only the platform pulled locally, then verify the imported reference.
     const containerEngine = process.env.OCC_DOCKER_BIN ?? "docker";
-    await execFile(containerEngine, [
-      "image",
-      "save",
-      ...(basename(containerEngine) === "podman" ? [] : ["--platform", platform]),
-      "--output",
-      archive,
-      importReference,
-    ]);
-    await execFile(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", [
-      "image",
-      "import",
-      "--mode",
-      "direct",
-      archive,
-      "-c",
-      cluster.name,
-    ]);
+    await timedPreparation(state.lane, "image-archive-save", () =>
+      execFile(containerEngine, [
+        "image",
+        "save",
+        ...(basename(containerEngine) === "podman" ? [] : ["--platform", platform]),
+        "--output",
+        archive,
+        importReference,
+      ]),
+    );
+    await timedPreparation(state.lane, "image-archive-import", () =>
+      execFile(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", [
+        "image",
+        "import",
+        "--mode",
+        "direct",
+        archive,
+        "-c",
+        cluster.name,
+      ]),
+    );
   } finally {
     await rm(archive, { force: true });
   }
