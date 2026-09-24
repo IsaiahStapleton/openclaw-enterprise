@@ -237,6 +237,7 @@ test("Preset admission rejects malformed templates and credential leaks while pr
   const unsafeTemplates = [
     { configuration: { secretBindings: { OPENAI_API_KEY: { source: secret.ref } } } },
     { agent: { namespaceId: beta.id } },
+    { agent: { harnessAuth: { method: "api_key", source: wrongSecret.ref } } },
     { agent: { name: "{{ vars.undeclared }}" } },
     { configuration: { secretBindings: { SLACK_BOT_TOKEN: { source: wrongSecret.ref } } } },
     { configuration: { values: { models: { providers: { openai: { apiKey: sentinel } } } } } },
@@ -263,7 +264,7 @@ test("Preset admission rejects malformed templates and credential leaks while pr
       values: {},
       secretBindings: {
         SLACK_BOT_TOKEN: {
-          source: { kind: "secret", namespaceId: alpha.id, id: "{{ vars.secretId }}" },
+          source: { kind: "secret", id: "{{ vars.secretId }}" },
         },
       },
     },
@@ -395,10 +396,15 @@ test("standard Codex Preset installs and creates a dedicated Agent with restrict
   assert.equal(catalog.status, 200);
   const preset = catalog.data.find(({ id }) => id === installed.data.id);
   assert.equal(preset.name, "standard-codex");
+  // PATCH accepts the same portable request and binds it to the route Namespace.
+  const updated = await fixture.request("PATCH", `${collection(namespace.id)}/${preset.id}`, {
+    body: { template: artifact.template },
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.equal(updated.data.template.agent.harnessAuth.source.namespaceId, namespace.id);
   const rendered = renderPresetTemplate(preset.template, {
     name: "Restricted assistant",
     model: "gpt-5.1",
-    namespaceId: namespace.id,
     modelSecretId: secret.ref.id,
   });
   const configuration = await fixture.request(
@@ -453,6 +459,16 @@ test("standard Codex Preset installs and creates a dedicated Agent with restrict
 
   // Variable substitution cannot grant access to another Namespace's model key.
   const other = await fixture.createNamespace("Other owner", { ready: true });
+  // The identical artifact installs independently in another Namespace without inputs for scope.
+  const otherInstalled = await fixture.request("POST", collection(other.id), { body: artifact });
+  assert.equal(otherInstalled.status, 201, JSON.stringify(otherInstalled.body));
+  assert.equal(otherInstalled.data.template.agent.harnessAuth.source.namespaceId, other.id);
+  const crossNamespaceUpdate = await fixture.request(
+    "PATCH",
+    `${collection(other.id)}/${otherInstalled.data.id}`,
+    { body: { template: preset.template } },
+  );
+  assert.equal(crossNamespaceUpdate.status, 400, JSON.stringify(crossNamespaceUpdate.body));
   const otherConfiguration = await fixture.request(
     "POST",
     `/namespaces/${other.id}/configurations`,

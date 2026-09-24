@@ -74,7 +74,14 @@ native settings and credentials required by your Installation before deploying.
 
 Use variables for credential reference IDs, not passwords or API keys.
 [SecretRefs](configuration/secrets.md) remain structured, unresolved references;
-ordinary Namespace and credential permissions still apply. The template and
+ordinary Namespace and credential permissions still apply. In Preset write requests,
+`agent.harnessAuth.source` and `configuration.secretBindings.*.source` may omit
+`namespaceId`. OCC fills it from the request's Namespace before validating and
+storing the template. A supplied Namespace is still validated; an explicit
+cross-Namespace reference is rejected. This shorthand applies only to Preset
+writes; ordinary Agent and Configuration APIs require complete references.
+
+The template and
 rendered JSON each have a 1 MiB size limit and a maximum depth of 64.
 
 ## CRUD and permissions

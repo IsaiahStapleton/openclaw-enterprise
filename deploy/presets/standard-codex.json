@@ -10,10 +10,6 @@
         "type": "string",
         "description": "Codex model ID without the codex/ prefix"
       },
-      "namespaceId": {
-        "type": "string",
-        "description": "Current Namespace ID"
-      },
       "modelSecretId": {
         "type": "string",
         "description": "Same-Namespace Secret ID containing the model API key"
@@ -27,7 +23,6 @@
         "method": "api_key",
         "source": {
           "kind": "secret",
-          "namespaceId": "{{ vars.namespaceId }}",
           "id": "{{ vars.modelSecretId }}"
         }
       },

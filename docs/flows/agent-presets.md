@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-21
-last_updated_session: codex/01a0b1f2-e696-7232-a439-5b668154bcd9
+updated: 2026-09-24
+last_updated_session: codex/01a0cfbd-e4cc-7d62-8542-c1358ab1bc5b
 ---
 
 # Agent Presets flow
@@ -56,6 +56,9 @@ administrator Role. Its guarded update preserves customized Roles; the exact
 [`OpenClawController.createPreset` and `admitPresetTemplate`](../../packages/occ/src/index.ts)
 lock the Namespace, check the exact collection grant and ready state, then call
 [`normalizePresetTemplate`](../../packages/contracts/src/presets.ts).
+The normalizer copies the template and fills omitted `namespaceId` fields in
+Harness authentication and Configuration Secret binding sources from the locked
+Namespace. Explicit scopes remain unchanged for same-Namespace validation.
 Template structure, variable declarations, default types, and credential
 references are checked without requiring unfilled variables. Ordinary Agent
 field validation is deferred to the creation APIs. When native values exist,
@@ -138,6 +141,8 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-24 00:28: Bind omitted Preset SecretRef scopes to the request Namespace before admission and storage (codex/01a0cfbd-e4cc-7d62-8542-c1358ab1bc5b - 3ca1ead02d47b84fb2c4f13b305cbf263c0612a6)
 
 - 2026-09-21 22:00: Simplify Preset selection to one-time prefill and defer ordinary launch-field validation to creation (codex/01a0b1f2-e696-7232-a439-5b668154bcd9 - f997fca7e7f739a460274c74396afbcfda63f53a)
 

@@ -45,9 +45,9 @@ Open **Agents → Create Agent**, choose **standard-codex**, and supply:
 | --------------- | ----------------------------------------------------------- |
 | `name`          | A unique Agent name.                                        |
 | `model`         | Your available Codex model ID, without the `codex/` prefix. |
-| `namespaceId`   | The current Namespace ID.                                   |
 | `modelSecretId` | The existing model Secret ID in that Namespace.             |
 
+OCC binds the model Secret reference to the Namespace where you install the Preset.
 Select **Use Preset**, review the draft, then create the Agent. Complete the
 existing [credentials and deployment procedure](../../reference/console/create-and-deploy.md#initial-runtime-credentials),
 including the Agent's authorization to use its model Secret and gateway runtime

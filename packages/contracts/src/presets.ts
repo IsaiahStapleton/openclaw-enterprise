@@ -126,7 +126,21 @@ function validateCredentials(template: PresetTemplate, namespaceId: string) {
 
 /** Store a safe template; ordinary create/deploy admission owns concrete launch settings. */
 export function normalizePresetTemplate(input: unknown, namespaceId: string): PresetTemplate {
-  const template = validatePresetTemplate(input);
+  const template = structuredClone(validatePresetTemplate(input));
+  // Preset writes already carry an authorized Namespace; relative SecretRefs use it.
+  const bindings = [
+    template.agent?.harnessAuth,
+    ...Object.values(template.configuration?.secretBindings ?? {}),
+  ];
+  for (const binding of bindings) {
+    if (
+      isRecord(binding) &&
+      isRecord(binding.source) &&
+      !Object.hasOwn(binding.source, "namespaceId")
+    ) {
+      binding.source.namespaceId = namespaceId;
+    }
+  }
   validateCredentials(template, namespaceId);
   return immutableCopy(template);
 }
