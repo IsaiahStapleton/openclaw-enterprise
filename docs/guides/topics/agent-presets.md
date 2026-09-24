@@ -4,7 +4,7 @@ Use a Preset to reuse Agent settings across a Namespace. An operator creates the
 Preset through the HTTP API; users select it in the console and fill its
 variables. Each saved Agent gets its own Configuration and identity.
 
-For a dedicated Codex starting point with an empty tool-network allowlist and
+For a dedicated Codex starting point with an explicit network allowlist and
 cached search, [install the standard Codex Preset](standard-codex-preset.md).
 
 ## Create a Preset
