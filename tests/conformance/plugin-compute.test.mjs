@@ -1510,6 +1510,20 @@ test("Codex runtime helper checks effective app, tool, and account policy before
       rejects: true,
     },
     {
+      name: "explicit workspace categories match inherited native defaults",
+      defaults: { approval: "prompt" },
+      workspaceApp: { destructive_enabled: true, open_world_enabled: true },
+      global: { destructive_enabled: true, open_world_enabled: true },
+    },
+    {
+      name: "explicit destructive denial rejects native enablement",
+      defaults: { approval: "prompt" },
+      driverPolicy: { destructiveEnabled: false },
+      app: { destructive_enabled: true },
+      rejects: true,
+      error: /effective config does not match admitted configuration/,
+    },
+    {
       name: "unrequested app tool exposure changes",
       app: { omit_tools_from: ["search"] },
       rejects: true,
@@ -1633,7 +1647,10 @@ test("Codex runtime helper checks effective app, tool, and account policy before
         { captureError: true },
       );
       if (scenario.rejects) {
-        assert.match(result.error?.message ?? "", /effective (app|tool|account) policy conflicts/);
+        assert.match(
+          result.error?.message ?? "",
+          scenario.error ?? /effective (app|tool|account) policy conflicts/,
+        );
         assert.equal(result.value, undefined, "conflicting nested policy must prevent readiness");
       } else {
         assert.equal(result.error, undefined);

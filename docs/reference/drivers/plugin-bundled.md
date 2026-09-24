@@ -153,9 +153,12 @@ Before readiness, startup reads configuration for the Agent workspace and checks
 all managed app fields, including unexpected enablement/category defaults and tool
 exposure restrictions. An enabled app outside the selection fails verification;
 unselected disabled apps remain permitted. Native serialized defaults/nulls and
-omitted reviewers preserve inheritance. Every nested tool's enablement/approval
-must match its override or app default; account approval must match the app.
-Unexpected explicit enablement is rejected because it can bypass category rules.
+omitted reviewers preserve inheritance. Category settings (`destructive_enabled`
+and `open_world_enabled`) compare against the requested app value, then requested
+global value, then native `true`. An explicit native value equal to that expected
+default is accepted. Every nested tool's enablement/approval must match its override
+or app default; account approval must match the app. Unexpected explicit enablement
+is rejected because it can bypass category rules.
 
 This verifies loaded startup configuration, including trusted workspace layers.
 Codex 0.156 does not expose managed app/tool requirements through `config/read` or

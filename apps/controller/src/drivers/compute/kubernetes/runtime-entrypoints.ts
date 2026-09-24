@@ -918,8 +918,10 @@ function verifyCodexAppConfiguration(configuration, effective) {
       // Codex serializes global category defaults as true, optional fields as
       // null, and an empty exposure list imposes no additional restriction.
       if (field === "omit_tools_from" && Array.isArray(value) && value.length === 0 && app[field] === undefined) continue;
-      const expected = appId === "_default" && ["destructive_enabled", "open_world_enabled"].includes(field)
-        ? app[field] ?? true
+      // Category values inherit; resolve OCE's intended defaults, not the native
+      // values being checked. Explicit tool enablement still requires an exact match.
+      const expected = ["destructive_enabled", "open_world_enabled"].includes(field)
+        ? app[field] ?? configuration.apps?._default?.[field] ?? true
         : app[field];
       if (JSON.stringify(value) !== JSON.stringify(expected)) {
         throw new Error("Codex effective app policy conflicts at apps." + appId + "." + field + "; remove the native override or update the Agent policy.");

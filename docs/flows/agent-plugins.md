@@ -174,16 +174,16 @@ categories or copying defaults into tools. `native` maps to Codex `auto`;
 `toolDefaults.reviewer` maps `human`/`auto` to app `approvals_reviewer`
 `user`/`auto_review`; omission inherits the Harness reviewer. Unsupported reviewer
 scopes fail before save.
-`writeCodexAppConfiguration` replaces managed app subtrees with `config/batchWrite`;
-successful installations are checked for identity, version, and app mapping.
-Failed-only bindings are disabled; disabled selections produce no install attempts
-or startup results. `config/read` includes `/home/node/workspace`'s trusted project
-layers. Before readiness, `verifyCodexAppConfiguration` rejects mismatched requested
-fields, unexpected app/global defaults, and unselected enabled apps. Verified disabled
-bindings permit inherited app/tool/link fields; enabled apps and global defaults
-remain strict. Nulls, serialized defaults, and omitted reviewers preserve
-inheritance. Nested tool policies must match requested overrides or app defaults;
-account approval must match the app.
+`writeCodexAppConfiguration` replaces managed app subtrees; installation checks
+identity, version, and app mapping. Failed-only bindings are disabled; disabled
+selections skip installation and startup results. Workspace-scoped `config/read`
+includes trusted project layers. Before readiness, `verifyCodexAppConfiguration`
+rejects requested-field mismatches, unexpected defaults, and unselected enabled
+apps. Disabled bindings permit inherited fields. Category comparisons resolve
+requested app → requested global → native `true`; equivalent explicit values pass.
+Unexpected enablement remains strict. Nulls and omitted reviewers preserve
+inheritance. Nested tools must match overrides or app defaults; account approval
+must match the app.
 
 `runtime-entrypoints.ts:verifyCodexReviewerConfiguration` checks explicit app/link
 reviewers and `configRequirements/read`, rejecting forbidden reviewers, incompatible
@@ -289,6 +289,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 23:36: Normalize equivalent Codex category defaults during verification. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - 8ce00a84)
 
 - 2026-09-24 23:09: Clarified disabled-app verification and shortened startup readback prose. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - 27d44ac0)
 
