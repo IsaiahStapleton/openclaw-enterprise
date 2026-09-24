@@ -92,7 +92,8 @@ failed discovery leaves existing access unverified; only a successful catalog
 can establish that a selected repository is unavailable. Before deployment, the
 Console also compares the saved repository intent and bindings with the opened
 draft and requires a reload if they changed. This separate read cannot prevent a
-write between the check and deployment.
+write between the check and deployment. While the deployment request is in flight,
+the detail panel and Agent tab and revision controls cannot start another edit.
 
 These guards do not cover navigation away from the Agent or the Console's
 focus and visibility refresh. Those paths can discard local edits while the
