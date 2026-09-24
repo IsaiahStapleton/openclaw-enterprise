@@ -10,7 +10,8 @@ COPY packages/iam/package.json packages/iam/package.json
 COPY packages/occ/package.json packages/occ/package.json
 COPY packages/utils/package.json packages/utils/package.json
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
-    corepack pnpm install --frozen-lockfile --ignore-scripts
+    corepack pnpm install --frozen-lockfile --ignore-scripts --store-dir=/tmp/pnpm-store \
+    && rm -rf /tmp/pnpm-store
 COPY tsconfig.base.json tsconfig.json ./
 COPY packages packages
 COPY apps/controller apps/controller
@@ -22,8 +23,8 @@ RUN corepack pnpm credentials:build
 FROM ${NODE_BASE_IMAGE} AS openclaw-source
 
 # Keep the source identity separate from its unreleased package version.
-ENV GIT_COMMIT=20db76a79212c7d0c4f2106fea4d61fdce9972a3
-ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-21T02:26:33Z
+ENV GIT_COMMIT=2765f7a3341b8be4835afacbff3d04c6e3c3c79b
+ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-24T03:55:10Z
 ENV OPENCLAW_PREFER_PNPM=1
 WORKDIR /source
 RUN --mount=type=secret,id=build-ca,required=false \
@@ -31,16 +32,18 @@ RUN --mount=type=secret,id=build-ca,required=false \
     if [ -f /run/secrets/build-ca ]; then export CURL_CA_BUNDLE=/run/secrets/build-ca; fi; \
     curl --fail --location --silent --show-error \
       "https://codeload.github.com/openclaw/openclaw/tar.gz/${GIT_COMMIT}" -o /tmp/openclaw-source.tar.gz; \
-    echo '456e6d042aff7dec501c9417e86ee4c41ec480cde0418468d8436e5785f5a6d0  /tmp/openclaw-source.tar.gz' | sha256sum --check --strict; \
+    echo '42a420286dcad558b9710b7b583dd9e489bb07b3a835e3e19b69184b22fd416b  /tmp/openclaw-source.tar.gz' | sha256sum --check --strict; \
     tar -xzf /tmp/openclaw-source.tar.gz --strip-components=1; \
     rm /tmp/openclaw-source.tar.gz
 FROM openclaw-source AS openclaw-build
+# Keep package-store downloads out of retained layers; installed files remain.
 RUN --mount=type=secret,id=build-ca,required=false \
     --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
     set -eu; \
     if [ -f /run/secrets/build-ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build-ca; fi; \
     corepack enable; \
-    pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile --store-dir=/tmp/pnpm-store; \
+    rm -rf /tmp/pnpm-store
 # Follow the pinned upstream Docker assembly; plugin-local dependencies remain
 # separate when a plugin and core require different versions.
 RUN OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS=codex,slack \
@@ -54,11 +57,12 @@ RUN --mount=type=secret,id=build-ca,required=false \
     set -eu; \
     if [ -f /run/secrets/build-ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build-ca; fi; \
     corepack enable; \
-    pnpm install --frozen-lockfile --prod \
+    pnpm install --frozen-lockfile --prod --store-dir=/tmp/pnpm-store \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
       --config.supportedArchitectures.libc=glibc; \
-    node scripts/docker/verify-fs-safe-native.mjs --package-root /source --mode require
+    node scripts/docker/verify-fs-safe-native.mjs --package-root /source --mode require; \
+    rm -rf /tmp/pnpm-store
 
 FROM openclaw-build AS openclaw-build-output
 RUN rm -rf node_modules ui/node_modules \
@@ -105,7 +109,7 @@ RUN mkdir /out \
       node-host-launcher.mjs openclaw.mjs extensions skills docs qa \
     && cd /out \
     && sha256sum openclaw-runtime.tar.gz > openclaw-runtime.tar.gz.sha256 \
-    && node -e 'const fs = require("node:fs"); const crypto = require("node:crypto"); fs.writeFileSync("provenance.json", JSON.stringify({source: "https://github.com/openclaw/openclaw", commit: process.env.GIT_COMMIT, sourceArchiveSha256: "456e6d042aff7dec501c9417e86ee4c41ec480cde0418468d8436e5785f5a6d0", artifactKind: "assembled-runtime-root", runtimeArchiveSha256: fs.readFileSync("openclaw-runtime.tar.gz.sha256", "utf8").split(" ")[0], lockfileSha256: crypto.createHash("sha256").update(fs.readFileSync("/source/pnpm-lock.yaml")).digest("hex"), packageManager: require("/source/package.json").packageManager, platform: process.platform, architecture: process.arch, plugins: ["codex", "slack"]}, null, 2) + "\n");'
+    && node -e 'const fs = require("node:fs"); const crypto = require("node:crypto"); fs.writeFileSync("provenance.json", JSON.stringify({source: "https://github.com/openclaw/openclaw", commit: process.env.GIT_COMMIT, sourceArchiveSha256: "42a420286dcad558b9710b7b583dd9e489bb07b3a835e3e19b69184b22fd416b", artifactKind: "assembled-runtime-root", runtimeArchiveSha256: fs.readFileSync("openclaw-runtime.tar.gz.sha256", "utf8").split(" ")[0], lockfileSha256: crypto.createHash("sha256").update(fs.readFileSync("/source/pnpm-lock.yaml")).digest("hex"), packageManager: require("/source/package.json").packageManager, platform: process.platform, architecture: process.arch, plugins: ["codex", "slack"]}, null, 2) + "\n");'
 
 FROM ${NODE_BASE_IMAGE} AS runtime
 
