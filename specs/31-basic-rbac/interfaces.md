@@ -1,5 +1,9 @@
 # RBAC interfaces
 
+Read the [current-source and release-scope amendment](../31-basic-rbac.md#current-source-amendment--2026-09-24)
+before applying this original proposal. Its broader invocation scope remains
+disputed for 0.x; the requirements below are not implementation acceptance.
+
 This [proposal](../31-basic-rbac.md) builds on existing exact-action IAM. The policy
 catalog, units and outcomes below are selected proposed contracts. OCC facade
 routes, wire DTOs and response codes remain unresolved.

@@ -1,5 +1,9 @@
 # RBAC delivery and qualification
 
+Read the [current-source and release-scope amendment](../31-basic-rbac.md#current-source-amendment--2026-09-24)
+before applying this original proposal. Its broader invocation scope remains
+disputed for 0.x; the requirements below are not implementation acceptance.
+
 The [selected proposal](../31-basic-rbac.md) is complete only when ordinary people
 can use personal and team Agents through both channels with the required content,
 repository and withdrawal controls. An earlier checkpoint may be useful without

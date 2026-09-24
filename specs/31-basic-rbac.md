@@ -2,11 +2,45 @@
 
 **Date:** 2026-09-18
 
-**Status:** Proposed. Implementation and qualification remain open.
+**Status:** Proposed; release scope disputed. Implementation and qualification remain open.
 
 **Owner:** OCC authorization and Agent invocation.
 
 **Original source baseline:** `046e12b007bb1b4928bd3f7497a2353714be11a8`.
+
+## Current-source amendment — 2026-09-24
+
+This package preserves the original proposal below and in its linked design pages.
+Its references to “selected” scope describe that proposal, not an accepted release
+commitment. The [outstanding scope review](https://github.com/openclaw/openclaw-enterprise/pull/245#pullrequestreview-5262687790)
+objects to another authorization layer between Agents and channels for 0.x and
+calls for using OpenClaw Gateway's existing permission model. The invocation,
+audience mediation and protected-turn program here remains disputed and must not
+be treated as an approved 0.x requirement. Resolve that scope decision before
+adopting the delivery plan; this amendment does not decide it.
+
+[Authorization at the refreshed base](https://github.com/openclaw/openclaw-enterprise/blob/5ebd7305b0876db33276a249934bc82073b63424/docs/reference/authorization.md#manage-namespace-policy)
+already supports immutable Namespace Roles with administrator-selected permissions
+and exact-resource identity AccessBindings. Creation and deletion use the selected
+IAM Driver and commit policy with audit through the existing State transaction.
+The API requires Installation `administer`, exact Namespace `read`, and target
+`read` for binding creation. Group and broad-target creation are excluded; Roles
+and bindings have no update operation. Later requests reload current policy,
+while revocation does not stop an Agent or retract delivered bytes.
+
+The twenty fixed roles, Group administration, policy-operation receipts, creation
+profiles and active withdrawal below are proposed extensions. They are not the
+current Namespace API contract. In particular, “custom roles deferred” describes
+the original catalog proposal; it does not remove today's Role creation API.
+Any implementation must reconcile these extensions with the
+[existing policy flow](https://github.com/openclaw/openclaw-enterprise/blob/5ebd7305b0876db33276a249934bc82073b63424/docs/flows/namespace-iam-policy.md)
+and its IAM/State owners before adding writers or changing permissions.
+
+The [native admin UI pilot](https://github.com/openclaw/openclaw-enterprise/blob/5ebd7305b0876db33276a249934bc82073b63424/specs/31-agent-native-admin-ui.md)
+is a separate, trusted full-admin entry path. It does not establish the narrow
+content or per-operation guarantees proposed here. The remaining diagrams,
+milestones and withdrawal bounds are unqualified design requirements, not proof
+of current behavior.
 
 ## Problem and proposal
 

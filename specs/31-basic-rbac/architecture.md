@@ -1,5 +1,9 @@
 # RBAC architecture
 
+Read the [current-source and release-scope amendment](../31-basic-rbac.md#current-source-amendment--2026-09-24)
+before applying this original proposal. Its broader invocation scope remains
+disputed for 0.x; the requirements below are not implementation acceptance.
+
 The [proposal](../31-basic-rbac.md) connects existing owners so an ordinary human
 request can acquire exactly its admitted authority. The ordering below is required
 by the design. It is not evidence of a composed or installed implementation.
@@ -23,11 +27,11 @@ Egress owns the accepting transport and mandatory protected routes.
 Repository and model credential owners own acquisition, delivery and settlement.
 Audit records safe facts through its existing State owner.
 
-[Current main authorization](https://github.com/openclaw/openclaw-enterprise/blob/e9766f35a25afa240ee109b41a6ef821fb68687e/docs/reference/authorization.md)
+[Authorization at the earlier source snapshot](https://github.com/openclaw/openclaw-enterprise/blob/e9766f35a25afa240ee109b41a6ef821fb68687e/docs/reference/authorization.md)
 provides exact-action evaluation. This RFC's proposed
 [policy units](interfaces.md#policy-administration) do not establish these joins.
-Current [workspace selection](https://github.com/openclaw/openclaw-enterprise/blob/e9766f35a25afa240ee109b41a6ef821fb68687e/packages/occ/src/index.ts#L947-L962)
-still uses broader `read/operate` actions. The selected content cutover needs real
+That snapshot’s [workspace selection](https://github.com/openclaw/openclaw-enterprise/blob/e9766f35a25afa240ee109b41a6ef821fb68687e/packages/occ/src/index.ts#L947-L962)
+uses broader `read/operate` actions. The selected content cutover needs real
 consumers, not just new permission names.
 
 ## Original State transaction

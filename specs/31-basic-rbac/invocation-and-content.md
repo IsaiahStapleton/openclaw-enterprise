@@ -1,5 +1,9 @@
 # Invocation and authorized content
 
+Read the [current-source and release-scope amendment](../31-basic-rbac.md#current-source-amendment--2026-09-24)
+before applying this original proposal. Its broader invocation scope remains
+disputed for 0.x; the requirements below are not implementation acceptance.
+
 A verified conversation selects the authority for one ordinary Agent turn. This
 page owns that proposed workflow from native ingress to authorized disclosure.
 The [interface reference](interfaces.md#agent-invocation) owns operation permissions
