@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-24
-last_updated_session: public-pr/348
+last_updated_session: 01a0d1dd-aa36-7622-9f43-8376f6ff935e
 ---
 
 # Platform console request flow
@@ -41,6 +41,8 @@ graph TD
     A["Open console or change page"] --> B["Clear old rows and check session"]
     B -->|no session| C["Login"]
     B -->|authenticated| D["Read readable Namespaces and validate selection"]
+    D -->|debug=true| DBG["Read accessible Agents and runtime image metadata"]
+    DBG --> F
     D --> E["Request current page resource"]
     E --> E1["Edit starter JSON and select associations"]
     E1 --> S1["Select Secret or open creation modal"]
@@ -93,37 +95,43 @@ graph TD
 
 `apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`
 
-Startup validates Provider definitions into safe `{id,type}` summaries passed to
-`createFastifyApp`. Requests never scan configuration live, read credentials, or
-contact a Provider. [Provider-managed credential delivery](service-account-driver-credential-delivery.md)
-owns client construction and Driver activation.
+Startup passes safe Provider `{id,type}` summaries to `createFastifyApp`.
+[Provider-managed delivery](service-account-driver-credential-delivery.md) owns
+Driver activation. Requests do not reread configuration or credentials.
 
-`apps/controller/src/console-assets.ts:readConsoleAsset` maps public console
-assets and capability modules to allowlisted files, with recognized page URLs
-using the shared HTML shell. Unknown console paths receive that shell with HTTP
-`404`. The controller sets MIME type and same-origin content security policy;
-other routes keep canonical API JSON errors. The Dockerfile copies these files
-into the controller image.
+`apps/controller/src/console-assets.ts:readConsoleAsset` serves allowlisted assets
+and the shared HTML shell with MIME types and same-origin CSP. Unknown console
+paths return the shell with `404`; API routes retain JSON errors.
 
-`scripts/build-console-metadata.mjs` stamps the console HTML during image build.
-The publisher supplies its checked `source_sha` as `OCC_BUILD_REVISION`, also used
-for the image revision label. Empty metadata stays empty; nonempty metadata must
-be a full lowercase Git SHA. `shell.mjs:renderShell` shows the short OCC hash
-beside OCE with the full revision in a tooltip; missing or invalid metadata shows
-**dev**. No browser or controller request inspects Git or an Agent gateway version.
+`scripts/build-console-metadata.mjs` bakes the publisher's checked
+`OCC_BUILD_REVISION` into HTML. With `debug=true`, `shell.mjs:renderShell` displays
+the full commit; invalid or absent metadata remains unknown.
+
+`runtime-images.mjs:renderRuntimeImages` issues at most three concurrent reads for
+readable Agents in the selected Namespace.
+`packages/occ/src/index.ts:OpenClawController.getAgentRuntimeImages` authorizes
+exact Agent read, resolves its active revision, then calls its Compute Driver.
+Docker follows attached immutable images. Kubernetes reads revision-owned Pods
+and binds provenance to Pod/container identity, with a two-second metadata deadline.
+The Dockerfile bakes Enterprise metadata into `build.json`;
+`scripts/build-runtime-assets.mjs` records upstream OpenClaw in `provenance.json`.
+Both live under `/opt/oce/runtime/`; Drivers expose separate commits.
+
+Navigation preserves the flag and rejects stale responses; removing it stops
+these reads. Missing provenance and failures remain explicit. The
+[Compute contract](../reference/drivers/compute.md) defines inspection scope.
 
 ### 2. Resolve the session before private reads
 
 `apps/controller/src/console/console.mjs:loadPage`
 
-The browser clears the prior view, advances its navigation generation, and
-requests `GET /api/auth/session`. No session opens login; unavailable inspection
-blocks private reads and offers Retry. Login submits exactly email and password.
-`apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` compares browser
-Origin to the configured controller origin before sign-in or sign-out. Server SDK
-calls bypass Better Auth's request-origin middleware, so this HTTP boundary keeps
-that check while retaining headerless CLI requests. Better Auth owns the session
-cookie and password verification; the browser stores no credentials or tokens.
+The browser clears the prior view, advances its generation, and requests
+`GET /api/auth/session`. Missing sessions open login; failed reads offer Retry.
+Login submits email and password.
+`apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` checks browser
+Origin before sign-in/out, including SDK calls that bypass Better Auth middleware.
+Headerless CLI requests remain supported. Better Auth owns session cookies and
+password verification; the browser stores no credentials or tokens.
 
 After authentication, the client reads `GET /namespaces`, validates the URL's
 selection against readable Namespaces, or chooses the first ready one followed by
@@ -146,73 +154,79 @@ empty configuration is a successful empty list; absent wiring and dependency
 failure return errors.
 
 `apps/controller/src/console/agents/create.mjs:renderCreateAgent` selects Provider,
-then Harness. OpenAI defaults to Codex (Dedicated) and offers OpenClaw (Embedded);
-Anthropic offers OpenClaw. Codex accepts API keys or **Service Accounts**
-(`codex_pat`); OpenClaw accepts API keys. Provider changes reset harness,
-credential, and model. Switching an unsaved service account token to OpenClaw
-clears token/model and selects API-key auth; API-key harness changes retain both.
-Credential hints link to the token console and show expected prefixes.
+then Harness: OpenAI defaults to Dedicated Codex and offers Embedded OpenClaw;
+Anthropic offers OpenClaw. Provider/Harness changes reset incompatible credentials
+and model choices. The [creation reference](../reference/console/create-and-deploy.md)
+defines authentication combinations and token handling.
 
-Presets fix saved credential providers and reject cross-provider JSON before
-writes. Saved service account tokens lock Codex; operator-managed credentials
-lock OpenClaw across provider changes. Installation Provider discovery is hidden. The [creation reference](../reference/console/create-and-deploy.md)
-owns permissions and partial-save recovery.
+Presets reject cross-provider JSON: credentials fix Provider; PATs fix
+Codex; operator-managed credentials fix OpenClaw. Installation Provider
+discovery is hidden. The [creation reference](../reference/console/create-and-deploy.md)
+owns permissions and recovery.
 
-Advanced settings holds JSON and plugins; no model is selected initially.
-Binding edits refresh channel settings, preserving unrelated bindings when applying
-Slack. Invalid binding JSON blocks channel editing.
-`create.mjs:MODEL_CHOICES` supplies hardcoded provider choices before credential
-entry, without discovery or account-access verification. Manual entry remains available;
-Presets retain their model and authentication. Credential edits
-preserve model selection. Provider or authentication-method changes reset it.
-Model edits preserve provider transport and Codex plugin settings. Provider or
-Harness changes regenerate those entries while preserving unrelated JSON;
-reset restores the selected starter. The adjacent TODO tracks
-catalog refresh and credential-aware discovery.
+Advanced settings holds Configuration JSON and initial workspace files; no model
+is selected initially. Preset Secret bindings stay in form state. Applying Slack
+preserves unrelated bindings. Preset workspace files prefill editors before
+submission.
+
+`agents/plugin-fields.mjs:createPluginFields` edits Agent-owned `plugins` through
+`#agent-plugins`, separately from Configuration. Invalid JSON and untouched fields
+survive; clearing overrides restores inheritance. Submission, uncertain outcomes,
+or invalid JSON lock editing. `capabilities.pluginPolicies` gates each policy scope;
+Missing capabilities preserve JSON and disable edits. Unsupported saved reviewers
+remain clearable. Agent submission saves the draft.
+
+`create.mjs:loadPluginCatalog` and `loadPluginTools` implement
+[transient PAT discovery](agent-plugins.md#credential-scoped-discovery): upstream
+pagination, local filtering, and tools loaded on selection. Credential, provider,
+and Harness changes clear results and invalidate pending reads. The Driver owns
+upstream access.
+
+`create.mjs:MODEL_CHOICES` supplies static provider lists before credentials,
+without discovery requests or account verification. Manual entry remains available;
+Presets retain model/authentication.
+Credential edits preserve selection; Provider/authentication-method changes reset it.
+Model edits preserve transport and Codex plugin settings. Provider/Harness changes
+regenerate them, retaining unrelated JSON; reset restores the starter.
 
 `configurationTemplate` enables Control UI with loopback origins on port 18789.
 Compute supplies gateway authentication from Installation trust; Presets replace
-the starter unchanged. [OCE native admin access](agent-native-admin.md) still
-requires isolated HTTPS origins. [Agent editing](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
+the starter unchanged. [Native admin access](agent-native-admin.md) requires isolated
+HTTPS origins. [Agent editing](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
 traces Slack Secret selection/creation. **Apply channel settings** copies values
-and bindings into the form. Channel sender access is stored on each selected
-Slack channel; the drawer does not edit direct-message `allowFrom`. Cancellation
-discards selections but retains Secrets already created in the Namespace.
-Pending grants accumulate across drawer applications.
+and bindings; grants accumulate across applications. Sender access belongs to each
+selected channel, leaving direct-message `allowFrom` unchanged. Cancellation discards
+selections but retains created Namespace Secrets.
 
 `GET /namespaces/:namespaceId/agents/repository-options` discovers approved choices.
-Read-only and Contributor submit approved profiles; customization disables issues. Only
+Console submits opaque references and an explicit common profile. Read-only and
+Contributor use approved profiles; customization can disable issue management. Only
 `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh draft without bindings;
-it never enables provisioning. Other failures block submission until retry succeeds.
+other failures block submission. Retry discovery before provisioning.
 
-For supported Dedicated runtimes with successful repository discovery, submission
-sends the inline Configuration, selected repository bindings and ordinary Secret references to the [provisioning API](agent-provisioning.md).
-Console polls the job, then opens the returned revision.
-The worker creates resources and exact Secret grants before
-admitting deployment; Console does not duplicate those grants.
+Supported Dedicated runtimes with successful repository discovery submit inline
+Configuration, repository bindings, and Secret references to
+[provisioning](agent-provisioning.md). Console polls the job, then opens its Agent
+revision. The worker creates resources and exact Secret grants before deployment
+admission; Console does not duplicate grants.
 
-Ordinary draft creation posts `{kind: "agent", values, secretBindings}` to
-`POST /namespaces/:namespaceId/configurations`, then sends its returned ID to
-`POST /namespaces/:namespaceId/agents` with plugins, `initialWorkspaceFiles`, and
-`workspaceDefaultsId`. Success opens `revision=draft`. All four seeded workspace
-textareas, including unchanged/empty values, are submitted. OCC stages them
-outside Agent/Configuration; [workspace setup](workspace-files.md) applies them
-before execution.
+Ordinary drafts post `{kind: "agent", values, secretBindings}` to
+`POST /namespaces/:namespaceId/configurations`, then submit its ID, plugins,
+`initialWorkspaceFiles`, and `workspaceDefaultsId` to
+`POST /namespaces/:namespaceId/agents`. Success opens `revision=draft`.
+OCC stages all four workspace textareas, including unchanged/empty values, outside
+Agent/Configuration for [workspace setup](workspace-files.md).
 
-`create.mjs:grantConfigurationSecretAccess` grants the returned Agent exact
-Secret `operate` through separate Namespace IAM writes. Only final same-Namespace
-`env` bindings receive grants; superseded selections receive none. Failure keeps
-the Agent and enables **Retry credential access**, which rereads exact grants
-without duplicating resources; the saved Agent link permits manual recovery.
-Failed Agent writes retain the Configuration ID and lock JSON/Harness; explicit
-retries reuse it. Writes never retry automatically. Draft creation neither
-admits revisions, validates the plugin catalog, nor starts runtime work.
+`create.mjs:grantConfigurationSecretAccess` grants exact Secret `operate` through
+Namespace IAM writes for final same-Namespace `env` bindings only. Failure retains
+the Agent: **Retry credential access** rereads grants without duplication; its link
+supports manual recovery. Failed Agent writes retain Configuration ID and lock
+JSON/Harness for explicit reuse. Writes never retry automatically. Drafts admit no
+revision, validate no plugin catalog, and start no runtime.
 
-`apps/controller/src/console/agents/harness-auth.mjs:createHarnessAuthFields`
-masks the existing Secret ID input in the Credentials editor.
-`harnessAuthDescription` reports a configured Secret without displaying its ID
-in draft or revision summaries. Native Configuration displays unresolved
-references; the console does not fetch Secret values for these views.
+`agents/harness-auth.mjs:createHarnessAuthFields` masks existing Secret IDs;
+`harnessAuthDescription` omits them from draft/revision summaries. Configuration
+shows unresolved references; these views never fetch Secret values.
 
 ### 4–6. Edit the Agent and access runtime files
 
@@ -316,7 +330,15 @@ uncertain response disables replay until refresh and inspection.
 
 ## Changelog
 
+- 2026-09-24: Keep Preset bindings internal.
+
+- 2026-09-24 17:20: Expose upstream OpenClaw provenance separately. (01a0c179-19f7-7111-8bb4-fc7680da5545 - bd1a5c46eb069bfa7feedbb99b074dc015c4e9bc)
+
+- 2026-09-24 15:44: Trace opt-in sidebar build metadata and authorized Compute image observations. (01a0c179-19f7-7111-8bb4-fc7680da5545 - 6b5c9093)
+
 - 2026-09-24 06:19: Replace Console model discovery with an intentional static starter list and preserve manual entry. (01a0d20c-dc1b-7d22-a965-60b9c244b29d - 24ecb94b)
+
+- 2026-09-24 05:40: Added Create Agent plugin JSON controls and transient PAT catalog discovery; policy integration remains pending. (01a0d1dd-aa36-7622-9f43-8376f6ff935e - f62e17c)
 
 - 2026-09-23 21:41: Preserve edited Codex plugin settings across model and key changes. (01a0cce9-23e3-7072-aa3f-a2e26d2dbf11 - b8f23be17de4a4b077dab8d6b90b4add1f9146cb)
 
