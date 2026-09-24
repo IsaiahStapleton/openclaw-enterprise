@@ -1,6 +1,6 @@
 # Console draft navigation evidence
 
-Tested Console source: `58cd8c9d73d401104b31252235c38c2ecc499c62`.
+Tested Console source: `870708383a0484cb87254c9c5b1181201510cbea`.
 Environment: Linux, Node.js 26.5.0, Playwright 1.63.0, Chromium 153,
 1280 × 900 viewport. Storybook was rebuilt from this source.
 
