@@ -18,6 +18,13 @@ node scripts/ci/run-tests.mjs audit
 
 Both workflows reuse the [run-ci-lane action](../../.github/actions/run-ci-lane/action.yml) for setup, tests and cleanup; each job retains its own environment and credentials.
 
+The lane result artifact records `wallDurationMs` for each selected test file,
+including file-specific setup and cleanup. Preparation logs emit `[ci-timing]`
+lines with named phases for image-heavy and k3d lanes. Compare those values with
+the Actions step timestamps to separate preparation, tests, and runner overhead.
+The timing fields are diagnostic; lane pass/fail and required-test accounting
+remain authoritative.
+
 The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible words
 are flagged for review and pages above 2,500 fail, except the approved single-page
 [API reference](../reference/api.md) and `AGENTS.md` instruction files (see the
