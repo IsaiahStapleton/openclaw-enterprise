@@ -1488,6 +1488,29 @@ for (const mutation of ["authentication", "generated credentials", "channel Secr
       .getByText(/Outcome unknown/)
       .first()
       .waitFor();
+    const credentialsPanel = page.locator(".runtime-credentials");
+    const uncertaintyExplanation =
+      "Credential changes may have been saved. Reload this draft and inspect the saved state before deploying.";
+    if (mutation !== "authentication") {
+      assert.equal(
+        await credentialsPanel
+          .getByText("Outcome unknown. Credential storage could not be confirmed.", {
+            exact: false,
+          })
+          .count(),
+        1,
+      );
+      assert.equal(
+        await credentialsPanel.getByText(uncertaintyExplanation, { exact: true }).count(),
+        0,
+      );
+      assert.equal(
+        await page
+          .getByRole("button", { name: "Save authentication source" })
+          .evaluate((node) => node.ownerDocument.defaultView.getComputedStyle(node).opacity),
+        "0.55",
+      );
+    }
     assert.equal(
       await deploy.isDisabled(),
       true,
@@ -1497,6 +1520,7 @@ for (const mutation of ["authentication", "generated credentials", "channel Secr
     if (mutation !== "authentication") {
       await page.getByRole("button", { name: "Refresh status" }).click();
       assert.equal(await deploy.isDisabled(), true);
+      await credentialsPanel.getByText(uncertaintyExplanation, { exact: true }).waitFor();
     }
     if (mutation === "channel Secrets") {
       assert.equal(await page.locator("#revision-selector").isEnabled(), true);
@@ -1512,6 +1536,38 @@ for (const mutation of ["authentication", "generated credentials", "channel Secr
       .waitFor();
     assert.equal(await deploy.isEnabled(), true);
     assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
+    if (mutation === "channel Secrets") {
+      const configurationPath = `/namespaces/${namespace.id}/configurations/${configuration.id}`;
+      const secretPath = `/namespaces/${namespace.id}/secrets/${appSecret.id}`;
+      const previousSecretWrites = pathRequests(requests, "PATCH", secretPath).length;
+      await page.route(`${fixture.origin}${configurationPath}`, (route) =>
+        route.request().method() === "PATCH"
+          ? route.fulfill({
+              status: 403,
+              contentType: "application/json",
+              body: JSON.stringify({
+                error: { code: "FORBIDDEN", message: "denied" },
+                meta: { requestId: "req_00000000-0000-4000-8000-000000000433" },
+              }),
+            })
+          : route.continue(),
+      );
+      await page.getByLabel("Slack app token").fill("xapp-second-replacement");
+      await page.getByRole("button", { name: "Save channel Secrets" }).click();
+      const denial = credentialsPanel.getByText(
+        "Access denied. You do not have permission for this credential operation. Request ID: req_00000000-0000-4000-8000-000000000433",
+        { exact: true },
+      );
+      await denial.first().waitFor();
+      assert.equal(await denial.count(), 1);
+      assert.equal(pathRequests(requests, "PATCH", secretPath).length, previousSecretWrites + 1);
+      await credentialsPanel.getByText(uncertaintyExplanation, { exact: true }).waitFor();
+      assert.equal(await deploy.isDisabled(), true);
+      await page.getByRole("button", { name: "Refresh status" }).click();
+      await credentialsPanel.getByText(uncertaintyExplanation, { exact: true }).waitFor();
+      assert.equal(await denial.count(), 0);
+      assert.equal(await deploy.isDisabled(), true);
+    }
   });
 }
 

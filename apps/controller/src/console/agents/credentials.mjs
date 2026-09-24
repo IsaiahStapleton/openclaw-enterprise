@@ -115,6 +115,10 @@ function credentialError(error, mutation = false) {
   return text + (error.requestId ? ` Request ID: ${error.requestId}` : "");
 }
 
+function isDefinitiveRejection(error) {
+  return [400, 403, 404, 409, 429].includes(error.status);
+}
+
 async function storeChannelSecret(context, state, binding, value) {
   const currentSecretId = secretIdForBinding(state.configuration.secretBindings?.[binding.key]);
   if (currentSecretId) {
@@ -195,9 +199,13 @@ export function createRuntimeCredentialsPanel({
   const section = element("section", { className: "agent-card runtime-credentials" });
 
   function saveErrorText() {
-    return state.saveErrorBeforeWrite
-      ? "Could not check the saved Configuration. Try again before saving channel Secrets."
-      : credentialError(state.saveError, true);
+    if (state.saveErrorBeforeWrite) {
+      return (
+        "Could not check the saved Configuration. Try again before saving channel Secrets." +
+        (state.saveError.requestId ? ` Request ID: ${state.saveError.requestId}` : "")
+      );
+    }
+    return credentialError(state.saveError, true);
   }
 
   function canMutateGeneratedCredentials() {
@@ -332,8 +340,7 @@ export function createRuntimeCredentialsPanel({
         return;
       }
       state.saveError = cause;
-      state.outcomeUnknown =
-        cause.status === undefined || ![400, 403, 404, 409, 429].includes(cause.status);
+      state.outcomeUnknown = !isDefinitiveRejection(cause);
     } finally {
       if (context.isCurrent()) {
         state.saving = false;
@@ -343,18 +350,13 @@ export function createRuntimeCredentialsPanel({
     }
   }
 
-  function renderChannelForm() {
+  function renderChannelForm(error) {
     if (!slackEnabled(state.values)) {
       return null;
     }
     const formId = "runtime-channel-secrets-form";
     const fields = new Map();
     const status = element("p", { className: "hint", role: "status" });
-    const error = element(
-      "p",
-      { className: "error", role: "alert" },
-      state.saveError === null ? "" : saveErrorText(),
-    );
     const save = element(
       "button",
       { type: "submit", form: formId, className: "primary" },
@@ -411,7 +413,9 @@ export function createRuntimeCredentialsPanel({
       input.addEventListener("input", () => {
         state.saveError = null;
         state.saveMessage = "";
-        error.textContent = "";
+        if (error) {
+          error.textContent = "";
+        }
         status.textContent = "";
         if (input.value.length > 0 && input.value !== SECRET_MASK) {
           field.mode = "replacement";
@@ -461,7 +465,6 @@ export function createRuntimeCredentialsPanel({
       { id: formId, className: "credential-form" },
       ...SLACK_SECRET_BINDINGS.map((binding) => createTokenField(binding)),
       status,
-      error,
       element("div", { className: "form-actions" }, save),
     );
     form.addEventListener("submit", async (event) => {
@@ -486,7 +489,9 @@ export function createRuntimeCredentialsPanel({
       state.saveErrorBeforeWrite = false;
       state.saveMessage = "";
       status.textContent = "Saving channel Secrets...";
-      error.textContent = "";
+      if (error) {
+        error.textContent = "";
+      }
       updateControls();
       onStatusChange();
       let mutationStarted = false;
@@ -548,10 +553,8 @@ export function createRuntimeCredentialsPanel({
         state.saveErrorBeforeWrite = !mutationStarted;
         state.saveMessage = "";
         state.outcomeUnknown =
-          mutationCommitted ||
-          (mutationStarted && ![400, 403, 404, 409, 429].includes(cause.status));
+          mutationCommitted || (mutationStarted && !isDefinitiveRejection(cause));
         status.textContent = "";
-        error.textContent = credentialError(cause, true);
       } finally {
         for (const field of fields.values()) {
           field.input.value = "";
@@ -601,6 +604,9 @@ export function createRuntimeCredentialsPanel({
   }
 
   function render() {
+    const error = state.saveError
+      ? element("p", { className: "error", role: "alert" }, saveErrorText())
+      : null;
     section.replaceChildren(
       ...[
         element("h2", {}, "Runtime credentials"),
@@ -613,9 +619,7 @@ export function createRuntimeCredentialsPanel({
         state.saveMessage
           ? element("p", { className: "hint", role: "status" }, state.saveMessage)
           : null,
-        state.saveError
-          ? element("p", { className: "error", role: "alert" }, saveErrorText())
-          : null,
+        error,
         state.reloadRequired
           ? element(
               "p",
@@ -623,7 +627,7 @@ export function createRuntimeCredentialsPanel({
               "Configuration changed. Reload this draft before saving channel Secrets.",
             )
           : null,
-        state.outcomeUnknown
+        state.outcomeUnknown && (!state.saveError || isDefinitiveRejection(state.saveError))
           ? element(
               "p",
               { className: "error", role: "status" },
@@ -642,7 +646,7 @@ export function createRuntimeCredentialsPanel({
           state.outcomeUnknown || state.reloadRequired ? button("Reload draft", onReload) : null,
         ),
         renderUnavailableReason(),
-        renderChannelForm(),
+        renderChannelForm(error),
       ].filter(Boolean),
     );
   }
