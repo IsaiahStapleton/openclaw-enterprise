@@ -88,6 +88,12 @@ exhausted disk even after unused toolchains were removed. Controller preparation
 uses `ubuntu-24.04`. The repository must retain access to the Blacksmith runner
 label; container preparation does not delete preinstalled SDKs.
 
+Before installing QEMU, the job mounts `binfmt_misc` on the host so emulator
+registrations survive the installer container. It then runs ARM64 Node from the
+pinned base image and asserts its architecture before starting the build. BuildKit
+can emulate builds itself, so a successful cross-build alone does not establish
+that Docker can execute the resulting ARM64 image.
+
 After OCI export, the job prunes only its dedicated Buildx builder's cache so
 the cache and unpacked smoke images do not exhaust the runner's disk together.
 
@@ -165,6 +171,7 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 
 ## Changelog
 
+- 2026-09-24 04:45: Keep host emulator registrations mounted and execute an ARM64 container before building. (public-pr/348 - 467bcc83)
 - 2026-09-24 03:50: Use the existing Blacksmith runner for runtime preparation after GitHub-hosted builds exhausted disk; keep both platforms and all smoke checks. (public-pr/348 - ee6a5a3d)
 
 - 2026-09-24 00:30: Reclaim unused hosted Android SDK space before the runtime source build, retaining both platforms and all startup checks. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - ae96345b)
