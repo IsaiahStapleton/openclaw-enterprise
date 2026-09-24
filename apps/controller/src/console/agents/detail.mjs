@@ -528,6 +528,14 @@ export async function renderAgentDetail(context) {
             return;
           }
           if (
+            freshAgent.executionMode !== agent.executionMode ||
+            freshAgent.providerId !== agent.providerId ||
+            JSON.stringify(freshAgent.plugins) !== JSON.stringify(agent.plugins)
+          ) {
+            deployReloadMessage = "Agent settings changed. Reload this draft before deploying.";
+            return;
+          }
+          if (
             JSON.stringify(freshAgent.repositoryAccess) !==
               JSON.stringify(agent.repositoryAccess) ||
             JSON.stringify(freshAgent.repositoryBindings) !==

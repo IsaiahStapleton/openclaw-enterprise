@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
 updated: 2026-09-24
-last_updated_session: authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685
+last_updated_session: authoring-run/a76da345-0aab-449e-a344-726196fc376c
 ---
 
 # Console Agent editing and runtime requests
@@ -90,10 +90,11 @@ Reloading choices resets search, pagination, and dismissed results together, so 
 smaller catalog cannot retain filters whose controls are no longer visible. A
 failed discovery leaves existing access unverified; only a successful catalog
 can establish that a selected repository is unavailable. Before deployment, the
-Console also compares the saved repository intent and bindings with the opened
-draft and requires a reload if they changed. This separate read cannot prevent a
-write between the check and deployment. While the deployment request is in flight,
-the detail panel and Agent tab and revision controls cannot start another edit.
+Console compares the saved repository intent, bindings, execution mode, Provider,
+and plugin settings with the opened draft and requires a reload if they changed.
+This separate read cannot prevent a write between the check and deployment. While
+the deployment request is in flight, the detail panel and Agent tab and revision
+controls cannot start another edit.
 
 These guards do not cover navigation away from the Agent or the Console's
 focus and visibility refresh. Those paths can discard local edits while the
@@ -300,6 +301,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 20:00: Trace deployment checks for changed Agent settings. (authoring-run/a76da345-0aab-449e-a344-726196fc376c - 22fc4b0e18d5a6a1a7923d42c1503c1de3b7bf72)
 
 - 2026-09-24 19:41: Trace unavailable discovery and the repository-access deployment check. (authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685 - 43d99e7dce02fbd34b072c877868ad1beef4d245)
 

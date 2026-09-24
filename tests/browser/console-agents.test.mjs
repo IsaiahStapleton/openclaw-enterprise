@@ -1176,6 +1176,70 @@ test("Agent deployment reports preflight errors and requires reload for changed 
   assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
 });
 
+for (const [field, change] of [
+  ["execution mode", { executionMode: "dedicated" }],
+  ["Provider", { providerId: providerFixtures[0].id }],
+  [
+    "plugin policy",
+    {
+      plugins: {
+        "codex-plugin:linear@openai-curated-remote": {
+          enabled: true,
+          toolDefaults: { approval: "approve" },
+        },
+      },
+    },
+  ],
+]) {
+  test(`Agent deployment requires a reload after ${field} changes`, async (t) => {
+    const { fixture, namespace } = await createRuntimeAuthFixture(t, `Deployment ${field}`);
+    const pluginDriver = new CodexPluginDriver();
+    fixture.controller.registerDriver(pluginDriver);
+    fixture.controller.selectDriver("plugin", pluginDriver.id);
+    const agent = await fixture.createAgent(
+      namespace.id,
+      `Deployment ${field}`,
+      nativeValues("deployment-settings"),
+      { harnessAuth: { method: "runtime" } },
+    );
+    const path = `/namespaces/${namespace.id}/agents/${agent.id}`;
+    const { page } = await newPage(t, fixture);
+    await login(
+      page,
+      fixture,
+      `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft`,
+    );
+    const deploy = page.getByRole("button", { name: "Deploy new revision" });
+    await page.getByText("Configured on the runtime host", { exact: false }).waitFor();
+    assert.equal(await deploy.isEnabled(), true);
+
+    // A second operator changes the desired Agent state without editing its Configuration.
+    const updated = await fixture.request("PATCH", path, {
+      body: { configurationId: agent.configurationId, ...change },
+    });
+    assert.equal(updated.status, 200, JSON.stringify(updated.body));
+    const result = Promise.race([
+      page
+        .getByText("Agent settings changed. Reload this draft before deploying.", { exact: true })
+        .waitFor()
+        .then(() => "blocked"),
+      page
+        .waitForRequest(
+          (request) => request.method() === "POST" && request.url().endsWith(`${path}/deploy`),
+        )
+        .then(() => "submitted"),
+    ]);
+    // Stop an unguarded candidate from creating a revision during the regression check.
+    await page.route(`${fixture.origin}${path}/deploy`, (route) => route.abort());
+    await deploy.click();
+    assert.equal(await result, "blocked", `stale ${field} must not be submitted`);
+    assert.equal(await deploy.isDisabled(), true);
+    await page.reload();
+    await page.getByText("Configured on the runtime host", { exact: false }).waitFor();
+    assert.equal(await deploy.isEnabled(), true);
+  });
+}
+
 for (const tab of ["configuration", "repositories"]) {
   test(`Agent deployment keeps ${tab} edits unavailable until the request finishes`, async (t) => {
     const { fixture, namespace, modelSecret, grantModelAccess } =
