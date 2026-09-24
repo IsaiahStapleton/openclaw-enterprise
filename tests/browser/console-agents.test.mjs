@@ -5033,11 +5033,14 @@ for (const action of ["disable", "drawer"]) {
     await login(page, fixture, url.pathname + url.search);
     await page.getByText("Configured on the runtime host", { exact: false }).waitFor();
     assert.equal(
-      await page.locator(".channels-section").evaluate((section) =>
-        [...section.childNodes].some(
-          (node) => node.nodeType === globalThis.Node.TEXT_NODE && node.textContent.trim() === "null",
+      await page
+        .locator(".channels-section")
+        .evaluate((section) =>
+          [...section.childNodes].some(
+            (node) =>
+              node.nodeType === globalThis.Node.TEXT_NODE && node.textContent.trim() === "null",
+          ),
         ),
-      ),
       false,
     );
     const deploy = page.getByRole("button", { name: "Deploy new revision" });
