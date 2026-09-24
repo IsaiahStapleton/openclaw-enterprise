@@ -31,6 +31,32 @@ URLs. Reload with **Reset story**, not the embedded frame's current console URL.
 The Storybook build workflow also uploads a static artifact; it does not publish
 or change access to the documentation site.
 
+## Appearance review
+
+Use **Preview theme** on any story to select System, Light, or Dark without
+resetting its workflow. **Components/Navigation → Light appearance** and
+**Dark appearance** open the Agent list in a fixed mode. Check desktop
+(1440 × 1000), tablet (768 × 1024), and mobile (390 × 844); use keyboard focus,
+search, navigation, and an open dialog in both modes. Include empty, loading,
+error, permission-denied, and missing-credential stories.
+
+The console's Claw palette, type scale, and surface geometry reference
+[OpenClaw `6e8d06876fd166064abbec4928fb3bb109ebe999`](https://github.com/openclaw/openclaw/tree/6e8d06876fd166064abbec4928fb3bb109ebe999/ui),
+particularly `src/styles/base.css`, `layout.css`, and `components.css`.
+OCE retains its own navigation and workflows. Input borders are stronger than
+the reference's decorative dividers to keep controls distinguishable. The
+self-hosted Instrument Sans subset retains its SIL Open Font License beside
+the font; unsupported glyphs use the system fallback.
+
+The styling comparison includes [before](../assets/console-style/agents-before.png),
+[light](../assets/console-style/agents-1440-light.png),
+[dark](../assets/console-style/agents-1440-dark.png),
+[mobile](../assets/console-style/mobile-390-dark.png), and a
+[walkthrough](../assets/console-style/walkthrough.mp4). These are simulated
+Storybook UI evidence, not live backend or deployment proof. The
+[reference screen](../assets/console-style/openclaw-reference-light.png) is the
+actual OpenClaw disconnected gateway screen at the revision above.
+
 ## Pages and components
 
 The sidebar contains these groups. Stories with open dialogs or errors reach

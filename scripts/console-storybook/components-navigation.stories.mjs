@@ -8,3 +8,12 @@ export const Mobile = { ...story("mobile"), name: "Mobile drawer" };
 
 export const BuildRevision = { ...story("buildRevision") };
 export const DevelopmentBuild = { ...story("developmentBuild") };
+
+export const LightAppearance = {
+  ...story("agents", { colorScheme: "light" }),
+  name: "Light appearance",
+};
+export const DarkAppearance = {
+  ...story("agents", { colorScheme: "dark" }),
+  name: "Dark appearance",
+};
