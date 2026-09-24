@@ -1,8 +1,8 @@
 # Basic Agent egress proxy
 
-## Current disposition — 2026-09-24
+## Current disposition
 
-The custom Enterprise proxy is **deferred for 0.x**. The
+**2026-09-24.** The custom Enterprise proxy is **deferred for 0.x**. The
 [0.x direction](https://github.com/openclaw/openclaw-enterprise/pull/249#issuecomment-5754828001)
 selects wiring and verifying existing runtime protections first. This amendment
 supersedes the implementation selection below for 0.x; the original C0–C3 design,

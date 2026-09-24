@@ -1,7 +1,7 @@
 # Egress architecture
 
 > **Historical custom-proxy proposal:** deferred for 0.x by the
-> [current disposition](../31-basic-egress-proxy.md#current-disposition--2026-09-24).
+> [current disposition](../31-basic-egress-proxy.md#current-disposition).
 > The original contracts below are retained for reference.
 
 [Overview](../31-basic-egress-proxy.md) · [Interfaces](interfaces.md)
