@@ -172,8 +172,8 @@ selects only `api`, `worker`, and `initialization` Pods with the release identit
 It allows DNS, database egress to every `database.cidrs` host, and
 Kubernetes API egress to every `cluster.cidrs` host. Collectors use their separate
 DNS, API, and exporter policy; unknown or missing component labels retain
-default-deny. Pre-install initialization has only its hook DNS/database grants. Each entry must be an
-explicit IPv4 `/32`; operators must refresh the values when a managed database
+default-deny. Pre-install initialization has only its hook DNS/database grants.
+Each configured database or API destination must be an explicit IPv4 `/32`; operators must refresh the values when a managed database
 or API endpoint resolves to a different address set.
 
 The Kubernetes Compute Driver queries the API server version and verifies

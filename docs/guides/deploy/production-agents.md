@@ -444,15 +444,9 @@ separate from this browser-access check.
 
 ## Verify production workloads
 
-Verify allowed and denied connections with the cluster's enforcing NetworkPolicy
-implementation. Shared DNS, database, and Kubernetes API egress is limited to
-`api`, `worker`, and `initialization` Pods matching the installation's name and
-release labels. Before installation, the initialization hook has only DNS/database
-grants. The collector can reach DNS, the Kubernetes API, and its exporter, but
-not the database. Optional provider egress belongs only to the API; private Envoy routes
-serve both API and worker. Unknown or missing component labels receive no grants under default-deny.
-Use the [workload access matrix](../../testing/kubernetes.md#production-workload-network-access)
-as the expected boundary; verify it against the deployed cluster.
+Verify deployed NetworkPolicies against the
+[platform access matrix](../../testing/production-network-access.md), including
+collector isolation and allowed control-plane dependencies.
 
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
 expected `activeRevisionId`, then require a real model response from that

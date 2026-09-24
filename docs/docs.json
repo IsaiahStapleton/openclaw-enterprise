@@ -764,6 +764,7 @@
               "testing/docker",
               "testing/ssh",
               "testing/kubernetes",
+              "testing/production-network-access",
               "testing/gateway-routing",
               "testing/production-tui",
               "testing/slack",
