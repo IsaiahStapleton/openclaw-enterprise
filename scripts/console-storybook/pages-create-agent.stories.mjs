@@ -40,11 +40,11 @@ export const RepositorySelection = {
 };
 export const RepositoryContributor = {
   ...story("createRepositoriesContributor"),
-  name: "Contributor access and write limits",
+  name: "Contributor without issue management",
 };
 export const RepositoryCollaborator = {
   ...story("createRepositoriesCollaborator"),
-  name: "Collaborator access and write limits",
+  name: "Contributor with issue management",
 };
 export const RepositoryEmpty = {
   ...story("createRepositoriesEmpty"),

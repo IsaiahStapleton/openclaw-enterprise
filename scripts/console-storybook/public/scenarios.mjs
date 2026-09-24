@@ -33,6 +33,7 @@ const allowEveryoneInSlackChannels = [
 ];
 const createWorkspaceFields = [
   ...form,
+  { selector: ".launch-advanced summary", click: true },
   { selector: "#agent-name", value: "Workspace seed demo" },
   { selector: "#provider-api-key", value: "storybook-model-api-key" },
   { selector: "#agent-model", value: "gpt-5.6-sol" },
@@ -349,7 +350,7 @@ export const scenarios = {
       { selector: "#repository-profile-git-read", click: true },
     ],
     description:
-      "Two approved repositories share Reader access to code, issues, pull requests, and checks. The real form offers only their common levels and requires an explicit choice.",
+      "Two approved repositories share Read-only access to code, issues, pull requests, and checks. The real form offers only their common levels and requires an explicit choice.",
     gap: "An operator supplies Namespace approvals, GitHub App configuration, credential service, compatible runtime images, and network policy. Repository grants do not change Harness filesystem or approval policy.",
   },
   createRepositoriesContributor: {
@@ -359,14 +360,16 @@ export const scenarios = {
     actions: [
       ...repositoryForm,
       { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-write", click: true },
+      { selector: "#repository-profile-git-full", click: true },
+      { selector: ".repository-customize summary", click: true },
+      { selector: "#repository-issue-access", click: true },
     ],
     description:
-      "Contributor adds code pushes, pull requests, and PR discussion without granting ordinary issue management. The selected write level shows token and branch-policy limits.",
+      "Customize Contributor access to turn off issue management while keeping push and pull request access. The collapsed summary retains that restriction.",
   },
   createRepositoriesCollaborator: {
     group: "Pages/Create Agent",
-    name: "Collaborator access and write limits",
+    name: "Contributor access and write limits",
     path: create,
     actions: [
       ...repositoryForm,
@@ -374,7 +377,7 @@ export const scenarios = {
       { selector: "#repository-profile-git-full", click: true },
     ],
     description:
-      "Collaborator also creates and manages issues. GraphQL can permit merges and branch changes within the installation token grant; the Git push allowlist does not constrain GraphQL.",
+      "Contributor also creates and manages issues. GraphQL can permit merges and branch changes within the installation token grant; the Git push allowlist does not constrain GraphQL.",
   },
   createRepositoriesEmpty: {
     group: "Pages/Create Agent",
@@ -440,7 +443,9 @@ export const scenarios = {
     actions: [
       ...repositoryForm,
       { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-write", click: true },
+      { selector: "#repository-profile-git-full", click: true },
+      { selector: ".repository-customize summary", click: true },
+      { selector: "#repository-issue-access", click: true },
       click("Create Agent"),
       click("Reload repository choices"),
     ],
@@ -623,6 +628,7 @@ export const scenarios = {
     path: create,
     actions: [
       ...readyForm,
+      { selector: ".launch-advanced summary", click: true },
       { selector: "#configuration-json", value: "[]" },
       click("Create Agent"),
     ],
@@ -701,7 +707,7 @@ export const scenarios = {
       { repositoryRef: "application", profile: "git-write" },
       { repositoryRef: "handbook", profile: "git-read" },
     ],
-    description: "The new revision names Contributor and Reader access and shows write limits.",
+    description: "The new revision names Contributor and Read-only access and shows write limits.",
   },
   repositoryAdmitted: {
     group: "Pages/Agent detail",
@@ -710,7 +716,7 @@ export const scenarios = {
     deployed: true,
     repositoryBindings: [{ repositoryRef: "application", profile: "git-full" }],
     description:
-      "The admitted snapshot names Collaborator access and retains the write-limit notice. This fixture does not establish provider authorization or runtime execution.",
+      "The admitted snapshot names Contributor access and retains the write-limit notice. This fixture does not establish provider authorization or runtime execution.",
   },
   deploymentPending: {
     group: "Pages/Agent detail",

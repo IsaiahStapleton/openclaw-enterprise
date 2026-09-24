@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-24
-last_updated_session: 01a0d20c-dc1b-7d22-a965-60b9c244b29d
+last_updated_session: public-pr/348
 ---
 
 # Platform console request flow
@@ -158,15 +158,16 @@ writes. Saved service account tokens lock Codex; operator-managed credentials
 lock OpenClaw across provider changes. Installation Provider discovery is hidden. The [creation reference](../reference/console/create-and-deploy.md)
 owns permissions and partial-save recovery.
 
-The form starts with native JSON, optional plugins, and no selected model.
-`create.mjs:MODEL_CHOICES` supplies an intentionally hardcoded starter list per
-provider, visible before credential entry. The Console makes no model-discovery
-request and does not verify account access. Manual entry remains available;
-Presets retain their explicit model and saved authentication. Credential edits
+Advanced settings holds JSON and plugins; no model is selected initially.
+Binding edits refresh channel settings, preserving unrelated bindings when applying
+Slack. Invalid binding JSON blocks channel editing.
+`create.mjs:MODEL_CHOICES` supplies hardcoded provider choices before credential
+entry, without discovery or account-access verification. Manual entry remains available;
+Presets retain their model and authentication. Credential edits
 preserve model selection. Provider or authentication-method changes reset it.
 Model edits preserve provider transport and Codex plugin settings. Provider or
 Harness changes regenerate those entries while preserving unrelated JSON;
-reset restores the selected starter. The TODO beside the list tracks revisiting
+reset restores the selected starter. The adjacent TODO tracks
 catalog refresh and credential-aware discovery.
 
 `configurationTemplate` enables Control UI with loopback origins on port 18789.
@@ -180,14 +181,14 @@ discards selections but retains Secrets already created in the Namespace.
 Pending grants accumulate across drawer applications.
 
 `GET /namespaces/:namespaceId/agents/repository-options` discovers approved choices.
-The Console submits opaque references and an explicit common profile. Only
+Read-only and Contributor submit approved profiles; customization disables issues. Only
 `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh draft without bindings;
 it never enables provisioning. Other failures block submission until retry succeeds.
 
 For supported Dedicated runtimes with successful repository discovery, submission
 sends the inline Configuration, selected repository bindings and ordinary Secret references to the [provisioning API](agent-provisioning.md).
-Console polls the accepted job before an Agent exists, then opens the returned
-Agent revision. The worker creates resources and exact Secret grants before
+Console polls the job, then opens the returned revision.
+The worker creates resources and exact Secret grants before
 admitting deployment; Console does not duplicate those grants.
 
 Ordinary draft creation posts `{kind: "agent", values, secretBindings}` to

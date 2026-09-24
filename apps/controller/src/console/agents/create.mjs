@@ -219,8 +219,28 @@ export function renderCreateAgent(context) {
   context.setTitle("Create Agent");
   context.view.replaceChildren(
     link("← Agents", "agents", context),
-    createPresetFields(context, (rendered) => renderAgentForm(context, rendered)),
-    button("Start without Preset", () => renderAgentForm(context, {})),
+    element(
+      "section",
+      { className: "launch-intro agent-card" },
+      element("h2", {}, "Your next teammate"),
+      element(
+        "p",
+        { className: "muted" },
+        "Choose a model, connect repositories, and give your Agent a place to work.",
+      ),
+      button("Start without Preset", () => renderAgentForm(context, {}), { className: "primary" }),
+    ),
+    element(
+      "section",
+      { className: "agent-card launch-preset" },
+      element("h2", {}, "Use a saved setup"),
+      element(
+        "p",
+        { className: "muted" },
+        "Start from a Preset to reuse your team's configuration.",
+      ),
+      createPresetFields(context, (rendered) => renderAgentForm(context, rendered)),
+    ),
   );
 }
 
@@ -607,6 +627,10 @@ function renderAgentForm(context, rendered) {
     spellcheck: "false",
   });
   secretBindings.value = JSON.stringify(rendered.configuration?.secretBindings ?? {}, null, 2);
+  secretBindings.addEventListener("input", () => {
+    secretBindings.setCustomValidity("");
+    renderChannelEditor();
+  });
   const workspaceInputs = Object.entries(WORKSPACE_DEFAULTS).map(([filename, content]) => {
     const input = element("textarea", {
       id: `workspace-${filename.replace(".", "-")}`,
@@ -750,10 +774,15 @@ function renderAgentForm(context, rendered) {
     authSection,
     capabilityStatus,
     retryCapabilityDiscovery,
-    field(
-      "Execution mode",
-      mode,
-      "Set by the harness: Codex uses Dedicated execution; OpenClaw uses Embedded execution. Slack requires Codex.",
+    element(
+      "details",
+      { className: "launch-runtime" },
+      element("summary", {}, "Runtime details"),
+      field(
+        "Execution mode",
+        mode,
+        "Codex uses Dedicated execution; OpenClaw uses Embedded execution. Slack requires Codex.",
+      ),
     ),
     (repositories = createRepositoryFields(context, (changed) => {
       if (changed) {
@@ -762,23 +791,39 @@ function renderAgentForm(context, rendered) {
       feedback.textContent = "";
       updateControls();
     })).section,
-    field(
-      "Configuration JSON",
-      configuration,
-      "Provider and model selections update this JSON. Supported Dedicated runtimes provision and deploy from this form. Embedded and unsupported runtimes save a draft for later deployment. Slack token Secrets can be selected or created from the channel editor.",
-    ),
-    reset,
     element(
-      "div",
-      { hidden: true },
+      "details",
+      { className: "launch-advanced" },
+      element("summary", {}, "Advanced settings"),
+      element(
+        "p",
+        { className: "hint" },
+        "Defaults are ready to use. Customize configuration, Secret bindings, plugins, or initial workspace files when needed.",
+      ),
+      field(
+        "Configuration JSON",
+        configuration,
+        "Provider and model selections update this JSON. Supported Dedicated runtimes provision and deploy from this form. Embedded and unsupported runtimes save a draft for later deployment. Slack token Secrets can be selected or created from the channel editor.",
+      ),
+      reset,
       field(
         "Secret bindings JSON",
         secretBindings,
         "Map environment names to existing Secret references in this Namespace. Do not enter credentials.",
       ),
+      field("Plugin selections JSON", plugins, "Desired plugin selections and policies."),
+      workspaceSection,
     ),
-    field("Plugin selections JSON", plugins, "Desired plugin selections and policies."),
-    workspaceSection,
+  );
+  form.addEventListener(
+    "invalid",
+    (event) => {
+      const details = event.target.closest("details");
+      if (details) {
+        details.open = true;
+      }
+    },
+    true,
   );
   form.addEventListener("input", (event) => {
     edited = true;
@@ -796,6 +841,10 @@ function renderAgentForm(context, rendered) {
       return values;
     } catch {
       if (reportInvalid) {
+        const details = input.closest("details");
+        if (details) {
+          details.open = true;
+        }
         input.setCustomValidity("Enter a valid JSON object.");
         input.reportValidity();
       }
@@ -843,7 +892,8 @@ function renderAgentForm(context, rendered) {
   }
   function renderChannelEditor() {
     const values = parseObject(configuration);
-    if (values === undefined) {
+    const parsedSecretBindings = parseObject(secretBindings);
+    if (values === undefined || parsedSecretBindings === undefined) {
       channelEditor.replaceChildren(
         element(
           "section",
@@ -852,13 +902,14 @@ function renderAgentForm(context, rendered) {
           element(
             "p",
             { className: "error" },
-            "Enter a valid Configuration JSON object before configuring channels.",
+            values === undefined
+              ? "Enter a valid Configuration JSON object before configuring channels."
+              : "Enter a valid Secret bindings JSON object before configuring channels.",
           ),
         ),
       );
       return;
     }
-    const parsedSecretBindings = parseObject(secretBindings) ?? {};
     const channels = renderChannels({
       values,
       executionMode: mode.value,
@@ -1337,7 +1388,7 @@ function renderAgentForm(context, rendered) {
     element(
       "p",
       { className: "muted" },
-      "Create an Agent in this Namespace. Supported Dedicated runtimes provision and deploy automatically; Embedded and unsupported runtimes save a draft for later deployment.",
+      "Choose a model and repository access. Add Slack when you want this Agent to work with your team.",
     ),
     form,
     channelEditor,
