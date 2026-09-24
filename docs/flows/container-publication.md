@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
 updated: 2026-09-24
-last_updated_session: codex/01a0c179-19f7-7111-8bb4-fc7680da5545
+last_updated_session: public-pr/348
 ---
 
 # Container publication flow
@@ -83,11 +83,15 @@ separately pinned. See the [runtime recipe](../../deploy/runtime/README.md) for
 source identity and installed-image checks.
 Before starting the runtime build,
 `scripts/ci/repository-platform-headroom.mjs:main` verifies it is running on the
-Ubuntu 24 GitHub-hosted runner and removes only its unused, fixed Android SDK
-directory. The helper rejects symlinks, mounts, and unexpected runner/SDK paths
-and logs free bytes and inodes before and after cleanup. This makes room for
-the source-build dependency layers before OCI export; local and self-hosted
-runners are rejected. Controller preparation does not use this cleanup.
+Ubuntu 24 GitHub-hosted runner and removes its unused Android SDK, .NET, Haskell,
+Swift, and CodeQL installations from fixed paths. All existing targets must be
+root-owned directories on the root filesystem, without symlinks or nested mounts;
+every target is checked before removal begins. Optional tool installations may
+be absent. The helper logs removed paths and free bytes and inodes before and
+after cleanup. This makes room for both architectures' source-build dependency
+layers before OCI export; local and self-hosted runners are rejected. Controller
+preparation does not use this cleanup, and the repository-platform caller retains
+its Android-only cleanup.
 
 After OCI export, the job prunes only its dedicated Buildx builder's cache so
 the cache and unpacked smoke images do not exhaust the runner's disk together.
@@ -165,6 +169,8 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-24 02:50: Reclaim fixed unused tool installations for runtime builds after Android-only cleanup still exhausted disk; retain the platform caller's cleanup scope. (public-pr/348 - 06d787f3)
 
 - 2026-09-24 00:30: Reclaim unused hosted Android SDK space before the runtime source build, retaining both platforms and all startup checks. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - ae96345b)
 
