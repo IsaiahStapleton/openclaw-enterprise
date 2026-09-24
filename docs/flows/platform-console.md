@@ -159,66 +159,74 @@ Anthropic offers OpenClaw. Provider/Harness changes reset incompatible credentia
 and model choices. The [creation reference](../reference/console/create-and-deploy.md)
 defines authentication combinations and token handling.
 
-Presets fix saved credential providers and reject cross-provider JSON before
-writes. Saved service account tokens lock Codex; operator-managed credentials
-lock OpenClaw across provider changes. Installation Provider discovery is hidden. The [creation reference](../reference/console/create-and-deploy.md)
-owns permissions and partial-save recovery.
+Presets reject cross-provider JSON: credentials fix Provider; PATs fix
+Codex; operator-managed credentials fix OpenClaw. Installation Provider
+discovery is hidden. The [creation reference](../reference/console/create-and-deploy.md)
+owns permissions and recovery.
 
-Advanced settings holds JSON and plugins; no model is selected initially.
+Advanced settings holds Configuration JSON, Secret bindings, and initial workspace files; no model is selected initially.
 Binding edits refresh channel settings, preserving unrelated bindings when applying
 Slack. Invalid binding JSON blocks channel editing.
-`create.mjs:MODEL_CHOICES` supplies hardcoded provider choices before credential
-entry, without discovery or account-access verification. Manual entry remains available;
-Presets retain their model and authentication. Credential edits
-preserve model selection. Provider or authentication-method changes reset it.
-Model edits preserve provider transport and Codex plugin settings. Provider or
-Harness changes regenerate those entries while preserving unrelated JSON;
-reset restores the selected starter. The adjacent TODO tracks
-catalog refresh and credential-aware discovery.
+
+`agents/plugin-fields.mjs:createPluginFields` edits Agent-owned `plugins` through
+`#agent-plugins`, separately from Configuration. Invalid JSON and untouched fields
+survive; clearing overrides restores inheritance. Submission, uncertain outcomes,
+or invalid JSON lock editing. `capabilities.pluginPolicies` gates each policy scope;
+Missing capabilities preserve JSON and disable edits. Unsupported saved reviewers
+remain clearable. Agent submission saves the draft.
+
+`create.mjs:loadPluginCatalog` and `loadPluginTools` implement
+[transient PAT discovery](agent-plugins.md#credential-scoped-discovery): upstream
+pagination, local filtering, and tools loaded on selection. Credential, provider,
+and Harness changes clear results and invalidate pending reads. The Driver owns
+upstream access.
+
+`create.mjs:MODEL_CHOICES` supplies static provider lists before credentials,
+without discovery requests or account verification. Manual entry remains available;
+Presets retain model/authentication.
+Credential edits preserve selection; Provider/authentication-method changes reset it.
+Model edits preserve transport and Codex plugin settings. Provider/Harness changes
+regenerate them, retaining unrelated JSON; reset restores the starter.
 
 `configurationTemplate` enables Control UI with loopback origins on port 18789.
 Compute supplies gateway authentication from Installation trust; Presets replace
-the starter unchanged. [OCE native admin access](agent-native-admin.md) still
-requires isolated HTTPS origins. [Agent editing](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
+the starter unchanged. [Native admin access](agent-native-admin.md) requires isolated
+HTTPS origins. [Agent editing](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
 traces Slack Secret selection/creation. **Apply channel settings** copies values
-and bindings into the form. Channel sender access is stored on each selected
-Slack channel; the drawer does not edit direct-message `allowFrom`. Cancellation
-discards selections but retains Secrets already created in the Namespace.
-Pending grants accumulate across drawer applications.
+and bindings; grants accumulate. Sender access belongs to each selected channel;
+direct-message `allowFrom` stays unchanged. Cancellation discards selections but
+retains created Secrets.
 
 `GET /namespaces/:namespaceId/agents/repository-options` discovers approved choices.
 `createRepositoryFields` adds search and cards with inherited or custom access;
 submission sends `repositoryAccess`. [Repository admission](agent-repository-credentials.md)
-resolves concrete profiles. Only
+resolves concrete profiles. Read-only and Contributor use approved profiles;
+customization can disable issue management. Only
 `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh draft without bindings;
-it never enables provisioning. Other failures block submission until retry succeeds.
+other failures block submission. Retry discovery before provisioning.
 
-Supported Dedicated runtimes send inline Configuration, repository access, and Secret
+Supported Dedicated runtimes submit Configuration, repository access, and Secret
 references to [provisioning](agent-provisioning.md). Console polls the job and opens
-its revision. The worker creates resources and exact Secret grants before deployment.
+its revision. The worker creates resources and Secret grants before deployment;
+Console does not duplicate grants.
 
-Ordinary draft creation posts `{kind: "agent", values, secretBindings}` to
-`POST /namespaces/:namespaceId/configurations`, then sends its returned ID to
-`POST /namespaces/:namespaceId/agents` with plugins, `initialWorkspaceFiles`, and
-`workspaceDefaultsId`. Success opens `revision=draft`. All four seeded workspace
-textareas, including unchanged/empty values, are submitted. OCC stages them
-outside Agent/Configuration; [workspace setup](workspace-files.md) applies them
-before execution.
+Ordinary drafts post `{kind: "agent", values, secretBindings}` to
+`POST /namespaces/:namespaceId/configurations`, then submit its ID, plugins,
+`initialWorkspaceFiles`, and `workspaceDefaultsId` to
+`POST /namespaces/:namespaceId/agents`. Success opens `revision=draft`.
+OCC stages all four workspace textareas, including unchanged/empty values, outside
+Agent/Configuration for [workspace setup](workspace-files.md).
 
-`create.mjs:grantConfigurationSecretAccess` grants the returned Agent exact
-Secret `operate` through separate Namespace IAM writes. Only final same-Namespace
-`env` bindings receive grants; superseded selections receive none. Failure keeps
-the Agent and enables **Retry credential access**, which rereads exact grants
-without duplicating resources; the saved Agent link permits manual recovery.
-Failed Agent writes retain the Configuration ID and lock JSON/Harness; explicit
-retries reuse it. Writes never retry automatically. Draft creation neither
-admits revisions, validates the plugin catalog, nor starts runtime work.
+`create.mjs:grantConfigurationSecretAccess` grants exact Secret `operate` through
+Namespace IAM writes for final same-Namespace `env` bindings only. Failure retains
+the Agent: **Retry credential access** rereads grants without duplication; its link
+supports manual recovery. Failed Agent writes retain Configuration ID and lock
+JSON/Harness for explicit reuse. Writes never retry automatically. Drafts admit no
+revision, validate no plugin catalog, and start no runtime.
 
-`apps/controller/src/console/agents/harness-auth.mjs:createHarnessAuthFields`
-masks the existing Secret ID input in the Credentials editor.
-`harnessAuthDescription` reports a configured Secret without displaying its ID
-in draft or revision summaries. Native Configuration displays unresolved
-references; the console does not fetch Secret values for these views.
+`agents/harness-auth.mjs:createHarnessAuthFields` masks existing Secret IDs;
+`harnessAuthDescription` omits them from draft/revision summaries. Configuration
+shows unresolved references; these views never fetch Secret values.
 
 ### 4–6. Edit the Agent and access runtime files
 
@@ -329,6 +337,8 @@ uncertain response disables replay until refresh and inspection.
 - 2026-09-24 07:53: Trace inherited repository access. (public-change/repository-picker - 81b18912)
 
 - 2026-09-24 06:19: Replace Console model discovery with an intentional static starter list and preserve manual entry. (01a0d20c-dc1b-7d22-a965-60b9c244b29d - 24ecb94b)
+
+- 2026-09-24 05:40: Added Create Agent plugin JSON controls and transient PAT catalog discovery; policy integration remains pending. (01a0d1dd-aa36-7622-9f43-8376f6ff935e - f62e17c)
 
 - 2026-09-23 21:41: Preserve edited Codex plugin settings across model and key changes. (01a0cce9-23e3-7072-aa3f-a2e26d2dbf11 - b8f23be17de4a4b077dab8d6b90b4add1f9146cb)
 
