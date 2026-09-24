@@ -187,10 +187,18 @@ export function createRuntimeCredentialsPanel({
     error: null,
     saving: false,
     saveError: null,
+    saveErrorBeforeWrite: false,
     saveMessage: "",
     outcomeUnknown: false,
+    reloadRequired: false,
   };
   const section = element("section", { className: "agent-card runtime-credentials" });
+
+  function saveErrorText() {
+    return state.saveErrorBeforeWrite
+      ? "Could not check the saved Configuration. Try again before saving channel Secrets."
+      : credentialError(state.saveError, true);
+  }
 
   function canMutateGeneratedCredentials() {
     return (
@@ -198,7 +206,8 @@ export function createRuntimeCredentialsPanel({
       revisionCount === 0 &&
       state.loaded &&
       state.error === null &&
-      !state.outcomeUnknown
+      !state.outcomeUnknown &&
+      !state.reloadRequired
     );
   }
 
@@ -207,6 +216,7 @@ export function createRuntimeCredentialsPanel({
       revisionsLoaded &&
       !state.saving &&
       !state.outcomeUnknown &&
+      !state.reloadRequired &&
       state.loaded &&
       state.error === null &&
       slackEnabled(state.values) &&
@@ -219,6 +229,7 @@ export function createRuntimeCredentialsPanel({
       revisionsLoaded &&
       !state.saving &&
       !state.outcomeUnknown &&
+      !state.reloadRequired &&
       state.loaded &&
       state.error === null &&
       hasRequiredRuntimeCredentials(state.status, state.values, state.configuration)
@@ -231,6 +242,9 @@ export function createRuntimeCredentialsPanel({
     }
     if (state.outcomeUnknown) {
       return "Credential changes may have been saved. Reload this draft and inspect the saved state before deploying.";
+    }
+    if (state.reloadRequired) {
+      return "Configuration changed. Reload this draft before deploying.";
     }
     if (!revisionsLoaded) {
       return "Revision history is required before deploying this new revision.";
@@ -259,6 +273,7 @@ export function createRuntimeCredentialsPanel({
     state.loading = true;
     state.error = null;
     state.saveError = null;
+    state.saveErrorBeforeWrite = false;
     state.saveMessage = "";
     render();
     onStatusChange();
@@ -294,6 +309,7 @@ export function createRuntimeCredentialsPanel({
     }
     state.saving = true;
     state.saveError = null;
+    state.saveErrorBeforeWrite = false;
     state.saveMessage = "";
     state.outcomeUnknown = false;
     render();
@@ -337,7 +353,7 @@ export function createRuntimeCredentialsPanel({
     const error = element(
       "p",
       { className: "error", role: "alert" },
-      state.saveError === null ? "" : credentialError(state.saveError, true),
+      state.saveError === null ? "" : saveErrorText(),
     );
     const save = element(
       "button",
@@ -467,6 +483,7 @@ export function createRuntimeCredentialsPanel({
       }));
       state.saving = true;
       state.saveError = null;
+      state.saveErrorBeforeWrite = false;
       state.saveMessage = "";
       status.textContent = "Saving channel Secrets...";
       error.textContent = "";
@@ -475,6 +492,24 @@ export function createRuntimeCredentialsPanel({
       let mutationStarted = false;
       let mutationCommitted = false;
       try {
+        const configurationPath = `${namespacePath(context.namespaceId)}/configurations/${encodeURIComponent(state.configuration.id)}`;
+        const [freshAgent, freshConfiguration] = await Promise.all([
+          context.request(path),
+          context.request(configurationPath),
+        ]);
+        if (!context.isCurrent()) {
+          return;
+        }
+        if (
+          freshAgent.id !== state.agent.id ||
+          freshAgent.configurationId !== state.configuration.id ||
+          freshConfiguration.id !== state.configuration.id ||
+          freshConfiguration.generation !== state.configuration.generation
+        ) {
+          state.reloadRequired = true;
+          return;
+        }
+        // A write can still race with this preflight until the API accepts an expected generation.
         const bindings = { ...(state.configuration.secretBindings ?? {}) };
         for (const { binding, value } of replacementWrites) {
           mutationStarted = true;
@@ -510,6 +545,7 @@ export function createRuntimeCredentialsPanel({
           return;
         }
         state.saveError = cause;
+        state.saveErrorBeforeWrite = !mutationStarted;
         state.saveMessage = "";
         state.outcomeUnknown =
           mutationCommitted ||
@@ -578,10 +614,13 @@ export function createRuntimeCredentialsPanel({
           ? element("p", { className: "hint", role: "status" }, state.saveMessage)
           : null,
         state.saveError
+          ? element("p", { className: "error", role: "alert" }, saveErrorText())
+          : null,
+        state.reloadRequired
           ? element(
               "p",
-              { className: "error", role: "alert" },
-              credentialError(state.saveError, true),
+              { className: "error", role: "status" },
+              "Configuration changed. Reload this draft before saving channel Secrets.",
             )
           : null,
         state.outcomeUnknown
@@ -600,7 +639,7 @@ export function createRuntimeCredentialsPanel({
           button("Provision generated runtime credentials", () => void saveGeneratedCredentials(), {
             disabled: state.loading || state.saving || !canMutateGeneratedCredentials(),
           }),
-          state.outcomeUnknown ? button("Reload draft", onReload) : null,
+          state.outcomeUnknown || state.reloadRequired ? button("Reload draft", onReload) : null,
         ),
         renderUnavailableReason(),
         renderChannelForm(),
@@ -615,6 +654,6 @@ export function createRuntimeCredentialsPanel({
     canDeploy,
     deployGateMessage,
     isSaving: () => state.saving,
-    mutationPending: () => state.saving || state.outcomeUnknown,
+    mutationPending: () => state.saving || state.outcomeUnknown || state.reloadRequired,
   };
 }

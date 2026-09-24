@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
 updated: 2026-09-24
-last_updated_session: authoring-run/a76da345-0aab-449e-a344-726196fc376c
+last_updated_session: authoring-run/40ce5588-8a3c-4908-ae43-f87680889e36
 ---
 
 # Console Agent editing and runtime requests
@@ -199,8 +199,12 @@ Focusing the field clears the mask for replacement; an empty bound field keeps
 its existing binding. The save gate requires at least one entered replacement
 and either an existing binding or replacement for both token slots.
 
-On explicit submission, the browser skips unchanged slots. For each replacement,
-`storeChannelSecret` creates or updates the Namespace Secret and
+On explicit submission, the browser rereads the Agent and Configuration before
+writing any Secret. A changed Configuration ID or generation blocks credential
+saves and deployment until the draft is reloaded. This read is not atomic with
+the following writes, so a concurrent update can still race after the check.
+The browser skips unchanged slots. For each replacement, `storeChannelSecret`
+creates or updates the Namespace Secret and
 `ensureSecretOperateBinding` grants the Agent access. The Configuration PATCH
 preserves other bindings and incorporates the written Secret references. These
 are separate writes; uncertain outcomes block another save until the draft is
@@ -303,6 +307,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 20:12: Check the saved draft before channel Secret writes. (authoring-run/40ce5588-8a3c-4908-ae43-f87680889e36 - 5fda9d8a7770b95aff6e67a03bbb796639e8ada0)
 
 - 2026-09-24 20:00: Trace deployment checks for Agent settings and pending credential and channel writes. (authoring-run/a76da345-0aab-449e-a344-726196fc376c - 22fc4b0e18d5a6a1a7923d42c1503c1de3b7bf72)
 
