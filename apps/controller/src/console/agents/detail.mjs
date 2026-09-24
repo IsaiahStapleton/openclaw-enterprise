@@ -438,6 +438,7 @@ export async function renderAgentDetail(context) {
       if (!deploy || !deployStatus) {
         return;
       }
+      const editedSubject = selectedTab === "repositories" ? "repository access" : "Configuration";
       deploy.disabled =
         deployPending ||
         draftEditorState.dirty ||
@@ -449,14 +450,13 @@ export async function renderAgentDetail(context) {
         (!runtimeAuth && !credentials?.canDeploy());
       if (!deployPending) {
         if (draftEditorState.outcomeUnknown) {
-          deployStatus.textContent =
-            "Refresh this draft before deploying because the last Configuration save outcome is unknown.";
+          deployStatus.textContent = `Refresh this draft before deploying because the last ${editedSubject} save outcome is unknown.`;
         } else if (draftEditorState.reloadRequired) {
           deployStatus.textContent = "Reload this draft before deploying.";
         } else if (draftEditorState.saving) {
-          deployStatus.textContent = "Wait for Configuration save to finish before deploying.";
+          deployStatus.textContent = `Wait for ${editedSubject} save to finish before deploying.`;
         } else if (draftEditorState.dirty) {
-          deployStatus.textContent = "Save or cancel Configuration edits before deploying.";
+          deployStatus.textContent = `Save or cancel ${editedSubject} edits before deploying.`;
         } else if (revisionResult.status !== "fulfilled") {
           deployStatus.textContent =
             "Revision history is required before deploying this new revision.";

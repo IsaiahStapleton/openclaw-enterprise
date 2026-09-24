@@ -5030,14 +5030,16 @@ export class OpenClawController {
     bindings: readonly RepositoryBindingRequest[] | undefined,
   ): readonly RepositoryBindingSelection[] | undefined {
     const resolved = this.resolveRepositoryBindings(namespaceId, bindings);
-    return resolved === undefined
-      ? undefined
-      : immutableCopy(
-          resolved.resolution.bindings.map(({ repositoryRef, profile }) => ({
-            repositoryRef,
-            profile,
-          })),
-        );
+    if (resolved === undefined || bindings === undefined) {
+      return undefined;
+    }
+    const selections = new Map(
+      resolved.resolution.bindings.map(({ repositoryRef, profile }) => [
+        repositoryRef,
+        { repositoryRef, profile },
+      ]),
+    );
+    return immutableCopy(bindings.map(({ repositoryRef }) => selections.get(repositoryRef)!));
   }
 
   private admitRepositoryCredentials(

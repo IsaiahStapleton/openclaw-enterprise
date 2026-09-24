@@ -409,7 +409,6 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     for (const entry of visible) {
       const selected = state.selected.has(entry.repositoryRef);
       const addButton = button(selected ? "Added" : "Add", () => add(entry.repositoryRef), {
-        id: `repository-${entry.repositoryRef}`,
         "aria-label": `${selected ? "Added" : "Add"} ${entry.displayName}`,
         "data-add": entry.repositoryRef,
         disabled: !editable() || selected || state.selected.size >= MAX_SELECTED,
@@ -486,7 +485,14 @@ export function createRepositoryFields(context, onChange, initial = {}) {
             () => {
               searchState.page = page + delta;
               renderResults();
-              results.querySelector("button[data-add]:not(:disabled)")?.focus();
+              const focus = results.querySelector(
+                "button[data-add]:not(:disabled), .form-actions button:not(:disabled)",
+              );
+              if (focus) {
+                focus.focus();
+              } else {
+                focusDiscovery();
+              }
             },
             {
               disabled:
@@ -608,7 +614,11 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           element(
             "p",
             { className: "error" },
-            "This repository is no longer available. Remove it or retry discovery.",
+            state.discovery === "ready"
+              ? "This repository is no longer available. Remove it or retry discovery."
+              : state.discovery === "loading"
+                ? "Checking repository availability…"
+                : "Repository availability cannot be verified. Retry repository choices.",
           ),
         );
       } else {

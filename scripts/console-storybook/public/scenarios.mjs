@@ -390,8 +390,8 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-handbook", click: true },
+      { selector: 'button[data-add="application"]', click: true },
+      { selector: 'button[data-add="handbook"]', click: true },
       { selector: "#repository-default-git-read", click: true },
     ],
     description:
@@ -404,7 +404,7 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
+      { selector: 'button[data-add="application"]', click: true },
       { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
       { selector: "#repository-default-issues", click: true },
@@ -418,7 +418,7 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
+      { selector: 'button[data-add="application"]', click: true },
       { selector: "#repository-default-git-full", click: true },
     ],
     description:
@@ -471,11 +471,11 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
+      { selector: 'button[data-add="application"]', click: true },
       { selector: '[aria-label="Access for example/application"]', click: true },
       { selector: "#repository-inherit-application", click: true },
       { selector: "#repository-default-git-read", click: true },
-      { selector: "#repository-handbook", click: true },
+      { selector: 'button[data-add="handbook"]', click: true },
     ],
     description:
       "The application keeps custom Contributor access while the handbook inherits Read-only. The broader exception remains explicit beside the default.",
@@ -484,7 +484,7 @@ export const scenarios = {
     group: "Pages/Create Agent",
     name: "Repair a restricted repository",
     path: create,
-    actions: [...repositoryForm, { selector: "#repository-handbook", click: true }],
+    actions: [...repositoryForm, { selector: 'button[data-add="handbook"]', click: true }],
     description:
       "A repository restricted to Read-only remains expanded. The operator must explicitly repair the selection before saving.",
   },
@@ -551,7 +551,7 @@ export const scenarios = {
     ],
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
+      { selector: 'button[data-add="application"]', click: true },
       { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
       { selector: "#repository-default-issues", click: true },

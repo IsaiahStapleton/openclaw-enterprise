@@ -62,7 +62,7 @@ for (const issuesEnabled of [true, false]) {
     await page.getByRole("button", { name: "Access for example/application" }).click();
     await page.locator("#repository-inherit-application").check();
     await page.getByRole("button", { name: "Access for example/application" }).click();
-    await page.locator("#repository-documentation").click();
+    await page.getByRole("button", { name: "Add example/documentation", exact: true }).click();
     await page.getByRole("radio", { name: /^Contributor / }).check();
     assert.equal(await page.locator(".repository-write-access").isVisible(), false);
     const customize = page.getByText("Customize access", { exact: true });
@@ -102,7 +102,7 @@ for (const issuesEnabled of [true, false]) {
       await page.getByRole("checkbox", { name: /^Create and manage issues/ }).uncheck();
       // Changing the repository set must not silently restore issue management.
       await page.getByRole("button", { name: "Remove example/documentation" }).click();
-      await page.locator("#repository-documentation").click();
+      await page.getByRole("button", { name: "Add example/documentation", exact: true }).click();
       assert.equal(
         await page.getByRole("checkbox", { name: /^Create and manage issues/ }).isChecked(),
         false,

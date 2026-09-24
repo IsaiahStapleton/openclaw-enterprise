@@ -107,8 +107,8 @@ function registryFor(namespaceId) {
   };
 }
 
-function repositoryDriver(registry) {
-  return new GitHubRepoDriver(
+function repositoryDriver(registry, Driver = GitHubRepoDriver) {
+  return new Driver(
     {
       id: providerId,
       // Admission must complete without contacting the service or obtaining credentials.
@@ -169,14 +169,14 @@ async function fixture(
       ]
     : [];
 
-  async function compose(registry) {
+  async function compose(registry, Driver) {
     const controller = new OpenClawController(installation, { state, providers });
     for (const driver of [iam, compute, configurationDriver, secretDriver]) {
       controller.registerDriver(driver);
       controller.selectDriver(driver.capability, driver.id);
     }
     if (registry !== undefined) {
-      const driver = repositoryDriver(registry);
+      const driver = repositoryDriver(registry, Driver);
       controller.registerDriver(driver);
       controller.selectDriver(driver.capability, driver.id);
     }
@@ -629,6 +629,67 @@ test("Agent updates apply repository access and validate plugin policy together"
     { repositoryRef: "project", profile: "git-full" },
   ]);
   assert.deepEqual(updated.data.plugins, nextPlugins);
+});
+
+test("Agent repository access preserves request order when the Driver returns bindings in another order", async (t) => {
+  // Driver resolutions are keyed by reference; their order is not part of the contract.
+  class ReorderedRepositoryDriver extends GitHubRepoDriver {
+    resolve(input) {
+      const resolution = super.resolve(input);
+      return { ...resolution, bindings: [...resolution.bindings].reverse() };
+    }
+  }
+
+  const f = await fixture(t);
+  const registry = structuredClone(f.registry);
+  registry.repositories[1].namespaces.push({
+    namespaceId: f.namespace.id,
+    profiles: ["git-read", "git-write", "git-full"],
+  });
+  const { request } = await f.compose(registry, ReorderedRepositoryDriver);
+  const access = {
+    defaultProfile: "git-read",
+    repositories: [
+      { repositoryRef: "project" },
+      { repositoryRef: "foreign-project", profile: "git-write" },
+    ],
+  };
+  const created = await request("POST", f.collection, {
+    name: "Reordered repository access",
+    configurationId: f.configuration.id,
+    repositoryAccess: access,
+  });
+  assert.equal(created.status, 201, JSON.stringify(created));
+  assert.deepEqual(created.data.repositoryAccess, access);
+  assert.deepEqual(created.data.repositoryBindings, [
+    { repositoryRef: "project", profile: "git-read" },
+    { repositoryRef: "foreign-project", profile: "git-write" },
+  ]);
+
+  const path = `${f.collection}/${created.data.id}`;
+  const updatedAccess = { ...access, defaultProfile: "git-full" };
+  const updated = await request("PATCH", path, {
+    configurationId: f.configuration.id,
+    repositoryAccess: updatedAccess,
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated));
+  assert.deepEqual(updated.data.repositoryAccess, updatedAccess);
+  assert.deepEqual(updated.data.repositoryBindings, [
+    { repositoryRef: "project", profile: "git-full" },
+    { repositoryRef: "foreign-project", profile: "git-write" },
+  ]);
+  assert.deepEqual((await request("GET", path)).data.repositoryAccess, updatedAccess);
+
+  const legacy = await request("POST", f.collection, {
+    name: "Defaulted repository bindings",
+    configurationId: f.configuration.id,
+    repositoryBindings: [{ repositoryRef: "project" }, { repositoryRef: "foreign-project" }],
+  });
+  assert.equal(legacy.status, 201, JSON.stringify(legacy));
+  assert.deepEqual(legacy.data.repositoryBindings, [
+    { repositoryRef: "project", profile: "git-write" },
+    { repositoryRef: "foreign-project", profile: "git-write" },
+  ]);
 });
 
 test("Deploy freezes public repository selection without exposing provider grants", async (t) => {

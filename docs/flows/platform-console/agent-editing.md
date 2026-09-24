@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
 updated: 2026-09-24
-last_updated_session: public-change/repository-picker
+last_updated_session: authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685
 ---
 
 # Console Agent editing and runtime requests
@@ -72,9 +72,10 @@ Configuration authorization and generation ownership.
 
 A successful save reloads the draft; admitted snapshots and active revision
 selection remain unchanged. Invalid input, denied writes, and stale drafts retain
-editor text. An uncertain mutation outcome blocks another save until successful
-readback. Unsaved or unresolved edits block deployment of the old saved values and tab or revision
-navigation until save, cancel, or the required reload resolves them.
+editor text. An uncertain mutation outcome blocks another save until the draft is
+reloaded. A read can race a delayed write, so reloading alone does not prove that
+the write has settled. Unsaved or unresolved edits block deployment and Agent tab
+or revision navigation until save, cancel, or reload.
 Saving and deploying remain separate explicit actions.
 
 The draft **Repositories** tab uses `createRepositoryFields` with exact-Agent
@@ -86,7 +87,17 @@ Dirty state compares current access intent with the loaded draft: reversing an e
 or restoring a removed repository with Undo unlocks navigation without a save.
 The picker owns discovery status separately from access intent and search state.
 Reloading choices resets search, pagination, and dismissed results together, so a
-smaller catalog cannot retain filters whose controls are no longer visible.
+smaller catalog cannot retain filters whose controls are no longer visible. A
+failed discovery leaves existing access unverified; only a successful catalog
+can establish that a selected repository is unavailable. Before deployment, the
+Console also compares the saved repository intent and bindings with the opened
+draft and requires a reload if they changed. This separate read cannot prevent a
+write between the check and deployment.
+
+These guards do not cover navigation away from the Agent or the Console's
+focus and visibility refresh. Those paths can discard local edits while the
+Console rechecks the session and access. An interrupted write may still complete
+on the server; the refreshed view cannot establish its final outcome atomically.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders supported
 Slack channel settings in **New revision** only. Slack uses fixed unresolved
@@ -285,6 +296,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 19:41: Trace unavailable discovery and the repository-access deployment check. (authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685 - 43d99e7dce02fbd34b072c877868ad1beef4d245)
 
 - 2026-09-24 07:53: Trace draft repository editing and save guards. (public-change/repository-picker - 81b18912)
 

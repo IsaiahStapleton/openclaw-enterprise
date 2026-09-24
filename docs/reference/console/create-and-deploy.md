@@ -154,6 +154,10 @@ again on deployment. Push and PR permissions remain bundled. See
 [access levels](../repository-credentials/access-levels.md) for token permissions,
 merge behavior, and the API contract. Saved drafts can be edited in
 **New revision** > **Repositories**; admitted revisions stay unchanged.
+Save or cancel draft edits before navigating away. Returning to the browser tab
+can refresh the session and discard unsaved changes. If a save is interrupted,
+the server may still complete it after a refresh; inspect the saved draft before
+retrying and ask an operator if the outcome remains uncertain.
 
 Only `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh ordinary draft to
 continue without repository bindings: Agent-create authorization succeeded, but

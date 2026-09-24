@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
 updated: "2026-09-24"
-last_updated_session: "public-change/repository-picker"
+last_updated_session: "authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685"
 ---
 
 # Agent repository credential flow
@@ -113,10 +113,13 @@ Unknown outcomes require stored Agent and Configuration reads.
 `packages/occ/src/index.ts:OpenClawController.repositoryBindingSelections`
 uses `resolveRepositoryBindings` after existing authorization. The public input
 contains distinct opaque references and optional profiles, not provider tokens
-or caller-selected grant identities. The concrete
+or caller-selected grant identities. After validating the Driver's response by
+reference, the controller stores selections in request order so they match the
+saved access intent even when the Driver returns them in a different order. The
+concrete
 `apps/controller/src/drivers/repo/github/driver.ts:GitHubRepoDriver.resolve`
-uses local registry policy, defaulting to Contributor (`git-write`), without
-control-socket or GitHub calls.
+uses local registry policy and defaults an omitted legacy profile to `git-write`,
+without control-socket or GitHub calls.
 
 `apps/controller/src/drivers/repo/github/credentials/registry.ts:resolveGitHubRepositoryBinding`
 requires the exact Namespace/reference/profile combination. Its fingerprint
@@ -356,6 +359,8 @@ Slack or GitHub execution; Ready Pods and local commands do not prove live write
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 19:41: Trace request-order persistence after Driver resolution. (authoring-run/89d216e3-676a-4d9c-8792-6b275ceea685 - 43d99e7dce02fbd34b072c877868ad1beef4d245)
 
 - 2026-09-24 07:53: Trace discovery, inheritance, and per-repository overrides. (public-change/repository-picker - 81b18912)
 
