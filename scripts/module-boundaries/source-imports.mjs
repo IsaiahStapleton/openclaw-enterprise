@@ -6,8 +6,12 @@ import { freezeRecord, slash, sourceExtension } from "./workspace.mjs";
 
 function normalizedSpecifier(root, value) {
   try {
-    if (value.startsWith("file:")) return `file:${slash(relative(root, fileURLToPath(value)))}`;
-    if (isAbsolute(value)) return `file:${slash(relative(root, value))}`;
+    if (value.startsWith("file:")) {
+      return `file:${slash(relative(root, fileURLToPath(value)))}`;
+    }
+    if (isAbsolute(value)) {
+      return `file:${slash(relative(root, value))}`;
+    }
   } catch {
     /* Keep malformed URL text for its resolution diagnostic. */
   }
@@ -18,31 +22,38 @@ function assignedSymbols(source, checker) {
   const symbols = new Set();
   function assign(node) {
     node = unwrap(node);
-    if (ts.isIdentifier(node)) symbols.add(checker.getSymbolAtLocation(node));
-    else if (ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node))
+    if (ts.isIdentifier(node)) {
+      symbols.add(checker.getSymbolAtLocation(node));
+    } else if (ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node)) {
       ts.forEachChild(node, assign);
-    else if (ts.isPropertyAssignment(node)) assign(node.initializer);
-    else if (ts.isShorthandPropertyAssignment(node))
+    } else if (ts.isPropertyAssignment(node)) {
+      assign(node.initializer);
+    } else if (ts.isShorthandPropertyAssignment(node)) {
       symbols.add(checker.getShorthandAssignmentValueSymbol(node));
-    else if (ts.isSpreadElement(node) || ts.isSpreadAssignment(node)) assign(node.expression);
+    } else if (ts.isSpreadElement(node) || ts.isSpreadAssignment(node)) {
+      assign(node.expression);
+    }
   }
   function visit(node) {
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
       node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-    )
+    ) {
       assign(node.left);
+    }
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)
-    )
+    ) {
       assign(node.operand);
+    }
     if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
       !ts.isVariableDeclarationList(node.initializer)
-    )
+    ) {
       assign(node.initializer);
+    }
     ts.forEachChild(node, visit);
   }
   visit(source);
@@ -68,8 +79,8 @@ export function collectSourceImports(snapshot) {
       : undefined;
   const program = ts.createProgram([...texts.keys()], options, host);
   const checker = program.getTypeChecker();
-  const references = [],
-    diagnostics = [];
+  const references = [];
+  const diagnostics = [];
   for (const file of snapshot.files) {
     const source = program.getSourceFile(file.absolutePath);
     const commonjs = /\.[cm][jt]s$/.test(file.path)
@@ -82,7 +93,7 @@ export function collectSourceImports(snapshot) {
       assigned: assignedSymbols(source, checker),
     });
     const line = (node) => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-    for (const error of source.parseDiagnostics)
+    for (const error of source.parseDiagnostics) {
       diagnostics.push(
         freezeRecord({
           category: "syntax",
@@ -97,6 +108,7 @@ export function collectSourceImports(snapshot) {
           message: ts.flattenDiagnosticMessageText(error.messageText, " "),
         }),
       );
+    }
     function record(
       node,
       kind,
@@ -125,8 +137,8 @@ export function collectSourceImports(snapshot) {
     }
     function visit(node) {
       if (ts.isImportDeclaration(node)) {
-        const clause = node.importClause,
-          named = clause?.namedBindings;
+        const clause = node.importClause;
+        const named = clause?.namedBindings;
         const bindings = [
           ...(clause?.name ? [`${clause.isTypeOnly ? "type" : "value"}:default`] : []),
           ...(named && ts.isNamedImports(named)
@@ -157,24 +169,25 @@ export function collectSourceImports(snapshot) {
         record(node.moduleReference.expression, "require", node.isTypeOnly);
       } else if (ts.isCallExpression(node)) {
         const loader = analysis.reference(node.expression);
-        if (node.expression.kind === ts.SyntaxKind.ImportKeyword)
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
           record(node.arguments[0] ?? node, "dynamic-import");
-        else if (loader?.kind === "require")
+        } else if (loader?.kind === "require") {
           record(node.arguments[0] ?? node, "require", false, ["*"], loader.anchor);
-        else if (loader?.kind === "unknown-loader")
+        } else if (loader?.kind === "unknown-loader") {
           record(node.arguments[0] ?? node, "require", false, ["*"], null, {
             status: "unknown",
             reason: loader.reason,
           });
-        else if (analysis.builtin(node.expression, "node:module") === "createRequire") {
+        } else if (analysis.builtin(node.expression, "node:module") === "createRequire") {
           const target = analysis.value(node.arguments[0]);
           if (
             target.value &&
             (target.value.startsWith("file:") || isAbsolute(target.value)) &&
             target.value !== file.absolutePath &&
             target.value !== pathToFileURL(file.absolutePath).href
-          )
+          ) {
             record(node.arguments[0], "dependency-anchor");
+          }
         }
       } else if (ts.isNewExpression(node) && analysis.isURL(node.expression)) {
         const target = analysis.value(node);
@@ -182,8 +195,9 @@ export function collectSourceImports(snapshot) {
           if (
             target.value?.startsWith("file:") &&
             sourceExtension.test(new URL(target.value).pathname)
-          )
+          ) {
             record(node, "path");
+          }
         } catch {
           /* The containing recognized load reports invalid arguments. */
         }

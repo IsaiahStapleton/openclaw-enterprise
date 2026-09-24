@@ -208,11 +208,12 @@ test("honors Node's default node-addons export condition for import and require"
   const manifest = JSON.parse(await readFile(join(root, "packages/library/package.json"), "utf8"));
   manifest.exports["."] = { "node-addons": "./src/secret.mjs", default: "./src/safe.mjs" };
   await write("packages/library/package.json", JSON.stringify(manifest));
-  for (const name of ["secret", "safe"])
+  for (const name of ["secret", "safe"]) {
     await write(
       `packages/library/src/${name}.mjs`,
       'throw new Error("Analyzer must not execute targets.");',
     );
+  }
   await mkdir(join(root, "node_modules/@fixture"), { recursive: true });
   await symlink(join(root, "packages/library"), join(root, "node_modules/@fixture/library"), "dir");
   await write(
@@ -579,8 +580,9 @@ test("tracks loader aliases, module objects and wrappers while respecting lexica
     ],
     ["cjs", 'const mod = module; mod["require"]("external-driver");'],
   ];
-  for (const [index, [extension, source]] of known.entries())
+  for (const [index, [extension, source]] of known.entries()) {
     await write(`apps/app/src/known-${index}.${extension}`, source);
+  }
   await write(
     "apps/app/src/shadows.mjs",
     `
@@ -606,10 +608,11 @@ test("tracks loader aliases, module objects and wrappers while respecting lexica
     report.violations.filter((edge) => edge.rule === "forbidden-driver").length,
     known.length,
   );
-  for (const [index, [extension]] of known.entries())
+  for (const [index, [extension]] of known.entries()) {
     assert.ok(
       report.violations.some((edge) => edge.from === `apps/app/src/known-${index}.${extension}`),
     );
+  }
 });
 
 test("keeps Node file bindings local across JavaScript and TypeScript module formats", async (t) => {
@@ -641,11 +644,12 @@ test("keeps Node file bindings local across JavaScript and TypeScript module for
     // module syntax. The earlier file's same-named const must not hide this edge.
     await write(`${base}/a.${extension}`, `const target = "./safe.${extension}";`);
     await write(consumer, `const target = "./secret.${extension}"; import(target);`);
-    for (const name of ["safe", "secret"])
+    for (const name of ["safe", "secret"]) {
       await write(
         `${base}/${name}.${extension}`,
         'throw new Error("Analyzer must not execute targets.");',
       );
+    }
     const report = await check();
     observed.push({
       extension,
@@ -713,7 +717,9 @@ test("uses the nearest unnamed package scope for CLI CommonJS loaders and extens
       commonjs ? [target] : [],
     );
     assert.deepEqual(rules(report), commonjs ? ["forbidden-scope"] : []);
-    if (commonjs) assert.equal(report.violations[0].to, target);
+    if (commonjs) {
+      assert.equal(report.violations[0].to, target);
+    }
   }
 });
 
@@ -833,8 +839,9 @@ test("resolves ESM literal paths with URL semantics and preserves literal Common
   });
   const esmSpecifiers = ["./%73ecret.mjs", "./secret.mjs?view=1#probe"];
   const cjsSpecifiers = ["./literal?name.cjs", "./%73ecret.cjs"];
-  for (const name of ["secret.mjs", "literal?name.cjs", "%73ecret.cjs"])
+  for (const name of ["secret.mjs", "literal?name.cjs", "%73ecret.cjs"]) {
     await write(`${base}/${name}`, 'throw new Error("Analyzer must not execute targets.");');
+  }
   await write(
     consumer,
     esmSpecifiers.map((specifier) => `import ${JSON.stringify(specifier)};`).join("\n"),

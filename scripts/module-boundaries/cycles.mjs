@@ -2,7 +2,9 @@
 export function findCycles(files, edges) {
   const adjacent = new Map([...files].sort().map((file) => [file, new Set()]));
   for (const edge of edges) {
-    if (adjacent.has(edge.from) && adjacent.has(edge.to)) adjacent.get(edge.from).add(edge.to);
+    if (adjacent.has(edge.from) && adjacent.has(edge.to)) {
+      adjacent.get(edge.from).add(edge.to);
+    }
   }
   const indices = new Map();
   const low = new Map();
@@ -23,7 +25,9 @@ export function findCycles(files, edges) {
         low.set(file, Math.min(low.get(file), indices.get(target)));
       }
     }
-    if (low.get(file) !== indices.get(file)) return;
+    if (low.get(file) !== indices.get(file)) {
+      return;
+    }
     const members = [];
     let member;
     do {
@@ -31,9 +35,15 @@ export function findCycles(files, edges) {
       active.delete(member);
       members.push(member);
     } while (member !== file);
-    if (members.length > 1 || adjacent.get(file).has(file)) groups.push(members.sort());
+    if (members.length > 1 || adjacent.get(file).has(file)) {
+      groups.push(members.sort());
+    }
   }
-  for (const file of adjacent.keys()) if (!indices.has(file)) visit(file);
+  for (const file of adjacent.keys()) {
+    if (!indices.has(file)) {
+      visit(file);
+    }
+  }
   return Object.freeze(groups.sort((a, b) => a.join().localeCompare(b.join())).map(Object.freeze));
 }
 

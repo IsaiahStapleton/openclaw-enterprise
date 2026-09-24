@@ -49,11 +49,15 @@ export function resolveImports(snapshot, references, policy = {}) {
     ).resolvedModule?.resolvedFileName;
   }
   const graphPath = (path) => {
-    if (!path) return null;
+    if (!path) {
+      return null;
+    }
     try {
       return files.get(realpathSync(path))?.path ?? null;
     } catch (error) {
-      if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
+      if (!["ENOENT", "ENOTDIR"].includes(error.code)) {
+        throw error;
+      }
       return null;
     }
   };
@@ -64,20 +68,22 @@ export function resolveImports(snapshot, references, policy = {}) {
         Object.freeze({ reference, status, to: "", named, ...extra });
       const unresolved = (code, reason, extra = {}) =>
         result("unresolved", { code, reason, ...extra });
-      if (reference.value?.status !== "known" || typeof reference.value.value !== "string")
+      if (reference.value?.status !== "known" || typeof reference.value.value !== "string") {
         return unresolved(
           "unresolved-dynamic-import",
           reference.value?.reason ?? "Module path is not statically known.",
         );
+      }
       const specifier = reference.value.value;
       const mode = reference.mode ?? (reference.kind === "require" ? "require" : "import");
       const importer = resolve(root, reference.from);
       const anchor = reference.anchor ?? importer;
-      if (reference.anchor === null && specifier.startsWith("."))
+      if (reference.anchor === null && specifier.startsWith(".")) {
         return unresolved(
           "unresolved-dynamic-import",
           "Relative module path has no statically known loader anchor.",
         );
+      }
       const pkg = packages.find(
         (item) => specifier === item.name || specifier.startsWith(`${item.name}/`),
       );
@@ -91,11 +97,12 @@ export function resolveImports(snapshot, references, policy = {}) {
           typeCandidate = compilerTarget(specifier, packageAnchor, mode);
           const subpath = specifier === pkg.name ? "." : `.${specifier.slice(pkg.name.length)}`;
           if (pkg.manifest.exports === undefined) {
-            if (mode !== "require")
+            if (mode !== "require") {
               return unresolved(
                 "unsupported-package-export",
                 `Package ${pkg.name} requires explicit exports for ESM analysis.`,
               );
+            }
             target = resolve(root, pkg.path, subpath);
             typeCandidate = compilerTarget(target, packageAnchor, mode);
             nativeTarget = createRequire(packageAnchor).resolve(target);
@@ -105,61 +112,72 @@ export function resolveImports(snapshot, references, policy = {}) {
               subpath,
               new Set(["node", "node-addons", "module-sync", mode]),
             );
-            if (typeof selected === "string")
+            if (typeof selected === "string") {
               target = fileURLToPath(
                 new URL(selected, pathToFileURL(`${resolve(root, pkg.path)}/`)),
               );
-            if (!target && !reference.typeOnly)
+            }
+            if (!target && !reference.typeOnly) {
               return unresolved(
                 "unsupported-package-export",
                 `Package ${pkg.name} does not expose ${subpath} for this import.`,
               );
+            }
             if (reference.typeOnly && !typeCandidate) {
               const types = selectPackageExport(
                 pkg.manifest.exports,
                 subpath,
                 new Set(["types", "node", mode]),
               );
-              if (typeof types === "string")
+              if (typeof types === "string") {
                 typeCandidate = compilerTarget(
                   fileURLToPath(new URL(types, pathToFileURL(`${resolve(root, pkg.path)}/`))),
                   packageAnchor,
                   mode,
                 );
+              }
             }
             if (mode === "require" && target) {
               try {
                 nativeTarget = createRequire(packageAnchor).resolve(specifier);
               } catch (error) {
-                if (error.code !== "MODULE_NOT_FOUND")
+                if (error.code !== "MODULE_NOT_FOUND") {
                   throw new Error(
                     `Node could not resolve package export (${error.code ?? error.name}).`,
+                    { cause: error },
                   );
+                }
               }
             }
           }
-        } else if (specifier.startsWith("file:")) target = fileURLToPath(specifier);
-        else if (mode === "import" && specifier.startsWith("."))
+        } else if (specifier.startsWith("file:")) {
+          target = fileURLToPath(specifier);
+        } else if (mode === "import" && specifier.startsWith(".")) {
           target = fileURLToPath(new URL(specifier, pathToFileURL(importer)));
-        else if (specifier.startsWith(".") || isAbsolute(specifier))
+        } else if (specifier.startsWith(".") || isAbsolute(specifier)) {
           target = resolve(anchor.endsWith("/") ? anchor : dirname(anchor), specifier);
-        else if (specifier.startsWith("#"))
+        } else if (specifier.startsWith("#")) {
           return unresolved(
             "unresolved-local-import",
             "Package import aliases are not supported; use an explicit export or local path.",
           );
-        else if ((policy.workspaceNamespaces ?? []).some((prefix) => specifier.startsWith(prefix)))
+        } else if (
+          (policy.workspaceNamespaces ?? []).some((prefix) => specifier.startsWith(prefix))
+        ) {
           return unresolved(
             "unknown-workspace-package",
             "Workspace package is not registered in the boundary policy.",
           );
-        else return result("external");
+        } else {
+          return result("external");
+        }
       } catch (error) {
-        if (!reference.typeOnly || !graphPath(typeCandidate))
+        if (!reference.typeOnly || !graphPath(typeCandidate)) {
           return unresolved(
             pkg ? "unsupported-package-export" : "unresolved-local-import",
             error.message,
           );
+        }
         // Erased references can select a valid types branch even when the runtime
         // branch is unavailable. Keep that failure out of the runtime graph.
         target = undefined;
@@ -169,15 +187,17 @@ export function resolveImports(snapshot, references, policy = {}) {
       if (target && reference.kind === "dependency-anchor") {
         const directory =
           specifier.endsWith("/") && statSync(target, { throwIfNoEntry: false })?.isDirectory();
-        if (directory || manifests.has(target))
+        if (directory || manifests.has(target)) {
           return result("local", {
             to: slash(relative(root, target)),
             runtimeTarget: null,
             typeTarget: null,
           });
+        }
       }
-      if (target && reference.kind === "path" && !sourceExtension.test(target))
+      if (target && reference.kind === "path" && !sourceExtension.test(target)) {
         return result("external", { reason: "Non-source asset URL." });
+      }
 
       if (target && !pkg && mode === "require" && reference.kind !== "dependency-anchor") {
         try {
@@ -185,23 +205,27 @@ export function resolveImports(snapshot, references, policy = {}) {
             specifier.startsWith("file:") ? target : specifier,
           );
         } catch (error) {
-          if (error.code !== "MODULE_NOT_FOUND")
+          if (error.code !== "MODULE_NOT_FOUND") {
             return unresolved(
               "unresolved-local-import",
               `Node could not resolve the local module (${error.code ?? error.name}).`,
             );
+          }
         }
       }
-      if (target && !typeCandidate) typeCandidate = compilerTarget(target, anchor, mode);
+      if (target && !typeCandidate) {
+        typeCandidate = compilerTarget(target, anchor, mode);
+      }
       let runtime = nativeTarget ?? target;
       // An existing JavaScript file is authoritative even if a .d.ts or .ts sibling
       // is visible to the compiler. Only absent emitted files map back to source.
-      if (runtime && !host.fileExists(runtime) && emittedExtension.test(runtime))
+      if (runtime && !host.fileExists(runtime) && emittedExtension.test(runtime)) {
         runtime = compilerTarget(runtime, anchor, mode, true);
+      }
       const runtimeTarget = runtime && !declaration.test(runtime) ? graphPath(runtime) : null;
       const typeTarget = graphPath(typeCandidate);
       const to = reference.typeOnly ? (typeTarget ?? graphPath(target)) : runtimeTarget;
-      if (!to)
+      if (!to) {
         return unresolved(
           "unresolved-local-import",
           "Local module is missing or outside the active source graph.",
@@ -211,6 +235,7 @@ export function resolveImports(snapshot, references, policy = {}) {
             typeTarget,
           },
         );
+      }
       return result("local", { to, runtimeTarget, typeTarget });
     }),
   );

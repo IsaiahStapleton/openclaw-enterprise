@@ -6,7 +6,9 @@ export function validateExceptions(exceptions) {
   if (!exceptions || exceptions.version !== 1) {
     throw new Error("Unsupported module-boundary exceptions version.");
   }
-  if (!Array.isArray(exceptions.exceptions)) throw new Error("Invalid module-boundary exceptions.");
+  if (!Array.isArray(exceptions.exceptions)) {
+    throw new Error("Invalid module-boundary exceptions.");
+  }
   const identities = new Set();
   for (const exception of exceptions.exceptions) {
     if (
@@ -24,13 +26,17 @@ export function validateExceptions(exceptions) {
       );
     }
     const identity = diagnosticIdentity(exception);
-    if (identities.has(identity)) throw new Error("Duplicate module-boundary exception.");
+    if (identities.has(identity)) {
+      throw new Error("Duplicate module-boundary exception.");
+    }
     identities.add(identity);
   }
 }
 
 function frozenCopy(value) {
-  if (Array.isArray(value)) return Object.freeze(value.map(frozenCopy));
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map(frozenCopy));
+  }
   if (value && typeof value === "object") {
     return Object.freeze(
       Object.fromEntries(Object.entries(value).map(([key, item]) => [key, frozenCopy(item)])),

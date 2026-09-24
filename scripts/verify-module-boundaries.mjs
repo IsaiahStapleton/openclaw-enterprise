@@ -15,7 +15,9 @@ export async function verifyModuleBoundaries({
   policy,
   exceptions = { version: 1, exceptions: [] },
 } = {}) {
-  if (!policy) throw new Error("An explicit module-boundary policy is required.");
+  if (!policy) {
+    throw new Error("An explicit module-boundary policy is required.");
+  }
   validatePolicy(policy);
   validateExceptions(exceptions);
   const snapshot = await readWorkspace(root, policy);
@@ -63,42 +65,50 @@ export async function verifyModuleBoundaries({
 const usage =
   "Usage: node scripts/verify-module-boundaries.mjs --policy file [--root directory] [--exceptions file] [--json]";
 async function main() {
-  const args = process.argv.slice(2),
-    options = {};
+  const args = process.argv.slice(2);
+  const options = {};
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
     if (argument === "--help" && args.length === 1) {
       process.stdout.write(`${usage}\n`);
       return;
     }
-    if (argument === "--json" && !options.json) options.json = true;
-    else if (
+    if (argument === "--json" && !options.json) {
+      options.json = true;
+    } else if (
       ["--root", "--policy", "--exceptions"].includes(argument) &&
       args[index + 1] &&
       !args[index + 1].startsWith("--") &&
       !options[argument.slice(2)]
-    )
+    ) {
       options[argument.slice(2)] = args[++index];
-    else throw new Error(usage);
+    } else {
+      throw new Error(usage);
+    }
   }
-  if (!options.policy) throw new Error(`An explicit --policy file is required. ${usage}`);
+  if (!options.policy) {
+    throw new Error(`An explicit --policy file is required. ${usage}`);
+  }
   const root = resolve(options.root ?? defaultRoot);
   const policy = JSON.parse(await readFile(resolve(root, options.policy), "utf8"));
   const exceptions = options.exceptions
     ? JSON.parse(await readFile(resolve(root, options.exceptions), "utf8"))
     : undefined;
   const result = await verifyModuleBoundaries({ root, policy, exceptions });
-  if (options.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  else {
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } else {
     const limit = policy.diagnosticLimit ?? 50;
-    for (const item of result.violations.slice(0, limit))
+    for (const item of result.violations.slice(0, limit)) {
       process.stderr.write(
         `${item.from}:${item.line} [${item.rule}] ${item.message} ${item.to || item.specifier}\n`,
       );
-    if (result.violations.length > limit)
+    }
+    if (result.violations.length > limit) {
       process.stderr.write(
         `${result.violations.length - limit} additional violations; use --json for the full report.\n`,
       );
+    }
     process.stdout.write(
       `Module boundaries ${result.ok ? "verified" : "failed"}: ${result.files.length} sources, ${result.edges.length} local edges, ${result.baseline.length} explicit exceptions, ${result.runtimeCycles.length} runtime cycles, ${result.typeOnlyCycles.length} type-only cycle groups (${result.typeInvolvingCycles.length} type-involving groups), ${result.violations.length} violations.\n`,
     );

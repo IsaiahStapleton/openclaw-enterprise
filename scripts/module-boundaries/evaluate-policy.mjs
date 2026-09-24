@@ -32,8 +32,9 @@ const kinds = new Set([
 ]);
 
 export function validatePolicy(policy) {
-  if (!policy || policy.version !== 1)
+  if (!policy || policy.version !== 1) {
     throw new Error("Unsupported module-boundary policy version.");
+  }
   for (const field of ["sourceRoots", "packages"]) {
     if (!Array.isArray(policy[field]) || policy[field].some((entry) => !pathValid(entry))) {
       throw new Error(`Invalid policy field: ${field}`);
@@ -51,8 +52,9 @@ export function validatePolicy(policy) {
       policy.workspaceNamespaces.some(
         (entry) => typeof entry !== "string" || !/^@[^/\\\s]+\/$/.test(entry),
       ))
-  )
+  ) {
     throw new Error("Invalid policy field: workspaceNamespaces");
+  }
   if (
     policy.diagnosticLimit !== undefined &&
     (!Number.isSafeInteger(policy.diagnosticLimit) || policy.diagnosticLimit < 1)
@@ -73,7 +75,9 @@ export function validatePolicy(policy) {
       throw new Error("Boundaries require a rule and message.");
     }
     for (const field of ["from", "to", "exceptFrom", "exceptTo"]) {
-      if (field !== "from" && boundary[field] === undefined) continue;
+      if (field !== "from" && boundary[field] === undefined) {
+        continue;
+      }
       if (
         !Array.isArray(boundary[field]) ||
         boundary[field].some((entry) => !patternValid(entry))
@@ -92,8 +96,9 @@ export function validatePolicy(policy) {
               entry !== "**" &&
               (!entry.endsWith("/**") || entry.slice(0, -3).includes("*"))),
         ))
-    )
+    ) {
       throw new Error("Invalid boundary field: specifiers");
+    }
     if (!boundary.from.length || !(boundary.to?.length || boundary.specifiers?.length)) {
       throw new Error("Boundaries require source patterns and target paths or specifiers.");
     }
@@ -108,7 +113,9 @@ export function validatePolicy(policy) {
     ["packageImports", ["sourcePaths", "internalRoot"]],
     ["cycles", ["runtime", "typeOnly"]],
   ]) {
-    if (policy[field] === undefined) continue;
+    if (policy[field] === undefined) {
+      continue;
+    }
     if (!policy[field] || typeof policy[field] !== "object" || Array.isArray(policy[field])) {
       throw new Error(`Invalid policy field: ${field}`);
     }
@@ -122,21 +129,31 @@ export function validatePolicy(policy) {
 }
 
 function rootBarrels(snapshot, policy) {
-  if (policy.rootBarrels !== undefined) return new Set(policy.rootBarrels);
+  if (policy.rootBarrels !== undefined) {
+    return new Set(policy.rootBarrels);
+  }
   const files = new Set(snapshot.files.map((file) => file.path));
   const barrels = new Set();
   for (const pkg of snapshot.packages) {
     const exports = pkg.manifest.exports;
     const target = typeof exports === "string" ? exports : exports?.["."];
-    if (typeof target !== "string" || !target.startsWith("./")) continue;
+    if (typeof target !== "string" || !target.startsWith("./")) {
+      continue;
+    }
     const path = posix.join(pkg.path, target);
-    if (!inside(path, pkg.path)) continue;
-    if (files.has(path)) barrels.add(path);
+    if (!inside(path, pkg.path)) {
+      continue;
+    }
+    if (files.has(path)) {
+      barrels.add(path);
+    }
     for (const extension of { ".js": [".ts", ".tsx"], ".mjs": [".mts"], ".cjs": [".cts"] }[
       posix.extname(path)
     ] ?? []) {
       const source = path.slice(0, -posix.extname(path).length) + extension;
-      if (files.has(source)) barrels.add(source);
+      if (files.has(source)) {
+        barrels.add(source);
+      }
     }
   }
   return barrels;
@@ -212,8 +229,9 @@ export function evaluatePolicy(snapshot, resolutions, policy) {
         matches(edge.from, boundary.exceptFrom) ||
         (edge.to && matches(edge.to, boundary.exceptTo)) ||
         (boundary.kinds && !boundary.kinds.includes(edge.kind))
-      )
+      ) {
         continue;
+      }
       if (
         (status === "local" && matches(edge.to, boundary.to)) ||
         matches(edge.specifier, boundary.specifiers)
