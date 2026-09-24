@@ -658,6 +658,10 @@ function renderAgentForm(context, rendered) {
     spellcheck: "false",
   });
   secretBindings.value = JSON.stringify(rendered.configuration?.secretBindings ?? {}, null, 2);
+  secretBindings.addEventListener("input", () => {
+    secretBindings.setCustomValidity("");
+    renderChannelEditor();
+  });
   const workspaceInputs = Object.entries(WORKSPACE_DEFAULTS).map(([filename, content]) => {
     const input = element("textarea", {
       id: `workspace-${filename.replace(".", "-")}`,
@@ -919,7 +923,8 @@ function renderAgentForm(context, rendered) {
   }
   function renderChannelEditor() {
     const values = parseObject(configuration);
-    if (values === undefined) {
+    const parsedSecretBindings = parseObject(secretBindings);
+    if (values === undefined || parsedSecretBindings === undefined) {
       channelEditor.replaceChildren(
         element(
           "section",
@@ -928,13 +933,14 @@ function renderAgentForm(context, rendered) {
           element(
             "p",
             { className: "error" },
-            "Enter a valid Configuration JSON object before configuring channels.",
+            values === undefined
+              ? "Enter a valid Configuration JSON object before configuring channels."
+              : "Enter a valid Secret bindings JSON object before configuring channels.",
           ),
         ),
       );
       return;
     }
-    const parsedSecretBindings = parseObject(secretBindings) ?? {};
     const channels = renderChannels({
       values,
       executionMode: mode.value,
