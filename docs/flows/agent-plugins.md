@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-24
-last_updated_session: 01a0d1dd-aa36-7622-9f43-8376f6ff935e
+last_updated_session: 01a0b17c-68b6-7e11-bedc-f74de7d606ed
 ---
 
 # Agent Plugin Deployment Flow
@@ -179,18 +179,22 @@ subtree with `config/batchWrite`, removing stale per-app tool/link settings. It
 then rereads successful installations to check identity, version, and app mapping.
 Failed-only bindings are disabled; successful bindings retain admitted policy.
 Disabled selections do not contribute install attempts or startup results.
-`config/read` verifies the effective overlay before readiness, including every
-nested tool's enablement and approval against its requested override or app
-default. Absent/null fields inherit. Unexpected explicit tool enablement is
-rejected when OCE omitted the default, because it can bypass category restrictions.
-Account/link approval defaults must match the requested app approval.
+`config/read` uses the Agent workspace `/home/node/workspace`, including its
+trusted project layers. `verifyCodexAppConfiguration` checks requested fields and
+unexpected app/global defaults before readiness. Enabled unselected apps fail;
+unselected disabled apps remain permitted. Serialized defaults/nulls and omitted
+reviewers preserve inheritance. Every nested tool's enablement/approval must match
+its requested override or app default; account approval must match the app.
+Unexpected explicit enablement fails because it can bypass category restrictions.
 
 `runtime-entrypoints.ts:verifyCodexReviewerConfiguration` checks explicit app
 reviewers against effective app/link settings and `configRequirements/read`.
 It rejects forbidden reviewers, incompatible automatic-review approval settings,
 and human review conflicting with current-model requirements. These startup
-checks do not establish later session/model routing, strict review, workspace
-configuration, or managed requirements beyond reviewer checks. See the [remaining proof](../testing/plugins.md#current-proof-notes).
+checks do not establish later workspace/session/model changes or strict review.
+Codex 0.156 readback APIs omit managed app/tool requirements applied during
+execution; native effective-policy introspection remains required. See the
+[remaining proof](../testing/plugins.md#current-proof-notes).
 Codex owns cache integrity and runtime health.
 
 For Compute-owned Kubernetes workloads, a selected OpenClaw install command's

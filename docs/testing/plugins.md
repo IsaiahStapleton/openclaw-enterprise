@@ -164,11 +164,14 @@ review unless strict review applies; app-level `prompt` alone is not proof.
 Startup now checks explicit app reviewers against effective app/link settings,
 allowed reviewers, current approval policy, and managed current-model requirements.
 That check does not establish future turn routing, session/model changes, or the
-turn's strict-review flag. Startup fixtures also exercise every nested tool's
-enablement/approval and account/link approval defaults against the requested
-policy, including unexpected exceptions that would otherwise pass subset
-verification. Managed requirements beyond reviewer checks, workspace configuration,
-and live reviewer availability remain draft acceptance gates. Confirm a disabled plugin remains
+turn's strict-review flag. Startup fixtures exercise app/global fields, unselected
+apps, every nested tool, and account approval against the requested policy. They
+reject an inherited `default_tools_enabled:true` that bypasses requested
+destructive denial and include workspace overrides through `config/read.cwd`.
+Native default/null serialization and omitted reviewer inheritance remain valid.
+Codex 0.156 readback APIs omit managed app/tool requirements applied during
+execution. Native effective-policy introspection, later workspace/session changes,
+and live reviewer availability remain acceptance gates. Confirm a disabled plugin remains
 blocked despite an enabled tool override, and a tool exception preserves native
 operator restrictions. Installation composition also remains unproven on a real
 deployment.

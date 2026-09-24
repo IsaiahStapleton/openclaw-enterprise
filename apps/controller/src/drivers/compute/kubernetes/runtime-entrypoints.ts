@@ -891,14 +891,38 @@ async function writeCodexAppConfiguration(configuration) {
 }
 
 async function readCodexAppConfiguration() {
-  const response = await codexAppServerRequest("config/read", {});
+  // Match the dedicated Harness workspace; a thread-agnostic read omits its
+  // trusted .codex layers and can validate a different policy than the Agent uses.
+  const response = await codexAppServerRequest("config/read", { cwd: "/home/node/workspace" });
   return response?.config;
 }
 
-function verifyCodexNestedPolicy(configuration, effective) {
-  for (const [appId, app] of Object.entries(configuration.apps ?? {})) {
+function verifyCodexAppConfiguration(configuration, effective) {
+  assertConfigContainsOverlay(effective, configuration);
+  for (const [appId, actual] of Object.entries(effective.apps ?? {})) {
+    const app = configuration.apps?.[appId];
+    if (app === undefined) {
+      // An explicit app entry overrides _default.enabled. Unselected disabled
+      // entries are harmless; never admit an enabled app outside the selection.
+      if (actual.enabled !== false) {
+        throw new Error("Codex effective app policy conflicts with the selected apps; remove the unselected enabled app.");
+      }
+      continue;
+    }
+    for (const [field, value] of Object.entries(actual)) {
+      if (field === "tools" || field === "links" || value == null) continue;
+      if (field === "approvals_reviewer" && app.approvals_reviewer === undefined) continue;
+      // Codex serializes global category defaults as true, optional fields as
+      // null, and an empty exposure list imposes no additional restriction.
+      if (field === "omit_tools_from" && Array.isArray(value) && value.length === 0 && app[field] === undefined) continue;
+      const expected = appId === "_default" && ["destructive_enabled", "open_world_enabled"].includes(field)
+        ? app[field] ?? true
+        : app[field];
+      if (JSON.stringify(value) !== JSON.stringify(expected)) {
+        throw new Error("Codex effective app policy conflicts at apps." + appId + "." + field + "; remove the native override or update the Agent policy.");
+      }
+    }
     if (appId === "_default") continue;
-    const actual = effective?.apps?.[appId];
     // Native tables merge across layers; replacing the user app table does not
     // remove inherited tool exceptions. Null fields mean inheritance, not overrides.
     for (const [toolName, tool] of Object.entries(actual?.tools ?? {})) {
@@ -1136,10 +1160,12 @@ async function installCodexSelectionSet(selections, failures = []) {
     const detail = installedDetails[readParamsList.indexOf(readParams)];
     verifyCodexPluginDetail(plugin, readParams, detail);
   }
+  // TODO: use native effective app/tool policy introspection when available.
+  // Codex 0.156 config/read omits managed app requirements applied at execution;
+  // this readback verifies loaded configuration, not future thread policy.
   const effectiveConfiguration = await readCodexAppConfiguration();
   await verifyCodexReviewerConfiguration(effectiveResolvedArtifact.configuration, effectiveConfiguration);
-  assertConfigContainsOverlay(effectiveConfiguration, effectiveResolvedArtifact.configuration);
-  verifyCodexNestedPolicy(effectiveResolvedArtifact.configuration, effectiveConfiguration);
+  verifyCodexAppConfiguration(effectiveResolvedArtifact.configuration, effectiveConfiguration);
   return { successfulPluginIds, failures: failed };
 }
 
