@@ -1325,10 +1325,11 @@ for (const mutation of ["authentication", "generated credentials", "channel Secr
       );
     const values = createHarnessConfiguration("codex", "gpt-5.1");
     let appSecret;
+    let botSecret;
     let secretBindings;
     if (mutation === "channel Secrets") {
       appSecret = await fixture.createSecret(namespace.id, "Slack app", "xapp-original");
-      const botSecret = await fixture.createSecret(namespace.id, "Slack bot", "xoxb-original");
+      botSecret = await fixture.createSecret(namespace.id, "Slack bot", "xoxb-original");
       values.channels = {
         slack: {
           enabled: true,
@@ -1366,6 +1367,32 @@ for (const mutation of ["authentication", "generated credentials", "channel Secr
       body: {},
     });
     assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
+    if (mutation === "channel Secrets") {
+      const role = await fixture.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+        body: {
+          name: "Channel access",
+          permissions: [{ action: "operate", resourceKind: "secret" }],
+        },
+      });
+      assert.equal(role.status, 201, JSON.stringify(role.body));
+      for (const secret of [appSecret, botSecret]) {
+        const binding = await fixture.request(
+          "POST",
+          `/namespaces/${namespace.id}/iam/access-bindings`,
+          {
+            body: {
+              subjectKind: "identity",
+              subjectId: agent.servicePrincipalId,
+              roleId: role.data.id,
+              resourceKind: "secret",
+              resourceId: secret.id,
+            },
+          },
+        );
+        assert.equal(binding.status, 201, JSON.stringify(binding.body));
+      }
+      await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+    }
     const { page } = await newPage(t, fixture);
     const requests = apiRequests(page, fixture.origin);
     await login(
@@ -1444,9 +1471,16 @@ for (const mutation of ["authentication", "generated credentials", "channel Secr
           .evaluate((node) => Boolean(node.closest("[inert]"))),
         true,
       );
-      await page.getByRole("button", { name: "Configuration", exact: true }).click();
-      assert.equal(await deploy.isDisabled(), true);
-      await page.getByRole("button", { name: "Credentials", exact: true }).click();
+      for (const label of ["Configuration", "Repositories", "Channels", "Workspace files"]) {
+        assert.equal(
+          await page.getByRole("button", { name: label, exact: true }).isDisabled(),
+          true,
+          `${label} must not be available while credentials are saving`,
+        );
+      }
+      if (mutation === "channel Secrets") {
+        assert.equal(await page.locator("#revision-selector").isDisabled(), true);
+      }
     }
     assert.equal(pathRequests(requests, "POST", `${path}/deploy`).length, 0);
     release.resolve();
@@ -1463,6 +1497,9 @@ for (const mutation of ["authentication", "generated credentials", "channel Secr
     if (mutation !== "authentication") {
       await page.getByRole("button", { name: "Refresh status" }).click();
       assert.equal(await deploy.isDisabled(), true);
+    }
+    if (mutation === "channel Secrets") {
+      assert.equal(await page.locator("#revision-selector").isEnabled(), true);
     }
     await page.getByRole("button", { name: "Configuration", exact: true }).click();
     await page.getByRole("button", { name: "Credentials", exact: true }).click();

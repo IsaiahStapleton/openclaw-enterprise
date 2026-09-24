@@ -178,6 +178,7 @@ export async function renderAgentDetail(context) {
   let selectedTab = tabsForSelection.includes(tab) ? tab : "configuration";
   let deployInFlight = false;
   let authenticationSaveState = "idle";
+  let activeCredentials = null;
   const target = (revision = selected, tab = selectedTab) =>
     `agents/${agentId}?revision=${encodeURIComponent(revision)}&tab=${tab}`;
   const change = (revision, tab) => {
@@ -224,6 +225,7 @@ export async function renderAgentDetail(context) {
       selected === "draft" &&
       (deployInFlight ||
         authenticationSaveState === "saving" ||
+        activeCredentials?.isSaving() ||
         (["configuration", "repositories", "channels"].includes(selectedTab) &&
           draftEditorNavigationBlock))
     );
@@ -434,7 +436,10 @@ export async function renderAgentDetail(context) {
             values,
             revisionsLoaded: revisionResult.status === "fulfilled",
             revisionCount: revisions.length,
-            onStatusChange: updateDeployControls,
+            onStatusChange() {
+              updateNavigationControls();
+              updateDeployControls();
+            },
             onConfigurationChange(configuration) {
               snapshot = configuration;
               values = configuration.values;
@@ -442,6 +447,7 @@ export async function renderAgentDetail(context) {
             onReload: () => context.navigate(target("draft", "credentials"), namespaceId, true),
           })
         : null;
+    activeCredentials = credentials;
     function editedSubject() {
       if (selectedTab === "repositories") {
         return "repository access";

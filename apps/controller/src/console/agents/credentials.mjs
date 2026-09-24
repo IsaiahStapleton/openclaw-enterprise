@@ -614,6 +614,7 @@ export function createRuntimeCredentialsPanel({
     loadStatus,
     canDeploy,
     deployGateMessage,
+    isSaving: () => state.saving,
     mutationPending: () => state.saving || state.outcomeUnknown,
   };
 }
