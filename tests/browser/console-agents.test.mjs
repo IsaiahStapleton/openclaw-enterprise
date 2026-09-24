@@ -849,6 +849,13 @@ test("Agent creation selects approved repositories with one common explicit prof
   await page.getByText(/Does not grant ordinary issue management/).waitFor();
   assert.equal(await page.locator("#repository-issue-access").isDisabled(), true);
   assert.equal(await page.locator("#repository-issue-access").isChecked(), false);
+  // Restored selections must survive rediscovery and still be submitted through the real create path.
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.locator("#repository-application").waitFor();
+  assert.equal(await page.locator("#repository-application").isChecked(), true);
+  assert.equal(await page.locator("#repository-documentation").isChecked(), true);
+  assert.equal(await page.locator("#repository-profile-git-write").isChecked(), true);
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Repository Agent");
 
@@ -5452,6 +5459,32 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await openAdvancedSettings(page);
   await page.getByLabel("Configuration JSON", { exact: true }).fill(JSON.stringify(edited));
   await page.getByLabel("AGENTS.md", { exact: true }).fill("# Edited workspace\n");
+  // Route reconstruction must retain the rendered copy even after its source Preset was deleted.
+  await page.getByRole("link", { name: "Namespaces", exact: true }).click();
+  await page.getByRole("heading", { name: "Namespaces", exact: true }).waitFor();
+  await page.goBack();
+  await page.getByLabel("Agent name", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
+  assert.deepEqual(
+    JSON.parse(await page.getByLabel("Configuration JSON", { exact: true }).inputValue()),
+    edited,
+  );
+  assert.equal(
+    await page.getByLabel("AGENTS.md", { exact: true }).inputValue(),
+    "# Edited workspace\n",
+  );
+  assert.equal(await page.getByLabel("IDENTITY.md", { exact: true }).inputValue(), "");
+  assert.deepEqual(
+    JSON.parse(await page.getByLabel("Plugin selections JSON").inputValue()),
+    plugins,
+  );
+  await page.goForward();
+  await page.getByRole("heading", { name: "Namespaces", exact: true }).waitFor();
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByLabel("Agent name", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
+  assert.deepEqual(nonAuthWriteRequests(requests), [], "navigation must not save the local draft");
   // Canceling Start over keeps the ordinary draft and its ability to save.
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "Start over" }).click();
@@ -6097,4 +6130,88 @@ test("Preset picker ignores stale Preset responses after switching selection", a
   await page.getByRole("button", { name: "Use Preset" }).click();
   await page.getByLabel("Agent name", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Current Agent");
+});
+
+test("unsaved Preset drafts retain unfinished edits across navigation until explicit discard", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const root = await mkdtemp(join(tmpdir(), "occ-preset-navigation-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const namespace = await fixture.createNamespace("Draft navigation", { ready: true });
+  const artifact = JSON.parse(
+    await readFile(new URL("../../deploy/presets/standard-codex.json", import.meta.url), "utf8"),
+  );
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: artifact,
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.body));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByLabel("Variable: name", { exact: true }).fill("Navigation draft");
+  await page.getByLabel("Variable: model", { exact: true }).fill("gpt-5.1");
+  await page.getByLabel("Variable: modelSecret", { exact: true }).fill("synthetic-navigation-key");
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  await openAdvancedSettings(page);
+  const unfinished = '{"agents":';
+  await page.getByLabel("Configuration JSON", { exact: true }).fill(unfinished);
+  await page.getByLabel("USER.md", { exact: true }).fill("");
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByLabel("Agent name", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByLabel("Agent name", { exact: true }).inputValue(),
+    "Navigation draft",
+  );
+  assert.equal(
+    await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
+    unfinished,
+  );
+  assert.equal(await page.getByLabel("USER.md", { exact: true }).inputValue(), "");
+  // Navigation keeps the established credential-clearing rule, even though ordinary edits survive.
+  assert.equal(await page.getByLabel("API key", { exact: true }).inputValue(), "");
+  assert.deepEqual(
+    await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } })),
+    { local: {}, session: {} },
+  );
+  assert.equal(new URL(page.url()).search, `?namespace=${namespace.id}`);
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page.getByRole("button", { name: "Start over" }).click();
+  assert.equal(
+    await page.getByLabel("Configuration JSON", { exact: true }).inputValue(),
+    unfinished,
+  );
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Start over" }).click();
+  await page.getByLabel("Preset template").waitFor();
+  assert.equal(await page.getByLabel("Preset template").inputValue(), "");
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByLabel("Preset template").waitFor();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
+
+  // Reload ends the SPA session; a new form must not recover discarded or browser-stored inputs.
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name", { exact: true }).fill("Reload-only draft");
+  await page.reload();
+  await page.getByLabel("Preset template").waitFor();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
+
+  // Signing back in without reloading must not recover the previous session's in-memory draft.
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name", { exact: true }).fill("Private session draft");
+  await page.getByRole("button", { name: "OpenClaw Enterprise", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Logout" }).click();
+  await page.getByLabel("Username").fill(fixture.credentials.email);
+  await page.getByLabel("Password").fill(fixture.credentials.password);
+  await page.getByRole("button", { name: "Login", exact: true }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByLabel("Preset template").waitFor();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
 });

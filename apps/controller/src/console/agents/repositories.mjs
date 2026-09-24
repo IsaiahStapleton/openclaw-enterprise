@@ -6,7 +6,7 @@ import {
   repositoryWriteAccessHelp,
 } from "./repository-profiles.mjs";
 
-export function createRepositoryFields(context, onChange) {
+export function createRepositoryFields(context, onChange, initialBindings = []) {
   const status = element(
     "p",
     { className: "hint", role: "status", "aria-live": "polite" },
@@ -113,8 +113,8 @@ export function createRepositoryFields(context, onChange) {
   );
   const state = {
     options: [],
-    selected: new Set(),
-    profile: "",
+    selected: new Set(initialBindings.map((binding) => binding.repositoryRef)),
+    profile: initialBindings[0]?.profile ?? "",
     settled: false,
     draftOnly: false,
     blockingFailure: undefined,

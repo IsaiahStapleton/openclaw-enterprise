@@ -159,3 +159,5 @@ export const CreatePresetSecretsEmpty = {
   ...story("createPresetSecretsEmpty"),
   name: "No existing Preset Secrets",
 };
+
+export const CreatePresetNavigation = story("createPresetNavigation");

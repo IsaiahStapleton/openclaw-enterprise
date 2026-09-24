@@ -8,9 +8,8 @@ Secret creation permission. First-time provisioning grants access to accepted
 Secret references; ordinary draft creation also requires permission to grant
 Agent key access. After deployment, [verify this same
 Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
-If you are using [Local Setup](../../guides/quickstart.md) instead, the
-[local first-Agent walkthrough](../../guides/first-agent.md) creates a separate
-Agent; it does not verify an Agent you create in the console.
+The [local first-Agent walkthrough](../../guides/first-agent.md) creates a separate
+Agent; it does not verify your Console Agent.
 
 ## Create an Agent
 
@@ -40,11 +39,9 @@ Presets and edited Configuration JSON retain their settings.
    workspace, open **Service accounts**, and create a token with Codex scope.
    The fields show `sk-…` and `at-…` hints; prefixes do not select the method.
    Choose a model from the starter list or select **Enter model ID manually**.
-   The list appears before credential entry, with no preselected model.
-   It is intentionally hardcoded pending a future discovery iteration; confirm
-   your credential and runtime support your choice.
-   The form writes the corresponding native model configuration. Credentials
-   remain separate from Configuration JSON.
+   The hardcoded list has no preselected model and appears before credential entry;
+   confirm credential and runtime support. The form updates native model
+   configuration; credentials stay separate.
 4. Confirm your Installation has access to the chosen model. Primary and fallback
    models must use the same supported provider and Harness. For custom settings,
    open **Advanced settings**. Selection changes preserve unrelated JSON edits;
@@ -78,6 +75,13 @@ Presets and edited Configuration JSON retain their settings.
    without a workload. After deployment, use the
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no
    update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
+
+Before saving, one in-memory draft per Namespace survives Console navigation,
+including Back/Forward. Reopen **Create Agent** to resume edits; reenter new
+credentials because password fields clear on navigation. **Start over** confirms
+discard. Reload, page exit, and sign-out clear local drafts. Once saving begins,
+navigation does not retain partial-save or uncertain-outcome form state; follow
+save recovery below.
 
 For Codex plugins, enter a **Service Accounts** token with **Codex** and open
 **Configure plugins**. **Previous page** and **Next page** fetch
@@ -205,16 +209,14 @@ Check that the returned revision belongs to this Agent and retains its repositor
 selections. An ordinary draft requires credential setup and **Deploy new revision**
 from its detail page.
 
-Outside the Console, an operator must prepare the
+Operators must prepare the
 [repository installation](../../guides/repository-credentials/installation.md),
-Namespace approvals, runtime images and networking; supply a managed model
-credential and its exact-Agent access grant; and install a Slack app with Socket
-Mode and the required channel membership. Slack also needs the configured
+Namespace approvals, runtime images, networking, model credential and exact-Agent
+grant, plus a Slack app with Socket Mode and channel membership. Slack requires a
 [channel proxy](../drivers/kubernetes-compute/networking-and-isolation.md).
-Deployment admission is not a live channel connection or repository operation.
-Verify this same Agent and revision before presenting the live demo.
-Repository write permission does not change the Harness's filesystem or approval
-policy. Review those settings separately before demonstrating code edits.
+Verify this Agent and revision: admission proves neither channel connectivity nor
+repository operations. Repository permissions do not change Harness filesystem or
+approval policy; review both before demonstrating edits.
 
 ## Initial runtime credentials
 

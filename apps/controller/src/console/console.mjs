@@ -13,6 +13,9 @@ let namespaces = [];
 let namespaceId = null;
 let loggingOut = false;
 let navigateAgentTab = null;
+const createAgentDrafts = new Map();
+let draftUserId = null;
+let captureCreateAgentDraft = null;
 const navigation = createNavigation({
   getNamespaceId: () => namespaceId,
   isLoggingOut: () => loggingOut,
@@ -28,6 +31,8 @@ const request = createApiClient({
 });
 
 function resetReads() {
+  captureCreateAgentDraft?.();
+  captureCreateAgentDraft = null;
   navigateAgentTab = null;
   shellUI.reset();
   return lifetime.reset();
@@ -52,7 +57,14 @@ function clearPrivate() {
   namespaceId = null;
 }
 
+function clearCreateAgentDrafts() {
+  captureCreateAgentDraft = null;
+  createAgentDrafts.clear();
+  draftUserId = null;
+}
+
 function showLogin(message = "", returnPath = null) {
+  clearCreateAgentDrafts();
   resetReads();
   clearPrivate();
   const url = new URL("/console/login", location.origin);
@@ -191,6 +203,10 @@ async function loadPage({ fromNavigation = false } = {}) {
       );
       return;
     }
+    if (draftUserId !== session.user.id) {
+      clearCreateAgentDrafts();
+      draftUserId = session.user.id;
+    }
     if (current.feature === "login") {
       history.replaceState(
         null,
@@ -274,7 +290,19 @@ async function loadPage({ fromNavigation = false } = {}) {
       },
     };
     if (current.creating) {
-      renderCreateAgent(agentContext);
+      const draftNamespaceId = namespaceId;
+      renderCreateAgent(
+        {
+          ...agentContext,
+          setDraftCapture(capture) {
+            createAgentDrafts.delete(draftNamespaceId);
+            captureCreateAgentDraft = capture
+              ? () => createAgentDrafts.set(draftNamespaceId, capture())
+              : null;
+          },
+        },
+        createAgentDrafts.get(draftNamespaceId),
+      );
       return;
     }
     if (current.agentId) {
@@ -363,6 +391,7 @@ async function loadPage({ fromNavigation = false } = {}) {
 
 async function logout() {
   loggingOut = true;
+  clearCreateAgentDrafts();
   const active = resetReads();
   clearPrivate();
   publicPanel("Signing out…", "Confirming that your session has ended.");
@@ -410,6 +439,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("pagehide", () => {
+  clearCreateAgentDrafts();
   resetReads();
   clearPrivate();
   document.querySelectorAll('input[type="password"]').forEach((input) => {

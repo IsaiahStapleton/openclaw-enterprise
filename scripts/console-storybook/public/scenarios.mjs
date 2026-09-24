@@ -1210,6 +1210,22 @@ export const scenarios = {
     description:
       "The password remains masked in the editable draft; Configuration JSON contains no model key. There is no raw Secret bindings JSON editor.",
   },
+  createPresetNavigation: {
+    group: "Pages/Create Agent",
+    name: "Keep an unsaved Preset draft",
+    path: create,
+    standardCodexPreset: true,
+    actions: passwordPresetForm,
+    description:
+      "Unsaved settings remain in memory while navigating the Console. Password inputs clear when leaving the form. Start over explicitly discards the draft.",
+    steps: [
+      "Rename the Agent and edit a workspace file under Advanced settings.",
+      "Open Namespaces, then use browser Back and Forward to revisit both pages.",
+      "Open Agents and Create Agent: the edited draft returns with an empty API key field.",
+      "Select Start over, cancel once, then confirm. Navigate away and return to see the fresh Preset chooser.",
+    ],
+    gap: "Simulated UI proof only; this walkthrough does not save or deploy an Agent.",
+  },
   createPasswordPresetDenied: {
     group: "Pages/Create Agent",
     name: "Password Secret creation denied",
