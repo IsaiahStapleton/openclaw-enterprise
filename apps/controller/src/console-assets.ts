@@ -26,6 +26,10 @@ const CONSOLE_ASSETS = new Map(
       path: new URL("shell.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",
     },
+    "/console/runtime-images.mjs": {
+      path: new URL("runtime-images.mjs", CONSOLE_ROOT),
+      contentType: "text/javascript; charset=utf-8",
+    },
     "/console/agents/list.mjs": {
       path: new URL("agents/list.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",
@@ -44,6 +48,10 @@ const CONSOLE_ASSETS = new Map(
     },
     "/console/agents/create.mjs": {
       path: new URL("agents/create.mjs", CONSOLE_ROOT),
+      contentType: "text/javascript; charset=utf-8",
+    },
+    "/console/agents/plugin-fields.mjs": {
+      path: new URL("agents/plugin-fields.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",
     },
     "/console/agents/repositories.mjs": {
@@ -98,6 +106,10 @@ const CONSOLE_ASSETS = new Map(
       path: new URL("channels/shared-ui.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",
     },
+    "/console/fonts/instrument-sans-latin.woff2": {
+      path: new URL("fonts/instrument-sans-latin.woff2", CONSOLE_ROOT),
+      contentType: "font/woff2",
+    },
     "/console/console.css": {
       path: new URL("console.css", CONSOLE_ROOT),
       contentType: "text/css; charset=utf-8",
@@ -140,7 +152,8 @@ export const CONSOLE_CONTENT_SECURITY_POLICY = [
   "connect-src 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
-  "img-src 'self'",
+  // Catalog Drivers can supply public HTTPS images from plugin publishers.
+  "img-src 'self' https:",
   "object-src 'none'",
   "script-src 'self'",
   "style-src 'self'",
