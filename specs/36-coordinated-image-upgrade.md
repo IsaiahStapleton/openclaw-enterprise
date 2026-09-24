@@ -41,6 +41,23 @@ The runtime image fills both `drivers.compute.configuration.images.gateway` and
 `drivers.compute.configuration.images.agent`. V1 does not support split gateway
 and Agent releases.
 
+### First-adoption controller bootstrap
+
+An Installation whose current controller predates the complete-inventory
+operation cannot safely run the coordinated command: filtered collection reads
+cannot substitute for the missing server contract. The operator first performs
+a reviewed controller-only Helm upgrade to the candidate controller digest while
+leaving the Installation startup Secret and both runtime image selections
+unchanged. This bootstrap replaces only the OCC API and worker and must preserve
+its own before-state evidence. The operator verifies the new controller digest,
+OCC authentication, and `occ installation deployment-inventory`, then runs the
+coordinated command with the same controller digest and its companion runtime
+digest.
+
+This is a one-time adoption prerequisite, not a fallback inside the coordinated
+command. The command never interprets a missing inventory operation as an empty
+or complete fleet. Later upgrades begin directly with coordinated admission.
+
 ### Admission and baseline
 
 The script fails before mutation unless all image references use immutable
@@ -49,8 +66,8 @@ and Helm release are reachable, and the current API authenticates with the
 provided service key. It renders the candidate chart and runs server-side dry
 run before applying it.
 
-Before the first Secret or Helm mutation, the command obtains a complete
-Installation inventory through a new OCC read-only operation. OCC requires
+Before the coordinated command's first Secret or Helm mutation, it obtains a
+complete Installation inventory through a new OCC read-only operation. OCC requires
 exact-Installation `administer`, reads all Namespaces and their Agents from one
 consistent State snapshot, and checks exact-resource `read` for every Namespace
 and Agent through the selected IAM Driver. For every Agent selected for the
@@ -78,11 +95,13 @@ deployment may still be in flight. Stopped and deleting Agents remain untouched.
 ### Coordinated replacement
 
 The script writes the controller digest to the protected Helm values and the
-runtime digest to both protected Compute image slots. It then replaces the
-Installation startup Secret and runs `helm upgrade --install --wait` with the
-candidate values. Helm owns migration, initialization, and replacement of API
-and worker Pods. The script requires both OCC Deployments to become available
-on the candidate controller digest before continuing.
+runtime digest to both protected Compute image slots. The controller digest may
+already be selected after first-adoption bootstrap, but at least one runtime
+slot must change. It then replaces the Installation startup Secret and runs
+`helm upgrade --install --wait` with the candidate values. Helm owns migration,
+initialization, and replacement of API and worker Pods. The script requires both
+OCC Deployments to become available on the candidate controller digest before
+continuing.
 
 After OCC authentication recovers, the script sends the existing bodyless
 `POST /namespaces/:namespaceId/agents/:agentId/deploy` operation for every
@@ -130,10 +149,10 @@ command stops further mutations and reports partial failure.
 2. Add the fail-closed upgrade script and keep protected evidence out of the
    repository. Reuse the exact-Agent deployment and status operations; do not
    add an upgrade mutation endpoint or Kubernetes special case to platform core.
-3. Add an operator guide under `docs/guides/deploy/` with prerequisites,
-   invocation, completion evidence, partial-failure recovery, and rollback
-   boundaries. Link it from the deployment overview and production installation
-   guide.
+3. Add an operator guide under `docs/guides/deploy/` with the first-adoption
+   controller bootstrap, prerequisites, invocation, completion evidence,
+   partial-failure recovery, and rollback boundaries. Link it from the deployment
+   overview and production installation guide.
 4. Update the production startup and Agent deployment flows to show the
    coordinated handoff from Helm readiness to exact-Agent deployment fan-out.
 5. Extend the existing real production Kubernetes integration so one test
@@ -155,10 +174,14 @@ the command through Helm and the OCC API; command stubs or hand-written Agent
 state do not satisfy it. Record unavailable image pairs, credentials, or cluster
 capacity as verification gaps rather than substituting a fake rollout.
 
-The proof separately denies the administrator `read` on one Namespace, `read`
-on one Agent, and `deploy` on one selected Agent. Those cases, an unavailable
-complete-inventory operation, and existing nonterminal Agent deployment work
-must fail before any startup Secret, Helm release, or Agent workload changes.
+The proof first replaces only the old controller while retaining the old runtime
+and Agent revisions, then exercises the coordinated command. It separately
+denies the administrator `read` on one Namespace, `read` on one Agent, and
+`deploy` on one selected Agent. Those denial cases and existing nonterminal
+Agent deployment work must fail before any coordinated startup Secret, Helm
+release, or Agent workload changes. An unavailable complete-inventory operation
+must stop with the first-adoption prerequisite; it never authorizes coordinated
+mutation.
 
 Owning current documentation after implementation:
 [production installation](../docs/guides/deploy/production-installation.md),
