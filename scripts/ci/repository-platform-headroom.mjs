@@ -3,11 +3,9 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { lstat, readFile, realpath, statfs } from "node:fs/promises";
 
-// These fixed runner-image components are unused by their selected jobs. Never
-// derive deletion targets from workflow inputs or tool environment values.
+// This fixed runner-image component is unused by these build/test jobs. Never
+// derive a deletion target from workflow inputs or Android environment values.
 const androidRoot = "/usr/local/lib/android";
-const codeqlRoot = "/opt/hostedtoolcache/CodeQL";
-const runtimeToolRoots = ["/usr/share/dotnet", "/usr/local/.ghcup", "/usr/share/swift", codeqlRoot];
 const receipt = {
   kind: "repository-platform-capacity",
   lane: process.env.OPENCLAW_CI_HEADROOM_LANE,
@@ -17,8 +15,6 @@ const receipt = {
   status: "failed",
   stage: "hosted-guard",
   sdkRemoved: false,
-  removedDirectories: [],
-  checkedDirectories: [],
 };
 
 // Bound the command and its descendants; never forward raw command output.
@@ -124,76 +120,45 @@ async function main() {
     process.env.ANDROID_HOME === `${androidRoot}/sdk` &&
       process.env.ANDROID_SDK_ROOT === `${androidRoot}/sdk`,
   );
-  const roots = [
-    androidRoot,
-    ...(receipt.lane === "container-runtime-build" ? runtimeToolRoots : []),
-  ];
-  const rootDevice = (await lstat("/")).dev;
+  const info = await lstat(androidRoot);
+  assert(info.isDirectory() && !info.isSymbolicLink() && info.uid === 0);
+  assert((await realpath(androidRoot)) === androidRoot);
+  assert(info.dev === (await lstat("/")).dev);
   const mounts = await readFile("/proc/self/mountinfo", "utf8");
-  const presentRoots = [];
-  // Validate every target before removing any of them. Optional tools may be
-  // absent on newer runner images; an unexpected existing layout fails closed.
-  for (const root of roots) {
-    let info;
-    try {
-      info = await lstat(root);
-    } catch (error) {
-      if (root !== androidRoot && error.code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    const check = {
-      path: root,
-      directory: info.isDirectory(),
-      symbolicLink: info.isSymbolicLink(),
-      ownerUid: info.uid,
-      canonical: (await realpath(root)) === root,
-      rootFilesystem: info.dev === rootDevice,
-      mount: mounts.split("\n").some((line) => {
-        const path = line.split(" ")[4];
-        return path === root || path?.startsWith(`${root}/`);
-      }),
-    };
-    receipt.checkedDirectories.push(check);
-    // GitHub's tool cache belongs to the runner; system SDKs belong to root.
-    const expectedOwner =
-      check.ownerUid === 0 || (root === codeqlRoot && check.ownerUid === process.getuid());
-    assert(check.directory && !check.symbolicLink && expectedOwner);
-    assert(check.canonical && check.rootFilesystem && !check.mount);
-    presentRoots.push(root);
-  }
+  assert(
+    !mounts.split("\n").some((line) => {
+      const path = line.split(" ")[4];
+      return path === androidRoot || path?.startsWith(`${androidRoot}/`);
+    }),
+  );
   receipt.stage = "sdk-removal";
   // The privileged timeout can terminate root-owned rm; the runner cannot.
-  for (const root of presentRoots) {
-    await execute(
-      "/usr/bin/sudo",
-      [
-        "-n",
-        "--",
-        "/usr/bin/timeout",
-        "--signal=TERM",
-        "--kill-after=5s",
-        "120s",
-        "/usr/bin/rm",
-        "--recursive",
-        "--force",
-        "--one-file-system",
-        "--preserve-root=all",
-        "--",
-        root,
-      ],
-      130_000,
-    );
-    try {
-      await lstat(root);
-      assert.fail("Tool removal incomplete.");
-    } catch (error) {
-      assert(error.code === "ENOENT");
-    }
-    receipt.removedDirectories.push(root);
-    receipt.sdkRemoved ||= root === androidRoot;
+  await execute(
+    "/usr/bin/sudo",
+    [
+      "-n",
+      "--",
+      "/usr/bin/timeout",
+      "--signal=TERM",
+      "--kill-after=5s",
+      "120s",
+      "/usr/bin/rm",
+      "--recursive",
+      "--force",
+      "--one-file-system",
+      "--preserve-root=all",
+      "--",
+      androidRoot,
+    ],
+    130_000,
+  );
+  try {
+    await lstat(androidRoot);
+    assert.fail("SDK removal incomplete.");
+  } catch (error) {
+    assert(error.code === "ENOENT");
   }
+  receipt.sdkRemoved = true;
   receipt.stage = "complete";
   receipt.status = "passed";
 }

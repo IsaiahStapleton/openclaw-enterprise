@@ -81,17 +81,12 @@ Matching bundled plugins replace
 independently installed plugin packages; the Dedicated Codex executable remains
 separately pinned. See the [runtime recipe](../../deploy/runtime/README.md) for
 source identity and installed-image checks.
-Before starting the runtime build,
-`scripts/ci/repository-platform-headroom.mjs:main` verifies it is running on the
-Ubuntu 24 GitHub-hosted runner and removes its unused Android SDK, .NET, Haskell,
-Swift, and CodeQL installations from fixed paths. Targets must be owned by root
-(or the runner for CodeQL) and lie on the root filesystem, without symlinks or
-nested mounts; every target is checked before removal begins. Optional tools may
-be absent. The helper logs removed paths and free bytes and inodes before and
-after cleanup. This makes room for both architectures' source-build dependency
-layers before OCI export; local and self-hosted runners are rejected. Controller
-preparation does not use this cleanup, and the repository-platform caller retains
-its Android-only cleanup.
+Runtime preparation uses the existing `blacksmith-8vcpu-ubuntu-2404` runner,
+also used by repository-platform CI, for the disk capacity needed by both
+architectures' source-build layers and the OCI export. The standard GitHub runner
+exhausted disk even after unused toolchains were removed. Controller preparation
+uses `ubuntu-24.04`. The repository must retain access to the Blacksmith runner
+label; container preparation does not delete preinstalled SDKs.
 
 After OCI export, the job prunes only its dedicated Buildx builder's cache so
 the cache and unpacked smoke images do not exhaust the runner's disk together.
@@ -170,7 +165,7 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 
 ## Changelog
 
-- 2026-09-24 02:50: Reclaim fixed unused tool installations for runtime builds after Android-only cleanup still exhausted disk; retain the platform caller's cleanup scope. (public-pr/348 - 06d787f3)
+- 2026-09-24 03:50: Use the existing Blacksmith runner for runtime preparation after GitHub-hosted builds exhausted disk; keep both platforms and all smoke checks. (public-pr/348 - ee6a5a3d)
 
 - 2026-09-24 00:30: Reclaim unused hosted Android SDK space before the runtime source build, retaining both platforms and all startup checks. (codex/01a0c179-19f7-7111-8bb4-fc7680da5545 - ae96345b)
 
