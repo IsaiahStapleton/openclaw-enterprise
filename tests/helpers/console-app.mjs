@@ -34,11 +34,18 @@ export const providerFixtures = Object.freeze([
   }),
 ]);
 
-function computeDriver() {
-  const driver = createTestKubernetesComputeDriver("console-compute");
+function computeDriver({
+  repositoryCredentials = false,
+  discoverHarnessModels = async () => [],
+} = {}) {
+  const driver = createTestKubernetesComputeDriver("console-compute", { repositoryCredentials });
 
   return Object.assign(driver, {
     implementation: "test-memory-lifecycle",
+    // In-memory State has no durable provisioning queue; this fixture supports draft creation.
+    agentProvisioning: undefined,
+    // Catalog data is the external Compute boundary; Console/OCC/IAM routes remain real.
+    discoverHarnessModels,
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
     },
@@ -113,7 +120,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     bindings: seed.bindings.map((binding) => ({ ...binding })),
     restrictions: [],
   };
-  const auditSink = new InMemoryAuditSink();
+  const auditSink = options.auditSink ?? new InMemoryAuditSink();
   const iamDriver = new NativeIAMDriver(
     { loadNativeIAMState: async () => policy },
     { id: "console-native-iam" },
@@ -134,8 +141,14 @@ export async function createConsoleAppFixture(t, options = {}) {
     iamDriver,
     auditSink,
     development: { enabled: true, installationId, ...options.development },
-    computeDriver: options.computeDriver ?? computeDriver(),
-    configurationDriver: createTestConfigurationDriver({ id: "console-configuration" }),
+    computeDriver:
+      options.computeDriver ??
+      computeDriver({
+        repositoryCredentials: options.repositoryCredentials === true,
+        discoverHarnessModels: options.discoverHarnessModels,
+      }),
+    configurationDriver:
+      options.configurationDriver ?? createTestConfigurationDriver({ id: "console-configuration" }),
     ...(secretDriver === undefined || secretDriver === null ? {} : { secretDriver }),
     ...(publicOrigin === undefined ? {} : { publicOrigin }),
     ...(options.nativeAdmin === undefined ? {} : { nativeAdmin: options.nativeAdmin }),
@@ -146,13 +159,15 @@ export async function createConsoleAppFixture(t, options = {}) {
     createController(installation) {
       controller = new OpenClawController(installation, {
         state: platformState,
-        recordOperations: false,
+        recordOperations: options.recordOperations ?? false,
         providers,
+        defaultPresets: options.defaultPresets ?? [],
       });
-      if (providers.length > 0) {
+      const modelProviders = providers.filter((provider) => provider.type === "chatgpt");
+      if (modelProviders.length > 0) {
         const unexpectedProviderCall = async () =>
           assert.fail("Console read tests must not call Provider clients or provision accounts.");
-        for (const provider of providers) {
+        for (const provider of modelProviders) {
           controller.registerDriver({
             id: provider.drivers.service_account,
             capability: "service_account",
@@ -163,7 +178,7 @@ export async function createConsoleAppFixture(t, options = {}) {
             delete: unexpectedProviderCall,
           });
         }
-        controller.selectDriver("service_account", providers[0].drivers.service_account);
+        controller.selectDriver("service_account", modelProviders[0].drivers.service_account);
       }
       return controller;
     },

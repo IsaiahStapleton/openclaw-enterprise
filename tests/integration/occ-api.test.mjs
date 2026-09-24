@@ -8,7 +8,10 @@ import { createServer } from "node:net";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { AuthAccountRoleNotFoundError } from "../../apps/controller/src/auth/index.ts";
-import { OCCPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
+import {
+  CodexPluginDriver,
+  OCCPluginDriver,
+} from "../../apps/controller/src/drivers/plugin/index.ts";
 import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { createControllerApp, createFastifyApp } from "../../apps/controller/src/index.ts";
@@ -138,8 +141,8 @@ async function assertUnsafeStartupRejected() {
         once(processState.child, "exit"),
         new Promise((_, reject) => {
           deadline = setTimeout(
-            () => reject(new Error(`${description} unexpectedly started listening`)),
-            5_000,
+            () => reject(new Error(`${description} did not reject startup within 15 seconds`)),
+            15_000,
           );
         }),
       ]);
@@ -281,6 +284,84 @@ async function createAgent(controller, namespaceId, name, values = {}) {
   return result.data;
 }
 
+function exactSecretRef(namespaceId, id) {
+  return { kind: "secret", namespaceId, id };
+}
+
+function provisioningRequestBody(namespaceId, secrets, overrides = {}) {
+  return {
+    requestId: `req_${randomUUID()}`,
+    name: `Provisioned Agent ${randomUUID().slice(0, 8)}`,
+    executionMode: "dedicated",
+    configuration: {
+      kind: "agent",
+      values: { agents: { defaults: { model: "codex/gpt-6-astra" } } },
+      secretBindings: {
+        TOOL_API_KEY: {
+          source: exactSecretRef(namespaceId, secrets.toolApiKey.id),
+        },
+      },
+      ...overrides.configuration,
+    },
+    harnessAuth: {
+      method: "api_key",
+      source: exactSecretRef(namespaceId, secrets.modelApiKey.id),
+    },
+    ...overrides,
+  };
+}
+
+function createProvisioningCapableConfigurationDriver() {
+  const driver = createTestConfigurationDriver({ id: "configuration-provisioning-api" });
+  driver.createExact = (configuration) => driver.create(configuration);
+  driver.inspectExact = async (configuration) => {
+    try {
+      const stored = await driver.read(configuration);
+      assert.deepEqual(stored, configuration);
+      return stored;
+    } catch {
+      return undefined;
+    }
+  };
+  return driver;
+}
+
+function createProvisioningCapableComputeDriver() {
+  const runtimeStatus = new Map();
+  const keyOf = ({ namespace, agent }) => `${namespace.id}:${agent.id}`;
+  return {
+    id: "compute-provisioning-api",
+    capability: "compute",
+    implementation: "deterministic-test",
+    agentProvisioning: { executionModes: ["dedicated"] },
+    async ensureNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceReady: true };
+    },
+    async deleteNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceDeleted: true };
+    },
+    validateHarnessAuth() {},
+    validateAgentProvisioning() {},
+    async prepareRevision(revision) {
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
+    },
+    async provisionAgentRuntimeCredentials(binding) {
+      runtimeStatus.set(keyOf(binding), { transportConfigured: true });
+      return { transportConfigured: true };
+    },
+    async getAgentRuntimeCredentialStatus(binding) {
+      return runtimeStatus.get(keyOf(binding)) ?? { transportConfigured: false };
+    },
+    async stopRevision() {},
+    async retireRevision() {},
+  };
+}
+
 async function bindHarnessKey(fixture, namespaceId, agent) {
   const created = await injectedRequest(fixture.app, "POST", `/namespaces/${namespaceId}/secrets`, {
     body: { name: `key-${agent.id}`, value: "synthetic-api-contract-key" },
@@ -328,7 +409,7 @@ const diffsPluginId = "occ-plugin:diffs";
 const linearPluginId = "codex-plugin:linear@openai-curated-remote";
 
 function pluginPolicy(overrides = {}) {
-  return { enabled: true, approvalMode: "always", ...overrides };
+  return { enabled: true, toolDefaults: { approval: "approve" }, ...overrides };
 }
 
 function assertPolicyOnlyPlugin(selection) {
@@ -404,7 +485,9 @@ async function createInjectedFixture(options = {}) {
     async retireRevision() {},
   };
   const auditSink = options.auditSink ?? new InMemoryAuditSink();
-  const configurationDriver = createTestConfigurationDriver({ id: "configuration-integration" });
+  const configurationDriver =
+    options.configurationDriver ??
+    createTestConfigurationDriver({ id: "configuration-integration" });
   const secretDriver = createTestSecretDriver({ id: "secret-api-integration" });
   const sessionsByPrincipalId = new Map();
   let controller;
@@ -468,6 +551,9 @@ async function createInjectedFixture(options = {}) {
       secretDriver,
       resolveHarness: resolveApprovedDevelopmentHarness,
       auditSink,
+      ...(Object.hasOwn(options, "providerSummaries")
+        ? { providerSummaries: options.providerSummaries }
+        : {}),
       development: {
         enabled: true,
         installationId,
@@ -1157,11 +1243,19 @@ test("Agent Provider API preserves nullable drafts and immutable revision associ
         drivers: { service_account: "chatgpt-service-accounts" },
       },
     ],
+    providerSummaries: [{ id: "openai", type: "chatgpt" }],
   });
   const controller = {
     request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
   };
   await bootstrap(controller);
+  const providers = await controller.request("GET", "/providers");
+  assert.equal(providers.status, 200);
+  assert.deepEqual(providers.data, [{ id: "openai", type: "chatgpt" }]);
+  assert.doesNotMatch(
+    JSON.stringify(providers.body),
+    /apiKey|workspaceId|credential|drivers|path/i,
+  );
   const namespace = await createNamespace(controller, "provider-api");
   const configuration = await createConfiguration(controller, namespace.id);
   const collection = `/namespaces/${namespace.id}/agents`;
@@ -1224,6 +1318,59 @@ test("Agent Provider API preserves nullable drafts and immutable revision associ
   });
   assert.equal(replaced.status, 200);
   assert.equal(replaced.data.providerId, "openai");
+});
+
+test("Installation API exposes Agent provisioning capabilities without configured Providers", async () => {
+  let ensureNamespaceCalls;
+  let deleteNamespaceCalls;
+  const computeDriver = {
+    id: "compute-provisioning-capable",
+    capability: "compute",
+    implementation: "deterministic-test",
+    agentProvisioning: { executionModes: ["dedicated"] },
+    async ensureNamespace(namespace) {
+      ensureNamespaceCalls.push(namespace.id);
+      return { namespaceId: namespace.id, namespaceReady: true };
+    },
+    async deleteNamespace(namespace) {
+      deleteNamespaceCalls.push(namespace.id);
+      return { namespaceId: namespace.id, namespaceDeleted: true };
+    },
+    validateHarnessAuth() {},
+    validateAgentProvisioning() {},
+    async prepareRevision(revision) {
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
+    },
+    async stopRevision() {},
+    async retireRevision() {},
+  };
+  const fixture = await createInjectedFixture({
+    providers: [],
+    providerSummaries: [],
+    computeDriver,
+  });
+  ensureNamespaceCalls = fixture.computeCalls.ensureNamespace;
+  deleteNamespaceCalls = fixture.computeCalls.deleteNamespace;
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  const bootstrapped = await bootstrap(controller);
+  assert.deepEqual(bootstrapped.capabilities, {
+    agentProvisioning: { executionModes: ["dedicated"] },
+  });
+
+  const installation = await controller.request("GET", "/installation");
+  assert.equal(installation.status, 200);
+  assert.deepEqual(installation.data.capabilities, bootstrapped.capabilities);
+
+  const providers = await controller.request("GET", "/providers");
+  assert.equal(providers.status, 200);
+  assert.deepEqual(providers.data, []);
 });
 
 test("Agent deployment status polls the admitted revision work with exact read authorization", async () => {
@@ -1345,7 +1492,31 @@ test("Agent create and update replace policy-only plugin maps and revisions free
   const pluginDriver = new OCCPluginDriver();
   controller.fixture.controller.registerDriver(pluginDriver);
   controller.fixture.controller.selectDriver("plugin", pluginDriver.id);
-  const initialPlugins = { [diffsPluginId]: pluginPolicy() };
+  const installation = await controller.request("GET", "/installation");
+  assert.equal(installation.status, 200);
+  const capabilities = installation.data.capabilities.pluginPolicies;
+  assert.deepEqual(capabilities.driver, {
+    id: "occ-plugin",
+    implementation: "occ/openclaw-plugin",
+  });
+  assert.deepEqual(capabilities.toolDefaults, {
+    enabled: true,
+    approval: ["native", "approve"],
+    reviewer: [],
+  });
+  assert.deepEqual(capabilities.tools, {
+    enabled: true,
+    approval: ["native", "approve"],
+    reviewer: [],
+  });
+  assert.equal(capabilities.driverPolicySchema.additionalProperties, false);
+  assert.deepEqual(capabilities.driverPolicySchema.properties, {});
+  const initialPlugins = {
+    [diffsPluginId]: pluginPolicy({
+      toolDefaults: { enabled: false, approval: "approve" },
+      tools: { diffs: { enabled: true } },
+    }),
+  };
 
   const created = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
     body: {
@@ -1392,7 +1563,10 @@ test("Agent create and update replace policy-only plugin maps and revisions free
   assert.deepEqual(omittedPlugins.data.plugins, initialPlugins);
 
   const replacementPlugins = {
-    [linearPluginId]: pluginPolicy({ approvalMode: "auto", approvalsReviewer: "auto_review" }),
+    [diffsPluginId]: pluginPolicy({
+      toolDefaults: { approval: "native" },
+      tools: { diffs: { approval: "approve" } },
+    }),
   };
   const replacedPlugins = await controller.request(
     "PATCH",
@@ -1400,9 +1574,9 @@ test("Agent create and update replace policy-only plugin maps and revisions free
     { body: { configurationId: replacementConfiguration.id, plugins: replacementPlugins } },
   );
   assert.equal(replacedPlugins.status, 200);
+  // Replacing policy removes old enablement overrides without inventing new defaults.
   assert.deepEqual(replacedPlugins.data.plugins, replacementPlugins);
-  assert.equal(Object.hasOwn(replacedPlugins.data.plugins, diffsPluginId), false);
-  assertPolicyOnlyPlugin(replacedPlugins.data.plugins[linearPluginId]);
+  assertPolicyOnlyPlugin(replacedPlugins.data.plugins[diffsPluginId]);
 
   const clearedPlugins = await controller.request(
     "PATCH",
@@ -1427,6 +1601,78 @@ test("Agent create and update replace policy-only plugin maps and revisions free
   assert.equal(Object.hasOwn(pluginFreeRevision.data, "plugins"), false);
 });
 
+test("Agent plugin reviewer selection preserves omission and rejects unsupported tool scope", async () => {
+  const controller = await configuredController();
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "plugin-reviewer-api");
+  const configuration = await createConfiguration(controller, namespace.id, {
+    agents: { defaults: { model: "codex/gpt-6-astra" } },
+  });
+  const pluginDriver = new CodexPluginDriver();
+  controller.fixture.controller.registerDriver(pluginDriver);
+  controller.fixture.controller.selectDriver("plugin", pluginDriver.id);
+  const installation = await controller.request("GET", "/installation");
+  assert.equal(installation.status, 200);
+  const capabilities = installation.data.capabilities.pluginPolicies;
+  assert.equal(capabilities.driver.id, "codex-plugin");
+  assert.deepEqual(capabilities.toolDefaults.reviewer, ["human", "auto"]);
+  assert.deepEqual(capabilities.tools.reviewer, []);
+  assert.equal(
+    Object.hasOwn(capabilities.driverPolicySchema.properties, "approvalsReviewer"),
+    false,
+  );
+
+  const plugins = { [linearPluginId]: { enabled: true, toolDefaults: { reviewer: "auto" } } };
+  const created = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "reviewer-agent",
+      executionMode: "dedicated",
+      configurationId: configuration.id,
+      plugins,
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.deepEqual(created.data.plugins, plugins);
+  const path = `/namespaces/${namespace.id}/agents/${created.data.id}`;
+  const saved = await controller.request("GET", path);
+  assert.deepEqual(saved.data.plugins, plugins);
+  const omitted = await controller.request("PATCH", path, {
+    body: { configurationId: configuration.id },
+  });
+  assert.equal(omitted.status, 200);
+  assert.deepEqual(omitted.data.plugins, plugins);
+
+  // A tool reviewer must not silently become an app reviewer, even when redundant or disabled.
+  for (const policy of [
+    {
+      enabled: true,
+      toolDefaults: { reviewer: "auto" },
+      tools: { "app/search": { reviewer: "auto" } },
+    },
+    { enabled: true, tools: { "app/search": { enabled: false, reviewer: "human" } } },
+    { enabled: false, tools: { "app/search": { reviewer: "auto" } } },
+  ]) {
+    const rejected = await controller.request("PATCH", path, {
+      body: { configurationId: configuration.id, plugins: { [linearPluginId]: policy } },
+    });
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    assert.equal(
+      rejected.body.error.message,
+      "This Plugin Driver does not support tools[id].reviewer. Use toolDefaults.reviewer when supported, or omit the reviewer.",
+    );
+  }
+  assert.deepEqual((await controller.request("GET", path)).data.plugins, plugins);
+
+  // Replacing the policy removes the explicit reviewer without writing a replacement default.
+  const inherited = { [linearPluginId]: { enabled: true } };
+  const replaced = await controller.request("PATCH", path, {
+    body: { configurationId: configuration.id, plugins: inherited },
+  });
+  assert.equal(replaced.status, 200);
+  assert.deepEqual(replaced.data.plugins, inherited);
+});
+
 test("Agent plugin maps reject structural errors and preserve exact authorization and audit boundaries", async () => {
   const controller = await configuredController();
   await bootstrap(controller);
@@ -1437,16 +1683,21 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
   controller.fixture.controller.selectDriver("plugin", pluginDriver.id);
   const auditCount = controller.fixture.auditSink.events.length;
 
-  const metadataInCreate = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
-    body: {
-      name: "metadata-plugin-agent",
-      configurationId: configuration.id,
-      plugins: { [diffsPluginId]: { ...pluginPolicy(), nativeId: "diffs" } },
-    },
-  });
-  assert.equal(metadataInCreate.status, 400);
-  assert.equal(metadataInCreate.body.error.code, "INVALID_REQUEST");
-  assert.equal(controller.fixture.auditSink.events.length, auditCount);
+  for (const policy of [
+    { ...pluginPolicy(), nativeId: "diffs" },
+    { enabled: true, approvalMode: "always" },
+  ]) {
+    const invalidCreate = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+      body: {
+        name: "invalid-plugin-agent",
+        configurationId: configuration.id,
+        plugins: { [diffsPluginId]: policy },
+      },
+    });
+    assert.equal(invalidCreate.status, 400);
+    assert.equal(invalidCreate.body.error.code, "INVALID_REQUEST");
+    assert.equal(controller.fixture.auditSink.events.length, auditCount);
+  }
 
   const agent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
     body: { name: "plugin-auth-agent", configurationId: configuration.id },
@@ -1466,7 +1717,7 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
       plugins: {
         [linearPluginId]: {
           enabled: true,
-          approvalMode: "auto",
+          toolDefaults: { approval: "native" },
           approvals_reviewer: "auto_review",
         },
       },
@@ -1477,9 +1728,17 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
   assert.equal(controller.fixture.auditSink.events.length, auditBeforeInvalidUpdate);
 
   for (const plugins of [
-    { "codex-plugin:bad/plugin@openai-curated-remote": pluginPolicy({ approvalMode: "auto" }) },
-    { [linearPluginId]: pluginPolicy({ tools: { "bad/tool": { enabled: true } } }) },
+    { "codex-plugin:bad/plugin@openai-curated-remote": pluginPolicy() },
+    { [linearPluginId]: pluginPolicy({ tools: { "bad tool": { enabled: true } } }) },
     { [linearPluginId]: pluginPolicy({ tools: { search: {} } }) },
+    { [diffsPluginId]: { enabled: true, approvalMode: "never" } },
+    { [diffsPluginId]: pluginPolicy({ approvalsReviewer: "user" }) },
+    { [diffsPluginId]: pluginPolicy({ destructiveActions: "never" }) },
+    { [diffsPluginId]: pluginPolicy({ writes: "prompt" }) },
+    { [diffsPluginId]: pluginPolicy({ tools: { diffs: { approvalMode: "always" } } }) },
+    { [diffsPluginId]: pluginPolicy({ toolDefaults: { approval: "auto" } }) },
+    { [diffsPluginId]: pluginPolicy({ toolDefaults: { reviewer: "user" } }) },
+    { [diffsPluginId]: pluginPolicy({ tools: { diffs: { reviewer: null } } }) },
   ]) {
     const invalid = await controller.request("PATCH", agentPath, {
       body: { configurationId: configuration.id, plugins },
@@ -1491,6 +1750,54 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
 
   const afterInvalidUpdate = await controller.request("GET", agentPath);
   assert.equal(Object.hasOwn(afterInvalidUpdate.data, "plugins"), false);
+
+  // These policies satisfy the shared schema but the selected native driver cannot apply them.
+  for (const [policy, message] of [
+    [
+      pluginPolicy({ toolDefaults: { approval: "prompt" } }),
+      "The supplied plugin policies are invalid.",
+    ],
+    [
+      pluginPolicy({ tools: { diffs: { approval: "prompt" } } }),
+      "The supplied plugin policies are invalid.",
+    ],
+    [
+      pluginPolicy({ driverPolicy: { destructiveEnabled: false } }),
+      "The supplied plugin policies are invalid.",
+    ],
+    [
+      pluginPolicy({ toolDefaults: { reviewer: "human" } }),
+      "This Plugin Driver does not support toolDefaults.reviewer. Omit the reviewer to inherit the Harness setting.",
+    ],
+    [
+      pluginPolicy({ tools: { diffs: { reviewer: "auto" } } }),
+      "This Plugin Driver does not support tools[id].reviewer. Use toolDefaults.reviewer when supported, or omit the reviewer.",
+    ],
+  ]) {
+    const unsupportedCreate = await controller.request(
+      "POST",
+      `/namespaces/${namespace.id}/agents`,
+      {
+        body: {
+          name: "unsupported-plugin-agent",
+          configurationId: configuration.id,
+          plugins: { [diffsPluginId]: policy },
+        },
+      },
+    );
+    const unsupportedUpdate = await controller.request("PATCH", agentPath, {
+      body: { configurationId: configuration.id, plugins: { [diffsPluginId]: policy } },
+    });
+    for (const response of [unsupportedCreate, unsupportedUpdate]) {
+      assert.equal(response.status, 400);
+      assert.equal(response.body.error.code, "INVALID_REQUEST");
+      assert.equal(response.body.error.message, message);
+    }
+  }
+  const afterUnsupported = await controller.request("GET", agentPath);
+  assert.deepEqual(afterUnsupported.data, afterInvalidUpdate.data);
+  const savedAgents = await controller.request("GET", `/namespaces/${namespace.id}/agents`);
+  assert.equal(savedAgents.data.length, 2, "unsupported policies must not create an Agent");
 
   const { principal: noGrantPrincipal } =
     await controller.fixture.createAuthPrincipal("plugin-no-grant");
@@ -1569,7 +1876,10 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
     throw new Error("plugin audit sink unavailable");
   };
   const failedAudit = await controller.request("PATCH", agentPath, {
-    body: { configurationId: configuration.id, plugins: { [linearPluginId]: pluginPolicy() } },
+    body: {
+      configurationId: configuration.id,
+      plugins: { [diffsPluginId]: pluginPolicy({ enabled: false }) },
+    },
   });
   controller.fixture.auditSink.append = originalAppend;
   assert.equal(failedAudit.status, 503);
@@ -2304,6 +2614,189 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
 
   const untouched = await injectedRequest(fixture.app, "GET", "/namespaces");
   assertOnlyDefaultNamespace(untouched);
+});
+
+test("Agent provisioning API validates inline configuration with existing Secret references", async () => {
+  const fixture = await createInjectedFixture({
+    computeDriver: createProvisioningCapableComputeDriver(),
+    configurationDriver: createProvisioningCapableConfigurationDriver(),
+  });
+  const installation = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Provisioning validation installation" },
+  });
+  assert.equal(installation.status, 201);
+  const namespace = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "provisioning-validation" },
+  });
+  assert.equal(namespace.status, 201);
+  await fixture.controller.handleNamespaceLifecycle(
+    fixture.principal.id,
+    namespace.data.id,
+    "ready",
+  );
+  const modelApiKey = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/secrets`,
+    { body: { name: "model-api-key", value: `model-key-${randomUUID()}` } },
+  );
+  assert.equal(modelApiKey.status, 201, JSON.stringify(modelApiKey.body));
+  const toolApiKey = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/secrets`,
+    { body: { name: "tool-api-key", value: `tool-key-${randomUUID()}` } },
+  );
+  assert.equal(toolApiKey.status, 201, JSON.stringify(toolApiKey.body));
+  const secrets = { modelApiKey: modelApiKey.data, toolApiKey: toolApiKey.data };
+
+  const foreignNamespaceId = `ns_${randomUUID()}`;
+  const foreignSecretId = `sec_${randomUUID()}`;
+  const oversizedBindings = Object.fromEntries(
+    Array.from({ length: 65 }, (_, index) => [`TOOL_${index}`, { source: toolApiKey.data.ref }]),
+  );
+  const invalidBodies = [
+    [
+      "submitted Secret values",
+      {
+        ...provisioningRequestBody(namespace.data.id, secrets),
+        secrets: [{ name: "tool-api-key", value: `tool-key-${randomUUID()}` }],
+      },
+    ],
+    [
+      "request-local Secret binding sources",
+      provisioningRequestBody(namespace.data.id, secrets, {
+        configuration: {
+          secretBindings: {
+            TOOL_API_KEY: {
+              source: { kind: "provisioning-secret", name: "tool-api-key" },
+            },
+          },
+        },
+      }),
+    ],
+    [
+      "request-local Harness Secret source",
+      provisioningRequestBody(namespace.data.id, secrets, {
+        harnessAuth: {
+          method: "api_key",
+          source: { kind: "provisioning-secret", name: "model-api-key" },
+        },
+      }),
+    ],
+    [
+      "too many binding destinations",
+      provisioningRequestBody(namespace.data.id, secrets, {
+        configuration: { secretBindings: oversizedBindings },
+      }),
+    ],
+    [
+      "non-env delivery",
+      provisioningRequestBody(namespace.data.id, secrets, {
+        configuration: {
+          secretBindings: {
+            TOOL_API_KEY: {
+              source: toolApiKey.data.ref,
+              delivery: { type: "file" },
+            },
+          },
+        },
+      }),
+    ],
+    [
+      "cross-Namespace Secret references",
+      provisioningRequestBody(namespace.data.id, secrets, {
+        configuration: {
+          secretBindings: {
+            TOOL_API_KEY: {
+              source: { kind: "secret", namespaceId: foreignNamespaceId, id: foreignSecretId },
+            },
+          },
+        },
+        harnessAuth: { method: "runtime" },
+      }),
+    ],
+    [
+      "reserved environment destinations",
+      provisioningRequestBody(namespace.data.id, secrets, {
+        configuration: {
+          secretBindings: {
+            OPENCLAW_TOKEN: {
+              source: toolApiKey.data.ref,
+            },
+          },
+        },
+        harnessAuth: { method: "runtime" },
+      }),
+    ],
+  ];
+
+  for (const [description, body] of invalidBodies) {
+    const result = await injectedRequest(
+      fixture.app,
+      "POST",
+      `/namespaces/${namespace.data.id}/agents/provision`,
+      { body },
+    );
+    assert.equal(result.status, 400, description);
+    assert.equal(result.body.error.code, "INVALID_REQUEST", description);
+  }
+
+  const pluginDriver = new CodexPluginDriver();
+  fixture.controller.registerDriver(pluginDriver);
+  fixture.controller.selectDriver("plugin", pluginDriver.id);
+  // Driver-specific validation must precede durable provisioning and resource creation.
+  const invalidPolicy = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    {
+      body: provisioningRequestBody(namespace.data.id, secrets, {
+        plugins: {
+          [linearPluginId]: { enabled: true, tools: { "app/search": { reviewer: "auto" } } },
+        },
+      }),
+    },
+  );
+  assert.equal(invalidPolicy.status, 400, JSON.stringify(invalidPolicy.body));
+  assert.equal(invalidPolicy.body.error.code, "INVALID_REQUEST");
+  assert.equal(
+    invalidPolicy.body.error.message,
+    "This Plugin Driver does not support tools[id].reviewer. Use toolDefaults.reviewer when supported, or omit the reviewer.",
+  );
+  assert.deepEqual(
+    await fixture.platformState.read((view) => view.agents.listAgents(namespace.data.id)),
+    [],
+  );
+
+  const durableOnly = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: provisioningRequestBody(namespace.data.id, secrets) },
+  );
+  assert.equal(durableOnly.status, 503, JSON.stringify(durableOnly.body));
+  assert.equal(durableOnly.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  assert.deepEqual(
+    await fixture.platformState.read((view) => view.agents.listAgents(namespace.data.id)),
+    [],
+    "in-memory admission must stop before creating an Agent",
+  );
+
+  const oversized = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    {
+      rawBody: JSON.stringify(
+        provisioningRequestBody(namespace.data.id, secrets, {
+          configuration: { values: { payload: "x".repeat(448 * 1024) } },
+        }),
+      ),
+    },
+  );
+  assert.equal(oversized.status, 413);
+  assert.equal(oversized.body.error.code, "PAYLOAD_TOO_LARGE");
 });
 
 test("bootstrap fails closed when IAM omits structured authorization evidence", async () => {

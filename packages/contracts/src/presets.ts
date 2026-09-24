@@ -11,6 +11,7 @@ import {
 } from "./preset-variables.mjs";
 
 export type PresetVariable =
+  | { readonly type: "password"; readonly description?: string }
   | { readonly type: "string"; readonly description?: string; readonly default?: string }
   | { readonly type: "number"; readonly description?: string; readonly default?: number }
   | { readonly type: "boolean"; readonly description?: string; readonly default?: boolean };
@@ -19,9 +20,13 @@ export type PresetVariable =
 export type PresetLaunchSettings = Omit<PresetTemplate, "variables">;
 
 // Typed launch fields may contain string tokens until rendering and admission.
+export interface PresetAgentTemplate extends Readonly<Record<string, unknown>> {
+  readonly initialWorkspaceFiles?: Readonly<Record<string, unknown>>;
+}
+
 export interface PresetTemplate {
   readonly variables?: Readonly<Record<string, PresetVariable>>;
-  readonly agent?: Readonly<Record<string, unknown>>;
+  readonly agent?: PresetAgentTemplate;
   readonly configuration?: {
     readonly values?: Readonly<Record<string, unknown>>;
     readonly secretBindings?: Readonly<Record<string, unknown>>;
@@ -106,8 +111,18 @@ function validateCredentials(template: PresetTemplate, namespaceId: string) {
     isRecord(auth) &&
     isRecord(value) &&
     ((hasFields(auth, ["method"]) && scalar(auth.method, value.method, Type.Literal("runtime"))) ||
+      (hasFields(auth, ["method", "secret"]) &&
+        scalar(
+          auth.method,
+          value.method,
+          Type.Union([Type.Literal("api_key"), Type.Literal("codex_pat")]),
+        )) ||
       (hasFields(auth, ["method", "source"]) &&
-        scalar(auth.method, value.method, Type.Literal("api_key")) &&
+        scalar(
+          auth.method,
+          value.method,
+          Type.Union([Type.Literal("api_key"), Type.Literal("codex_pat")]),
+        ) &&
         reference(auth.source, value.source)) ||
       (hasFields(auth, ["method", "serviceAccountId"]) &&
         scalar(auth.method, value.method, Type.Literal("chatgpt_service_account")) &&
@@ -122,7 +137,21 @@ function validateCredentials(template: PresetTemplate, namespaceId: string) {
 
 /** Store a safe template; ordinary create/deploy admission owns concrete launch settings. */
 export function normalizePresetTemplate(input: unknown, namespaceId: string): PresetTemplate {
-  const template = validatePresetTemplate(input);
+  const template = structuredClone(validatePresetTemplate(input));
+  // Preset writes already carry an authorized Namespace; relative SecretRefs use it.
+  const bindings = [
+    template.agent?.harnessAuth,
+    ...Object.values(template.configuration?.secretBindings ?? {}),
+  ];
+  for (const binding of bindings) {
+    if (
+      isRecord(binding) &&
+      isRecord(binding.source) &&
+      !Object.hasOwn(binding.source, "namespaceId")
+    ) {
+      binding.source.namespaceId = namespaceId;
+    }
+  }
   validateCredentials(template, namespaceId);
   return immutableCopy(template);
 }

@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, link, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadTestSuites } from "./test-suites.mjs";
 
 export const repository = "openclaw/openclaw-enterprise";
 export const publishWorkflow = ".github/workflows/container-publish.yml";
@@ -208,7 +209,7 @@ async function validate(env) {
     execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     env.SOURCE_SHA,
   );
-  const suites = JSON.parse(await readFile("scripts/ci/test-suites.json", "utf8"));
+  const suites = loadTestSuites("scripts/ci/test-suites.json");
   const testedBase = suites.lanes["images-packaging"].prepare.defaultEnv.NODE_BASE_IMAGE;
   assert.match(
     env.NODE_BASE_IMAGE ?? "",
@@ -301,53 +302,159 @@ export function readArchivePlatforms(archive, indexDigest) {
   return selected;
 }
 
+// Assemble the exact exports that passed startup tests on their native runners.
+// Hard links let assembly share those bytes until the final archive is written.
+async function assemble(directory, env) {
+  const combined = join(directory, "combined");
+  await mkdir(combined);
+  await mkdir(join(combined, "blobs/sha256"), { recursive: true });
+  const retained = new Set();
+  const manifests = [];
+  for (const arch of ["amd64", "arm64"]) {
+    const layout = join(directory, arch);
+    const receipt = JSON.parse(await readFile(join(layout, "platform.json"), "utf8"));
+    for (const [key, value] of Object.entries(identity(env, env.IMAGE))) {
+      assert.deepEqual(receipt[key], value, `Platform receipt ${key} mismatch.`);
+    }
+    assert.equal(receipt.platform, `linux/${arch}`, "Platform receipt architecture mismatch.");
+    assert.equal(receipt.native, true, "Platform must pass smoke on its native runner.");
+    async function retain(descriptor) {
+      assert.match(descriptor.digest ?? "", digestPattern);
+      const path = join(layout, "blobs/sha256", descriptor.digest.slice(7));
+      const info = await lstat(path);
+      assert.ok(info.isFile(), "OCI blob must be a regular file.");
+      assert.equal(info.size, descriptor.size, "OCI blob size mismatch.");
+      assert.equal(
+        `sha256:${await fileDigest(path)}`,
+        descriptor.digest,
+        "OCI blob digest mismatch.",
+      );
+      if (!retained.has(descriptor.digest)) {
+        await link(path, join(combined, "blobs/sha256", descriptor.digest.slice(7)));
+        retained.add(descriptor.digest);
+      }
+      return path;
+    }
+    const root = JSON.parse(await readFile(join(layout, "index.json"), "utf8"));
+    assert.equal(root.schemaVersion, 2);
+    assert.equal(root.manifests.length, 1, "Expected exactly one exported platform.");
+    let descriptor = root.manifests[0];
+    assert.equal(descriptor.digest, receipt.digest, "Build output digest mismatch.");
+    if (descriptor.mediaType === "application/vnd.oci.image.index.v1+json") {
+      const index = JSON.parse(await readFile(await retain(descriptor), "utf8"));
+      assert.equal(index.schemaVersion, 2);
+      assert.equal(index.manifests.length, 1, "Expected exactly one platform manifest.");
+      descriptor = index.manifests[0];
+    }
+    assert.equal(descriptor.mediaType, "application/vnd.oci.image.manifest.v1+json");
+    const manifest = JSON.parse(await readFile(await retain(descriptor), "utf8"));
+    assert.equal(manifest.schemaVersion, 2);
+    assert.equal(manifest.mediaType, descriptor.mediaType);
+    const config = JSON.parse(await readFile(await retain(manifest.config), "utf8"));
+    assert.equal(config.os, "linux");
+    assert.equal(config.architecture, arch, "Exported platform configuration mismatch.");
+    if (descriptor.platform) {
+      assert.equal(descriptor.platform.os, config.os);
+      assert.equal(descriptor.platform.architecture, config.architecture);
+      assert.ok(
+        descriptor.platform.variant === undefined ||
+          (arch === "arm64" && descriptor.platform.variant === "v8"),
+      );
+    }
+    for (const layer of manifest.layers) {
+      await retain(layer);
+    }
+    manifests.push({ ...descriptor, platform: { os: "linux", architecture: arch } });
+  }
+  const index = {
+    schemaVersion: 2,
+    mediaType: "application/vnd.oci.image.index.v1+json",
+    manifests,
+  };
+  const bytes = JSON.stringify(index);
+  const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  await writeFile(join(combined, "blobs/sha256", digest.slice(7)), bytes);
+  await writeFile(
+    join(combined, "index.json"),
+    JSON.stringify({
+      ...index,
+      manifests: [{ mediaType: index.mediaType, digest, size: Buffer.byteLength(bytes) }],
+    }),
+  );
+  await writeFile(join(combined, "oci-layout"), JSON.stringify({ imageLayoutVersion: "1.0.0" }));
+  const archive = join(directory, "image.tar");
+  execFileSync("tar", ["-cf", archive, "-C", combined, "blobs", "index.json", "oci-layout"]);
+  readArchivePlatforms(archive, digest);
+  for (const path of ["amd64", "arm64", "combined"]) {
+    await rm(join(directory, path), { recursive: true });
+  }
+  await appendFile(env.GITHUB_OUTPUT, `digest=${digest}\n`);
+}
+
 async function smoke(directory, env) {
   assert.ok(images.includes(env.IMAGE));
-  const archive = join(directory, "image.tar");
-  const archiveSha256 = await fileDigest(archive);
-  assert.equal(inspectDigest(`oci-archive:${archive}`), env.IMAGE_DIGEST);
-  for (const image of readArchivePlatforms(archive, env.IMAGE_DIGEST)) {
-    const [, arch] = image.platform.split("/");
-    const tag = `localhost/enterprise-${env.IMAGE}:prepared-${arch}`;
-    skopeo(
-      [
-        "--override-os",
-        "linux",
-        "--override-arch",
-        arch,
-        "copy",
-        `oci-archive:${archive}`,
-        `docker-daemon:${tag}`,
-      ],
-      { stdio: "inherit" },
-    );
+  const arch = process.arch === "x64" ? "amd64" : process.arch;
+  assert.ok(["amd64", "arm64"].includes(arch));
+  assert.equal(env.PLATFORM, `linux/${arch}`, "Smoke requires the target's native runner.");
+  assert.equal(inspectDigest(`oci:${directory}`), env.IMAGE_DIGEST);
+  const root = JSON.parse(await readFile(join(directory, "index.json"), "utf8"));
+  assert.equal(root.manifests.length, 1);
+  let descriptor = root.manifests[0];
+  async function blob(entry) {
+    assert.match(entry.digest ?? "", digestPattern);
+    const bytes = await readFile(join(directory, "blobs/sha256", entry.digest.slice(7)));
+    assert.equal(`sha256:${createHash("sha256").update(bytes).digest("hex")}`, entry.digest);
+    return JSON.parse(bytes);
+  }
+  assert.equal(descriptor.digest, env.IMAGE_DIGEST);
+  let manifest = await blob(descriptor);
+  if (descriptor.mediaType === "application/vnd.oci.image.index.v1+json") {
+    assert.equal(manifest.manifests.length, 1);
+    descriptor = manifest.manifests[0];
+    manifest = await blob(descriptor);
+  }
+  assert.equal(manifest.mediaType, "application/vnd.oci.image.manifest.v1+json");
+  const tag = `localhost/enterprise-${env.IMAGE}:prepared-${arch}`;
+  skopeo(["copy", `oci:${directory}`, `docker-daemon:${tag}`], { stdio: "inherit" });
+  try {
     const [loaded] = JSON.parse(execFileSync("docker", ["image", "inspect", tag]));
-    // Docker may translate the manifest media type; the config ID binds the
-    // loaded image to this index entry and its ordered filesystem diff IDs.
-    assert.equal(loaded.Id, image.configDigest);
+    assert.equal(loaded.Id, manifest.config.digest);
     assert.equal(loaded.Os, "linux");
     assert.equal(loaded.Architecture, arch);
-    const controller = env.IMAGE === "controller";
-    console.log(`Smoke ${env.IMAGE} ${image.platform} @ ${image.digest}`);
+    console.log(`Smoke ${env.IMAGE} ${env.PLATFORM} @ ${descriptor.digest}`);
     execFileSync(
       process.execPath,
       [
         "--test",
-        `tests/integration/${controller ? "production" : "runtime"}-image-startup.test.mjs`,
+        `tests/integration/${env.IMAGE === "controller" ? "production" : "runtime"}-image-startup.test.mjs`,
       ],
       {
         env: {
           ...env,
-          OCC_TEST_IMAGE_TIMEOUT_MULTIPLIER: arch === "arm64" ? "6" : "1",
-          [controller ? "OCC_TEST_PRODUCTION_IMAGE" : "OCC_TEST_RUNTIME_IMAGE"]: loaded.Id,
+          OCC_TEST_IMAGE_TIMEOUT_MULTIPLIER: "1",
+          [env.IMAGE === "controller" ? "OCC_TEST_PRODUCTION_IMAGE" : "OCC_TEST_RUNTIME_IMAGE"]:
+            loaded.Id,
         },
         stdio: "inherit",
       },
     );
-    // Keep only one unpacked variant on this disposable preparation runner.
+    assert.equal(inspectDigest(`oci:${directory}`), env.IMAGE_DIGEST);
+    await writeFile(
+      join(directory, "platform.json"),
+      `${JSON.stringify(
+        {
+          ...identity(env, env.IMAGE),
+          platform: env.PLATFORM,
+          digest: env.IMAGE_DIGEST,
+          native: true,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } finally {
     execFileSync("docker", ["image", "rm", tag], { stdio: "inherit" });
   }
-  assert.equal(await fileDigest(archive), archiveSha256, "OCI archive changed during smoke.");
 }
 
 async function seal(directory, env) {
@@ -469,6 +576,8 @@ async function main() {
   if (command === "validate") {
     const attempt = await validate(process.env);
     await appendFile(process.env.GITHUB_OUTPUT, `ci_attempt=${attempt}\n`);
+  } else if (command === "assemble") {
+    await assemble(directory, process.env);
   } else if (command === "smoke") {
     await smoke(directory, process.env);
   } else if (command === "seal") {
@@ -483,7 +592,7 @@ async function main() {
     );
     await writeFile(join(directory, "publication.json"), `${JSON.stringify(receipt, null, 2)}\n`);
   } else {
-    throw new Error("Expected validate, smoke, seal, or publish.");
+    throw new Error("Expected validate, assemble, smoke, seal, or publish.");
   }
 }
 

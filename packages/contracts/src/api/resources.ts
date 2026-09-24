@@ -17,6 +17,7 @@ import {
   NamespaceId,
   PermissionActionSchema,
   ProviderId,
+  RepositoryBindingSelectionSchema,
   RepositoryBindingSelectionsSchema,
   RevisionId,
   ResourceKindSchema,
@@ -28,7 +29,7 @@ import {
   Timestamp,
   WorkspaceFileName,
   PluginApprovalModeSchema,
-  PluginApprovalsReviewerSchema,
+  PluginReviewerSchema,
 } from "./common.ts";
 
 const RuntimeFailureIdentifier = Type.String({
@@ -37,14 +38,131 @@ const RuntimeFailureIdentifier = Type.String({
   pattern: "^[A-Za-z0-9._~:@-]{1,64}$",
 });
 
+export const AgentModelListResponse = Type.Object(
+  {
+    data: Type.Array(
+      Type.Object({ id: Type.String(), name: Type.String() }, { additionalProperties: false }),
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
+const PluginCatalogLinkSchema = Type.Object(
+  { label: Type.String(), url: Type.String() },
+  { additionalProperties: false },
+);
+
+const PluginCatalogEntrySchema = Type.Object(
+  {
+    id: Type.String(),
+    name: Type.String(),
+    remoteId: Type.Optional(Type.String()),
+    logoUrl: Type.Optional(Type.String()),
+    websiteUrl: Type.Optional(Type.String()),
+    privacyPolicyUrl: Type.Optional(Type.String()),
+    termsOfServiceUrl: Type.Optional(Type.String()),
+    description: Type.Optional(Type.String()),
+    available: Type.Optional(Type.Boolean()),
+    unavailableReason: Type.Optional(Type.String()),
+    unavailableHelp: Type.Optional(PluginCatalogLinkSchema),
+    tools: Type.Union([
+      Type.Null(),
+      Type.Array(
+        Type.Object(
+          {
+            id: Type.String(),
+            name: Type.String(),
+            description: Type.Optional(Type.String()),
+            ownerId: Type.String(),
+            available: Type.Optional(Type.Boolean()),
+            unavailableReason: Type.Optional(Type.String()),
+            destructive: Type.Optional(Type.Boolean()),
+            writes: Type.Optional(Type.Boolean()),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentPluginCatalogResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        plugins: Type.Array(PluginCatalogEntrySchema),
+        nextCursor: Type.Union([Type.String(), Type.Null()]),
+        setup: Type.Optional(
+          Type.Object(
+            { message: Type.String(), links: Type.Array(PluginCatalogLinkSchema) },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentPluginDetailsResponse = Type.Object(
+  { data: PluginCatalogEntrySchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 const RuntimeEvidenceTimestamp = Type.String({
   format: "date-time",
   pattern:
     "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$",
 });
 
+const InstallationCapabilitiesSchema = Type.Object(
+  {
+    agentProvisioning: Type.Optional(
+      Type.Object(
+        { executionModes: Type.Array(HarnessExecutionModeSchema, { minItems: 1, maxItems: 2 }) },
+        { additionalProperties: false },
+      ),
+    ),
+    pluginPolicies: Type.Optional(
+      Type.Object(
+        {
+          driver: Type.Ref("PluginDriverIdentity"),
+          toolDefaults: Type.Object(
+            {
+              enabled: Type.Boolean(),
+              approval: Type.Array(PluginApprovalModeSchema),
+              reviewer: Type.Array(PluginReviewerSchema),
+            },
+            { additionalProperties: false },
+          ),
+          tools: Type.Object(
+            {
+              enabled: Type.Boolean(),
+              approval: Type.Array(PluginApprovalModeSchema),
+              reviewer: Type.Array(PluginReviewerSchema),
+            },
+            { additionalProperties: false },
+          ),
+          driverPolicySchema: Type.Record(Type.String(), Type.Unknown()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const InstallationSchema = Type.Object(
-  { id: InstallationId, name: Name, createdAt: Timestamp },
+  {
+    id: InstallationId,
+    name: Name,
+    createdAt: Timestamp,
+    capabilities: Type.Optional(InstallationCapabilitiesSchema),
+  },
   { additionalProperties: false },
 );
 
@@ -92,30 +210,30 @@ export const PluginDriverIdentitySchema = Type.Object(
 export const PluginToolPolicySchema = Type.Object(
   {
     enabled: Type.Optional(Type.Boolean()),
-    approvalMode: Type.Optional(PluginApprovalModeSchema),
+    approval: Type.Optional(PluginApprovalModeSchema),
+    reviewer: Type.Optional(PluginReviewerSchema),
   },
   { additionalProperties: false, minProperties: 1, $id: "PluginToolPolicy" },
 );
 
 const PluginIdPattern = "^[A-Za-z0-9._~:@-]{1,253}$";
+const PluginToolIdPattern = "^[^\\u0000-\\u0020\\u007f]{1,1024}$";
 const PluginToolPolicyMapSchema = Type.Unsafe({
   type: "object",
   description:
-    "Plugin tool policy map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$.",
-  propertyNames: { pattern: PluginIdPattern },
+    "Tool overrides keyed by exact opaque tool IDs from the selected Plugin Driver catalog.",
+  propertyNames: { pattern: PluginToolIdPattern },
   additionalProperties: false,
   patternProperties: {
-    [PluginIdPattern]: Type.Ref("PluginToolPolicy"),
+    [PluginToolIdPattern]: Type.Ref("PluginToolPolicy"),
   },
 });
 
 export const PluginDesiredSelectionSchema = Type.Object(
   {
     enabled: Type.Boolean(),
-    approvalMode: PluginApprovalModeSchema,
-    approvalsReviewer: Type.Optional(PluginApprovalsReviewerSchema),
-    destructiveActions: Type.Optional(PluginApprovalModeSchema),
-    writes: Type.Optional(PluginApprovalModeSchema),
+    toolDefaults: Type.Optional(Type.Ref("PluginToolPolicy")),
+    driverPolicy: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     tools: Type.Optional(PluginToolPolicyMapSchema),
   },
   { additionalProperties: false, $id: "PluginDesiredSelection" },
@@ -159,6 +277,70 @@ export const SecretSchema = Type.Object(
 export const AgentRuntimeCredentialStatusSchema = Type.Object(
   {
     transportConfigured: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentRuntimeImagesResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        status: Type.Union([
+          Type.Literal("observed"),
+          Type.Literal("undeployed"),
+          Type.Literal("unsupported"),
+        ]),
+        images: Type.Array(
+          Type.Object(
+            {
+              workload: Type.String(),
+              container: Type.String(),
+              image: Type.String(),
+              imageId: Type.Union([Type.String(), Type.Null()]),
+              commit: Type.Union([Type.String({ pattern: "^[a-f0-9]{40}$" }), Type.Null()]),
+              openclawCommit: Type.Union([Type.String({ pattern: "^[a-f0-9]{40}$" }), Type.Null()]),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentProvisioningStatusSchema = Type.Object(
+  {
+    workId: Type.String({ minLength: 1, maxLength: 200 }),
+    status: Type.Union([
+      Type.Literal("queued"),
+      Type.Literal("running"),
+      Type.Literal("succeeded"),
+      Type.Literal("failed"),
+    ]),
+    phase: Type.Union([
+      Type.Literal("admitted"),
+      Type.Literal("configuration"),
+      Type.Literal("transport"),
+      Type.Literal("handoff"),
+    ]),
+    attemptCount: Type.Integer({ minimum: 0 }),
+    updatedAt: Timestamp,
+    agentId: Type.Optional(AgentId),
+    configurationId: Type.Optional(ConfigurationId),
+    revisionId: Type.Optional(RevisionId),
+    url: Type.String({ minLength: 1 }),
+    error: Type.Optional(
+      Type.Object(
+        {
+          code: Type.String({ minLength: 1, maxLength: 64 }),
+          message: Type.String({ minLength: 1, maxLength: 256 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -214,7 +396,23 @@ export const ServiceAccountSchema = Type.Object(
 );
 
 export const ProviderSummarySchema = Type.Object(
-  { id: ProviderId, type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github")]) },
+  {
+    id: ProviderId,
+    type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github")]),
+  },
+  { additionalProperties: false },
+);
+
+export const RepositoryOptionSchema = Type.Object(
+  {
+    repositoryRef: RepositoryBindingSelectionSchema.properties.repositoryRef,
+    displayName: Name,
+    allowedProfiles: Type.Array(RepositoryBindingSelectionSchema.properties.profile, {
+      minItems: 1,
+      maxItems: 16,
+      uniqueItems: true,
+    }),
+  },
   { additionalProperties: false },
 );
 
@@ -266,6 +464,24 @@ export const AgentResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentProvisioningResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        provisioning: AgentProvisioningStatusSchema,
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentProvisioningStatusResponse = Type.Object(
+  { data: AgentProvisioningStatusSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 export const AgentRuntimeCredentialResponse = Type.Object(
   { data: AgentRuntimeCredentialStatusSchema, meta: Meta },
   { $id: "AgentRuntimeCredentialResponse", additionalProperties: false },
@@ -298,6 +514,11 @@ export const AgentListResponse = Type.Object(
 
 export const ProviderListResponse = Type.Object(
   { data: Type.Array(ProviderSummarySchema), meta: Meta },
+  { additionalProperties: false },
+);
+
+export const RepositoryOptionListResponse = Type.Object(
+  { data: Type.Array(RepositoryOptionSchema, { maxItems: 128 }), meta: Meta },
   { additionalProperties: false },
 );
 
@@ -482,6 +703,7 @@ export type AgentWire = Type.Static<typeof AgentSchema>;
 export type AgentRuntimeCredentialStatusWire = Type.Static<
   typeof AgentRuntimeCredentialStatusSchema
 >;
+export type AgentProvisioningStatusWire = Type.Static<typeof AgentProvisioningStatusSchema>;
 export type IAMPermissionWire = Type.Static<typeof IAMPermissionSchema>;
 export type IAMRoleWire = Type.Static<typeof IAMRoleSchema>;
 export type IAMAccessBindingWire = Type.Static<typeof IAMAccessBindingSchema>;
@@ -503,6 +725,9 @@ export type IAMAccessBindingResponse = Type.Static<typeof IAMAccessBindingRespon
 export type IAMAccessBindingListResponse = Type.Static<typeof IAMAccessBindingListResponse>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
 export type ProviderListResponse = Type.Static<typeof ProviderListResponse>;
+export type AgentProvisioningResponse = Type.Static<typeof AgentProvisioningResponse>;
+export type AgentProvisioningStatusResponse = Type.Static<typeof AgentProvisioningStatusResponse>;
+export type RepositoryOptionListResponse = Type.Static<typeof RepositoryOptionListResponse>;
 export type AgentRevisionResponse = Type.Static<typeof AgentRevisionResponse>;
 export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResponse>;
 export type AgentDeploymentStatusResponse = Type.Static<typeof AgentDeploymentStatusResponse>;

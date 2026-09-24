@@ -28,6 +28,7 @@ export type {
   OpenRepositorySessionResult,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
+  RepositoryOption,
   RepoDriver,
   RepositoryCredentialGrantIdentity,
   RepositoryCredentialMaterialRef,
@@ -81,6 +82,11 @@ export type ProviderDefinition =
 export interface ProviderSummary {
   readonly id: string;
   readonly type: ProviderType;
+}
+
+export interface InstallationCapabilities {
+  readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
+  readonly pluginPolicies?: PluginPolicyCapabilities & { readonly driver: PluginDriverIdentity };
 }
 
 export interface Provider<Client = unknown> {
@@ -141,6 +147,7 @@ export interface Installation {
   readonly id: string;
   readonly name: string;
   readonly createdAt: string;
+  readonly capabilities?: InstallationCapabilities;
 }
 
 export type NamespaceStatus = "provisioning" | "ready" | "failed" | "deleting";
@@ -213,6 +220,7 @@ export interface SecretEnvironmentProjection {
 
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
+  | { readonly method: "codex_pat"; readonly source: SecretReference }
   | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
   | { readonly method: "runtime" };
 
@@ -221,6 +229,11 @@ export type HarnessAuthSnapshot =
   | { readonly method: "runtime" }
   | {
       readonly method: "api_key";
+      readonly source: SecretReference;
+      readonly secretDriverId: string;
+    }
+  | {
+      readonly method: "codex_pat";
       readonly source: SecretReference;
       readonly secretDriverId: string;
     }
@@ -238,7 +251,7 @@ export type HarnessAuthSnapshot =
 
 /** Authoritative delivery references, resolved again at dispatch; never secret values. */
 export type ResolvedHarnessAuth =
-  | (Extract<HarnessAuthSnapshot, { method: "api_key" }> & {
+  | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" }> & {
       readonly backendRef: SecretBackendRef;
     })
   | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" | "runtime" }>;
@@ -250,9 +263,9 @@ export interface ComputeRevisionContext {
   readonly repositoryCredentials?: readonly RepositoryCredentialRuntimeBinding[];
 }
 
-export type PluginApprovalMode = "always" | "never" | "prompt" | "auto";
+export type PluginReviewer = "human" | "auto";
 
-export type PluginApprovalsReviewer = "user" | "auto_review";
+export type PluginApprovalMode = "native" | "prompt" | "approve";
 
 export interface PluginDriverIdentity {
   readonly id: string;
@@ -261,15 +274,15 @@ export interface PluginDriverIdentity {
 
 export interface PluginToolPolicy {
   readonly enabled?: boolean;
-  readonly approvalMode?: PluginApprovalMode;
+  readonly approval?: PluginApprovalMode;
+  readonly reviewer?: PluginReviewer;
 }
 
 export interface PluginDesiredSelection {
   readonly enabled: boolean;
-  readonly approvalMode: PluginApprovalMode;
-  readonly approvalsReviewer?: PluginApprovalsReviewer;
-  readonly destructiveActions?: PluginApprovalMode;
-  readonly writes?: PluginApprovalMode;
+  readonly toolDefaults?: PluginToolPolicy;
+  /** Validated by the selected Plugin Driver, never interpreted by the control plane. */
+  readonly driverPolicy?: Readonly<Record<string, unknown>>;
   readonly tools?: Readonly<Record<string, PluginToolPolicy>>;
 }
 
@@ -277,15 +290,54 @@ export type PluginDesiredState = Readonly<Record<string, PluginDesiredSelection>
 
 export interface PluginToolCatalogEntry {
   readonly id: string;
+  readonly ownerId: string;
   readonly name: string;
-  readonly destructive: boolean;
-  readonly writes: boolean;
+  readonly description?: string;
+  readonly available?: boolean;
+  readonly unavailableReason?: string;
+  readonly destructive?: boolean;
+  readonly writes?: boolean;
+}
+
+export interface PluginPolicyCapabilities {
+  readonly toolDefaults: {
+    readonly enabled: boolean;
+    readonly approval: readonly PluginApprovalMode[];
+    readonly reviewer: readonly PluginReviewer[];
+  };
+  readonly tools: {
+    readonly enabled: boolean;
+    readonly approval: readonly PluginApprovalMode[];
+    readonly reviewer: readonly PluginReviewer[];
+  };
+  readonly driverPolicySchema: JSONSchema;
+}
+
+export interface PluginCatalogLink {
+  readonly label: string;
+  readonly url: string;
 }
 
 export interface PluginCatalogEntry {
   readonly id: string;
   readonly name: string;
+  readonly remoteId?: string;
+  readonly description?: string;
+  /** Public HTTPS presentation image; may expire and is never selection state. */
+  readonly logoUrl?: string;
+  readonly websiteUrl?: string;
+  readonly privacyPolicyUrl?: string;
+  readonly termsOfServiceUrl?: string;
+  readonly available?: boolean;
+  readonly unavailableReason?: string;
+  readonly unavailableHelp?: PluginCatalogLink;
   readonly tools: readonly PluginToolCatalogEntry[] | null;
+}
+
+export interface PluginCatalogPage {
+  readonly plugins: readonly PluginCatalogEntry[];
+  readonly nextCursor: string | null;
+  readonly setup?: { readonly message: string; readonly links: readonly PluginCatalogLink[] };
 }
 
 export interface PluginRevisionState {
@@ -664,6 +716,7 @@ export interface DriverImplementation {
 
 export interface IAMDriver extends Driver {
   readonly capability: "iam";
+  readonly namespacePolicyTransaction?: "platform-unit-of-work";
   lookupIdentity(input: IdentityLookup): Promise<Identity | undefined>;
   authorize(request: AuthorizationRequest): Promise<AuthorizationDecision>;
   listNamespaceRoles?(
@@ -790,7 +843,19 @@ export interface PluginDriverContext {
 
 export interface PluginDriver extends Driver {
   readonly capability: "plugin";
+  readonly policyCapabilities: PluginPolicyCapabilities;
+  /** Checks policy support without installing plugins or performing authenticated discovery. */
+  validatePolicies(selections: PluginDesiredState): void;
   listCatalog(context: PluginDriverContext): Promise<readonly PluginCatalogEntry[]>;
+  /** Pre-Agent discovery uses a transient credential; neither it nor results are persisted. */
+  discoverCatalog?(
+    input: { readonly accessToken: string; readonly cursor?: string },
+    signal?: AbortSignal,
+  ): Promise<PluginCatalogPage>;
+  getCatalogPlugin?(
+    input: { readonly accessToken: string; readonly pluginId: string },
+    signal?: AbortSignal,
+  ): Promise<PluginCatalogEntry>;
 }
 
 export type NamespaceLifecycleFailure = "retryable" | "permanent";
@@ -835,10 +900,29 @@ export interface ComputeAgentBinding {
   readonly agent: Readonly<Agent>;
 }
 
+export interface ComputeAgentProvisioningInput {
+  readonly executionMode: HarnessExecutionMode;
+  readonly configuration: Readonly<OpenClawConfigurationDocument>;
+}
+
+export interface ComputeAgentProvisioningCapabilities {
+  readonly executionModes: readonly HarnessExecutionMode[];
+}
+
 export type AgentRuntimeCredentialsInput = Readonly<Record<never, never>>;
 
 export interface AgentRuntimeCredentialStatus {
   readonly transportConfigured: boolean;
+}
+
+/** Observed workload image identity; missing provenance must never be inferred from a tag. */
+export interface RuntimeImage {
+  readonly workload: string;
+  readonly container: string;
+  readonly image: string;
+  readonly imageId: string | null;
+  readonly commit: string | null;
+  readonly openclawCommit: string | null;
 }
 
 export interface ComputePreflightWarning {
@@ -855,14 +939,25 @@ export interface ComputeDriver extends Driver {
   readonly capability: "compute";
   /** Default: platform admission policy. Driver ownership preserves native logging settings. */
   readonly runtimeLogging?: "platform" | "driver";
+  readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
   readonly activationOrder?: "beforeCommit" | "afterCommit";
   readonly maintenanceIntervalMs?: number;
+  getRuntimeImages?(revision: AgentRevision): Promise<readonly RuntimeImage[]>;
+  /** Read-only native model discovery; supplied credentials must never be persisted. */
+  discoverHarnessModels?(input: {
+    readonly authMethod: "api_key" | "codex_pat";
+    readonly provider: string;
+    readonly apiKey: string;
+  }): Promise<readonly { readonly id: string; readonly name: string }[]>;
+  validateAgentProvisioning?(input: ComputeAgentProvisioningInput): void;
   validateHarnessAuth?(
     harness: RevisionHarnessDescriptor,
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
     secretBindings?: SecretBindings,
   ): void;
+  /** Discovery availability; deployment must still validate its exact Harness. */
+  validateRepositoryCredentialSupport?(sandboxDriverId?: string): void;
   validateRepositoryCredentials?(
     harness: RevisionHarnessDescriptor,
     sandboxDriverId?: string,
@@ -896,6 +991,8 @@ export interface ConfigurationDriver extends Driver {
   /** Side-effect-free admission of partial native values before Preset storage. */
   validateValues?(values: OpenClawConfigurationDocument): Promise<void>;
   create(configuration: Configuration): Promise<Configuration>;
+  createExact?(configuration: Configuration): Promise<Configuration>;
+  inspectExact?(configuration: Configuration): Promise<Configuration | undefined>;
   read(reference: ConfigurationReference): Promise<Configuration>;
   update(configuration: Configuration): Promise<Configuration>;
   delete(reference: ConfigurationReference): Promise<void>;

@@ -1,3 +1,4 @@
+import { kubernetesGatewayNamespaceName } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { defaultAgentModel } from "../../apps/controller/src/console/agents/starter-model.mjs";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
@@ -274,13 +275,7 @@ async function attachPostgresToK3d(context) {
   return address;
 }
 
-async function createScopedController(
-  context,
-  identifier,
-  platformNamespace,
-  kubeconfig,
-  gatewayRouting,
-) {
+async function createScopedController(context, identifier, platformNamespace, kubeconfig) {
   const suffix = hash(identifier);
   const account = "openclaw-production-controller";
   const namespaceRole = `oce-production-namespaces-${suffix}`;
@@ -327,21 +322,17 @@ async function createScopedController(
     "--type=json",
     "--patch",
     JSON.stringify([
-      // Match the routed Helm worker: Compute persists node enrollment Secrets
-      // only inside the tenant namespaces that bind this role.
-      ...(gatewayRouting
-        ? [
-            {
-              op: "add",
-              path: "/rules/-",
-              value: {
-                apiGroups: [""],
-                resources: ["secrets"],
-                verbs: ["get", "create", "update", "delete"],
-              },
-            },
-          ]
-        : []),
+      // Match Helm: Compute reads admitted source keys and persists Gateway
+      // projections only inside the namespaces that bind this role.
+      {
+        op: "add",
+        path: "/rules/-",
+        value: {
+          apiGroups: [""],
+          resources: ["secrets"],
+          verbs: ["get", "create", "update", "delete"],
+        },
+      },
       {
         op: "add",
         path: "/rules/-",
@@ -952,7 +943,9 @@ function nativeConfiguration(harnessId, slack, options = {}) {
   if (harnessId === "codex" && slack === undefined) {
     // Native Codex file tools require a writable app-server sandbox plus an omitted or wildcard
     // OpenClaw dynamic-tool allowlist; this case explicitly edits AGENTS.md in the workspace.
-    configuration.plugins.entries.codex.config.appServer.sandbox = "workspace-write";
+    const appServer = configuration.plugins.entries.codex.config.appServer;
+    appServer.approvalPolicy = "never";
+    appServer.sandbox = "workspace-write";
     configuration.tools = {
       allow: ["*"],
       fs: { workspaceOnly: true },
@@ -1370,6 +1363,33 @@ async function storedAgent(pool, namespaceId, agentId) {
   };
 }
 
+async function grantGatewayWorkerTarget(target, role, account, platformNamespace) {
+  await waitFor(`Gateway runtime namespace ${target}`, async () => {
+    try {
+      return await resource("namespace", target);
+    } catch (error) {
+      if (/NotFound|not found/i.test(error.stderr ?? error.message)) {
+        return undefined;
+      }
+      throw error;
+    }
+  });
+  await kubectl(
+    "create",
+    "rolebinding",
+    "openclaw-gateway-worker",
+    "--namespace",
+    target,
+    `--clusterrole=${role}`,
+    `--serviceaccount=${platformNamespace}:${account}`,
+  );
+}
+
+async function topologyPods(topology) {
+  const targets = [...new Set([topology.placement, topology.gatewayPlacement])];
+  return (await Promise.all(targets.map((target) => resources("pods", target)))).flat();
+}
+
 async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const loggingObservationStartedAt = Date.now();
   const includeSecretProbes = options.secretLifecycle === true;
@@ -1417,7 +1437,6 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     identifier,
     platformNamespace,
     kubeconfig,
-    mode === "dedicated" || options.workspaceGateway === true,
   );
   // Shared infrastructure and API credentials exist before any Agent is created.
   // The production Compute Driver alone supplies each Agent's route and endpoint.
@@ -1526,6 +1545,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   let productionApp;
   let controllerApiPod;
   let placement;
+  let gatewayRuntimeNamespace;
+  let gatewayPlacement;
   let forwarding;
   context.after(async () => {
     try {
@@ -1540,6 +1561,16 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
         await productionApp.close();
       }
       await observerPool.end();
+      if (gatewayRuntimeNamespace !== undefined) {
+        await kubectl(
+          "delete",
+          "namespace",
+          gatewayRuntimeNamespace,
+          "--ignore-not-found=true",
+          "--wait=true",
+          "--timeout=120s",
+        );
+      }
       if (placement !== undefined) {
         await kubectl(
           "delete",
@@ -1661,6 +1692,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     namespaceId = createdNamespace.data.id;
   }
   placement = kubernetesNamespaceName(namespaceId);
+  gatewayRuntimeNamespace = kubernetesGatewayNamespaceName(namespaceId);
+  gatewayPlacement = mode === "dedicated" ? gatewayRuntimeNamespace : placement;
   if (workspaceGateway === undefined) {
     workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
     worker = createControllerWorker({
@@ -1713,6 +1746,23 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     `--clusterrole=${controller.apiConfigurationRole}`,
     `--serviceaccount=${platformNamespace}:${controller.apiAccount}`,
   );
+  await grantGatewayWorkerTarget(
+    gatewayRuntimeNamespace,
+    controller.tenantRole,
+    controller.account,
+    platformNamespace,
+  );
+  for (const role of [controller.apiSecretRole, controller.apiConfigurationRole]) {
+    await kubectl(
+      "create",
+      "rolebinding",
+      `canonical-${role}`,
+      "--namespace",
+      gatewayRuntimeNamespace,
+      `--clusterrole=${role}`,
+      `--serviceaccount=${platformNamespace}:${controller.apiAccount}`,
+    );
+  }
   for (const verb of ["get", "create"]) {
     const secretAccess = await kubectl(
       "auth",
@@ -1725,7 +1775,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     ).catch(({ stdout }) => stdout);
     assert.equal(
       secretAccess.trim(),
-      workspaceGateway === undefined ? "no" : "yes",
+      "yes",
       `worker Secret ${verb} access must match the node enrollment role`,
     );
 
@@ -2019,6 +2069,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     agent.data.id,
     {
       gatewayPassword,
+      executionMode: mode,
     },
   );
   assert.equal(provisionedGatewayPassword, gatewayPassword);
@@ -2132,14 +2183,16 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   const workloadAccounts =
     mode === "dedicated" ? [gatewayServiceName, agentServiceName] : [agentServiceName];
   for (const accountName of workloadAccounts) {
+    const accountNamespace =
+      accountName === gatewayServiceName && mode === "dedicated" ? gatewayPlacement : placement;
     const workloadSecretAccess = await kubectl(
       "auth",
       "can-i",
       "get",
       "secrets",
       "--namespace",
-      placement,
-      `--as=system:serviceaccount:${placement}:${accountName}`,
+      accountNamespace,
+      `--as=system:serviceaccount:${accountNamespace}:${accountName}`,
     ).catch(({ stdout }) => stdout);
     assert.equal(
       workloadSecretAccess.trim(),
@@ -2148,7 +2201,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     );
   }
   const pods = await waitFor(`production ${mode} workload Pods`, async () => {
-    const running = (await resources("pods", placement)).filter((pod) =>
+    const running = (await topologyPods({ placement, gatewayPlacement })).filter((pod) =>
       pod.status.conditions?.some(({ type, status }) => type === "Ready" && status === "True"),
     );
     return running.length === (mode === "dedicated" ? 2 : 1) ? running : undefined;
@@ -2161,12 +2214,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     ({ metadata }) => metadata.labels?.["openclaw.dev/workload-role"] === "agent",
   );
   const modelStorage = await storedSecret(observerPool, namespaceId, secretApi.model.id);
-  const modelContainer = (harnessPod ?? gatewayPod).spec.containers[0];
-  const modelProjection = modelContainer.env.find(({ name }) => name === "OPENAI_API_KEY");
-  assertRequiredSecretKeyRef(modelProjection.valueFrom.secretKeyRef, {
-    name: modelStorage.backendRef.name,
-    key: modelStorage.backendRef.key,
-  });
+  await assertModelRuntimeProjection(harnessPod ?? gatewayPod, modelStorage);
   if (mode === "dedicated") {
     assert.equal(
       gatewayPod.spec.containers.some((container) =>
@@ -2179,16 +2227,31 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     const slackAppStorage = await storedSecret(observerPool, namespaceId, secretApi.slackApp.id);
     const slackBotStorage = await storedSecret(observerPool, namespaceId, secretApi.slackBot.id);
     const gatewayContainer = gatewayPod.spec.containers[0];
-    assertRequiredSecretKeyRef(
-      gatewayContainer.env.find(({ name }) => name === "SLACK_APP_TOKEN").valueFrom.secretKeyRef,
-      { name: slackAppStorage.backendRef.name, key: slackAppStorage.backendRef.key },
-      "Slack app token must be projected from the bound Secret into the gateway",
-    );
-    assertRequiredSecretKeyRef(
-      gatewayContainer.env.find(({ name }) => name === "SLACK_BOT_TOKEN").valueFrom.secretKeyRef,
-      { name: slackBotStorage.backendRef.name, key: slackBotStorage.backendRef.key },
-      "Slack bot token must be projected from the bound Secret into the gateway",
-    );
+    for (const [name, source] of [
+      ["SLACK_APP_TOKEN", slackAppStorage],
+      ["SLACK_BOT_TOKEN", slackBotStorage],
+    ]) {
+      const ref = gatewayContainer.env.find((entry) => entry.name === name).valueFrom.secretKeyRef;
+      if (mode === "dedicated") {
+        assert.equal(source.backendRef.namespaceName, gatewayPlacement);
+        assertRequiredSecretKeyRef(ref, {
+          name: source.backendRef.name,
+          key: source.backendRef.key,
+        });
+      } else {
+        const projected = await resource("secret", ref.name, gatewayPlacement);
+        const original = await resource(
+          "secret",
+          source.backendRef.name,
+          source.backendRef.namespaceName,
+        );
+        assert.equal(
+          projected.data[ref.key] === original.data[source.backendRef.key],
+          true,
+          "only the admitted channel key must reach the embedded runtime",
+        );
+      }
+    }
     if (harnessPod !== undefined) {
       assert.equal(
         harnessPod.spec.containers.some((container) =>
@@ -2206,7 +2269,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       "exec",
       gatewayPod.metadata.name,
       "--namespace",
-      placement,
+      gatewayPlacement,
       "--",
       "node",
       "/app/openclaw.mjs",
@@ -2220,15 +2283,15 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   context.diagnostic(`${mode}: ${gatewayVersion}`);
   await assertGatewayEffectiveDefaultModel(
     context,
-    { mode, placement, gatewayPod },
+    { mode, placement, gatewayPlacement, gatewayPod },
     `${harnessId === "codex" ? "codex" : "openai"}/${providerModel}`,
   );
 
   const startGatewayForward = () =>
     options.gatewayPort === undefined
-      ? startPortForward(placement, gatewayServiceName)
+      ? startPortForward(gatewayPlacement, gatewayServiceName)
       : startPortForwardTarget(
-          placement,
+          gatewayPlacement,
           `service/${gatewayServiceName}`,
           `${options.gatewayPort}:8080`,
         );
@@ -2264,6 +2327,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   return {
     mode,
     placement,
+    gatewayPlacement,
     namespaceId,
     installation: activeInstallation,
     platformNamespace,
@@ -2376,7 +2440,7 @@ async function assertUnauthorizedCodexSocket(topology) {
     "exec",
     topology.gatewayPod.metadata.name,
     "--namespace",
-    topology.placement,
+    topology.gatewayPlacement,
     "--",
     "node",
     "-e",
@@ -2408,7 +2472,7 @@ async function assertActualModelTurn(topology) {
       [topology.gatewayPod, topology.harnessPod]
         .filter(Boolean)
         .map((pod) =>
-          kubectl("logs", pod.metadata.name, "--namespace", topology.placement, "--tail=100"),
+          kubectl("logs", pod.metadata.name, "--namespace", pod.metadata.namespace, "--tail=100"),
         ),
     );
     assertNoSecretMaterial(
@@ -2458,7 +2522,7 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
   const rejectedPod = await waitFor(
     `native authentication rejection for ${candidate.data.id}`,
     async () => {
-      const pod = (await resources("pods", topology.placement)).find(
+      const pod = (await topologyPods(topology)).find(
         (pod) =>
           pod.metadata.deletionTimestamp === undefined &&
           pod.metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
@@ -2477,7 +2541,7 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
           "logs",
           pod.metadata.name,
           "--namespace",
-          topology.placement,
+          pod.metadata.namespace,
           "--tail=100",
         );
       } catch (error) {
@@ -2499,17 +2563,7 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
         pod.status.conditions?.some(({ type, status }) => type === "Ready" && status === "True"),
         false,
       );
-      const projection = pod.spec.containers
-        .flatMap(({ env = [] }) => env)
-        .find(({ name }) => name === "OPENAI_API_KEY");
-      assertRequiredSecretKeyRef(
-        projection?.valueFrom?.secretKeyRef,
-        {
-          name: storage.backendRef.name,
-          key: storage.backendRef.key,
-        },
-        "the rejected runtime must consume the deliberately invalid candidate source",
-      );
+      await assertModelRuntimeProjection(pod, storage);
       return pod;
     },
     120_000,
@@ -2533,7 +2587,8 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
   if (topology.mode === "dedicated") {
     assert.equal(active.data.activeRevisionId, predecessor.id);
     assert.equal(
-      (await resource("pod", topology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
+      (await resource("pod", topology.gatewayPod.metadata.name, topology.gatewayPlacement)).metadata
+        .uid,
       topology.gatewayPod.metadata.uid,
       "invalid auth must preserve the dedicated serving gateway Pod",
     );
@@ -2546,7 +2601,7 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
     // Embedded activation publishes the revision before replacing the shared
     // gateway. Failed native startup keeps that replacement unready, with no rollback.
     assert.equal(active.data.activeRevisionId, candidate.data.id);
-    const gateways = (await resources("pods", topology.placement)).filter(
+    const gateways = (await topologyPods(topology)).filter(
       ({ metadata }) =>
         metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
         metadata.labels?.["openclaw.dev/workload-role"] === "gateway",
@@ -2673,7 +2728,7 @@ async function deploymentStatus(topology, revisionId) {
 }
 
 async function deleteRevisionPods(topology, revisionId) {
-  const pods = (await resources("pods", topology.placement)).filter((pod) => {
+  const pods = (await topologyPods(topology)).filter((pod) => {
     const { metadata } = pod;
     if (
       metadata.deletionTimestamp !== undefined ||
@@ -2696,7 +2751,7 @@ async function deleteRevisionPods(topology, revisionId) {
         "pod",
         pod.metadata.name,
         "--namespace",
-        topology.placement,
+        pod.metadata.namespace,
         "--wait=true",
         "--timeout=90s",
       ),
@@ -2707,7 +2762,7 @@ async function deleteRevisionPods(topology, revisionId) {
 
 async function assertStartupFailureDeploymentStatusDurable(context, topology, options = {}) {
   const plugins = options.pluginsEnabled
-    ? { [startupFailurePluginId]: { enabled: true, approvalMode: "auto" } }
+    ? { [startupFailurePluginId]: { enabled: true, toolDefaults: { approval: "native" } } }
     : {};
   const failure = await assertInvalidHarnessAuthStaysUnready(context, topology, {
     plugins,
@@ -2902,7 +2957,7 @@ const gatewayPrivatePaths = [
 
 async function assertGatewayPrivateResources(topology) {
   const name = `gateway-state-${hash(topology.agent.id)}`;
-  const claim = await resource("persistentvolumeclaim", name, topology.placement);
+  const claim = await resource("persistentvolumeclaim", name, topology.gatewayPlacement);
   assert.deepEqual(
     [
       claim.spec.accessModes,
@@ -2943,7 +2998,7 @@ async function gatewayCall(topology, method, params) {
   // The real CLI authenticates from the Pod's env/config; credentials never enter kubectl args.
   return JSON.parse(
     await execNode(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       `
     const { execFileSync } = require("node:child_process");
@@ -2958,7 +3013,7 @@ async function gatewayCall(topology, method, params) {
 async function assertGatewayEffectiveDefaultModel(context, topology, expectedModel) {
   const actualModel = JSON.parse(
     await execNode(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       `
     (async () => {
@@ -2992,6 +3047,49 @@ function messageText(message) {
     .filter(({ type }) => type === "text")
     .map(({ text }) => text)
     .join("\n");
+}
+
+function assertNativeToolSucceeded(history, marker, expectedText) {
+  const historyJson = JSON.stringify(history);
+  assert.doesNotMatch(
+    historyJson,
+    /require_escalated/,
+    "native Codex execution must not request escalated execution",
+  );
+  assert.equal(
+    history.messages.some(({ role, stopReason }) => role === "assistant" && stopReason === "error"),
+    false,
+    "the native provider turn must not end in an assistant error",
+  );
+
+  const call = history.messages
+    .flatMap((message) => {
+      if (message.role !== "assistant" || !Array.isArray(message.content)) {
+        return [];
+      }
+      return message.content
+        .filter((block) => block?.type === "toolCall" && ["bash", "exec"].includes(block.name))
+        .map((block) => ({ message, block }));
+    })
+    .find(({ block }) => JSON.stringify(block.arguments ?? {}).includes(marker));
+  assert.ok(call, "chat.history must retain the native shell tool call for the probe");
+
+  const result = history.messages.find(
+    (message) =>
+      message.role === "toolResult" &&
+      (call.block.id === undefined || message.toolCallId === call.block.id) &&
+      ["bash", "exec"].includes(message.toolName) &&
+      messageText(message).includes(marker) &&
+      messageText(message).includes(expectedText),
+  );
+  assert.ok(result, "chat.history must retain the successful native shell tool result");
+  assert.notEqual(result.isError, true, "native shell tool result must not be marked as an error");
+  if (result.details?.exitCode !== undefined) {
+    assert.equal(result.details.exitCode, 0);
+  }
+  if (typeof result.details?.status === "string") {
+    assert.match(result.details.status, /completed|success/i);
+  }
 }
 
 async function assertConversation(topology, sessionKey, nonce) {
@@ -3048,7 +3146,7 @@ async function inspectGatewayPersistence(topology, imageDigest, sessionKey, sess
   // Read existing persisted state only. Missing/corrupt storage fails; the probe never creates it.
   return JSON.parse(
     await execNode(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       `
     const { DatabaseSync } = require("node:sqlite");
@@ -3179,7 +3277,7 @@ async function assertRetainedArtifact(
   // Mint a fresh ticket after each restart. The capability stays inside the Pod, out of kubectl args/logs.
   const downloaded = JSON.parse(
     await execNode(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       `
     const assert = require("node:assert/strict");
@@ -3283,12 +3381,12 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
     "pod",
     topology.gatewayPod.metadata.name,
     "--namespace",
-    topology.placement,
+    topology.gatewayPlacement,
     "--wait=true",
     "--timeout=120s",
   );
   topology.gatewayPod = await waitFor("a replacement gateway Pod with a new UID", async () =>
-    (await resources("pods", topology.placement)).find(
+    (await resources("pods", topology.gatewayPlacement)).find(
       (pod) =>
         pod.metadata.uid !== previousUid &&
         !pod.metadata.deletionTimestamp &&
@@ -3419,7 +3517,11 @@ async function inspectDedicatedAgentsInstructionsDiagnostics(
 ) {
   const [gatewayInstructions, harnessInstructions, history] = await Promise.all([
     promiseResult(() =>
-      inspectFileInPod(topology.placement, topology.gatewayPod.metadata.name, instructionsPath),
+      inspectFileInPod(
+        topology.gatewayPlacement,
+        topology.gatewayPod.metadata.name,
+        instructionsPath,
+      ),
     ),
     promiseResult(() =>
       inspectFileInPod(topology.placement, topology.harnessPod.metadata.name, instructionsPath),
@@ -3467,7 +3569,7 @@ async function requestDedicatedAgentTurn(topology, sessionKey, prompt) {
 
 async function requestFreshDedicatedHarnessTurn(topology) {
   return execNode(
-    topology.placement,
+    topology.gatewayPlacement,
     topology.gatewayPod.metadata.name,
     `
       const socket = new WebSocket(process.env.APP_SERVER_URL, {
@@ -3623,7 +3725,7 @@ async function assertDedicatedAgentsInstructionsInFreshSession(topology) {
 
 async function waitForReadyAgentPod(topology, revisionId, previousUid) {
   return waitFor(`dedicated Codex Pod for revision ${revisionId}`, async () => {
-    const ready = (await resources("pods", topology.placement)).find(
+    const ready = (await topologyPods(topology)).find(
       (pod) =>
         pod.metadata.uid !== previousUid &&
         pod.metadata.labels?.["openclaw.dev/workload-role"] === "agent" &&
@@ -3637,7 +3739,7 @@ async function waitForReadyAgentPod(topology, revisionId, previousUid) {
 
 async function waitForReadyGatewayPod(topology, revisionId, previousUid) {
   return waitFor(`embedded OpenClaw gateway Pod for revision ${revisionId}`, async () => {
-    const ready = (await resources("pods", topology.placement)).find(
+    const ready = (await resources("pods", topology.gatewayPlacement)).find(
       (pod) =>
         (previousUid === undefined || pod.metadata.uid !== previousUid) &&
         pod.metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
@@ -3701,18 +3803,33 @@ function assertRequiredSecretKeyRef(actual, expected, message) {
   assert.equal(optional ?? false, false, message);
 }
 
+async function assertModelRuntimeProjection(pod, storage) {
+  const ref = pod.spec.containers[0].env.find(({ name }) => name === "OPENAI_API_KEY")?.valueFrom
+    ?.secretKeyRef;
+  const agentId = pod.metadata.labels["openclaw.dev/agent"];
+  const revisionId = pod.metadata.labels["openclaw.dev/revision"];
+  assertRequiredSecretKeyRef(ref, {
+    name: `harness-secrets-${hash(agentId)}-${hash(revisionId)}`,
+    key: "OPENAI_API_KEY",
+  });
+  const [runtime, source] = await Promise.all([
+    resource("secret", ref.name, pod.metadata.namespace),
+    resource("secret", storage.backendRef.name, storage.backendRef.namespaceName),
+  ]);
+  assert.equal(
+    runtime.data[ref.key] === source.data[storage.backendRef.key],
+    true,
+    "the admitted model source must reach only its selected runtime projection",
+  );
+}
+
 async function assertOpenAiKeyProjectedFromSecret(topology, pod) {
   const storage = await storedSecret(
     topology.observerPool,
     topology.agent.namespaceId,
     topology.secretApi.model.id,
   );
-  const projection = pod.spec.containers[0].env.find(({ name }) => name === "OPENAI_API_KEY");
-  assertRequiredSecretKeyRef(
-    projection?.valueFrom?.secretKeyRef,
-    { name: storage.backendRef.name, key: storage.backendRef.key },
-    "OPENAI_API_KEY must remain projected from the valid Secret API backend",
-  );
+  await assertModelRuntimeProjection(pod, storage);
   const backend = await resource(
     "secret",
     storage.backendRef.name,
@@ -3785,7 +3902,9 @@ async function assertCrossNamespaceSecretBindingDenied(context, topology) {
   });
   assert.equal(namespace.status, 201, JSON.stringify(namespace.error));
   const placement = topology.kubernetesNamespaceName(namespace.data.id);
+  const gatewayTarget = kubernetesGatewayNamespaceName(namespace.data.id);
   context.after(async () => {
+    await kubectl("delete", "namespace", gatewayTarget, "--ignore-not-found=true", "--wait=true");
     await kubectl(
       "delete",
       "namespace",
@@ -3820,6 +3939,21 @@ async function assertCrossNamespaceSecretBindingDenied(context, topology) {
     "openclaw-production-secret-api",
     "--namespace",
     placement,
+    `--clusterrole=${topology.apiSecretRole}`,
+    `--serviceaccount=${topology.platformNamespace}:${topology.apiAccount}`,
+  );
+  await grantGatewayWorkerTarget(
+    gatewayTarget,
+    topology.controllerTenantRole,
+    topology.controllerAccount,
+    topology.platformNamespace,
+  );
+  await kubectl(
+    "create",
+    "rolebinding",
+    "canonical-secret-api",
+    "--namespace",
+    gatewayTarget,
     `--clusterrole=${topology.apiSecretRole}`,
     `--serviceaccount=${topology.platformNamespace}:${topology.apiAccount}`,
   );
@@ -4047,6 +4181,7 @@ async function assertSameNamespaceSecretSharing(context, topology) {
     topology.directory,
     topology.placement,
     agent.data.id,
+    { executionMode: "embedded" },
   );
   const deployed = await deployEmbeddedAgentAndWait(
     { ...topology, agent: agent.data },
@@ -4063,12 +4198,15 @@ async function assertSameNamespaceSecretSharing(context, topology) {
     gatewayPod: deployed.gatewayPod,
     gatewayPassword,
   };
-  let forwarding = await startPortForward(topology.placement, peerTopology.gatewayServiceName);
+  let forwarding = await startPortForward(
+    topology.gatewayPlacement,
+    peerTopology.gatewayServiceName,
+  );
   context.after(() => forwarding?.stop());
   peerTopology.gatewayUrl = forwarding.url;
   peerTopology.refreshGatewayUrl = async () => {
     await forwarding?.stop();
-    forwarding = await startPortForward(topology.placement, peerTopology.gatewayServiceName);
+    forwarding = await startPortForward(topology.gatewayPlacement, peerTopology.gatewayServiceName);
     return forwarding.url;
   };
 
@@ -4131,12 +4269,14 @@ async function assertSameNamespaceSecretSharing(context, topology) {
   );
   topology.secretApi.rotatedSharedProbeValue = rotatedSharedProbeValue;
   assert.equal(
-    (await resource("pod", topology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
+    (await resource("pod", topology.gatewayPod.metadata.name, topology.gatewayPlacement)).metadata
+      .uid,
     primaryPodUid,
     "updating a shared Secret must not restart the primary consumer",
   );
   assert.equal(
-    (await resource("pod", peerTopology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
+    (await resource("pod", peerTopology.gatewayPod.metadata.name, topology.gatewayPlacement))
+      .metadata.uid,
     peerPodUid,
     "updating a shared Secret must not restart the peer consumer",
   );
@@ -4276,18 +4416,12 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
   assert.equal(Object.hasOwn(modelStorage, "agentId"), false);
   assert.equal(Object.hasOwn(probeStorage, "agentId"), false);
 
-  const modelProjection = topology.gatewayPod.spec.containers[0].env.find(
-    ({ name }) => name === "OPENAI_API_KEY",
-  );
-  assertRequiredSecretKeyRef(modelProjection.valueFrom.secretKeyRef, {
-    name: modelStorage.backendRef.name,
-    key: modelStorage.backendRef.key,
-  });
+  await assertModelRuntimeProjection(topology.gatewayPod, modelStorage);
   assert.notEqual(modelStorage.backendRef.name, `${modelPrefix}-${hash(topology.agent.id)}`);
   await assertNoLegacyModelSecret(topology);
 
   const initialProbe = await inspectEnvironmentValue(
-    topology.placement,
+    topology.gatewayPlacement,
     topology.gatewayPod.metadata.name,
     secretRotationProbe,
     initialProbeValue,
@@ -4308,7 +4442,11 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
   );
   assert.equal(afterAgent.status, 200, JSON.stringify(afterAgent.error));
   assert.equal(afterAgent.data.activeRevisionId, topology.revision.id);
-  const samePod = await resource("pod", topology.gatewayPod.metadata.name, topology.placement);
+  const samePod = await resource(
+    "pod",
+    topology.gatewayPod.metadata.name,
+    topology.gatewayPlacement,
+  );
   assert.equal(samePod.metadata.uid, beforePodUid);
   const afterRevisions = await topology.request(
     "GET",
@@ -4322,7 +4460,7 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
   );
   assert.deepEqual(
     await inspectEnvironmentValue(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       secretRotationProbe,
       initialProbeValue,
@@ -4331,7 +4469,7 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
   );
   assert.deepEqual(
     await inspectEnvironmentValue(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       secretRotationProbe,
       rotatedProbeValue,
@@ -4345,14 +4483,14 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
     "pod",
     topology.gatewayPod.metadata.name,
     "--namespace",
-    topology.placement,
+    topology.gatewayPlacement,
     "--wait=true",
     "--timeout=120s",
   );
   topology.gatewayPod = await waitForReadyGatewayPod(topology, topology.revision.id, beforePodUid);
   assert.deepEqual(
     await inspectEnvironmentValue(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       secretRotationProbe,
       rotatedProbeValue,
@@ -4391,7 +4529,8 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
   assert.equal(rebound.status, 200, JSON.stringify(rebound.error));
   assert.equal(rebound.data.activeRevisionId, previousRevision.id);
   assert.equal(
-    (await resource("pod", topology.gatewayPod.metadata.name, topology.placement)).metadata.uid,
+    (await resource("pod", topology.gatewayPod.metadata.name, topology.gatewayPlacement)).metadata
+      .uid,
     topology.gatewayPod.metadata.uid,
     "draft binding changes cannot restart an active process",
   );
@@ -4431,7 +4570,7 @@ async function assertSecretApiRotationAndRedeploy(context, topology) {
   await assertActualModelTurn(topology);
   assert.deepEqual(
     await inspectEnvironmentValue(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       secretRotationProbe,
       rotatedProbeValue,
@@ -4494,7 +4633,11 @@ async function assertNativeReferenceNegativeControl(context, topology) {
   );
   assert.equal(active.status, 200);
   assert.equal(active.data.activeRevisionId, topology.revision.id);
-  const gateway = await resource("pod", topology.gatewayPod.metadata.name, topology.placement);
+  const gateway = await resource(
+    "pod",
+    topology.gatewayPod.metadata.name,
+    topology.gatewayPlacement,
+  );
   assert.equal(gateway.metadata.uid, topology.gatewayPod.metadata.uid);
   await assertOpenAiKeyProjectedFromSecret(topology, gateway);
   const restored = await topology.request(
@@ -4565,7 +4708,11 @@ async function assertLegacyModelSecretBindingDenied(topology) {
     revisionsBefore.data.map(({ id }) => id),
     "dedicated model Secret binding denial must happen before revision mutation",
   );
-  const gateway = await resource("pod", topology.gatewayPod.metadata.name, topology.placement);
+  const gateway = await resource(
+    "pod",
+    topology.gatewayPod.metadata.name,
+    topology.gatewayPlacement,
+  );
   const harness = await resource("pod", topology.harnessPod.metadata.name, topology.placement);
   assert.equal(gateway.metadata.uid, topology.gatewayPod.metadata.uid);
   assert.equal(harness.metadata.uid, topology.harnessPod.metadata.uid);
@@ -4596,27 +4743,85 @@ async function assertDedicatedWorkspaceRuntime(context, topology, claim, private
     "owner edits through Gateway must reach the Harness file",
   );
   assert.equal(
-    (await inspectFileInPod(topology.placement, gatewayPod, workspaceFromGateway)).exists,
+    (await inspectFileInPod(topology.gatewayPlacement, gatewayPod, workspaceFromGateway)).exists,
     false,
     "Gateway must not retain a local workspace copy",
   );
 
   // The expected content is absent from the prompt: a real tool read must supply it.
   await writeFileInPod(topology.placement, harnessPod, workspaceFromHarness, harnessContent);
-  await context.test("model reads the Harness-owned workspace file", async () => {
-    const response = await requestDedicatedAgentTurn(
-      topology,
-      `enterprise-workspace-${randomUUID()}`,
-      `Use your native Harness shell tool to read ${workspaceFromHarness} and return its entire contents. The file is local to your working environment; do not use Gateway network file-transfer tools or supply Gateway connection settings.`,
-    );
-    assert.ok(
-      response.includes(harnessContent),
-      `The model did not return the Harness file contents. Response: ${response.slice(0, 1500)}`,
-    );
+  await context.test("model reads and writes through the native sandbox", async () => {
+    const probeMarker = `SANDBOX-${randomUUID()}`;
+    const workspaceOutput = `/home/node/workspace/sandbox-${nonce}.txt`;
+    const outsideSentinel = `/home/node/codex-sandbox-outside-${nonce}.txt`;
+    const outsideContent = `outside-${randomBytes(24).toString("hex")}\n`;
+    const workspaceOutputContent = `${probeMarker}-workspace-write\n`;
+    await writeFileInPod(topology.placement, harnessPod, outsideSentinel, outsideContent);
+    try {
+      const script = [
+        "const fs=require('node:fs')",
+        `const source=${JSON.stringify(workspaceFromHarness)}`,
+        `const output=${JSON.stringify(workspaceOutput)}`,
+        `const outside=${JSON.stringify(outsideSentinel)}`,
+        `const marker=${JSON.stringify(probeMarker)}`,
+        `const outputContent=${JSON.stringify(workspaceOutputContent)}`,
+        "const content=fs.readFileSync(source,'utf8')",
+        "fs.writeFileSync(output,outputContent)",
+        "let denied='NO_ERROR'",
+        "try{fs.writeFileSync(outside,'escaped\\n')}catch(error){denied=error.code||error.name}",
+        "if(denied==='NO_ERROR'){console.error('outside workspace write unexpectedly succeeded');process.exit(70)}",
+        "process.stdout.write('PROBE '+marker+'\\nREAD:'+content+'\\nWRITE:'+outputContent+'DENIED:'+denied+'\\n')",
+      ].join(";");
+      const scriptArgument = `'${script.replaceAll("'", "'\"'\"'")}'`;
+      const command = `timeout 60s node -e ${scriptArgument}`;
+      const sandboxSession = `enterprise-workspace-sandbox-${randomUUID()}`;
+      const response = await requestDedicatedAgentTurn(
+        topology,
+        sandboxSession,
+        `Use your native Harness shell tool to run exactly this one command from /home/node/workspace, then return the command output without adding another command:\n${command}\nThe source file is local to your working environment. Do not use Gateway network file-transfer tools, do not supply Gateway connection settings, and do not request escalated execution.`,
+      );
+      assert.ok(
+        response.includes(harnessContent),
+        `The model did not return the Harness file contents. Response: ${response.slice(0, 1500)}`,
+      );
+      assert.ok(response.includes(probeMarker));
+      assert.ok(response.includes("DENIED:"));
+      const history = await gatewayCall(topology, "chat.history", {
+        sessionKey: sandboxSession,
+        limit: 100,
+      });
+      assertNativeToolSucceeded(history, probeMarker, harnessContent);
+      assert.equal(
+        await readFileInPod(topology.placement, harnessPod, workspaceOutput),
+        workspaceOutputContent,
+        "native workspace-write execution must create the expected workspace bytes",
+      );
+      assert.equal(
+        await readFileInPod(topology.placement, harnessPod, outsideSentinel),
+        outsideContent,
+        "outside-workspace sentinel must remain unchanged after the sandboxed command",
+      );
+    } finally {
+      await execNode(
+        topology.placement,
+        harnessPod,
+        `
+          const { rmSync } = require("node:fs");
+          for (const file of ${JSON.stringify([workspaceOutput, outsideSentinel])}) {
+            rmSync(file, { force: true });
+          }
+        `,
+      );
+    }
   });
 
   const privateSession = `/home/node/.openclaw/agents/main/sessions/gateway-${nonce}.json`;
-  await writeFileInPod(topology.placement, gatewayPod, privateSession, JSON.stringify({ nonce }));
+  await writeFileInPod(
+    topology.gatewayPlacement,
+    gatewayPod,
+    privateSession,
+    JSON.stringify({ nonce }),
+  );
   assert.equal(
     (await inspectFileInPod(topology.placement, harnessPod, privateSession)).exists,
     false,
@@ -4630,7 +4835,7 @@ async function assertDedicatedWorkspaceRuntime(context, topology, claim, private
       'process.stdout.write(String(require("node:fs").existsSync("/home/node/.openclaw/openclaw.json")))',
     ),
     execNode(
-      topology.placement,
+      topology.gatewayPlacement,
       gatewayPod,
       'const fs=require("node:fs");process.stdout.write(JSON.stringify({auth:fs.existsSync("/home/node/.codex/auth.json"),config:fs.existsSync("/home/node/.codex/config.toml")}))',
     ),
@@ -4698,7 +4903,7 @@ async function assertDedicatedWorkspaceRuntime(context, topology, claim, private
       `# ${memoryKey}\n\nThe confirmation for ${memoryKey} is ${memoryValue}.\n`,
     );
     assert.equal(
-      (await inspectFileInPod(topology.placement, gatewayPod, memoryFile)).exists,
+      (await inspectFileInPod(topology.gatewayPlacement, gatewayPod, memoryFile)).exists,
       false,
     );
     const memorySession = `agent:main:memory-${randomUUID()}`;
@@ -4799,7 +5004,10 @@ async function assertDedicatedWorkspaceRuntime(context, topology, claim, private
       ),
       "a successful native tool result must include actual cowsay output",
     );
-    assert.equal((await inspectFileInPod(topology.placement, gatewayPod, skillFile)).exists, false);
+    assert.equal(
+      (await inspectFileInPod(topology.gatewayPlacement, gatewayPod, skillFile)).exists,
+      false,
+    );
     process.stderr.write(
       "k3d dedicated: owner Skill installation and real Harness command execution passed.\n",
     );
@@ -4865,7 +5073,7 @@ async function assertDedicatedWorkspaceRuntime(context, topology, claim, private
     "Agent revisions must reuse the same PVC",
   );
   assert.equal(
-    (await resource("persistentvolumeclaim", privateClaim.metadata.name, topology.placement))
+    (await resource("persistentvolumeclaim", privateClaim.metadata.name, topology.gatewayPlacement))
       .metadata.uid,
     privateClaim.metadata.uid,
     "replacing an Agent revision must preserve the exact gateway-private claim",
@@ -4970,6 +5178,7 @@ export {
   resource,
   resources,
   secretRotationProbe,
+  storedSecret,
   slackApi,
   waitFor,
   waitForReadyGatewayPod,

@@ -9,6 +9,7 @@ const clientKeys = ["gatewayOrigin", "gitRemote", "gitUsername", "canonicalApiHo
 const limits = { bearer: 256, "client.json": 16384, gitconfig: 16384, "gh/hosts.yml": 16384, "gh/config.yml": 16384, "ca.pem": 65536 };
 const runtimeRoot = "/run/oce/repository-credentials/sessions/";
 const uid = process.getuid();
+let normalizePushRefAllowlist;
 
 function requireValid(condition) {
   if (!condition) throw new Error("invalid-repository-material");
@@ -46,7 +47,9 @@ function optionalMetadata(name) {
 }
 
 function validateClient(client) {
-  exactKeys(client, clientKeys);
+  const hasPolicy = client !== null && typeof client === "object" && Object.hasOwn(client, "pushRefAllowlist");
+  exactKeys(client, [...clientKeys, ...(hasPolicy ? ["pushRefAllowlist"] : [])]);
+  if (hasPolicy) normalizePushRefAllowlist(client.pushRefAllowlist);
   requireValid(clientKeys.every((key) => typeof client[key] === "string" &&
     Buffer.byteLength(client[key], "utf8") <= 4096 && !/[\x00-\x1f\x7f]/.test(client[key])));
   const origin = new URL(client.gatewayOrigin);
@@ -146,7 +149,8 @@ function validateProjection(sourceRoot, binding) {
   exactKeys(client, ["sessionId", "deadlineWallMs", "client", "hasPublicCa"]);
   validateClient(client.client);
   requireValid(client.sessionId === binding.sessionId && client.deadlineWallMs === binding.deadlineWallMs &&
-    client.hasPublicCa === hasPublicCa && clientKeys.every((key) => client.client[key] === binding.client[key]));
+    client.hasPublicCa === hasPublicCa && clientKeys.every((key) => client.client[key] === binding.client[key]) &&
+    JSON.stringify(client.client.pushRefAllowlist) === JSON.stringify(binding.client.pushRefAllowlist));
   requireValid(files.gitconfig.text === "[credential]\n\thelper =\n\tuseHttpPath = true\n[http]\n\tfollowRedirects = false\n\tsslVerify = true\n");
   requireValid(files["gh/config.yml"].text === "version: 1\nprompt: disabled\ngit_protocol: https\n");
   requireValid(files["gh/hosts.yml"].text === JSON.stringify(binding.client.canonicalApiHost) + ":\n  api_host: " +
@@ -197,6 +201,9 @@ function writePrivate(filename, contents) {
 }
 
 async function materialize(descriptor) {
+  ({ normalizePushRefAllowlist } = await import(
+    "/opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/native-git.js"
+  ));
   validateDescriptor(descriptor);
   const { sourceRoot, targetRoot, manifest } = descriptor;
   requireDirectoriesWithoutSymlinks(sourceRoot);
@@ -222,10 +229,6 @@ async function materialize(descriptor) {
       for (const [name, file] of Object.entries(files)) writePrivate(path.join(directory, name), file.contents);
     }
     writePrivate(path.join(staging, "manifest.json"), JSON.stringify(manifest) + "\n");
-    const { prepareNativeGitConfiguration } = await import(
-      "/opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/native-git.js"
-    );
-    await prepareNativeGitConfiguration(staging, "/run/oce/repository-credentials");
     requireValid(manifest.bindings.every((binding) => binding.deadlineWallMs > Date.now()));
     requireDirectoriesWithoutSymlinks(parent);
     const parentAfter = metadata(parent);
@@ -246,6 +249,36 @@ Promise.resolve().then(async () => {
   await materialize(JSON.parse(process.argv[1]));
 }).catch(() => {
   process.stderr.write("Repository credential material initialization failed.\n");
+  process.exitCode = 1;
+});
+`;
+
+/** Runs after the private subPath exists, without the fsGroup-writable volume root. */
+export const REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT = String.raw`
+"use strict";
+const fs = require("node:fs/promises");
+const path = require("node:path");
+Promise.resolve().then(async () => {
+  process.umask(0o077);
+  const root = process.argv[1];
+  const { readPrivateFile } = await import(
+    "/opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/private-files.js"
+  );
+  const { prepareNativeGitConfiguration } = await import(
+    "/opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/native-git.js"
+  );
+  const config = path.join(root, "gitconfig");
+  // An interrupted init may have left a partial file. Only this init can write
+  // the private mount; validate custody before removing its previous output.
+  try {
+    await readPrivateFile(config, 256 * 1024);
+    await fs.unlink(config);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  await prepareNativeGitConfiguration(root, "/run/oce/repository-credentials");
+}).catch(() => {
+  process.stderr.write("Repository native Git configuration initialization failed.\n");
   process.exitCode = 1;
 });
 `;

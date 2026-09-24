@@ -43,6 +43,12 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Plugin policy enforcement](37-plugin-policy-enforcement.md) — Proposed for alignment;
+revises the earlier plugin policy proposals with nested defaults and tool overrides,
+Driver extensions, and admission-to-runtime enforcement. Draft implementation
+exists; enforcement delivery awaits alignment. Catalog discovery proceeds in the
+separate Create Agent workstream.
+
 [Coordinated production image upgrades](36-coordinated-image-upgrade.md) — Proposed;
 replace the controller and runtime image pair, then redeploy the baseline running
 Agent fleet concurrently through OCC.

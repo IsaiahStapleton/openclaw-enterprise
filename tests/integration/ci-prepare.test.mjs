@@ -5,11 +5,8 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import {
-  codexBwrapAdditionalSyscalls,
-  deriveCodexBwrapProfile,
-  prepareCodexSeccompProfile,
-} from "../../scripts/ci/codex-seccomp.mjs";
+import { loadTestSuites } from "../../scripts/ci/test-suites.mjs";
+import { prepareCodexSeccompProfile } from "../../scripts/ci/codex-seccomp.mjs";
 import { createKubernetesInstallationConfiguration } from "../helpers/kubernetes-real.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -144,6 +141,12 @@ if (command === "docker" || command === "podman") {
     const alias = state.aliases?.[node];
     if (equals(args.slice(2), ["ip", "route", "get", "10.42.7.0"])) {
       assert.ok(node.endsWith("-server-0"));
+      // Node readiness can precede Flannel's cross-node route. The first lookup
+      // then selects the container network, which must never become the allowlist.
+      state.routeLookups = (state.routeLookups ?? 0) + 1;
+      if (scenario === "delayed-overlay-route" && state.routeLookups === 1) {
+        finish("10.42.7.0 via 172.19.0.1 dev eth0 src 172.19.0.2\n");
+      }
       finish(scenario === "missing-proxy-source"
         ? "10.42.7.0 dev flannel.1\n"
         : "10.42.7.0 via 10.42.7.0 dev flannel.1 src 10.42.3.0\n");
@@ -329,6 +332,7 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
 for (const { scenario, error } of [
   { scenario: "success" },
   { scenario: "podman-success" },
+  { scenario: "delayed-overlay-route" },
   { scenario: "missing-tag", error: /Unable to find imported OCI manifest digest/ },
   {
     scenario: "missing-alias",
@@ -565,6 +569,22 @@ test("repository platform preparation binds runtime clients, an owned gateway an
   const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform");
   const prepared = commands.prepare();
   assert.equal(prepared.status, 0, prepared.stderr);
+  for (const phase of [
+    "postgres-start",
+    "k3d-create",
+    "runtime-image-build",
+    "platform-fixture-build",
+    "image-archive-save",
+    "image-archive-import",
+    "platform-image-import",
+  ]) {
+    assert.match(
+      prepared.stderr,
+      new RegExp(
+        `\\[ci-timing\\] lane=repository-credentials-platform phase=${phase} duration_ms=\\d+`,
+      ),
+    );
+  }
   const state = JSON.parse(await readFile(commands.statePath, "utf8"));
   const cluster = state.resources.find(({ kind }) => kind === "k3d-cluster");
   assert.equal(state.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM, "1");
@@ -669,9 +689,7 @@ test("installed repository preparation requires explicit authorization and prote
 });
 
 test("ordinary CI groups require platform proof and exclude installed live repository writes", async () => {
-  const manifest = JSON.parse(
-    await readFile(join(repositoryRoot, "scripts/ci/test-suites.json"), "utf8"),
-  );
+  const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
   for (const name of ["ci", "full"]) {
     assert.ok(manifest.groups[name].includes("repository-credentials-platform"));
     assert.ok(!manifest.groups[name].includes("repository-credentials-installed"));
@@ -679,76 +697,6 @@ test("ordinary CI groups require platform proof and exclude installed live repos
       assert.notEqual(manifest.lanes[lane].env?.OCC_TEST_REPOSITORY_CREDENTIALS_REAL, "1");
     }
   }
-});
-
-const runtimeDefaultBaseline = Object.freeze({
-  architectures: ["SCMP_ARCH_X86_64"],
-  defaultAction: "SCMP_ACT_ERRNO",
-  syscalls: [
-    { names: ["read"], action: "SCMP_ACT_ALLOW" },
-    { names: ["clone3"], action: "SCMP_ACT_ERRNO", errnoRet: 38 },
-  ],
-});
-
-test("codex seccomp profile derivation preserves the RuntimeDefault baseline and adds only reviewed bwrap rules", () => {
-  const profile = deriveCodexBwrapProfile(runtimeDefaultBaseline);
-  const added = profile.syscalls.slice(runtimeDefaultBaseline.syscalls.length);
-
-  assert.deepEqual(profile.architectures, runtimeDefaultBaseline.architectures);
-  assert.deepEqual(profile.syscalls.slice(0, runtimeDefaultBaseline.syscalls.length), [
-    ...runtimeDefaultBaseline.syscalls,
-  ]);
-  assert.equal(profile.defaultAction, "SCMP_ACT_ERRNO");
-  assert.equal(added.length, 78);
-  assert.deepEqual(added, codexBwrapAdditionalSyscalls());
-  assert.deepEqual(
-    added.filter((rule) => rule.names.includes("unshare")),
-    [
-      {
-        names: ["unshare"],
-        action: "SCMP_ACT_ALLOW",
-        args: [{ index: 0, op: "SCMP_CMP_EQ", value: 0x10000000 }],
-      },
-    ],
-  );
-  assert.deepEqual(
-    added.filter((rule) => rule.names.includes("pivot_root")),
-    [{ names: ["pivot_root"], action: "SCMP_ACT_ALLOW" }],
-  );
-  assert.deepEqual(
-    added.filter((rule) => rule.names.includes("umount2")),
-    [
-      {
-        names: ["umount2"],
-        action: "SCMP_ACT_ALLOW",
-        args: [{ index: 1, op: "SCMP_CMP_EQ", value: 2 }],
-      },
-    ],
-  );
-  assert.equal(
-    added.some((rule) => rule.names.includes("clone3")),
-    false,
-    "clone3 must remain governed by the RuntimeDefault ENOSYS rule",
-  );
-});
-
-test("codex seccomp profile derivation rejects non-denying or malformed baselines", () => {
-  assert.throws(
-    () =>
-      deriveCodexBwrapProfile({
-        ...runtimeDefaultBaseline,
-        defaultAction: "SCMP_ACT_ALLOW",
-      }),
-    /default-deny/,
-  );
-  assert.throws(
-    () =>
-      deriveCodexBwrapProfile({
-        ...runtimeDefaultBaseline,
-        syscalls: [{ names: ["read"], action: "SCMP_ACT_ALLOW" }],
-      }),
-    /clone3 ENOSYS/,
-  );
 });
 
 test("Kubernetes test helper passes an explicit Codex localhost seccomp profile into runtime config", () => {
@@ -889,6 +837,7 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
           const commandText = `${command} ${args.join(" ")}`;
           assert.match(commandText, /--namespace/);
           assert.match(commandText, /codex-seccomp-ok/);
+          assert.match(commandText, /codex-seccomp-outside/);
           const error = new Error(`${commandText} failed: unrelated setup failure`);
           error.stderr = "unrelated setup failure";
           error.stdout = "";

@@ -23,6 +23,11 @@ export const AgentId = Type.String({ pattern: `^agt_${UUID_V4}$` });
 export const RevisionId = Type.String({ pattern: `^rev_${UUID_V4}$` });
 export const AuditId = Type.String({ pattern: `^aud_${UUID_V4}$` });
 export const RequestId = Type.String({ pattern: `^req_${UUID_V4}$` });
+export const AgentProvisioningWorkId = Type.String({
+  minLength: 1,
+  maxLength: 200,
+  pattern: "^[A-Za-z0-9._~:@/-]{1,200}$",
+});
 export const ProviderId = Type.String({
   minLength: 1,
   maxLength: 200,
@@ -64,6 +69,11 @@ export const NamespaceParams = Type.Object(
 
 export const AgentParams = Type.Object(
   { namespaceId: NamespaceId, agentId: AgentId },
+  { additionalProperties: false },
+);
+
+export const AgentProvisioningParams = Type.Object(
+  { namespaceId: NamespaceId, workId: AgentProvisioningWorkId },
   { additionalProperties: false },
 );
 
@@ -157,6 +167,10 @@ export const HarnessAuthBindingSchema = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object(
+    { method: Type.Literal("codex_pat"), source: SecretReference },
+    { additionalProperties: false },
+  ),
+  Type.Object(
     { method: Type.Literal("chatgpt_service_account"), serviceAccountId: ServiceAccountId },
     { additionalProperties: false },
   ),
@@ -189,7 +203,7 @@ export const SecretBindings = Type.Record(
   {
     maxProperties: 64,
     description:
-      'Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.',
+      'Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `ANTHROPIC_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth.',
   },
 );
 
@@ -212,6 +226,38 @@ export const UpdateSecretBody = Type.Object(
 );
 
 export const AgentRuntimeCredentialsBody = Type.Object({}, { additionalProperties: false });
+
+export const DiscoverAgentModelsBody = Type.Object(
+  {
+    provider: Type.Union([Type.Literal("openai"), Type.Literal("anthropic")]),
+    authMethod: Type.Union([Type.Literal("api_key"), Type.Literal("codex_pat")]),
+    apiKey: Type.String({ minLength: 1, maxLength: 8192, pattern: "\\S", writeOnly: true }),
+  },
+  { additionalProperties: false },
+);
+
+const PluginDiscoveryAccessToken = Type.String({
+  minLength: 1,
+  maxLength: 16384,
+  pattern: "\\S",
+  writeOnly: true,
+});
+
+export const DiscoverAgentPluginsBody = Type.Object(
+  {
+    accessToken: PluginDiscoveryAccessToken,
+    cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+  },
+  { additionalProperties: false },
+);
+
+export const DiscoverAgentPluginDetailsBody = Type.Object(
+  {
+    accessToken: PluginDiscoveryAccessToken,
+    pluginId: Type.String({ minLength: 1, maxLength: 256 }),
+  },
+  { additionalProperties: false },
+);
 
 export const PermissionActionSchema = Type.Union([
   Type.Literal("create"),
@@ -372,6 +418,31 @@ export const CreateAgentBody = Type.Object(
   { additionalProperties: false },
 );
 
+export const ProvisionAgentConfigurationBody = Type.Object(
+  {
+    kind: ConfigurationKindSchema,
+    values: ConfigurationValues,
+    secretBindings: Type.Optional(SecretBindings),
+  },
+  { additionalProperties: false },
+);
+
+export const ProvisionAgentBody = Type.Object(
+  {
+    requestId: RequestId,
+    initialWorkspaceFiles: Type.Optional(CreateAgentBody.properties.initialWorkspaceFiles),
+    workspaceDefaultsId: Type.Optional(CreateAgentBody.properties.workspaceDefaultsId),
+    name: Name,
+    configuration: ProvisionAgentConfigurationBody,
+    providerId: Type.Optional(Type.Union([ProviderId, Type.Null()])),
+    harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
+    executionMode: Type.Optional(HarnessExecutionModeSchema),
+    plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const UpdateAgentBody = Type.Object(
   {
     configurationId: ConfigurationId,
@@ -396,16 +467,12 @@ export const UpdateWorkspaceFileBody = Type.Object(
   { additionalProperties: false },
 );
 
-export const PluginApprovalModeSchema = Type.Union([
-  Type.Literal("always"),
-  Type.Literal("never"),
-  Type.Literal("prompt"),
-  Type.Literal("auto"),
-]);
+export const PluginReviewerSchema = Type.Union([Type.Literal("human"), Type.Literal("auto")]);
 
-export const PluginApprovalsReviewerSchema = Type.Union([
-  Type.Literal("user"),
-  Type.Literal("auto_review"),
+export const PluginApprovalModeSchema = Type.Union([
+  Type.Literal("native"),
+  Type.Literal("prompt"),
+  Type.Literal("approve"),
 ]);
 
 export const ERROR_DETAIL_CODES = Object.freeze([
@@ -435,6 +502,15 @@ export const ERROR_CODES = Object.freeze([
   "NOT_IMPLEMENTED",
   "INTERNAL_ERROR",
   "DEPENDENCY_UNAVAILABLE",
+  "REPOSITORY_OPTIONS_UNAVAILABLE",
+  "MODEL_DISCOVERY_CREDENTIALS_REJECTED",
+  "MODEL_DISCOVERY_RATE_LIMITED",
+  "MODEL_DISCOVERY_UNAVAILABLE",
+  "MODEL_DISCOVERY_INVALID_RESPONSE",
+  "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED",
+  "PLUGIN_DISCOVERY_RATE_LIMITED",
+  "PLUGIN_DISCOVERY_UNAVAILABLE",
+  "PLUGIN_DISCOVERY_INVALID_RESPONSE",
 ] as const);
 
 export const ErrorDetail = Type.Object(
@@ -477,6 +553,18 @@ export const ErrorResponse = Type.Object(
           Type.Literal("NOT_IMPLEMENTED"),
           Type.Literal("INTERNAL_ERROR"),
           Type.Literal("DEPENDENCY_UNAVAILABLE"),
+          Type.Literal("REPOSITORY_OPTIONS_UNAVAILABLE", {
+            description:
+              "Only repository-option discovery is unavailable after Agent create authorization. An Agent without repository bindings may be submitted and is authorized again. Other dependency failures do not carry this meaning.",
+          }),
+          Type.Literal("MODEL_DISCOVERY_CREDENTIALS_REJECTED"),
+          Type.Literal("MODEL_DISCOVERY_RATE_LIMITED"),
+          Type.Literal("MODEL_DISCOVERY_UNAVAILABLE"),
+          Type.Literal("MODEL_DISCOVERY_INVALID_RESPONSE"),
+          Type.Literal("PLUGIN_DISCOVERY_CREDENTIALS_REJECTED"),
+          Type.Literal("PLUGIN_DISCOVERY_RATE_LIMITED"),
+          Type.Literal("PLUGIN_DISCOVERY_UNAVAILABLE"),
+          Type.Literal("PLUGIN_DISCOVERY_INVALID_RESPONSE"),
         ]),
         message: Type.String({ minLength: 1, maxLength: 256 }),
         details: Type.Optional(Type.Array(ErrorDetail, { maxItems: 32 })),
@@ -533,6 +621,7 @@ export type UpdateServiceAccountCredentialBody = Type.Static<
   typeof UpdateServiceAccountCredentialBody
 >;
 export type CreateAgentBody = Type.Static<typeof CreateAgentBody>;
+export type ProvisionAgentBody = Type.Static<typeof ProvisionAgentBody>;
 export type UpdateAgentBody = Type.Static<typeof UpdateAgentBody>;
 export type UpdateWorkspaceFileBody = Type.Static<typeof UpdateWorkspaceFileBody>;
 export type ErrorDetail = Type.Static<typeof ErrorDetail>;
@@ -540,8 +629,12 @@ export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 export type ErrorDetailCode = (typeof ERROR_DETAIL_CODES)[number];
 
-export const PresetVariableSchema = Type.Union(
-  (["string", "number", "boolean"] as const).map((type) =>
+export const PresetVariableSchema = Type.Union([
+  Type.Object(
+    { type: Type.Literal("password"), description: Type.Optional(Type.String()) },
+    { additionalProperties: false },
+  ),
+  ...(["string", "number", "boolean"] as const).map((type) =>
     Type.Object(
       {
         type: Type.Literal(type),
@@ -553,7 +646,7 @@ export const PresetVariableSchema = Type.Union(
       { additionalProperties: false },
     ),
   ),
-);
+]);
 
 export const PresetTemplateSchema = Type.Object(
   {
@@ -562,12 +655,15 @@ export const PresetTemplateSchema = Type.Object(
     ),
     agent: Type.Optional(
       Type.Object(
-        Object.fromEntries(
-          ["name", "executionMode", "providerId", "harnessAuth", "plugins"].map((key) => [
-            key,
-            Type.Optional(Type.Ref("SafeJsonValue")),
-          ]),
-        ),
+        {
+          ...Object.fromEntries(
+            ["name", "executionMode", "providerId", "harnessAuth", "plugins"].map((key) => [
+              key,
+              Type.Optional(Type.Ref("SafeJsonValue")),
+            ]),
+          ),
+          initialWorkspaceFiles: Type.Optional(CreateAgentBody.properties.initialWorkspaceFiles),
+        },
         { additionalProperties: false },
       ),
     ),

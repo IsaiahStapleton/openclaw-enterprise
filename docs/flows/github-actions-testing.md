@@ -1,7 +1,7 @@
 ---
 created: 2026-09-04
-updated: 2026-09-23
-last_updated_session: codex/01a0ccf5-96e4-7541-9845-c9a6443fa7b2
+updated: 2026-09-24
+last_updated_session: codex/01a0d502-6efc-7063-a88c-4f1739da163c
 ---
 
 # GitHub Actions testing flow
@@ -49,8 +49,15 @@ graph TD
 
 ### 1. Select one source revision and coverage group
 
-`.github/workflows/ci.yml:jobs`, `.github/workflows/full-integration.yml:jobs`, and
-`scripts/ci/full-integration-preflight.mjs:validateFullIntegrationPreflight`
+`.github/workflows/ci.yml:jobs`, `.github/workflows/full-integration.yml:jobs`,
+`scripts/ci/full-integration-preflight.mjs:validateFullIntegrationPreflight`, and
+`scripts/ci/test-suites.mjs:loadTestSuites`
+
+The suite index, `scripts/ci/test-suites.json`, holds ordered lane references and
+coverage groups. `loadTestSuites` loads each referenced
+`scripts/ci/test-suites/<lane>.json` into the shared suite map. Each lane file owns
+its test inventory, environment, required inputs, and preparation settings. The
+runner and preparation tools consume the assembled map.
 
 The PR workflow uses the event checkout and supplies no external service credentials. Suite Audit and all ten lanes start independently on ephemeral runners. Kubernetes fixture lanes use `ubuntu-22.04` for bridge netfilter support; other lanes and the audit use `blacksmith-8vcpu-ubuntu-2404`. Its aggregate uses `ubuntu-22.04` and requires a successful audit plus `checks-baseline`, `postgres`, `postgres-application`, `images-packaging`, `k3d-fixture-configuration`, `k3d-fixture-state`, `k3d-fixture-plugins`, `logging-collector`, `repository-credentials-container`, and `repository-credentials-platform`. A failed audit still fails CI Required even when the lanes pass. Full Integration checks configured environment protection and checks out the immutable event SHA. It admits `refs/heads/main` for every lane. Only `k3d-model` may use another branch: preflight requires an exact branch rule in `integration-model`, and GitHub still requires reviewer approval with self-review prevention. Wildcards, tags, and other non-main lanes are rejected. The administrator removes the temporary branch rule after verification. A manual dispatch selects its requested lane or `all`; pushes and merges do not start this workflow. Manual runs share one concurrency group and do not cancel an in-progress run. The provider environment must allow exactly the `main` branch and needs no per-run reviewer approval. Other credentialed environments still require reviewers with self-review prevention. No PR event enters this credentialed workflow. A targeted integration run has a narrower claim than a full inventory run.
 
@@ -67,6 +74,13 @@ The provider job selects the shared `blacksmith-8vcpu-ubuntu-2404` runner for di
 `scripts/ci/prepare.mjs:main`
 
 [CI resource preparation](github-actions-testing/preparation.md) traces tool setup, image and cluster preparation, protected credentials, and resource ownership. Continue below when preparation has produced the lane state.
+
+Dedicated Codex preparation and the operator's offline profile generator share
+`scripts/lib/codex-seccomp-profile.mjs:deriveCodexBwrapProfile`. Preparation
+requires an actual workspace write and denied write to a container-writable
+outside path before publishing the selected Localhost profile to the live suite.
+Production node provisioning remains outside CI ownership; see
+[Codex sandbox setup](../guides/deploy/codex-sandbox.md).
 
 ### 3. Execute and account for actual cases
 
@@ -111,6 +125,10 @@ The aggregate runs after success or failure and checks expected job outcomes plu
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 13:09: Document the shared offline seccomp generator and meaningful outside-workspace denial probe in the accompanying changes. (01a0d502-6efc-7063-a88c-4f1739da163c - b4b6a0e0d8700930f21d58b3724c055f8249c486)
+
+- 2026-09-23 23:07: Document lane-owned suite definitions and the shared loader; retain workflow selection, preparation, and result accounting. (01a0d075-a358-7620-8c16-fd4290acddf1 - 4df9f9800836dc1c2b57afd5f8af4d91f55088d5)
 
 - 2026-09-23 06:35: Start the audit and required lanes independently on the existing ephemeral Blacksmith pool; split PostgreSQL and Kubernetes fixtures across owned runners and retain the final coverage gate. (01a0ccf5-96e4-7541-9845-c9a6443fa7b2 - 3ac9d07a4d7ede8c4e1c010f598ef67673f97b74)
 

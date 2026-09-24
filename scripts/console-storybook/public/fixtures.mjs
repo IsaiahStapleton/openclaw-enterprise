@@ -1,7 +1,25 @@
+import standardCodexPreset from "/console/standard-codex-preset.mjs";
+import standardOpenclawPreset from "/console/standard-openclaw-preset.mjs";
+import devdayPreset from "/console/devday-preset.mjs";
+import devdayQaPreset from "/console/devday-qa-preset.mjs";
+import devdayOncallPreset from "/console/devday-oncall-preset.mjs";
+
 const createdAt = "2026-09-01T12:00:00.000Z";
 const namespaceId = "ns_00000000-0000-4000-8000-000000000001";
 const secretRef = (id) => ({ kind: "secret", namespaceId, id });
 const auth = { method: "api_key", source: secretRef("sec_demo_model") };
+
+function slackChannels(scenario) {
+  if (scenario.slackChannels !== undefined) {
+    return structuredClone(scenario.slackChannels);
+  }
+  return {
+    CDEMO123: {
+      requireMention: true,
+      users: scenario.slackAllowEveryone ? ["*"] : ["UDEMO123"],
+    },
+  };
+}
 
 function configurationValues(scenario) {
   const values = {
@@ -18,7 +36,7 @@ function configurationValues(scenario) {
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
       allowFrom: scenario.slackPolicy === "open" ? ["*"] : ["UDEMO123"],
-      channels: { CDEMO123: { requireMention: true, users: ["UDEMO123"] } },
+      channels: slackChannels(scenario),
     };
   }
   return values;
@@ -36,6 +54,7 @@ export function installFixture(scenario, evidence) {
   const agents = new Map();
   const revisions = new Map();
   const deployments = new Map();
+  const provisioning = new Map();
   const credentials = new Map();
   const files = new Map();
   const secrets = new Map();
@@ -64,6 +83,7 @@ export function installFixture(scenario, evidence) {
     secretMetadata("sec_demo_slack_app_token", "Slack app token (simulated)"),
     secretMetadata("sec_demo_slack_bot_token", "Slack bot token (simulated)"),
     secretMetadata("sec_demo_slack_backup_token", "Slack backup token (simulated)"),
+    ...(scenario.extraSecrets ?? []).map((secret) => secretMetadata(secret.id, secret.name)),
   ]) {
     secrets.set(secret.id, secret);
   }
@@ -109,7 +129,7 @@ export function installFixture(scenario, evidence) {
   const agent = {
     id: "agt_00000000-0000-4000-8000-000000000001",
     namespaceId,
-    name: "Research assistant",
+    name: scenario.agentName ?? "Research assistant",
     status: scenario.deleting ? "deleting" : "active",
     desiredRuntimeState: scenario.stopped ? "stopped" : scenario.deployed ? "running" : "stopped",
     configurationId: config.id,
@@ -118,6 +138,9 @@ export function installFixture(scenario, evidence) {
     servicePrincipalId: "identity_demo_agent",
     createdAt,
     activeRevisionId: scenario.deployed ? "rev_00000000-0000-4000-8000-000000000001" : null,
+    ...(scenario.repositoryBindings
+      ? { repositoryBindings: structuredClone(scenario.repositoryBindings) }
+      : {}),
   };
   agents.set(agent.id, agent);
   credentials.set(agent.id, { transportConfigured: scenario.transport !== false });
@@ -138,6 +161,23 @@ export function installFixture(scenario, evidence) {
       harness: { id: "codex", version: "demo", mode: owner.executionMode },
       compute: { id: "kubernetes-demo", implementation: "kubernetes" },
       servicePrincipalId: owner.servicePrincipalId,
+      ...(owner.repositoryBindings?.length
+        ? {
+            repositoryCredentials: {
+              driver: { id: "github-demo", implementation: "github" },
+              deadlineWallMs: Date.parse(createdAt) + 3600000,
+              bindings: owner.repositoryBindings.map((binding) => ({
+                ...binding,
+                providerId: "github-demo",
+                grant: {
+                  providerInstanceId: "github-demo",
+                  repositoryId: `demo-${binding.repositoryRef}`,
+                  grantId: `demo-${binding.repositoryRef}-${binding.profile}`,
+                },
+              })),
+            },
+          }
+        : {}),
     };
   }
   if (scenario.deployed) {
@@ -177,7 +217,7 @@ export function installFixture(scenario, evidence) {
     });
   }
   const preset = {
-    id: "pre_00000000-0000-4000-8000-000000000001",
+    id: scenario.devdayPreset ? "pre_devday_codex" : "pre_00000000-0000-4000-8000-000000000001",
     namespaceId,
     name: "Research assistant",
     template: {
@@ -189,18 +229,57 @@ export function installFixture(scenario, evidence) {
           description: "Model reference copied into the draft.",
         },
       },
-      agent: { name: "{{ vars.name }}", executionMode: "dedicated", harnessAuth: auth },
+      agent: {
+        name: "{{ vars.name }}",
+        executionMode: "dedicated",
+        harnessAuth: { ...auth, method: scenario.presetAuth ?? auth.method },
+      },
       configuration: {
         values: { ...configurationValues({}), agents: { defaults: { model: "{{ vars.model }}" } } },
       },
     },
   };
-  const response = (data, status = 200) =>
+  if (scenario.standardCodexPreset || scenario.standardOpenclawPreset || scenario.devdayPreset) {
+    Object.assign(
+      preset,
+      structuredClone(
+        scenario.devdayPreset
+          ? devdayPreset
+          : scenario.standardOpenclawPreset
+            ? standardOpenclawPreset
+            : standardCodexPreset,
+      ),
+    );
+  }
+  if (scenario.presetWorkspaceFiles) {
+    preset.template.agent.initialWorkspaceFiles = structuredClone(scenario.presetWorkspaceFiles);
+  }
+  const presets = [preset];
+  if (scenario.devdayPreset) {
+    for (const [name, definition] of [
+      ["standard-codex", standardCodexPreset],
+      ["standard-openclaw", standardOpenclawPreset],
+      ["devday-qa", devdayQaPreset],
+      ["devday-oncall", devdayOncallPreset],
+    ]) {
+      presets.push({
+        ...structuredClone(definition),
+        id: `pre_${name.replaceAll("-", "_")}`,
+        namespaceId,
+      });
+    }
+  }
+  const response = (data, status = 200, errorCode) =>
     new Response(
-      JSON.stringify({ data, meta: { requestId: "req_00000000-0000-4000-8000-000000000001" } }),
+      JSON.stringify({
+        ...(errorCode
+          ? { error: { code: errorCode, message: "The selected preview simulates this failure." } }
+          : { data }),
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+      }),
       { status, headers: { "content-type": "application/json" } },
     );
-  const error = (status) => response(null, status);
+  const error = (status, code) => response(null, status, code);
   window.fetch = async (input, options = {}) => {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     const path = url.pathname;
@@ -228,7 +307,7 @@ export function installFixture(scenario, evidence) {
           }
         });
       }
-      return error(rule.status);
+      return error(rule.status, rule.code);
     }
     const body = options.body ? JSON.parse(options.body) : {};
     if (path === "/api/auth/session") {
@@ -241,6 +320,19 @@ export function installFixture(scenario, evidence) {
     if (path === "/api/auth/sign-out" && method === "POST") {
       signedIn = false;
       return response({});
+    }
+    if (path === "/installation" && method === "GET") {
+      return response({
+        id: "ins_00000000-0000-4000-8000-000000000001",
+        name: "Demo installation",
+        createdAt,
+        capabilities: {
+          ...(scenario.unsupportedProvisioning === true
+            ? {}
+            : { agentProvisioning: { executionModes: ["dedicated"] } }),
+          ...(scenario.pluginCapabilities ? { pluginPolicies: scenario.pluginCapabilities } : {}),
+        },
+      });
     }
     if (path === "/namespaces" && method === "GET") {
       return response(namespaces);
@@ -257,11 +349,36 @@ export function installFixture(scenario, evidence) {
       if (resource === "service-accounts" && method === "GET") {
         return response(accounts);
       }
-      if (resource === "presets" && method === "GET") {
-        return response(scenario.emptyPresets ? [] : [preset]);
+      if (resource === "agents/repository-options" && method === "GET") {
+        return response(
+          scenario.repositoryOptions ?? [
+            {
+              repositoryRef: "application",
+              displayName: "example/application",
+              allowedProfiles: ["git-read", "git-write", "git-full"],
+            },
+            {
+              repositoryRef: "handbook",
+              displayName: "example/handbook",
+              allowedProfiles: ["git-read"],
+            },
+          ],
+        );
       }
-      if (resource === "presets/pre_00000000-0000-4000-8000-000000000001" && method === "GET") {
-        return response(preset);
+      if (resource === "presets" && method === "GET") {
+        return response(scenario.emptyPresets ? [] : presets);
+      }
+      if (resource.startsWith("presets/") && method === "GET") {
+        const selectedPreset = presets.find((item) => item.id === resource.split("/")[1]);
+        return selectedPreset ? response(selectedPreset) : error(404);
+      }
+      if (resource === "agents/plugins" && method === "POST" && scenario.pluginDiscovery) {
+        const page = scenario.pluginDiscovery.pages[body.cursor ?? "initial"];
+        return page ? response(page) : error(400, "PLUGIN_DISCOVERY_INVALID_RESPONSE");
+      }
+      if (resource === "agents/plugins/details" && method === "POST" && scenario.pluginDiscovery) {
+        const entry = scenario.pluginDiscovery.details[body.pluginId];
+        return entry ? response(entry) : error(503, "PLUGIN_DISCOVERY_UNAVAILABLE");
       }
       if (resource === "configurations" && method === "POST") {
         const saved = {
@@ -313,6 +430,129 @@ export function installFixture(scenario, evidence) {
           return response(saved, 201);
         }
       }
+      if (resource === "agents/provision" && method === "POST") {
+        const {
+          configuration,
+          initialWorkspaceFiles = {},
+          workspaceDefaultsId: _workspaceDefaultsId,
+          requestId,
+          ...agentBody
+        } = body;
+        const workId = nextId("work");
+        const savedConfig = {
+          ...configuration,
+          id: nextId("cfg"),
+          namespaceId,
+          generation: configuration?.secretBindings ? 2 : 1,
+          createdAt,
+        };
+        configs.set(savedConfig.id, savedConfig);
+        const saved = {
+          ...agentBody,
+          id: nextId("agt"),
+          namespaceId,
+          configurationId: savedConfig.id,
+          status: "active",
+          desiredRuntimeState: "running",
+          createdAt,
+          activeRevisionId: null,
+          servicePrincipalId: "identity_demo_provisioned",
+        };
+        agents.set(saved.id, saved);
+        credentials.set(saved.id, { transportConfigured: true });
+        for (const [filename, content] of Object.entries(initialWorkspaceFiles)) {
+          files.set(`${saved.id}/${filename}`, content);
+        }
+        const revision = snapshot(saved, nextId("rev"), 1);
+        revisions.set(revision.id, revision);
+        deployments.set(revision.id, {
+          deploymentId: `dep_${revision.id}`,
+          revisionId: revision.id,
+          status: "queued",
+          reads: 0,
+          error: null,
+        });
+        provisioning.set(saved.id, {
+          requestId,
+          workId,
+          reads: 0,
+          status: scenario.provisioningStatus ?? "queued",
+          agentId: saved.id,
+          configurationId: savedConfig.id,
+          revisionId: revision.id,
+          url: `/namespaces/${namespaceId}/agents/provision/${workId}`,
+        });
+        provisioning.set(workId, provisioning.get(saved.id));
+        return response(
+          {
+            provisioning: {
+              workId,
+              status: scenario.provisioningStatus ?? "queued",
+              phase: "admitted",
+              attemptCount: 1,
+              updatedAt: createdAt,
+              url: `/namespaces/${namespaceId}/agents/provision/${workId}`,
+            },
+          },
+          202,
+        );
+      }
+      const provisioningMatch = resource.match(/^agents\/provision\/([^/]+)(\/retry)?$/);
+      if (provisioningMatch) {
+        const [, workId, retrySuffix] = provisioningMatch;
+        const current = provisioning.get(workId);
+        if (!current) {
+          return error(404);
+        }
+        if (retrySuffix === "/retry" && method === "POST") {
+          current.status = "queued";
+          current.reads = 0;
+          return response(
+            {
+              provisioning: {
+                workId: current.workId,
+                status: current.status,
+                phase: "admitted",
+                attemptCount: 2,
+                updatedAt: createdAt,
+                url: current.url,
+              },
+            },
+            202,
+          );
+        }
+        if (retrySuffix === undefined && method === "GET") {
+          current.reads += 1;
+          if (current.status !== "failed") {
+            current.status = current.reads > 1 ? "succeeded" : "running";
+          }
+          return response({
+            provisioning: {
+              workId: current.workId,
+              status: current.status,
+              phase: current.status === "succeeded" ? "handoff" : "configuration",
+              attemptCount: 1,
+              updatedAt: createdAt,
+              url: current.url,
+              ...(current.status === "failed"
+                ? {
+                    error: {
+                      code: "PROVISIONING_FAILED",
+                      message: "The worker could not finish provisioning.",
+                    },
+                  }
+                : {}),
+              ...(current.status === "succeeded"
+                ? {
+                    configurationId: current.configurationId,
+                    agentId: current.agentId,
+                    revisionId: current.revisionId,
+                  }
+                : {}),
+            },
+          });
+        }
+      }
       const agentMatch = resource.match(/^agents\/([^/]+)(.*)$/);
       if (agentMatch) {
         const [, id, suffix] = agentMatch;
@@ -346,8 +586,13 @@ export function installFixture(scenario, evidence) {
         if (suffix === "/native-admin" && method === "GET") {
           return response({
             status: scenario.nativeAdmin ?? "disabled",
-            url: "/storybook-fixtures/native-admin.html",
+            url:
+              (id === agent.id ? scenario.nativeAdminUrl : undefined) ??
+              "/storybook-fixtures/native-admin.html",
           });
+        }
+        if (suffix === "/runtime-images" && method === "GET") {
+          return response(scenario.runtimeImages ?? { status: "unsupported", images: [] });
         }
         if (suffix === "/runtime-credentials") {
           if (method === "POST") {
@@ -436,8 +681,15 @@ export function installFixture(scenario, evidence) {
         }
       }
       if (resource === "secrets") {
+        if (method === "POST" && scenario.denySecretCreate) {
+          return response(undefined, 403, "FORBIDDEN");
+        }
         if (method === "GET") {
-          return response([...secrets.values()].map((secret) => structuredClone(secret)));
+          return response(
+            scenario.emptySecrets
+              ? []
+              : [...secrets.values()].map((secret) => structuredClone(secret)),
+          );
         }
         if (method === "POST") {
           const id = nextId("sec");
