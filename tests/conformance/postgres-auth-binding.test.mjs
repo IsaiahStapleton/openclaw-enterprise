@@ -74,7 +74,7 @@ test("the public auth binding factory preserves inferred types and rejects unsup
   const project = "apps/controller/tests/fixtures/postgres-auth-binding/tsconfig.json";
   const result = spawnSync(
     process.execPath,
-    ["--max-old-space-size=1536", compiler, "--project", project, "--pretty", "false"],
+    ["--max-old-space-size=1536", compiler, "--build", project, "--pretty", "false"],
     {
       cwd: fileURLToPath(new URL("../../", import.meta.url)),
       encoding: "utf8",

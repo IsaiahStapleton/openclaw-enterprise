@@ -4,7 +4,12 @@
     "composite": false,
     "declaration": false,
     "noEmit": true,
-    "allowJs": true
+    "tsBuildInfoFile": "../../../../../.build/postgres-auth-binding.tsbuildinfo"
   },
-  "files": ["producer.ts", "type-negatives.ts"]
+  "files": ["producer.ts", "type-negatives.ts"],
+  "references": [
+    {
+      "path": "../../../../../packages/occ"
+    }
+  ]
 }
