@@ -20,18 +20,26 @@ go to the Agent's gateway; model credentials are configured separately.
   [model authentication](../../reference/agents.md#harness-authentication).
   Embedded execution cannot isolate channel credentials from the Harness.
 - To provision generated credentials, you need `read` and `operate` on the Agent.
-  Saving channel Secrets also requires Secret creation, Configuration update, and
+  Selecting Secrets requires [readable Secret metadata](../../reference/drivers/secret.md#iam)
+  and caller `operate` on each selected Secret. Saving token bindings requires Configuration update and
   [Namespace IAM administration](../../reference/authorization.md#manage-namespace-policy)
-  to grant the Agent access to each exact Secret.
+  to grant the Agent access to each exact Secret. Creating a token Secret also
+  requires Secret creation permission in the Namespace.
 
 ## Connect and verify
 
 1. Open the Agent's new revision in the console and open **Channels**. Enable
-   Slack, enter the channel IDs, and leave **Require mention** enabled for this
-   setup. Save. If multiple Agents use this Configuration, the edit also
-   affects their future deployments.
+   Slack, enter the channel IDs, then either enter **Allowed channel user IDs**
+   or select **Allow everyone in these channels to mention the agent**. Leave
+   **Require mention** enabled for this setup. For each token menu, select a
+   Namespace Secret or **Create new Secret...**.
+   The modal prefills the token key and accepts its value in a password field.
+   **Create Secret** stores it immediately; **Save configuration** saves the
+   selected bindings. Cancelling the drawer discards selections but keeps any
+   newly created Secrets. If multiple Agents use this Configuration, the edit
+   also affects their future deployments.
 2. Open **Credentials** and select **Provision generated runtime credentials**
-   before the first deployment. Fill any missing Slack app and bot tokens, then select
+   before the first deployment. If tokens are still missing, fill them and select
    **Save channel Secrets**. OCC stores them as Namespace Secrets, grants the
    Agent access, and saves Configuration bindings for gateway delivery. Stored
    credentials confirm storage only; they do not prove Slack accepted them.
@@ -50,8 +58,9 @@ go to the Agent's gateway; model credentials are configured separately.
 If you manage Configuration through the API, use the
 [native Slack Socket Mode example](../../reference/configuration/secrets.md#native-channel-configuration).
 The console supports the default Socket Mode account and gateway environment
-references; non-Socket settings and mixed per-channel mention settings may
-need an API edit.
+references; non-Socket settings, wildcard channel maps, mixed per-channel
+mention settings, mixed per-channel sender lists, and sender IDs that cannot be
+represented in a comma-separated field may need an API edit.
 
 ## Enable direct messages (optional)
 
@@ -64,8 +73,9 @@ bot. To enable one-to-one messages:
    Reinstall the Slack app if the scope is new. In
    [App Home settings](https://docs.slack.dev/tools/python-slack-sdk/socket-mode/#using-socket-mode),
    enable sending messages from the **Messages** tab.
-2. In the OCC console, add the intended Slack user IDs under **Allowed user
-   IDs**, save the channel draft, and redeploy.
+2. Configure `allowFrom` in native Configuration JSON, save the channel draft,
+   and redeploy. The simple Slack drawer edits channel sender access; it does
+   not edit direct-message `allowFrom`.
 3. From an allowed user account, send the app a direct message with a new
    phrase and confirm a reply. A channel reply does not verify direct messages.
 
@@ -77,7 +87,8 @@ bot. To enable one-to-one messages:
   operator to check gateway network access if it cannot connect.
 - **Channel messages work but direct messages do not:** check the
   `message.im` subscription, the installed bot token's `im:history` scope,
-  and whether the sender's Slack user ID is in **Allowed user IDs**.
+  and whether the sender's Slack user ID is allowed by the native `allowFrom`
+  setting and direct-message policy.
 - **Credential save failed or the response was lost:** select **Refresh status**
   before retrying. Inspect saved Secrets, IAM bindings, and Configuration after a
   partial save; those writes are separate and are not automatically rolled back.

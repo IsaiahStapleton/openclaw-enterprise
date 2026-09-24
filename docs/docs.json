@@ -83,6 +83,10 @@
                     "label": "Presets"
                   },
                   {
+                    "page": "guides/topics/standard-codex-preset",
+                    "label": "Standard Codex Preset"
+                  },
+                  {
                     "page": "guides/topics/agent-compute",
                     "label": "Compute"
                   },
@@ -325,6 +329,14 @@
                       {
                         "page": "reference/repository-credentials",
                         "label": "Credential Lifecycle"
+                      },
+                      {
+                        "page": "reference/repository-credentials/access-levels",
+                        "label": "Access Levels"
+                      },
+                      {
+                        "page": "reference/repository-credentials/push-ref-guardrail",
+                        "label": "Push Guardrail"
                       }
                     ]
                   }
@@ -736,6 +748,7 @@
               "flows/openshell-sandbox-provisioning",
               "flows/driver-plugin-loading",
               "flows/agent-plugins",
+              "flows/agent-provisioning",
               "flows/agent-native-admin",
               "flows/kubernetes-existing-namespace-placement",
               "flows/production-tui",

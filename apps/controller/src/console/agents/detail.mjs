@@ -3,6 +3,7 @@ import { createHarnessAuthFields, harnessAuthDescription } from "./harness-auth.
 import { renderNativeAdminAccess } from "./native-admin.mjs";
 import { createAgentDeletion } from "./deletion.mjs";
 import { createAgentStop } from "./stop.mjs";
+import { repositoryProfile, repositoryWriteAccessHelp } from "./repository-profiles.mjs";
 import { renderChannels } from "../channels.mjs";
 import { renderWorkspaceFiles } from "./workspace.mjs";
 import { displayDate, shortId, namespacePath, link, message } from "./list.mjs";
@@ -11,6 +12,7 @@ import {
   hasRequiredRuntimeCredentials,
   runtimeCredentialBlockReason,
 } from "./credentials.mjs";
+import { ensureSecretOperateBinding } from "./secret-access.mjs";
 
 function errorPanel(error, context, retry) {
   if (error.status === 401) {
@@ -634,8 +636,19 @@ export async function renderAgentDetail(context) {
         values,
         executionMode,
         readOnly: !draft,
-        onSave: async (updatedValues) => {
+        drawerContext: {
+          namespaceId,
+          request,
+          agentName: agent.name,
+          secretBindings: snapshot.secretBindings,
+          credentialsHref: context.pageUrl(
+            `agents/${agent.id}?revision=draft&tab=credentials`,
+            namespaceId,
+          ),
+        },
+        onSave: async (updatedValues, options = {}) => {
           let mutationStarted = false;
+          let configurationSaved = false;
           try {
             const [freshAgent, freshConfig] = await Promise.all([
               request(path),
@@ -655,13 +668,33 @@ export async function renderAgentDetail(context) {
               );
             }
             mutationStarted = true;
+            const nextSecretBindings = options.secretBindings;
             await request(
               `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(snapshot.id)}`,
               {
                 method: "PATCH",
-                body: { values: updatedValues },
+                body: {
+                  values: updatedValues,
+                  ...(nextSecretBindings === undefined
+                    ? {}
+                    : { secretBindings: nextSecretBindings }),
+                },
               },
             );
+            configurationSaved = true;
+            details = null;
+            try {
+              if (options.changedSecrets !== undefined) {
+                for (const secret of options.changedSecrets) {
+                  await ensureSecretOperateBinding(context, freshAgent, secret);
+                }
+              }
+            } catch (error) {
+              error.message =
+                "Configuration saved, but Secret access grants could not be confirmed. Open Agent Credentials to inspect saved bindings, then ask a Namespace administrator to grant this Agent access to the saved Secret.";
+              error.outcomeUnknown = true;
+              throw error;
+            }
             if (context.isCurrent()) {
               change("draft", "channels");
             }
@@ -678,17 +711,20 @@ export async function renderAgentDetail(context) {
               error.name === "TimeoutError" ||
               error.name === "TypeError"
             ) {
-              error.message = message(error, mutationStarted);
+              if (!configurationSaved) {
+                error.message = message(error, mutationStarted);
+              }
             }
             error.outcomeUnknown =
-              mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
+              error.outcomeUnknown ??
+              (mutationStarted && ![400, 403, 404, 409, 429].includes(error.status));
             throw error;
           }
         },
       });
       content.append(channels);
     } else if (selectedTab === "credentials" && draft) {
-      const auth = createHarnessAuthFields(context, agent.harnessAuth);
+      const auth = createHarnessAuthFields(context, agent.harnessAuth, agent.executionMode);
       const feedback = element("p", { role: "status", className: "hint" });
       const save = element(
         "button",
@@ -749,9 +785,21 @@ export async function renderAgentDetail(context) {
         content.append(credentials.section);
       }
     } else {
+      const repositoryBindings = draft
+        ? agent.repositoryBindings
+        : snapshot.repositoryCredentials?.bindings;
       const details = [
         ["Execution mode", executionMode === "dedicated" ? "Dedicated" : "Embedded"],
         ["Provider", draft ? agent.providerId : snapshot.providerId],
+        [
+          "Repository access",
+          repositoryBindings
+            ?.map(
+              (binding) =>
+                `${binding.repositoryRef} · ${repositoryProfile(binding.profile)?.label ?? "Unknown access level"}`,
+            )
+            .join(", ") ?? "None",
+        ],
         [
           "Harness authentication",
           harnessAuthDescription(draft ? agent.harnessAuth : snapshot.harnessAuth),
@@ -770,6 +818,9 @@ export async function renderAgentDetail(context) {
           { className: "agent-card" },
           element("h2", {}, draft ? "Configuration draft" : "Configuration snapshot"),
           summary(values, details),
+          repositoryBindings?.some((binding) => repositoryProfile(binding.profile)?.writes)
+            ? element("p", { className: "hint repository-write-access" }, repositoryWriteAccessHelp)
+            : null,
           draft
             ? renderDraftConfigurationEditor(context, data)
             : element(

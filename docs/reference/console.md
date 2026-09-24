@@ -3,7 +3,7 @@
 Use the browser console at `/console/` on your OCC address to sign in, choose a
 Namespace, create, deploy, and delete Agents, and edit supported Slack
 draft settings. You can also set initial workspace contents and runtime credentials,
-read or replace supported live workspace files, and list the Agents, Providers, and Namespaces
+read or replace supported live workspace files, and list the Agents and Namespaces
 you can access. When the pilot is enabled, trusted operators can open an Agent's
 [native admin UI](#open-the-native-admin-ui). The console does not offer rollback,
 live runtime health, or browser chat through OCE.
@@ -29,17 +29,24 @@ The console uses the existing [email/password session contract](authentication.m
 with same-origin cookies. It does not store tokens or accept service keys. A
 missing or expired session clears private content and asks you to sign in again.
 
+## Identify the control-plane build
+
+The sidebar shows **OCE** followed by the first eight characters of the running
+OCC image's source commit; hover over the hash for the full OCC revision. Published images bake the checked release revision into the console HTML.
+The hash identifies OCC, not an Agent's gateway. A source checkout or image built
+without revision metadata shows **dev** beside OCE, with a tooltip explaining
+that the build revision is unavailable.
+
 ## Browse and select a Namespace
 
-The sidebar opens **Agents**, **Providers**, or **Namespaces**. **Refresh**
-repeats the current read. Provider and Namespace rows remain read-only collection
-entries.
+The sidebar opens **Agents** or **Namespaces**. **Refresh** repeats the current
+read. Model provider and API-key setup are part of Agent creation; the separate
+Providers tab is hidden. Namespace rows remain read-only collection entries.
 
 | Page       | Scope and permission                                                     |
 | ---------- | ------------------------------------------------------------------------ |
 | Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |
 | Namespaces | Installation-wide collection filtered by exact Namespace `read`.         |
-| Providers  | Installation-wide configured inventory; Installation `administer`.       |
 
 Use the bottom **OpenClaw Enterprise** menu for **Namespace**, **Settings**, or
 **Logout**. Settings shows the signed-in account and no configurable settings.
@@ -50,7 +57,7 @@ selection. With no readable Namespaces, Agents explains that provisioning or
 access is needed; global pages remain available.
 
 Switching Namespace from Agent detail or creation returns to the Agents list in
-the new scope. Global pages stay open because Providers and Namespaces remain
+the new scope. Global pages stay open because Namespaces remain
 Installation-wide. The API makes all authorization decisions; the selector does
 not broaden access.
 
@@ -96,8 +103,8 @@ The Channels tab edits Slack settings on the saved Configuration draft.
 Microsoft Teams has no console editor: its credentials and Bot Framework ingress
 require operator setup, and the console cannot deploy a Teams-enabled draft.
 Existing Teams settings remain visible in the native Configuration JSON.
-Saving Slack settings patches only `values`, so
-the backend retains existing `secretBindings`. An existing plugin allowlist is
+Saving Slack settings patches `values` and includes `secretBindings` when a
+token selection changed, preserving unrelated bindings. An existing plugin allowlist is
 extended; an omitted allowlist stays omitted. Because a Configuration can be
 shared by multiple Agents, channel edits can affect future deployments of other
 Agents that reference the same Configuration.
@@ -114,18 +121,44 @@ automatic replay. **Disable Slack** edits only the draft. It does not disable
 access, stop execution, or change an admitted revision.
 
 Slack editing preserves existing direct-message and channel policies, including
-pairing, open, disabled, and omitted policies. It also preserves per-channel user
-restrictions. New Slack configurations use allowlist policies. **Allowed user
-IDs** edits `allowFrom`; the existing policy determines how those entries affect
-access. The editor does not change the policy when saving channel settings. Slack Socket Mode uses fixed
+pairing, open, disabled, and omitted policies. It preserves unrelated
+per-channel settings while replacing the selected channels' sender lists.
+New Slack configurations use allowlist policies. **Allowed channel user IDs**
+edits each selected channel's `users` list. Selecting **Allow everyone in these
+channels to mention the agent** writes `users: ["*"]` on each selected channel
+and leaves direct-message `allowFrom` unchanged. The checkbox and user ID input
+are mutually exclusive: entering IDs disables the everyone option, clearing IDs
+makes everyone selectable, and turning everyone off re-enables ID entry.
+**Require a mention** is independent of sender access. The editor does not
+change DM or group policy when saving channel settings. Slack Socket Mode uses fixed
 unresolved references to `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`.
 Slack requires dedicated execution and Kubernetes runtime projection.
 
+Each Slack token field is a menu containing the current binding, readable
+Secrets in the same Namespace, and **Create new Secret...**. The creation modal
+prefills the fixed `SLACK_APP_TOKEN` or `SLACK_BOT_TOKEN` binding key and accepts
+the value in a password field. It creates a Namespace Secret immediately;
+cancelling the surrounding channel editor or Agent creation does not delete it.
+The browser never reads stored values. Listing and binding retain the
+[Secret IAM checks](drivers/secret.md#iam).
+An unconfirmed creation blocks another submission in that modal. Refresh and
+inspect Secret metadata before creating another Secret; the first may exist.
+
+Menu choices stay in the drawer until **Save configuration**. Cancel discards
+those choices. Saving grants the Agent's service principal access to selected
+Secrets through Namespace IAM, then patches the Configuration; the caller needs
+permission for both operations. These are separate writes, so a grant may remain
+if the Configuration save fails. Neither saving nor creating a Secret deploys it.
+
+Bound Secret metadata and **Open Agent Credentials** links open in new tabs,
+preserving unsaved channel inputs. Save channel edits before changing credentials
+in another tab, then refresh the original Agent page before editing again.
+
 The simple editor may reject native channel documents it cannot round-trip,
 including non-Socket Slack settings, non-standard credential references, mixed
-per-channel mention settings, or unsupported plugin shapes. Inspect unsupported
-settings in the native Configuration view and edit them through the API or
-operator workflow.
+per-channel mention settings, mixed per-channel sender lists, `*` channel maps,
+or unsupported plugin shapes. Inspect unsupported settings in the native
+Configuration view and edit them through the API or operator workflow.
 
 ## Stop and resume an Agent
 

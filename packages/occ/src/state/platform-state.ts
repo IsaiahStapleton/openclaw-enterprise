@@ -50,6 +50,10 @@ import {
   ScopeViolationError,
 } from "../errors.ts";
 import type { ControllerWork } from "./controller-work.ts";
+import type {
+  AgentProvisioningReadRepository,
+  AgentProvisioningRepository,
+} from "./agent-provisioning.ts";
 
 export interface InstallationReadRepository {
   findInstallation(installationId: string): Promise<Readonly<Installation> | undefined>;
@@ -220,6 +224,7 @@ export interface PresetRepository extends PresetReadRepository {
 
 export interface SecretReadRepository {
   findSecret(namespaceId: string, secretId: string): Promise<Readonly<Secret> | undefined>;
+  listSecrets(namespaceId: string): Promise<readonly Readonly<Secret>[]>;
 }
 
 export interface SecretRepository extends SecretReadRepository {
@@ -319,17 +324,17 @@ export function validHarnessAuthSnapshot(value: HarnessAuthSnapshot, namespaceId
       return normalizeHarnessAuthBinding(value) !== null;
     }
     const binding =
-      value.method === "api_key"
+      value.method === "api_key" || value.method === "codex_pat"
         ? normalizeHarnessAuthBinding({ method: value.method, source: value.source })
         : normalizeHarnessAuthBinding({
             method: value.method,
             serviceAccountId: value.serviceAccountId,
           });
-    if (binding?.method === "api_key") {
+    if (binding?.method === "api_key" || binding?.method === "codex_pat") {
       return (
         Object.keys(value).length === 3 &&
         binding.source.namespaceId === namespaceId &&
-        value.method === "api_key" &&
+        (value.method === "api_key" || value.method === "codex_pat") &&
         isNonEmptyString(value.secretDriverId)
       );
     }
@@ -367,7 +372,8 @@ export function harnessAuthMatches(
   if (binding.method === "runtime") {
     return true;
   }
-  return binding.method === "api_key" && snapshot.method === "api_key"
+  return (binding.method === "api_key" || binding.method === "codex_pat") &&
+    (snapshot.method === "api_key" || snapshot.method === "codex_pat")
     ? binding.source.namespaceId === snapshot.source.namespaceId &&
         binding.source.id === snapshot.source.id
     : binding.method === "chatgpt_service_account" &&
@@ -381,7 +387,7 @@ function harnessSecretReference(
   secretId: string,
 ): boolean {
   return (
-    binding?.method === "api_key" &&
+    (binding?.method === "api_key" || binding?.method === "codex_pat") &&
     binding.source.namespaceId === namespaceId &&
     binding.source.id === secretId
   );
@@ -410,7 +416,7 @@ export async function assertHarnessAuthAvailable(
   if (binding === null || binding.method === "runtime") {
     return;
   }
-  if (binding.method === "api_key") {
+  if (binding.method === "api_key" || binding.method === "codex_pat") {
     if (
       binding.source.namespaceId !== namespaceId ||
       (await state.secrets.findSecret(namespaceId, binding.source.id)) === undefined
@@ -519,6 +525,8 @@ export interface PlatformOperationRepository extends PlatformOperationReadReposi
   append(operation: PlatformOperation): Promise<void>;
 }
 
+export type { AgentProvisioningRecord } from "./agent-provisioning.ts";
+
 export interface IAMPolicyReadRepository {
   listRoles(namespaceId: string): Promise<readonly Readonly<Role>[]>;
   getRole(namespaceId: string, roleId: string): Promise<Readonly<Role> | undefined>;
@@ -548,6 +556,7 @@ export interface PlatformReadView {
   readonly revisions: AgentRevisionReadRepository;
   readonly iamPolicy: IAMPolicyReadRepository;
   readonly repositorySessions: RepositorySessionReadRepository;
+  readonly provisioning: AgentProvisioningReadRepository;
   readonly operations: PlatformOperationReadRepository;
 }
 
@@ -563,6 +572,7 @@ export interface PlatformUnitOfWork extends PlatformReadView {
   readonly revisions: AgentRevisionRepository;
   readonly iamPolicy: IAMPolicyRepository;
   readonly repositorySessions: RepositorySessionRepository;
+  readonly provisioning: AgentProvisioningRepository;
   readonly audit: PlatformAuditRepository;
   readonly operations: PlatformOperationRepository;
 }
@@ -1044,6 +1054,12 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
             const secret = snapshot.secrets.get(agentKey(namespaceId, secretId));
             return secret === undefined ? undefined : immutableCopy(secret);
           },
+          listSecrets: async (namespaceId) =>
+            Object.freeze(
+              Array.from(snapshot.secrets.values())
+                .filter((secret) => secret.namespaceId === namespaceId)
+                .map((secret) => immutableCopy(secret)),
+            ),
         },
         configuration.namespaceId,
         secretBindings,
@@ -1109,6 +1125,21 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       }
       const secret = snapshot.secrets.get(agentKey(namespaceId, secretId));
       return secret === undefined ? undefined : immutableCopy(secret);
+    },
+    listSecrets: async (namespaceId) => {
+      if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) {
+        return Object.freeze([]);
+      }
+      return Object.freeze(
+        Array.from(snapshot.secrets.values())
+          .filter((secret) => secret.namespaceId === namespaceId)
+          .sort((left, right) =>
+            left.createdAt === right.createdAt
+              ? left.id.localeCompare(right.id)
+              : left.createdAt.localeCompare(right.createdAt),
+          )
+          .map((secret) => immutableCopy(secret)),
+      );
     },
     lockSecret: async (namespaceId, secretId) => secrets.findSecret(namespaceId, secretId),
     createSecret: async (secret) => {
@@ -1406,9 +1437,6 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         agent.namespaceId,
         agent.configurationId,
       );
-      if (Object.hasOwn(agent, "serviceAccountId")) {
-        throw new ScopeViolationError("Legacy Agent authentication selectors are unsupported.");
-      }
       await assertHarnessAuthAvailable(
         { secrets, serviceAccounts },
         agent.namespaceId,
@@ -1796,6 +1824,14 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     },
   );
 
+  const provisioningUnavailable = async (): Promise<never> => {
+    throw new DependencyUnavailableError(
+      "Agent provisioning requires durable PostgreSQL state for checkpoints.",
+    );
+  };
+  const provisioningAbsent = async (): Promise<undefined> => undefined;
+  const provisioningPendingAbsent = async (): Promise<boolean> => false;
+
   return {
     installations,
     namespaces,
@@ -1808,6 +1844,21 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     revisions,
     iamPolicy,
     repositorySessions,
+    provisioning: {
+      findByWorkId: provisioningAbsent,
+      hasPendingNamespaceProvisioning: provisioningPendingAbsent,
+      findByAgent: provisioningAbsent,
+      findByConfiguration: provisioningAbsent,
+      findByRequest: provisioningAbsent,
+      create: provisioningUnavailable,
+      beginEffect: provisioningUnavailable,
+      checkpoint: provisioningUnavailable,
+      recordFailure: provisioningUnavailable,
+      settleEffect: provisioningUnavailable,
+      cancel: provisioningUnavailable,
+      cancelByAgent: async () => undefined,
+      retryByWorkId: provisioningUnavailable,
+    },
     audit: {
       async append(event) {
         if (event.installationId !== snapshot.installation?.id) {
@@ -1905,6 +1956,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
                 )?.agentId
             : undefined;
         return immutableCopy({
+          kind: "lifecycle",
           idempotencyKey,
           namespaceId: operation.namespaceId,
           ...(operation.kind === "agent" ? { agentId: operation.resourceId } : {}),

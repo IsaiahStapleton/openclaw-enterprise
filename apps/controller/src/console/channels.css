@@ -74,7 +74,8 @@
   gap: 0.35rem;
 }
 
-.channel-field input {
+.channel-field input,
+.channel-field select {
   width: 100%;
   padding: 11px 12px;
   border: 1px solid var(--line);
@@ -114,6 +115,16 @@
 
 .channel-check input {
   width: auto;
+}
+
+.channel-field:has(input:disabled),
+.channel-check:has(input:disabled) {
+  opacity: 0.55;
+}
+
+.channel-field input:disabled,
+.channel-check input:disabled {
+  cursor: not-allowed;
 }
 
 @media (max-width: 760px) {

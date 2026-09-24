@@ -17,6 +17,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { cleanupResourceIds } from "./cleanup.mjs";
 import { prepareGatewayRouting } from "./routing.mjs";
 import { prepareLogging } from "./logging.mjs";
@@ -42,6 +43,11 @@ const defaultStatePath = join(
 );
 const laneDefinitions = JSON.parse(readFileSync(testSuitesManifestPath, "utf8")).lanes ?? {};
 const allowedLanes = new Set(Object.keys(laneDefinitions));
+const fixtureLanes = new Set([
+  "k3d-fixture-configuration",
+  "k3d-fixture-state",
+  "k3d-fixture-plugins",
+]);
 
 function laneDefinition(name) {
   return laneDefinitions[name] ?? {};
@@ -667,7 +673,7 @@ async function ensureK3dCluster(statePath, state) {
   }
   await commandAvailable(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", ["version"]);
   const openShell = state.lane === "openshell";
-  const crossNodePluginStatus = state.lane === "k3d-fixture-configuration";
+  const crossNodePluginStatus = fixtureLanes.has(state.lane);
   if (!openShell) {
     await commandAvailable(process.env.OCC_KUBECTL_BIN ?? "kubectl", ["version", "--client=true"]);
   }
@@ -780,16 +786,28 @@ async function ensureK3dCluster(statePath, state) {
     if (!isIPv4(destination ?? "")) {
       throw new Error("The plugin status worker must have an IPv4 Pod CIDR.");
     }
-    // Cross-node API proxy traffic uses the server's overlay route source, which
-    // can differ from its InternalIP. Admit only that observed address in tests.
-    const route = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-      "exec",
-      `k3d-${cluster}-server-0`,
-      "ip",
-      "route",
-      "get",
-      destination,
-    ]);
+    resource.pluginStatusProxyCidrs = await waitForPluginStatusProxySource(cluster, destination);
+    await verifyFixtureStorage(resource);
+  }
+  await markResourceReady(statePath, state, resource);
+  return resource;
+}
+
+async function waitForPluginStatusProxySource(cluster, destination) {
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const route = await execFile(
+      process.env.OCC_DOCKER_BIN ?? "docker",
+      ["exec", `k3d-${cluster}-server-0`, "ip", "route", "get", destination],
+      { timeoutMs: Math.min(15_000, deadline - Date.now()) },
+    );
+    // These owned clusters use K3s's default Flannel VXLAN backend. Node Ready
+    // can precede its cross-node route; an earlier lookup uses eth0's default
+    // route and would permanently admit the wrong source in NetworkPolicies.
+    if (!/\bdev\s+flannel\.1(?:\s|$)/.test(route.stdout)) {
+      await delay(500);
+      continue;
+    }
     const sources = [...route.stdout.matchAll(/\bsrc\s+(\S+)/g)].map((match) => match[1]);
     if (
       sources.length !== 1 ||
@@ -801,11 +819,9 @@ async function ensureK3dCluster(statePath, state) {
         "Unable to determine the cross-node plugin status proxy source IPv4 address.",
       );
     }
-    resource.pluginStatusProxyCidrs = `${sources[0]}/32`;
-    await verifyFixtureStorage(resource);
+    return `${sources[0]}/32`;
   }
-  await markResourceReady(statePath, state, resource);
-  return resource;
+  throw new Error("Timed out waiting for the cross-node plugin status proxy route on flannel.1.");
 }
 
 async function verifyFixtureStorage(cluster, timeoutSeconds = 120) {
@@ -1481,6 +1497,7 @@ async function prepareLane({ lane, statePath }) {
 
   switch (name) {
     case "postgres":
+    case "postgres-application":
       await ensurePostgresServer(resolvedStatePath, state);
       break;
     case "images-packaging":
@@ -1517,11 +1534,13 @@ async function prepareLane({ lane, statePath }) {
         }),
       );
       break;
-    case "k3d-fixture-configuration": {
+    case "k3d-fixture-configuration":
+    case "k3d-fixture-state":
+    case "k3d-fixture-plugins": {
       await ensurePostgresServer(resolvedStatePath, state);
       const cluster = await ensureK3dCluster(resolvedStatePath, state);
       const fixture = await prepareFixtureImage(resolvedStatePath, state, cluster);
-      // Both fixture tests use the same local-only image. Keep it active on
+      // Fixture suites use the same local-only image. Keep it active on
       // every node so kubelet image garbage collection cannot remove it.
       await pinFixtureImageInK3d(cluster, fixture.image);
       // The suites restart this controller when enabling shared storage. Verify
@@ -1563,6 +1582,8 @@ async function prepareLane({ lane, statePath }) {
     case "repository-credentials-installed": {
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       const cluster = await ensureK3dCluster(resolvedStatePath, state);
+      const routing = await prepareGatewayRouting({ cluster, execFile });
+      Object.assign(env, routing.env);
       env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
       await prepareProductionImages(resolvedStatePath, state, cluster, env, { localStore: true });
@@ -1741,7 +1762,7 @@ async function prepareFile({ lane, file, statePath }) {
     env,
     cleanup: async () => {
       try {
-        if (name === "k3d-fixture-configuration") {
+        if (fixtureLanes.has(name)) {
           const cluster = effectiveState.resources.find(
             (resource) => resource.kind === "k3d-cluster",
           );

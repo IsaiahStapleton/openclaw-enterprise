@@ -9,6 +9,11 @@ if (!scenario) {
 const evidence = { id, requests: [], unhandled: [], ready: false, error: null };
 window.__consoleStory = evidence;
 installFixture(scenario, evidence);
+// Simulated build metadata; deployed images bake this meta tag into their HTML.
+const buildRevision = document.createElement("meta");
+buildRevision.name = "occ-build-revision";
+buildRevision.content = scenario.buildRevision ?? "";
+document.head.append(buildRevision);
 history.replaceState(
   null,
   "",
@@ -42,6 +47,17 @@ try {
       node.click();
     }
     if (action.value !== undefined) {
+      if (node instanceof HTMLSelectElement) {
+        while (
+          Date.now() < deadline &&
+          ![...node.options].some((option) => option.value === action.value)
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
+        if (![...node.options].some((option) => option.value === action.value)) {
+          throw new Error(`Story select option unavailable: ${JSON.stringify(action)}`);
+        }
+      }
       node.value = action.value;
       node.dispatchEvent(new Event("input", { bubbles: true }));
       node.dispatchEvent(new Event("change", { bubbles: true }));
