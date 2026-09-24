@@ -119,12 +119,11 @@ function containerEnv(container, name) {
   return entry === undefined ? undefined : entry.slice(name.length + 1);
 }
 
-function gatewayUrl(gateway) {
+function assertGatewayLoopbackBinding(gateway) {
   const port = containerEnv(gateway, "OPENCLAW_GATEWAY_PORT");
   const bindings = gateway.NetworkSettings?.Ports?.[`${port}/tcp`];
   assert.equal(Array.isArray(bindings) && bindings.length === 1, true);
   assert.equal(bindings[0].HostIp, "127.0.0.1");
-  return `http://127.0.0.1:${bindings[0].HostPort}`;
 }
 
 async function waitForRuntime(namespaceId, agentId, revisionId) {
@@ -158,14 +157,20 @@ async function waitForRuntime(namespaceId, agentId, revisionId) {
 }
 
 async function assertGatewayCanReachAgent(gateway) {
-  const response = await fetch(new URL("/token-check", gatewayUrl(gateway)), {
-    signal: AbortSignal.timeout(10_000),
-  });
-  assert.equal(
-    response.status,
-    200,
-    "gateway must complete an authenticated fixture WebSocket ping/pong",
-  );
+  assertGatewayLoopbackBinding(gateway);
+  // Probe inside the owned gateway so the test also works when the Docker
+  // daemon and test runner have different network namespaces. The fixture
+  // endpoint still performs real gateway-to-app-server WebSocket requests.
+  await docker([
+    "exec",
+    gateway.Id,
+    "node",
+    "-e",
+    `fetch("http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/token-check", {
+      signal: AbortSignal.timeout(10_000),
+    }).then((response) => process.exit(response.status === 200 ? 0 : 1))
+      .catch(() => process.exit(1));`,
+  ]);
 }
 
 async function buildFixtureImage(tag) {
