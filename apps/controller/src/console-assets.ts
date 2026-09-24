@@ -102,6 +102,10 @@ const CONSOLE_ASSETS = new Map(
       path: new URL("channels/shared-ui.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",
     },
+    "/console/fonts/instrument-sans-latin.woff2": {
+      path: new URL("fonts/instrument-sans-latin.woff2", CONSOLE_ROOT),
+      contentType: "font/woff2",
+    },
     "/console/console.css": {
       path: new URL("console.css", CONSOLE_ROOT),
       contentType: "text/css; charset=utf-8",

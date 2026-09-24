@@ -159,7 +159,12 @@ export const scenarios = {
     group: "Pages/Agents",
     name: "Populated",
     description:
-      "Searchable Agent table with draft and deployed Agents. Open an Agent to explore its tabs.",
+      "Searchable Agent table with draft and deployed Agents. Open an Agent to explore its tabs. The shared shell, table, and controls use the Claw palette and typography.",
+    steps: [
+      "Check text, search input, buttons, and the current navigation item. The console stays light with either system appearance preference.",
+      "Tab through the search and creation controls, then search for an Agent and open its detail page.",
+      "At a narrow viewport, use Open navigation and choose a page; the drawer must close and return focus to the page.",
+    ],
   },
   agentsEmpty: {
     group: "Pages/Agents",
