@@ -21,8 +21,7 @@ Read the enforcement boundary below before deploying.
   Do not select a SandboxDriver that replaces this policy with external
   containment unless its policy has independently been verified.
 - A model available to your credential and supporting Codex hosted search, plus
-  a same-Namespace Secret holding the model API key. The template takes only
-  the Secret ID. Follow [Harness authentication](../../reference/harness-execution.md#harness-authentication)
+  the model API key and permission to create a Secret in the current Namespace. Follow [Harness authentication](../../reference/harness-execution.md#harness-authentication)
   for credential authorization and delivery.
 
 ## Install and select
@@ -41,14 +40,15 @@ is explicit per Namespace; bootstrap does not seed or overwrite Presets.
 
 Open **Agents → Create Agent**, choose **standard-codex**, and supply:
 
-| Variable        | Value                                                       |
-| --------------- | ----------------------------------------------------------- |
-| `name`          | A unique Agent name.                                        |
-| `model`         | Your available Codex model ID, without the `codex/` prefix. |
-| `modelSecretId` | The existing model Secret ID in that Namespace.             |
+| Variable      | Value                                                       |
+| ------------- | ----------------------------------------------------------- |
+| `name`        | A unique Agent name.                                        |
+| `model`       | Your available Codex model ID, without the `codex/` prefix. |
+| `modelSecret` | The model API key, entered in a masked password field.      |
 
-OCC binds the model Secret reference to the Namespace where you install the Preset.
-Select **Use Preset**, review the draft, then create the Agent. Complete the
+Select **Use Preset** and review the draft; the API key remains masked.
+**Create Agent** stores it as a Secret in the current Namespace and binds that
+Secret to the Agent. The template needs no Namespace ID or existing Secret ID. Complete the
 existing [credentials and deployment procedure](../../reference/console/create-and-deploy.md#initial-runtime-credentials),
 including the Agent's authorization to use its model Secret and gateway runtime
 credentials. The template keeps `${APP_SERVER_URL}`, `${APP_SERVER_TOKEN}`,

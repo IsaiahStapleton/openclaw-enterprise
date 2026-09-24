@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -5029,4 +5029,91 @@ test("Agent tab switches ignore late configuration reads and keep direct workspa
   await page.getByRole("button", { name: "Channels", exact: true }).click();
   await page.getByRole("button", { name: "Configure Slack", exact: true }).waitFor();
   assert.equal(requests.filter((request) => request.path === configurationPath).length, 1);
+});
+
+test("standard Codex password Preset creates one scoped Secret and reuses it after an Agent conflict", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const root = await mkdtemp(join(tmpdir(), "occ-password-preset-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const namespace = await fixture.createNamespace("Password Preset", { ready: true });
+  await fixture.createAgent(namespace.id, "Existing Agent");
+  const artifact = JSON.parse(
+    await readFile(new URL("../../deploy/presets/standard-codex.json", import.meta.url), "utf8"),
+  );
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: artifact,
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.body));
+  const { page } = await newPage(t, fixture);
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByLabel("Variable: name", { exact: true }).fill("Existing Agent");
+  await page.getByLabel("Variable: model", { exact: true }).fill("gpt-5.1");
+  const password = page.getByLabel("Variable: modelSecret", { exact: true });
+  assert.equal(await password.getAttribute("type"), "password");
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  assert.equal(await password.evaluate((input) => input.validity.valueMissing), true);
+  const key = "synthetic-password-key-{{ vars.name }}";
+  await password.fill(key);
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  const apiKey = page.getByLabel("API key", { exact: true });
+  assert.equal(await apiKey.getAttribute("type"), "password");
+  assert.equal(await apiKey.inputValue(), key);
+  assert.equal(
+    (await page.getByLabel("Configuration JSON", { exact: true }).inputValue()).includes(key),
+    false,
+  );
+  assert.equal(nonAuthWriteRequests(requests).length, 0);
+  const save = page.getByRole("button", { name: "Create Agent", exact: true });
+  const conflict = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await save.click();
+  assert.equal((await conflict).status(), 409);
+  await page.getByText(/conflicts with the saved state/).waitFor();
+  assert.equal(await apiKey.inputValue(), "");
+  assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), true);
+  await page.getByLabel("Agent name", { exact: true }).fill("Password Agent");
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await save.click();
+  const created = await (await createdResponse).json();
+  await page.waitForURL((url) => url.pathname === `/console/agents/${created.data.id}`);
+  const secretWrites = pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`);
+  assert.equal(secretWrites.length, 1);
+  assert.equal(secretWrites[0].body.value, key);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  assert.equal(
+    JSON.stringify(requests.filter((request) => !request.path.endsWith("/secrets"))).includes(key),
+    false,
+  );
+  assert.equal(created.data.executionMode, "dedicated");
+  assert.equal(created.data.harnessAuth.source.namespaceId, namespace.id);
+  const secrets = await fixture.request("GET", `/namespaces/${namespace.id}/secrets`);
+  assert.ok(secrets.data.some((secret) => secret.id === created.data.harnessAuth.source.id));
+  assert.equal(JSON.stringify(secrets.body).includes(key), false);
+  const retained = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/presets/${preset.data.id}`,
+  );
+  assert.deepEqual(retained.data.template, artifact.template);
+  const access = await fixture.request("GET", `/namespaces/${namespace.id}/iam/access-bindings`);
+  assert.ok(
+    access.data.some(
+      (binding) =>
+        binding.subjectId === created.data.servicePrincipalId &&
+        binding.resourceId === created.data.harnessAuth.source.id,
+    ),
+  );
 });

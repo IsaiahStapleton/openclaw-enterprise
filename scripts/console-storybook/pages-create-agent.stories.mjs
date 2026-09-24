@@ -95,3 +95,16 @@ export const CreateGrantDenied = { ...story("createGrantDenied"), name: "Credent
 export const CreateInvalid = { ...story("createInvalid"), name: "Invalid JSON" };
 export const CreateConflict = { ...story("createConflict"), name: "Provisioning conflict" };
 export const CreateUnknown = { ...story("createUnknown"), name: "Provisioning outcome unknown" };
+
+export const CreatePasswordPreset = {
+  ...story("createPasswordPreset"),
+  name: "Standard Codex password variable",
+};
+export const CreatePasswordPresetDraft = {
+  ...story("createPasswordPresetDraft"),
+  name: "Standard Codex password draft",
+};
+export const CreatePasswordPresetDenied = {
+  ...story("createPasswordPresetDenied"),
+  name: "Password Secret creation denied",
+};

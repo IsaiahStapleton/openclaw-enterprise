@@ -34,7 +34,9 @@ graph TD
   D --> E["User supplies variables and selects Use Preset"]
   E --> F["Renderer copies launch settings"]
   F --> G["Chooser closes; user edits and saves ordinary draft"]
-  G --> H["Configuration API admits and saves"]
+  G --> S["Password input: create Secret in current Namespace"]
+  S --> H["Configuration API admits and saves"]
+  G -->|Existing credential binding| H
   H --> I["Agent API admits and saves"]
   I --> J["Independent Agent draft"]
   F -->|Invalid variable| E
@@ -60,7 +62,9 @@ The normalizer copies the template and fills omitted `namespaceId` fields in
 Harness authentication and Configuration Secret binding sources from the locked
 Namespace. Explicit scopes remain unchanged for same-Namespace validation.
 Template structure, variable declarations, default types, and credential
-references are checked without requiring unfilled variables. Ordinary Agent
+references are checked without requiring unfilled variables. Password definitions
+have no defaults and can appear only as whole tokens at `agent.harnessAuth.secret`;
+literal credentials and substitution into ordinary settings are rejected. Ordinary Agent
 field validation is deferred to the creation APIs. When native values exist,
 the selected Configuration Driver's
 `validateValues` checks their native credential rules; missing capability fails
@@ -78,14 +82,15 @@ path records mutations and denials without template or variable contents.
 
 [`createPresetFields`](../../apps/controller/src/console/agents/presets.mjs)
 lists only readable Presets, then reads the selected resource once. The user
-fills typed inputs and selects **Use Preset**. The shared
+fills typed inputs, including masked password fields, and selects **Use Preset**. The shared
 [`renderPresetTemplate`](../../packages/contracts/src/preset-variables.mjs)
 walks JSON once, rejects missing or mistyped inputs and duplicate rendered native
 keys, and preserves runtime placeholders and unresolved SecretRefs.
 
 Rendering makes no requests and fetches no credentials. On success, the chooser
 is replaced by the ordinary Agent form; the form keeps only the rendered
-settings. Preset updates or deletion cannot alter them. Before saving,
+settings. Password values move into the ordinary masked credential input; the
+chooser clears its detached password controls. Preset updates or deletion cannot alter them. Before saving,
 **Start over** discards the unsaved draft after confirmation and opens a fresh
 chooser. After a save succeeds or its outcome becomes uncertain, restart is
 disabled so the user follows ordinary creation recovery.
@@ -96,10 +101,17 @@ disabled so the user follows ordinary creation recovery.
 
 [The creation form](../../apps/controller/src/console/agents/create.mjs) copies
 rendered settings into editable fields and checks their form representation.
-Save creates a Configuration first, then an Agent that refers to it. Each server
+For a password input, Save first creates a same-Namespace Secret, clears the
+credential input, and retains the returned reference. It then creates a
+Configuration and an Agent that refers to the Configuration and Secret, and
+grants the Agent access. Dedicated provisioning uses the existing provisioning
+flow after Secret creation. Password bytes are sent only to the Secret creation
+endpoint, never as Agent or Configuration fields. Each server
 request owns full schema, native credential, and authorization admission before
 its persistence boundary; browser validation is not that boundary.
 
+If Secret creation fails, the masked input remains for correction or retry.
+If a later save fails, its saved Secret reference is reused.
 If Configuration creation succeeds but Agent creation fails, the form retains
 the Configuration ID and locks Configuration-affecting controls. A safe retry
 reuses the saved Configuration. An uncertain response requires inspection before
@@ -141,6 +153,8 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-24: Add password variables and reuse the ordinary Secret creation and recovery flow (codex/01a0cfbd-e4cc-7d62-8542-c1358ab1bc5b - b682ffad80e92a9cdee1d265f0b51c735847d503)
 
 - 2026-09-24 00:28: Bind omitted Preset SecretRef scopes to the request Namespace before admission and storage (codex/01a0cfbd-e4cc-7d62-8542-c1358ab1bc5b - 3ca1ead02d47b84fb2c4f13b305cbf263c0612a6)
 

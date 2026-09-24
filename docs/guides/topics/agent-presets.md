@@ -58,7 +58,8 @@ To reuse more settings, add fields from the [Preset contract](../../reference/pr
    the rendered copy. To use standard defaults, select **Start without Preset**.
 3. Review the model, execution mode, native Configuration JSON, authentication,
    plugin selections, and Secret bindings. Edit any copied setting and fill
-   missing values. Never paste credential values into variables or native JSON.
+   missing values. Enter credentials only in password variables or credential
+   fields; never in ordinary variables or native JSON.
 4. Select **Create Agent**. Then follow [credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
    for that saved Agent. Creating the draft does not start a workload.
 

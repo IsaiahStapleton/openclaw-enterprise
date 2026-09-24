@@ -401,11 +401,11 @@ test("standard Codex Preset installs and creates a dedicated Agent with restrict
     body: { template: artifact.template },
   });
   assert.equal(updated.status, 200, JSON.stringify(updated.body));
-  assert.equal(updated.data.template.agent.harnessAuth.source.namespaceId, namespace.id);
+  assert.deepEqual(updated.data.template, artifact.template);
   const rendered = renderPresetTemplate(preset.template, {
     name: "Restricted assistant",
     model: "gpt-5.1",
-    modelSecretId: secret.ref.id,
+    modelSecret: "synthetic-model-key",
   });
   const configuration = await fixture.request(
     "POST",
@@ -416,7 +416,11 @@ test("standard Codex Preset installs and creates a dedicated Agent with restrict
   );
   assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
   const agent = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
-    body: { ...rendered.agent, configurationId: configuration.data.id },
+    body: {
+      ...rendered.agent,
+      harnessAuth: { method: rendered.agent.harnessAuth.method, source: secret.ref },
+      configurationId: configuration.data.id,
+    },
   });
   assert.equal(agent.status, 201, JSON.stringify(agent.body));
   assert.equal(agent.data.executionMode, "dedicated");
@@ -462,11 +466,13 @@ test("standard Codex Preset installs and creates a dedicated Agent with restrict
   // The identical artifact installs independently in another Namespace without inputs for scope.
   const otherInstalled = await fixture.request("POST", collection(other.id), { body: artifact });
   assert.equal(otherInstalled.status, 201, JSON.stringify(otherInstalled.body));
-  assert.equal(otherInstalled.data.template.agent.harnessAuth.source.namespaceId, other.id);
+  assert.deepEqual(otherInstalled.data.template, artifact.template);
+  const boundTemplate = structuredClone(preset.template);
+  boundTemplate.agent.harnessAuth = { method: "api_key", source: secret.ref };
   const crossNamespaceUpdate = await fixture.request(
     "PATCH",
     `${collection(other.id)}/${otherInstalled.data.id}`,
-    { body: { template: preset.template } },
+    { body: { template: boundTemplate } },
   );
   assert.equal(crossNamespaceUpdate.status, 400, JSON.stringify(crossNamespaceUpdate.body));
   const otherConfiguration = await fixture.request(
@@ -478,8 +484,46 @@ test("standard Codex Preset installs and creates a dedicated Agent with restrict
   );
   assert.equal(otherConfiguration.status, 201, JSON.stringify(otherConfiguration.body));
   const rejected = await fixture.request("POST", `/namespaces/${other.id}/agents`, {
-    body: { ...rendered.agent, configurationId: otherConfiguration.data.id },
+    body: {
+      ...rendered.agent,
+      harnessAuth: { method: "api_key", source: secret.ref },
+      configurationId: otherConfiguration.data.id,
+    },
   });
   assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
   assert.equal(JSON.stringify(installed.body).includes("synthetic-model-key"), false);
+});
+
+test("password Presets reject stored credentials and password substitution outside credential inputs", async (t) => {
+  const fixture = await createFixture(t);
+  const namespace = await fixture.createNamespace("Password admission", { ready: true });
+  const template = {
+    variables: { key: { type: "password" } },
+    agent: { harnessAuth: { method: "api_key", secret: "{{ vars.key }}" } },
+  };
+  const preset = await createPreset(fixture, namespace.id, "Password", template);
+  const unsafe = [
+    { ...template, variables: { key: { type: "password", default: "sentinel-credential" } } },
+    { ...template, agent: { harnessAuth: { method: "api_key", secret: "sentinel-credential" } } },
+    { ...template, variables: { key: { type: "string", default: "sentinel-credential" } } },
+    { ...template, agent: { name: "{{ vars.key }}" } },
+    { ...template, configuration: { values: { env: { MODEL_KEY: "{{ vars.key }}" } } } },
+    { ...template, agent: { harnessAuth: { method: "api_key", secret: "prefix-{{ vars.key }}" } } },
+  ];
+  for (const candidate of unsafe) {
+    for (const method of ["POST", "PATCH"]) {
+      const response = await fixture.request(
+        method,
+        `${collection(namespace.id)}${method === "PATCH" ? `/${preset.id}` : ""}`,
+        {
+          body: { name: "Unsafe", template: candidate },
+        },
+      );
+      assert.equal(response.status, 400, JSON.stringify(response.body));
+      assert.equal(JSON.stringify(response.body).includes("sentinel-credential"), false);
+    }
+  }
+  const retained = await fixture.request("GET", `${collection(namespace.id)}/${preset.id}`);
+  assert.deepEqual(retained.data.template, template);
+  assert.equal(JSON.stringify(fixture.audit.events).includes("sentinel-credential"), false);
 });

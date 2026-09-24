@@ -10,9 +10,9 @@
         "type": "string",
         "description": "Codex model ID without the codex/ prefix"
       },
-      "modelSecretId": {
-        "type": "string",
-        "description": "Same-Namespace Secret ID containing the model API key"
+      "modelSecret": {
+        "type": "password",
+        "description": "Model API key; stored as a Secret when you create the Agent"
       }
     },
     "agent": {
@@ -21,10 +21,7 @@
       "providerId": null,
       "harnessAuth": {
         "method": "api_key",
-        "source": {
-          "kind": "secret",
-          "id": "{{ vars.modelSecretId }}"
-        }
+        "secret": "{{ vars.modelSecret }}"
       },
       "plugins": {}
     },
