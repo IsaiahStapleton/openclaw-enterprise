@@ -286,7 +286,7 @@ function validateRepositorySettings(agent, partial) {
     }
     selector(access.defaultProfile, "agent.repositoryAccess.defaultProfile");
   }
-  const entries = access?.repositories ?? agent.repositoryBindings;
+  const entries = access !== undefined ? access.repositories : agent.repositoryBindings;
   if (entries === undefined) {
     return;
   }
