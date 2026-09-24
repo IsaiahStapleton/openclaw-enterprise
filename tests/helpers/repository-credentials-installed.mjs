@@ -658,6 +658,10 @@ export async function createInstalledRepositoryFixture(
     `${release}-openclaw-tenant-api`,
     "api",
   );
+  await record("Operator granted exact tenant and control-plane namespace access", {
+    tenant,
+    gatewayRuntimeNamespace,
+  });
   await waitFor(
     "OCC Namespace ready",
     async () => (await api("GET", `/namespaces/${namespace.id}`)).status === "ready",

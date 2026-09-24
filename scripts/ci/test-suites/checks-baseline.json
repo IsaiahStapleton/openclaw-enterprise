@@ -61,6 +61,9 @@
       "path": "tests/conformance/pr-status.test.mjs"
     },
     {
+      "path": "tests/conformance/repository-credentials-tool-evidence.test.mjs"
+    },
+    {
       "path": "tests/conformance/presets.test.mjs"
     },
     {
