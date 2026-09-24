@@ -67,7 +67,8 @@ only after the transaction commits.
 
 Role creation accepts only nonempty, duplicate-free permissions for Namespace
 resource kinds. AccessBinding creation accepts identity subjects and exact
-targets in the same Namespace. OCC verifies the target resource exists and that
+targets in the same Namespace, including the Namespace itself when the target
+ID matches the path Namespace. OCC verifies the target resource exists and that
 the caller can read it before asking the IAM Driver to create the binding.
 
 ### 4. The IAM Driver persists or reads policy
@@ -78,6 +79,8 @@ The native IAM Driver implements Namespace policy methods against the
 platform-provided policy repository. It rejects missing Roles, cross-Namespace
 targets, unsupported subjects, duplicate IDs, referenced Role deletion, and
 unknown exact bindings without weakening authorization.
+Existing human Principals can receive bindings without a Namespace service
+identity. ServicePrincipal subjects must belong to that exact Namespace.
 
 ### 5. Platform state commits policy and audit together
 
@@ -87,6 +90,11 @@ The PostgreSQL state implementation writes Roles and AccessBindings through the
 same unit of work used by the API audit append. If commit outcome is unknown,
 OCC reports dependency failure rather than assuming policy state. Later
 authorization requests read the current policy through the IAM Driver.
+Namespace locking serializes grant creation with Namespace deletion; exact
+resource targets retain their existing deletion locks. Identity foreign keys
+protect persisted bindings without expanding application-role privileges.
+The in-memory adapter accepts explicitly provisioned identities at construction
+and validates Agent-owned ServicePrincipals against its current Agent state.
 
 ## Debugging and Verification
 
@@ -113,4 +121,6 @@ authorization requests read the current policy through the IAM Driver.
 ## Changelog
 
 - 2026-09-23 22:56: Update source ownership for extracted IAM HTTP handlers; preserve admission and transaction boundaries. (codex/01a0d075-a358-7620-8c16-fd4290acddf1 - 4df9f9800836dc1c2b57afd5f8af4d91f55088d5)
+
+- 2026-09-23 08:44: Extend the managed grant path to existing humans and exact Namespace targets. (authoring-run/1d5da2d1-e61e-4277-bd91-037d64c10744 - 370570d788725a178a7441f8388a333c47c29798)
 - 2026-09-20 09:32: Document Namespace IAM policy management flow. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 5f7728e8c5d128bc7067b7035e07f06c3c4da92c)

@@ -45,6 +45,15 @@ production bootstrap still needs its own URL:
 )
 ```
 
+The production bootstrap test also exercises existing-person Agent sharing through
+real cookie-authenticated HTTP, native IAM and restricted PostgreSQL State. It
+checks initial denial, exact Namespace/Agent grants, sibling and Configuration
+denial, persisted sessions and policy after application restart, and selective
+revocation while another person retains access. The fixture seeds an existing
+Installation-reader Role; account creation and password sign-in use ordinary APIs.
+This is not atomic-enrollment proof. Its passive Compute and test Configuration/Secret
+Drivers do not establish native Gateway execution or closure of open streams.
+
 The two PostgreSQL URLs select different coverage. Omitting the general URL
 skips most persistence tests, including queue coverage; omitting
 `OCC_PRODUCTION_WIREUP_DATABASE_URL` skips production bootstrap. `test:postgres`

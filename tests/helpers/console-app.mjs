@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:net";
 import { randomUUID, createHash, X509Certificate } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -120,9 +121,56 @@ export async function createConsoleAppFixture(t, options = {}) {
     bindings: seed.bindings.map((binding) => ({ ...binding })),
     restrictions: [],
   };
+  // These grant-free accounts are fixture setup, before the immutable identity snapshot.
+  // This does not implement dynamic production enrollment.
+  const provisionedAccounts = [];
+  for (const label of options.provisionedPeople ?? []) {
+    const personCredentials = {
+      email: `${label}-${randomUUID()}@example.com`,
+      password: `console-password-${randomUUID()}`,
+      name: label,
+    };
+    const person = await auth.createAccount(personCredentials);
+    const personSeed = auth.principalSeed(person, { roleId: seed.roles[0].id });
+    policy.identities.push(personSeed.principal);
+    provisionedAccounts.push({ credentials: personCredentials, principal: personSeed.principal });
+  }
   const auditSink = new InMemoryAuditSink();
+  const policyUnit = new AsyncLocalStorage();
+  class ConsolePlatformState extends InMemoryPlatformState {
+    transact(work) {
+      // Authorization inside a transaction reads that actual unit, without waiting on itself.
+      return super.transact((unit) => policyUnit.run(unit, () => work(unit)));
+    }
+  }
+  const platformState =
+    options.state ?? new ConsolePlatformState({ auditSink, iamIdentities: policy.identities });
   const iamDriver = new NativeIAMDriver(
-    { loadNativeIAMState: async () => policy },
+    {
+      async loadNativeIAMState() {
+        // The real evaluator reads Roles and bindings committed by the real policy APIs.
+        if (options.provisionedPeople === undefined) {
+          return policy;
+        }
+        const readPolicy = async (view) => {
+          const namespaces = await view.namespaces.listNamespaces();
+          const roles = [];
+          const bindings = [];
+          for (const namespace of namespaces) {
+            roles.push(...(await view.iamPolicy.listRoles(namespace.id)));
+            bindings.push(...(await view.iamPolicy.listAccessBindings(namespace.id)));
+          }
+          return { roles, bindings };
+        };
+        const unit = policyUnit.getStore();
+        const managed = await (unit ? readPolicy(unit) : platformState.read(readPolicy));
+        return {
+          ...policy,
+          roles: [...policy.roles, ...managed.roles],
+          bindings: [...policy.bindings, ...managed.bindings],
+        };
+      },
+    },
     { id: "console-native-iam" },
   );
   const providers = options.providers ?? providerFixtures;
@@ -130,7 +178,6 @@ export async function createConsoleAppFixture(t, options = {}) {
   const providerSummaries = Object.hasOwn(options, "providerSummaries")
     ? options.providerSummaries
     : providerSummariesFromDefinitions(providers);
-  const platformState = options.state ?? new InMemoryPlatformState({ auditSink });
   const secretDriver = Object.hasOwn(options, "secretDriver")
     ? options.secretDriver
     : createTestSecretDriver({ id: "console-secret" });
@@ -187,6 +234,9 @@ export async function createConsoleAppFixture(t, options = {}) {
     appOptions.providerSummaries = providerSummaries;
   }
   const app = createFastifyApp(appOptions);
+  if (options.onSend) {
+    app.addHook("onSend", options.onSend);
+  }
   await app.listen({ host: "127.0.0.1", port });
   const cleanupBeforeAppClose = [];
   let appClosed = false;
@@ -340,7 +390,7 @@ export async function createConsoleAppFixture(t, options = {}) {
       headers: session === null ? headers : authenticatedHeaders(session, headers),
       body,
     });
-    const payload = parseJson(result);
+    const payload = result.response.status === 204 ? {} : parseJson(result);
     return {
       status: result.response.status,
       headers: result.response.headers,
@@ -512,6 +562,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     browserArgs,
     credentials,
     memoryDatabase,
+    provisionedAccounts,
     policy,
     rawRequest,
     request,

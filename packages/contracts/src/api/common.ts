@@ -258,6 +258,7 @@ export const ResourceKindSchema = Type.Union([
 ]);
 
 export const NamespacePolicyResourceKindSchema = Type.Union([
+  Type.Literal("namespace"),
   Type.Literal("agent"),
   Type.Literal("agent_revision"),
   Type.Literal("configuration"),

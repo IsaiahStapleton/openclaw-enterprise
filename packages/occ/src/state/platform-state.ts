@@ -22,6 +22,7 @@ import type {
   HarnessExecutionMode,
   HarnessAuthBinding,
   HarnessAuthSnapshot,
+  Identity,
   Installation,
   Namespace,
   NamespaceStatus,
@@ -597,6 +598,8 @@ export interface PlatformAuditSink {
 
 export interface InMemoryPlatformStateOptions {
   readonly auditSink?: PlatformAuditSink;
+  /** Preprovisioned identities copied at construction; later input changes are not observed. */
+  readonly iamIdentities?: readonly Identity[];
 }
 
 interface PlatformSnapshot {
@@ -798,7 +801,10 @@ function assertSecret(secret: Secret): void {
   }
 }
 
-function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
+function repositories(
+  snapshot: PlatformSnapshot,
+  iamIdentities: readonly Identity[],
+): PlatformUnitOfWork {
   const installations: InstallationRepository = {
     findInstallation: async (installationId) =>
       snapshot.installation?.id === installationId
@@ -1671,6 +1677,11 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     resourceKind: NonNullable<AccessBinding["resourceKind"]>,
     resourceId: string,
   ): Promise<boolean> => {
+    if (resourceKind === "namespace") {
+      return (
+        resourceId === namespaceId && (await namespaces.findNamespace(namespaceId)) !== undefined
+      );
+    }
     if (resourceKind === "agent") {
       return (await agents.findAgent(namespaceId, resourceId)) !== undefined;
     }
@@ -1775,7 +1786,15 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       }
       if (
         binding.subjectKind !== "identity" ||
-        !namespaceServicePrincipalExists(namespace.id, binding.subjectId)
+        (!namespaceServicePrincipalExists(namespace.id, binding.subjectId) &&
+          !iamIdentities.some(
+            (identity) =>
+              identity.id === binding.subjectId &&
+              ((identity.kind === "principal" && identity.namespaceId === undefined) ||
+                (identity.kind === "service_principal" &&
+                  identity.namespaceId === namespace.id &&
+                  identity.agentId === undefined)),
+          ))
       ) {
         throw new ScopeViolationError(
           "The IAM AccessBinding subject does not belong to the exact Namespace.",
@@ -2000,9 +2019,11 @@ export class InMemoryPlatformState implements PlatformStateStore {
   };
   private pending: Promise<void> = Promise.resolve();
   private readonly auditSink: PlatformAuditSink | undefined;
+  private readonly iamIdentities: readonly Identity[];
 
   constructor(options: InMemoryPlatformStateOptions = {}) {
     this.auditSink = options.auditSink;
+    this.iamIdentities = immutableCopy(options.iamIdentities ?? []);
   }
 
   pendingOperations(): readonly Readonly<PlatformOperation>[] {
@@ -2014,7 +2035,10 @@ export class InMemoryPlatformState implements PlatformStateStore {
     const lifetime = new RepositoryTransactionLifetime();
     try {
       return await work(
-        createPlatformReadView(repositories(cloneSnapshot(this.snapshot)), lifetime),
+        createPlatformReadView(
+          repositories(cloneSnapshot(this.snapshot), this.iamIdentities),
+          lifetime,
+        ),
       );
     } finally {
       await lifetime.finish();
@@ -2032,7 +2056,9 @@ export class InMemoryPlatformState implements PlatformStateStore {
       await previous;
       const working = cloneSnapshot(this.snapshot);
       const committedAuditCount = working.audit.length;
-      const result = await work(bindPlatformUnitOfWork(repositories(working), lifetime));
+      const result = await work(
+        bindPlatformUnitOfWork(repositories(working, this.iamIdentities), lifetime),
+      );
       await lifetime.finish();
       await this.publishAudit(working.audit.slice(committedAuditCount));
       this.snapshot = working;

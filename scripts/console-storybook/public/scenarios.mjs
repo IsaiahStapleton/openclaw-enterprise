@@ -55,6 +55,12 @@ const createProvisioningSecrets = [
   click("Apply channel settings"),
 ];
 
+const shareExistingPerson = [
+  { selector: "#share-principal-id", value: "person-demo" },
+  { selector: ".agent-access-consent input", click: true },
+  click("Share Agent"),
+];
+
 // API failures are injected at the HTTP boundary. The console owns their presentation.
 export const scenarios = {
   overview: {
@@ -671,6 +677,51 @@ export const scenarios = {
     path: draft,
     description:
       "Editable desired configuration, masked authentication summary, deployment gate, and Agent deletion.",
+  },
+  agentSharing: {
+    group: "Pages/Agent detail",
+    name: "Share an Agent",
+    path: draft,
+    description:
+      "Grant an existing person access to this Agent's full native Gateway. Other Agents and OCE administration remain separate.",
+    steps: [
+      "Enter person-demo as the existing Principal ID.",
+      "Review the native-access disclosure, acknowledge it, and share.",
+      "Remove the direct binding; Namespace discovery remains available.",
+    ],
+  },
+  agentSharingGranted: {
+    group: "Pages/Agent detail",
+    name: "Agent shared",
+    path: draft,
+    actions: shareExistingPerson,
+    description:
+      "Namespace discovery and the selected Agent grant are present. Removing the direct grant does not remove other effective access.",
+  },
+  agentSharingRemoved: {
+    group: "Pages/Agent detail",
+    name: "Direct Agent grant removed",
+    path: draft,
+    actions: [...shareExistingPerson, click("Remove binding")],
+    description:
+      "The selected direct Agent binding was removed. Namespace discovery and unrelated grants are preserved.",
+  },
+  agentSharingDenied: {
+    group: "Pages/Agent detail",
+    name: "Sharing administration denied",
+    path: draft,
+    rules: [{ suffix: "/iam/roles", status: 403 }],
+    description:
+      "An Agent's other controls retain their own permissions when sharing administration is unavailable.",
+  },
+  agentSharingUnknown: {
+    group: "Pages/Agent detail",
+    name: "Sharing outcome uncertain",
+    path: draft,
+    actions: shareExistingPerson,
+    rules: [{ suffix: "/iam/access-bindings", method: "POST", status: 503, once: true }],
+    description:
+      "A failed mutation response leaves the outcome uncertain. Refresh current policy before explicitly retrying; no automatic replay occurs.",
   },
   configurationEditor: {
     group: "Pages/Agent detail",

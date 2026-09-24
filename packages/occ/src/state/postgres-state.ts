@@ -2377,6 +2377,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       resourceId: string,
     ): Promise<boolean> => {
       const queryByKind: Record<string, string> = {
+        namespace: "SELECT 1 FROM occ.namespaces WHERE id = $1 AND id = $2 FOR KEY SHARE",
         agent: "SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         agent_revision: "SELECT 1 FROM occ.agent_revisions WHERE namespace_id = $1 AND id = $2",
         configuration:
@@ -2497,7 +2498,10 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         const identity = await client.query(
           `SELECT 1 FROM occ.iam_identities
-           WHERE namespace_id = $1 AND id = $2 AND kind = 'service_principal'`,
+           WHERE id = $2 AND (
+             (kind = 'principal' AND namespace_id IS NULL) OR
+             (kind = 'service_principal' AND namespace_id = $1)
+           )`,
           [namespace.id, binding.subjectId],
         );
         if (identity.rowCount !== 1) {

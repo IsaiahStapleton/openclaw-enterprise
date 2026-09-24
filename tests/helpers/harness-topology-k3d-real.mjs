@@ -206,7 +206,7 @@ async function createAuthenticatedControllerUrlRequest(origin, credentials, requ
   };
 }
 
-async function attachPostgresToK3d(context) {
+async function attachPostgresToK3d(registerCleanup) {
   const statePath = process.env.OPENCLAW_ENTERPRISE_CI_STATE;
   const containerBin = process.env.OCC_DOCKER_BIN ?? "docker";
   assert.ok(statePath, "OPENCLAW_ENTERPRISE_CI_STATE is required for in-cluster OCC");
@@ -253,7 +253,7 @@ async function attachPostgresToK3d(context) {
   if (!alreadyAttached) {
     await executeFile(containerBin, ["network", "connect", network, postgresContainer]);
   }
-  context.after(async () => {
+  registerCleanup(async () => {
     if (!alreadyAttached) {
       await executeFile(containerBin, [
         "network",
@@ -428,6 +428,7 @@ async function startInClusterControllers(
     authBaseURL,
     controller,
     controllerPort,
+    databaseAddress,
     events,
     nativeAdminDomain,
     nativeAdminSharedCookieDomain,
@@ -435,7 +436,6 @@ async function startInClusterControllers(
     workspaceGateway,
   },
 ) {
-  const databaseAddress = await attachPostgresToK3d(context);
   const databaseServiceName = "occ-test-postgres";
   const inClusterDatabaseUrl = new URL(databaseUrl);
   inClusterDatabaseUrl.hostname = `${databaseServiceName}.${platformNamespace}.svc`;
@@ -1537,7 +1537,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       : undefined;
   const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
   const platformState = new PostgresPlatformState(observerPool);
-  let activeInstallation = await platformState.loadInstallation();
+  let detachPostgres;
+  let databaseAddress;
   let workerPool;
   let worker;
   let productionApp;
@@ -1559,6 +1560,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
         await productionApp.close();
       }
       await observerPool.end();
+      await detachPostgres?.();
       if (gatewayRuntimeNamespace !== undefined) {
         await kubectl(
           "delete",
@@ -1582,6 +1584,16 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  // Docker may replace published-port connections when another network attaches.
+  // Complete that topology change before opening the observer/bootstrap pools;
+  // its registered cleanup runs only after those pools and controllers stop.
+  if (workspaceGateway !== undefined) {
+    databaseAddress = await attachPostgresToK3d((cleanup) => {
+      detachPostgres = cleanup;
+    });
+  }
+  let activeInstallation = await platformState.loadInstallation();
 
   let createdFreshInstallation = false;
   if (activeInstallation !== undefined) {
@@ -1623,6 +1635,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       apiConfiguration,
       authBaseURL: controllerAuthBaseURL,
       controller,
+      databaseAddress,
       controllerPort: options.controllerPort,
       events,
       nativeAdminDomain: options.nativeAdmin?.domain,

@@ -202,6 +202,7 @@ const ACTIONS: readonly PermissionAction[] = [
 ];
 
 const MANAGED_RESOURCE_KINDS: readonly ManagedIAMResourceKind[] = [
+  "namespace",
   "preset",
   "agent",
   "agent_revision",

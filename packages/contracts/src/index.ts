@@ -743,7 +743,13 @@ export interface IAMPolicyManagementContext {
 }
 
 export type ManagedIAMResourceKind =
-  "agent" | "agent_revision" | "configuration" | "preset" | "secret" | "service_account";
+  | "namespace"
+  | "agent"
+  | "agent_revision"
+  | "configuration"
+  | "preset"
+  | "secret"
+  | "service_account";
 
 export interface IAMManagedRoleInput {
   readonly id: string;

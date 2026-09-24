@@ -512,7 +512,10 @@ async function createInjectedFixture(options = {}) {
         ? { controller }
         : {
             createController(installation) {
-              const baseState = new InMemoryPlatformState({ auditSink });
+              const baseState = new InMemoryPlatformState({
+                auditSink,
+                iamIdentities: state.identities,
+              });
               platformState =
                 options.deploymentWorks === undefined
                   ? baseState
@@ -939,6 +942,73 @@ test("Namespace IAM routes manage exact Role and AccessBinding policy through th
   assert.equal(missingRole.body.error.code, "NOT_FOUND");
 });
 
+test("Namespace IAM routes bind existing humans to the exact Namespace and Agent", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("assigned-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "human-iam");
+  const foreign = await createNamespace(controller, "foreign-human-iam");
+  const agent = await createAgent(controller, namespace.id, "assigned-agent");
+  const foreignAgent = await createAgent(controller, foreign.id, "foreign-agent");
+  const role = await controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+    body: {
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "agent" },
+      ],
+    },
+  });
+  assert.equal(role.status, 201, JSON.stringify(role.body));
+
+  const bind = (subjectId, resourceKind, resourceId) =>
+    controller.request("POST", `/namespaces/${namespace.id}/iam/access-bindings`, {
+      body: { subjectKind: "identity", subjectId, roleId: role.data.id, resourceKind, resourceId },
+    });
+  // A provisioned human has no Namespace ServicePrincipal entry.
+  for (const [resourceKind, resourceId] of [
+    ["namespace", namespace.id],
+    ["agent", agent.id],
+  ]) {
+    const binding = await bind(member.principal.id, resourceKind, resourceId);
+    assert.equal(binding.status, 201, JSON.stringify(binding.body));
+    assert.equal(binding.data.subjectId, member.principal.id);
+    assert.equal(binding.data.resourceKind, resourceKind);
+    assert.equal(binding.data.resourceId, resourceId);
+  }
+
+  for (const [subjectId, resourceKind, resourceId] of [
+    ["missing-human", "namespace", namespace.id],
+    [foreignAgent.servicePrincipalId, "namespace", namespace.id],
+    [member.principal.id, "namespace", foreign.id],
+    [member.principal.id, "namespace", `ns_${randomUUID()}`],
+    [member.principal.id, "agent", foreignAgent.id],
+    [member.principal.id, "agent", namespace.id],
+  ]) {
+    const denied = await bind(subjectId, resourceKind, resourceId);
+    assert.equal(denied.status, 404, JSON.stringify(denied.body));
+  }
+
+  const memberApp = fixture.createApp(member.principal);
+  const forbidden = await injectedRequest(
+    memberApp,
+    "POST",
+    `/namespaces/${namespace.id}/iam/roles`,
+    {
+      body: { permissions: [{ action: "read", resourceKind: "namespace" }] },
+    },
+  );
+  assert.equal(forbidden.status, 403, "human grants must not confer policy administration");
+  const bindings = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/iam/access-bindings`,
+  );
+  assert.equal(bindings.data.length, 2, "rejected grants must leave policy unchanged");
+});
+
 test("Namespace IAM read routes serialize broad native policy without widening mutations", async () => {
   const fixture = await createInjectedFixture();
   const controller = {
@@ -1036,7 +1106,7 @@ test("Namespace IAM read routes serialize broad native policy without widening m
     {
       body: {
         name: "Rejected broad mutating role",
-        permissions: [{ action: "read", resourceKind: "namespace" }],
+        permissions: [{ action: "read", resourceKind: "installation" }],
       },
     },
   );
@@ -1125,7 +1195,9 @@ test("Namespace IAM routes fail closed without policy management and roll back a
   assert.equal(dependencyFailure.status, 503, JSON.stringify(dependencyFailure.body));
   assert.equal(dependencyFailure.body.error.code, "DEPENDENCY_UNAVAILABLE");
   assert.deepEqual(
-    unsupportedFixture.state.roles.filter((role) => role.namespaceId === unsupportedNamespace.id),
+    await unsupportedFixture.platformState.read((unit) =>
+      unit.iamPolicy.listRoles(unsupportedNamespace.id),
+    ),
     [],
   );
 
@@ -1156,7 +1228,9 @@ test("Namespace IAM routes fail closed without policy management and roll back a
   assert.equal(auditFailure.status, 503);
   assert.equal(auditFailure.body.error.code, "DEPENDENCY_UNAVAILABLE");
   assert.deepEqual(
-    rollbackFixture.state.roles.filter((role) => role.namespaceId === rollbackNamespace.id),
+    await rollbackFixture.platformState.read((unit) =>
+      unit.iamPolicy.listRoles(rollbackNamespace.id),
+    ),
     [],
   );
 });

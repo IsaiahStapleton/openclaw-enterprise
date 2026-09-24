@@ -1,5 +1,6 @@
 import { element, button } from "../dom.mjs";
 import { createHarnessAuthFields, harnessAuthDescription } from "./harness-auth.mjs";
+import { renderAgentAccess } from "./access.mjs";
 import { renderNativeAdminAccess } from "./native-admin.mjs";
 import { createAgentDeletion } from "./deletion.mjs";
 import { createAgentStop } from "./stop.mjs";
@@ -267,6 +268,7 @@ export async function renderAgentDetail(context) {
     identity,
     ...deploymentStatus,
     renderNativeAdminAccess(context, path),
+    renderAgentAccess(context, agent),
     selector,
     tabs,
     content,

@@ -8,11 +8,10 @@ last_updated_session: public-pr/348
 
 ## Overview
 
-Opening `/console/` resolves a cookie session and renders authorized resources.
-This trace follows Namespace selection, Agent creation and editing, runtime
-actions, Providers, and logout. It stops at rendered state or a submitted API
-mutation; deletion additionally confirms absence. The [console reference](../reference/console.md)
-owns user-visible behavior, while API and IAM retain resource authority.
+`/console/` authenticates cookie sessions and renders authorized resources,
+sharing and runtime controls. Requests end in rendering, mutation or confirmed
+deletion. The [console reference](../reference/console.md) owns behavior;
+API and IAM authorize resources.
 
 ## Entry Points
 
@@ -50,6 +49,7 @@ graph TD
     E2 --> E3["Save supported channel draft edit"]
     E2 --> E4["Confirm Agent deletion"]
     E2 --> E5["Confirm Agent stop"]
+    E2 --> E6["Share with an existing Principal"]
   end
   subgraph Controller["Controller API"]
     E --> F["Authenticate and authorize exact scope"]
@@ -66,6 +66,7 @@ graph TD
     E3 --> O["PATCH Configuration, then grant selected Secret access"]
     E4 --> P["DELETE exact Agent"]
     E5 --> P2["POST exact Agent stop"]
+    E6 --> P3["Read policy and serialize exact Role and binding writes"]
   end
   subgraph Result["Browser result"]
     G --> I["Accept only current navigation response"]
@@ -76,6 +77,9 @@ graph TD
     O --> I
     P -->|accepted or uncertain| Q["Show status and refresh exact Agent"]
     P2 -->|accepted or uncertain| Q
+    P3 -->|confirmed steps| I
+    P3 -->|uncertain| Q2["Block writes until policy refresh"]
+    P3 -->|policy denied| K2["Keep other Agent panels available"]
     P2 -->|denied| K
     P -->|denied| K
     Q -->|Agent not found| R["Return to Agents list"]
@@ -221,18 +225,6 @@ traces draft/revision rendering, channel changes, credential provisioning,
 workspace reads/writes, stopping, and deletion. Each request returns through the
 response-ordering checks below.
 
-`apps/controller/src/console/channels/slack.mjs:supportSlack` checks whether the
-channel editor can preserve the stored settings. Existing `dmPolicy` and
-`groupPolicy` values do not block editing. `updatedSlack` copies those values
-unchanged, including their absence, when saving channel IDs, channel sender
-users, or mention settings. It preserves unrelated properties on selected
-channel entries, then writes the selected channels' `users` lists from the
-drawer. The everyone option writes `users: ["*"]` on each selected channel;
-direct-message `allowFrom` is not changed by channel edits. Only a new Slack
-configuration receives allowlist defaults. Existing channel maps with mixed
-sender lists or a `*` channel entry are rejected by the simple editor so native
-Configuration JSON remains the source of truth.
-
 `apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers a
 handler for tab-only navigation with `console.mjs:loadPage`. For the same Agent,
 Namespace, and revision, tab clicks and browser history update the URL and replace
@@ -246,6 +238,8 @@ Each tab render captures its own generation. Late panel reads and form callbacks
 cannot overwrite a newer tab; leaving a tab clears its password inputs. Channel
 Secret saves update the shared draft snapshot used by other tabs and deployment
 preflight. Session expiry still clears the whole private view.
+
+See [sharing and removal](platform-console/agent-editing.md#share-and-remove-explicit-agent-access) for the exact policy-write sequence.
 
 ### 7. Commit only the current response, or clear the view
 
@@ -317,6 +311,12 @@ uncertain response disables replay until refresh and inspection.
 ## Changelog
 
 - 2026-09-24 06:19: Replace Console model discovery with an intentional static starter list and preserve manual entry. (01a0d20c-dc1b-7d22-a965-60b9c244b29d - 24ecb94b)
+
+- 2026-09-24 06:09: Preserve current Slack editing behavior alongside existing-person sharing. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c3a3913f0aded736b17140d6caa7c5c857641a9d)
+
+- 2026-09-23 22:29: Receive main; consolidate the sharing trace. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 3bf606bfda107ada7e32a941c161aa0fdcbafd92)
+
+- 2026-09-23 10:11: Trace sharing, removal and uncertain outcomes. (authoring-run/2dbd0778-19ef-4616-a799-abcfcba888e4 - ba03f19e950577141837c02dda37112fd3377dc5)
 
 - 2026-09-23 21:41: Preserve edited Codex plugin settings across model and key changes. (01a0cce9-23e3-7072-aa3f-a2e26d2dbf11 - b8f23be17de4a4b077dab8d6b90b4add1f9146cb)
 

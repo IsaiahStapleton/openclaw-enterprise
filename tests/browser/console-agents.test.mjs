@@ -5184,6 +5184,261 @@ test("Agent tab switches ignore late configuration reads and keep direct workspa
   assert.equal(requests.filter((request) => request.path === configurationPath).length, 1);
 });
 
+test("Agent sharing grants existing people exact discovery and native access, then removes only the selected binding", async (t) => {
+  const cookieDomain = "oce.example.test";
+  const consoleHost = `console.${cookieDomain}`;
+  const fixture = await createConsoleAppFixture(t, {
+    provisionedPeople: ["shared-person"],
+    originHost: consoleHost,
+    publicOrigin: true,
+    authCookieDomain: cookieDomain,
+    development: { enabled: false },
+    https: true,
+    authSecureCookies: true,
+    nativeAdmin: {
+      enabled: true,
+      domain: `agents.${cookieDomain}`,
+      sharedCookieDomain: cookieDomain,
+    },
+    nativeAdminGatewayApiKey: async () => "native-admin-gateway-api-key",
+    computeDriver: nativeAdminComputeDriver("wss://private-gateway.example.invalid/shared"),
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Shared workspace", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Shared research Agent",
+    nativeValues("shared"),
+  );
+  const sibling = await fixture.createAgent(
+    namespace.id,
+    "Private sibling",
+    nativeValues("private"),
+  );
+  await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const native = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
+  );
+  await fixture.updateConfiguration(
+    namespace.id,
+    agent.configurationId,
+    nativeAdminValues("shared", native.data.origin),
+  );
+  const active = await fixture.seedActiveAgentRevision(
+    namespace.id,
+    agent.id,
+    (await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`)).data
+      .activeRevisionId,
+  );
+  const person = fixture.provisionedAccounts[0];
+  const session = await fixture.signIn(person.credentials);
+  assert.deepEqual((await fixture.request("GET", "/namespaces", { session })).data, []);
+  const policyPath = `/namespaces/${namespace.id}/iam`;
+  // A familiar display name must never substitute for the required exact permission set.
+  const misleadingRole = await fixture.request("POST", `${policyPath}/roles`, {
+    body: {
+      name: "Agent native administration",
+      permissions: [{ action: "delete", resourceKind: "agent" }],
+    },
+  });
+  assert.equal(misleadingRole.status, 201);
+  const browserOptions = {
+    args: [...fixture.browserArgs, `--host-resolver-rules=MAP ${consoleHost} 127.0.0.1`],
+  };
+  const { page, artifacts } = await newPage(t, fixture, browserOptions);
+  const detail = detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`);
+  const panel = page.getByRole("region", { name: "Share Agent", exact: true });
+  await panel.getByLabel("Existing person’s Principal ID").fill(person.principal.id);
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText("Agent access is shared.", { exact: false }).waitFor();
+  await panel.screenshot({ path: join(artifacts, "agent-sharing-granted.png") });
+  const bindings = (await fixture.request("GET", `${policyPath}/access-bindings`)).data;
+  assert.equal(bindings.length, 2);
+  assert.equal(
+    bindings.some((binding) => binding.roleId === misleadingRole.data.id),
+    false,
+  );
+  assert.deepEqual(bindings.map((binding) => [binding.resourceKind, binding.resourceId]).sort(), [
+    ["agent", agent.id],
+    ["namespace", namespace.id],
+  ]);
+  assert.deepEqual(
+    (await fixture.request("GET", "/namespaces", { session })).data.map((item) => item.id),
+    [namespace.id],
+  );
+  assert.deepEqual(
+    (await fixture.request("GET", `/namespaces/${namespace.id}/agents`, { session })).data.map(
+      (item) => item.id,
+    ),
+    [agent.id],
+  );
+  assert.equal(
+    (await fixture.request("GET", `/namespaces/${namespace.id}/agents/${sibling.id}`, { session }))
+      .status,
+    403,
+  );
+  assert.equal(
+    (
+      await fixture.request(
+        "GET",
+        `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+        { session },
+      )
+    ).status,
+    403,
+  );
+  assert.equal((await fixture.request("GET", `${policyPath}/roles`, { session })).status, 403);
+  assert.equal(
+    (
+      await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`, {
+        session,
+      })
+    ).data.status,
+    "available",
+  );
+
+  const recipient = (await newPage(t, fixture, browserOptions)).page;
+  await login(recipient, fixture, `${detail.pathname}${detail.search}`, person.credentials);
+  await recipient
+    .getByText("Sharing policy requires Installation administration.", { exact: false })
+    .waitFor();
+  await recipient.getByRole("heading", { name: "Configuration unavailable" }).waitFor();
+  await recipient.getByRole("link", { name: "Open native admin UI" }).waitFor();
+  await recipient.screenshot({
+    path: join(artifacts, "agent-sharing-recipient.png"),
+    fullPage: true,
+  });
+  // Stop has its own permission. Grant it separately through the real policy API.
+  assert.equal(
+    (
+      await fixture.request("POST", `/namespaces/${namespace.id}/agents/${agent.id}/stop`, {
+        session,
+      })
+    ).status,
+    403,
+  );
+  const operateRole = await fixture.request("POST", `${policyPath}/roles`, {
+    body: { permissions: [{ action: "operate", resourceKind: "agent" }] },
+  });
+  const operateBinding = await fixture.request("POST", `${policyPath}/access-bindings`, {
+    body: {
+      subjectKind: "identity",
+      subjectId: person.principal.id,
+      roleId: operateRole.data.id,
+      resourceKind: "agent",
+      resourceId: agent.id,
+    },
+  });
+  assert.equal(operateBinding.status, 201);
+  await recipient.getByRole("button", { name: "Stop Agent", exact: true }).click();
+  await recipient
+    .getByRole("dialog")
+    .getByRole("button", { name: "Stop Agent", exact: true })
+    .click();
+  await recipient.getByText("Stop requested. OCC will not start", { exact: false }).waitFor();
+
+  // The stale administrator list holds the specific sharing binding, not the new operate grant.
+  await panel.getByRole("button", { name: "Remove binding", exact: true }).click();
+  await panel.getByText("Binding removed.", { exact: false }).waitFor();
+  await panel.screenshot({ path: join(artifacts, "agent-sharing-removed.png") });
+  const after = (await fixture.request("GET", `${policyPath}/access-bindings`)).data;
+  assert.deepEqual(
+    after.map((binding) => binding.id).sort(),
+    [
+      bindings.find((binding) => binding.resourceKind === "namespace").id,
+      operateBinding.data.id,
+    ].sort(),
+  );
+  assert.deepEqual(
+    (await fixture.request("GET", "/namespaces", { session })).data.map((item) => item.id),
+    [namespace.id],
+  );
+  assert.deepEqual(
+    (await fixture.request("GET", `/namespaces/${namespace.id}/agents`, { session })).data,
+    [],
+  );
+  assert.equal(
+    (
+      await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`, {
+        session,
+      })
+    ).status,
+    403,
+  );
+});
+
+test("Agent sharing reconciles a truncated committed response without replaying writes", async (t) => {
+  let loseAgentBindingResponse = true;
+  const fixture = await createConsoleAppFixture(t, {
+    provisionedPeople: ["response-recipient"],
+    async onSend(request, reply, payload) {
+      if (
+        loseAgentBindingResponse &&
+        request.method === "POST" &&
+        request.url.endsWith("/iam/access-bindings") &&
+        reply.statusCode === 201 &&
+        JSON.parse(payload).data.resourceKind === "agent"
+      ) {
+        // Truncate only the response after the real route committed its grant.
+        loseAgentBindingResponse = false;
+        return payload.slice(0, 8);
+      }
+      return payload;
+    },
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Sharing recovery");
+  const agent = await fixture.createAgent(namespace.id, "Recovery Agent", nativeValues("recovery"));
+  const person = fixture.provisionedAccounts[0];
+  const { page, artifacts } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`);
+  const panel = page.getByRole("region", { name: "Share Agent", exact: true });
+  await panel.getByLabel("Existing person’s Principal ID").fill(person.principal.id);
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText("Outcome unknown.", { exact: false }).waitFor();
+  await panel.getByText("Namespace discovery is enabled.", { exact: true }).waitFor();
+  await panel.getByText("Direct grants need a fresh read.", { exact: false }).waitFor();
+  assert.equal(await panel.getByText("No direct Agent grants.", { exact: true }).count(), 0);
+  assert.equal(
+    await panel.getByRole("button", { name: "Share Agent", exact: true }).isDisabled(),
+    true,
+  );
+  await panel.screenshot({ path: join(artifacts, "agent-sharing-unknown.png") });
+  const writes = () =>
+    nonAuthWriteRequests(requests).filter((request) => request.path.includes("/iam/"));
+  assert.equal(writes().length, 4);
+  const session = await fixture.signIn(person.credentials);
+  assert.deepEqual(
+    (await fixture.request("GET", `/namespaces/${namespace.id}/agents`, { session })).data.map(
+      (item) => item.id,
+    ),
+    [agent.id],
+  );
+  await panel.getByRole("button", { name: "Refresh sharing" }).click();
+  await panel.getByText("Current policy loaded.", { exact: false }).waitFor();
+  assert.equal(writes().length, 4);
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText("Agent access is shared.", { exact: false }).waitFor();
+  assert.equal(writes().length, 4);
+  const policyPath = `/namespaces/${namespace.id}/iam`;
+  assert.equal((await fixture.request("GET", `${policyPath}/roles`)).data.length, 2);
+  assert.equal((await fixture.request("GET", `${policyPath}/access-bindings`)).data.length, 2);
+  // A sharing read must preserve global expiry handling, including private panel removal.
+  for (const savedSession of fixture.memoryDatabase.session) {
+    savedSession.expiresAt = new Date(Date.now() - 1000);
+  }
+  await panel.getByRole("button", { name: "Refresh sharing" }).click();
+  await page.getByText("Your session has expired").waitFor();
+  await page.getByRole("button", { name: "Login", exact: true }).waitFor();
+  assert.equal(await panel.count(), 0);
+});
+
 test("standard Codex password Preset creates one scoped Secret and reuses it after an Agent conflict", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

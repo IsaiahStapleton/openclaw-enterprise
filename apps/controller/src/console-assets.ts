@@ -62,6 +62,10 @@ const CONSOLE_ASSETS = new Map(
       path: new URL("agents/workspace.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",
     },
+    "/console/agents/access.mjs": {
+      path: new URL("agents/access.mjs", CONSOLE_ROOT),
+      contentType: "text/javascript; charset=utf-8",
+    },
     "/console/agents/detail.mjs": {
       path: new URL("agents/detail.mjs", CONSOLE_ROOT),
       contentType: "text/javascript; charset=utf-8",

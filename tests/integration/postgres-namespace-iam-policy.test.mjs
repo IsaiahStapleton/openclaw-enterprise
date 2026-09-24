@@ -116,6 +116,18 @@ async function createNamespaceServicePrincipal(state, namespaceId) {
   return identityId;
 }
 
+async function createHumanPrincipal(state) {
+  const principal = {
+    id: identifier("principal"),
+    kind: "principal",
+    issuer: "https://identity.example.com",
+    subject: randomUUID(),
+  };
+  // Provision a real identity without a Namespace service identity or a grant.
+  await state.appendNativeIAMPrincipal({ principal, roles: [], bindings: [] });
+  return principal;
+}
+
 function deferred() {
   let resolve;
   const promise = new Promise((done) => {
@@ -297,7 +309,8 @@ test(
     const createState = new PostgresPlatformState(createPool);
     const deleteState = new PostgresPlatformState(deletePool);
     const iam = new NativeIAMDriver(createState, { id: "postgres-namespace-iam-create-race" });
-    const { namespace, secret, agent } = await createNamespaceAgentState(createState);
+    const { namespace, secret } = await createNamespaceAgentState(createState);
+    const principal = await createHumanPrincipal(createState);
     let role;
     let binding;
 
@@ -321,7 +334,7 @@ test(
           id: identifier("binding"),
           namespaceId: namespace.id,
           subjectKind: "identity",
-          subjectId: agent.servicePrincipalId,
+          subjectId: principal.id,
           roleId: role.id,
           resourceKind: "secret",
           resourceId: secret.id,
@@ -365,7 +378,8 @@ test(
     const deleteState = new PostgresPlatformState(deletePool);
     const createState = new PostgresPlatformState(createPool);
     const iam = new NativeIAMDriver(createState, { id: "postgres-namespace-iam-delete-race" });
-    const { namespace, secret, agent } = await createNamespaceAgentState(deleteState);
+    const { namespace, secret } = await createNamespaceAgentState(deleteState);
+    const principal = await createHumanPrincipal(deleteState);
     let role;
 
     await createState.transact(async (unit) => {
@@ -398,7 +412,7 @@ test(
               id: identifier("binding"),
               namespaceId: namespace.id,
               subjectKind: "identity",
-              subjectId: agent.servicePrincipalId,
+              subjectId: principal.id,
               roleId: role.id,
               resourceKind: "secret",
               resourceId: secret.id,
@@ -420,7 +434,7 @@ test(
             id: identifier("binding"),
             namespaceId: namespace.id,
             subjectKind: "identity",
-            subjectId: agent.servicePrincipalId,
+            subjectId: principal.id,
             roleId: role.id,
             resourceKind: "secret",
             resourceId: secret.id,
@@ -471,6 +485,221 @@ test(
       iam.getNamespaceRole({ policy: unit.iamPolicy }, namespace.id, roleId),
     );
     assert.equal(rolledBack, undefined);
+  },
+);
+
+test(
+  "PostgreSQL native IAM grants and revokes existing human access to exact Namespace and Agent targets",
+  requiresPostgres,
+  async (context) => {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: databaseUrl });
+    const replicaPool = new Pool({ connectionString: databaseUrl });
+    context.after(() => pool.end());
+    context.after(() => replicaPool.end());
+    const state = new PostgresPlatformState(pool);
+    const iam = new NativeIAMDriver(state);
+    const replica = new NativeIAMDriver(new PostgresPlatformState(replicaPool));
+    const { installation, namespace, agent } = await createNamespaceAgentState(state);
+    const foreign = await createNamespaceAgentState(state);
+    const principal = await createHumanPrincipal(state);
+    const request = (resourceKind, resourceId, namespaceId = namespace.id) => ({
+      principalId: principal.id,
+      action: "read",
+      resource: { kind: resourceKind, id: resourceId, namespaceId },
+    });
+    assert.equal((await replica.authorize(request("namespace", namespace.id))).allowed, false);
+    const role = await state.transact((unit) =>
+      iam.createNamespaceRole(
+        { policy: unit.iamPolicy },
+        {
+          id: identifier("role"),
+          namespaceId: namespace.id,
+          permissions: [
+            { action: "read", resourceKind: "namespace" },
+            { action: "read", resourceKind: "agent" },
+          ],
+        },
+      ),
+    );
+    const bindingInput = (resourceKind, resourceId) => ({
+      id: identifier("binding"),
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: role.id,
+      resourceKind,
+      resourceId,
+    });
+    const namespaceBinding = bindingInput("namespace", namespace.id);
+    const agentBinding = bindingInput("agent", agent.id);
+
+    // Rejection of the audit append must also roll back the human grant.
+    await assert.rejects(
+      state.transact(async (unit) => {
+        await iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, namespaceBinding);
+        await unit.audit.append(
+          auditEvent(
+            installation.id,
+            namespace.id,
+            principal.id,
+            "openclaw.iam.accessBindings.create",
+            { kind: "namespace", id: namespace.id, namespaceId: foreign.namespace.id },
+          ),
+        );
+      }),
+      { name: "ScopeViolationError" },
+    );
+    assert.equal((await replica.authorize(request("namespace", namespace.id))).allowed, false);
+
+    await state.transact(async (unit) => {
+      for (const binding of [namespaceBinding, agentBinding]) {
+        await iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, binding);
+        await unit.audit.append(
+          auditEvent(
+            installation.id,
+            namespace.id,
+            principal.id,
+            "openclaw.iam.accessBindings.create",
+            { kind: binding.resourceKind, id: binding.resourceId, namespaceId: namespace.id },
+          ),
+        );
+      }
+    });
+    for (const [kind, id, binding] of [
+      ["namespace", namespace.id, namespaceBinding],
+      ["agent", agent.id, agentBinding],
+    ]) {
+      const decision = await replica.authorize(request(kind, id));
+      assert.equal(decision.allowed, true);
+      assert.deepEqual(decision.evidence.bindingIds, [binding.id]);
+    }
+    for (const denied of [
+      request("namespace", foreign.namespace.id, foreign.namespace.id),
+      request("agent", foreign.agent.id, foreign.namespace.id),
+      request("agent", identifier("agt")),
+      { ...request("agent", agent.id), action: "administer" },
+    ]) {
+      assert.equal((await replica.authorize(denied)).allowed, false);
+    }
+    for (const input of [
+      bindingInput("namespace", foreign.namespace.id),
+      bindingInput("namespace", identifier("ns")),
+      bindingInput("agent", namespace.id),
+      { ...bindingInput("namespace", namespace.id), subjectId: identifier("principal") },
+      { ...bindingInput("namespace", namespace.id), subjectId: foreign.agent.servicePrincipalId },
+    ]) {
+      await assert.rejects(
+        state.transact((unit) =>
+          iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, input),
+        ),
+        { name: "ScopeViolationError" },
+      );
+    }
+
+    await state.transact(async (unit) => {
+      await iam.deleteNamespaceAccessBinding(
+        { policy: unit.iamPolicy },
+        namespace.id,
+        agentBinding.id,
+      );
+      await unit.audit.append(
+        auditEvent(
+          installation.id,
+          namespace.id,
+          principal.id,
+          "openclaw.iam.accessBindings.delete",
+          { kind: "agent", id: agent.id, namespaceId: namespace.id },
+        ),
+      );
+    });
+    assert.equal((await replica.authorize(request("agent", agent.id))).allowed, false);
+    assert.equal((await replica.authorize(request("namespace", namespace.id))).allowed, true);
+    const audit = await state.transact((unit) => unit.audit.list());
+    assert.equal(
+      audit.filter(
+        (event) =>
+          event.actorId === principal.id && event.action === "openclaw.iam.accessBindings.create",
+      ).length,
+      2,
+    );
+  },
+);
+
+test(
+  "PostgreSQL exact Namespace grants serialize with Namespace deletion",
+  requiresPostgres,
+  async (context) => {
+    const { Pool } = await import("pg");
+    const grantPool = new Pool({ connectionString: databaseUrl });
+    const deletePool = new Pool({ connectionString: databaseUrl });
+    context.after(() => grantPool.end());
+    context.after(() => deletePool.end());
+    const state = new PostgresPlatformState(grantPool);
+    const deletionState = new PostgresPlatformState(deletePool);
+    const iam = new NativeIAMDriver(state);
+    await createNamespaceAgentState(state);
+    const principal = await createHumanPrincipal(state);
+    // An empty, ready Namespace can enter deletion through its ordinary lifecycle.
+    const namespace = await state.transact((unit) =>
+      unit.namespaces.createNamespace({
+        id: identifier("ns"),
+        name: `grant-deletion-${randomUUID()}`,
+        status: "ready",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    const role = await state.transact((unit) =>
+      iam.createNamespaceRole(
+        { policy: unit.iamPolicy },
+        {
+          id: identifier("role"),
+          namespaceId: namespace.id,
+          permissions: [{ action: "read", resourceKind: "namespace" }],
+        },
+      ),
+    );
+    const input = {
+      id: identifier("binding"),
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: role.id,
+      resourceKind: "namespace",
+      resourceId: namespace.id,
+    };
+    const granted = deferred();
+    const releaseGrant = deferred();
+    const grant = state.transact(async (unit) => {
+      await iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, input);
+      granted.resolve();
+      await releaseGrant.promise;
+    });
+    await Promise.race([granted.promise, grant]);
+    try {
+      await assert.rejects(
+        deletionState.transact(async (unit) => {
+          await deletionState.queryInTransaction(unit, "SET LOCAL lock_timeout = '50ms'");
+          await unit.namespaces.transitionNamespaceStatus(namespace.id, "ready", "deleting");
+        }),
+        isLockTimeout,
+      );
+    } finally {
+      releaseGrant.resolve();
+    }
+    await grant;
+    await deletionState.transact((unit) =>
+      unit.namespaces.transitionNamespaceStatus(namespace.id, "ready", "deleting"),
+    );
+    await assert.rejects(
+      state.transact((unit) =>
+        iam.createNamespaceAccessBinding(
+          { policy: unit.iamPolicy },
+          { ...input, id: identifier("binding") },
+        ),
+      ),
+      { name: "ScopeViolationError" },
+    );
   },
 );
 
@@ -652,7 +881,7 @@ test(
           {
             id: identifier("role"),
             namespaceId: namespace.id,
-            permissions: [{ action: "administer", resourceKind: "namespace" }],
+            permissions: [{ action: "administer", resourceKind: "installation" }],
           },
         ),
       ),

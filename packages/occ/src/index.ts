@@ -4646,6 +4646,7 @@ export class OpenClawController {
 
   private assertNamespacePolicyResourceKind(kind: ResourceKind): void {
     if (
+      kind !== "namespace" &&
       kind !== "agent" &&
       kind !== "agent_revision" &&
       kind !== "configuration" &&
@@ -4695,6 +4696,13 @@ export class OpenClawController {
     resourceId: string,
   ): Promise<void> {
     await this.read(async (state) => {
+      if (resourceKind === "namespace") {
+        if (resourceId !== namespaceId) {
+          throw new ScopeViolationError("The IAM target must be the exact Namespace.");
+        }
+        await this.exactNamespace(state, namespaceId);
+        return;
+      }
       if (resourceKind === "agent") {
         if ((await state.agents.findAgent(namespaceId, resourceId)) === undefined) {
           throw new ScopeViolationError("The IAM target Agent does not belong to the Namespace.");
