@@ -1,3 +1,5 @@
+import standardCodexPreset from "/console/standard-codex-preset.mjs";
+
 const createdAt = "2026-09-01T12:00:00.000Z";
 const namespaceId = "ns_00000000-0000-4000-8000-000000000001";
 const secretRef = (id) => ({ kind: "secret", namespaceId, id });
@@ -232,6 +234,9 @@ export function installFixture(scenario, evidence) {
       },
     },
   };
+  if (scenario.standardCodexPreset) {
+    Object.assign(preset, structuredClone(standardCodexPreset));
+  }
   const response = (data, status = 200, errorCode) =>
     new Response(
       JSON.stringify({
@@ -643,6 +648,9 @@ export function installFixture(scenario, evidence) {
         }
       }
       if (resource === "secrets") {
+        if (method === "POST" && scenario.denySecretCreate) {
+          return response(undefined, 403, "FORBIDDEN");
+        }
         if (method === "GET") {
           return response([...secrets.values()].map((secret) => structuredClone(secret)));
         }
