@@ -164,6 +164,13 @@ export async function createConsoleRepositoryLaunchFixture(t) {
     ...compute.manifest("v1", "Namespace", namespaceName, { namespaceId: namespace.id }),
     status: { phase: "Active" },
   });
+  // Canonical Secrets live in the control-plane tenant, separate from workloads.
+  // Seed completed Namespace provisioning with the real Driver's ownership labels.
+  const controlNamespace = compute.gatewayNamespaceManifest({ namespaceId: namespace.id });
+  namespaces.set(controlNamespace.metadata.name, {
+    ...controlNamespace,
+    status: { phase: "Active" },
+  });
   const repo = new GitHubRepoDriver(
     {
       id: provider.id,

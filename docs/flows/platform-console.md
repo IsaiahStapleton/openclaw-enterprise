@@ -163,7 +163,7 @@ writes. Saved service account tokens lock Codex; operator-managed credentials
 lock OpenClaw across provider changes. Installation Provider discovery is hidden. The [creation reference](../reference/console/create-and-deploy.md)
 owns permissions and partial-save recovery.
 
-The form starts with native JSON, optional plugins, and no model.
+Advanced settings holds JSON and plugins; model selection starts empty.
 `POST /namespaces/:namespaceId/agents/models` reaches
 `OpenClawController.discoverAgentModels`, which authorizes Namespace Agent creation
 and calls Compute outside a state transaction. `compute/model-discovery.ts` uses
@@ -184,7 +184,7 @@ and bindings into the form; cancellation discards selections but retains Secrets
 already created in the Namespace. Pending grants accumulate across drawer applications.
 
 `GET /namespaces/:namespaceId/agents/repository-options` discovers approved choices.
-The Console submits opaque references and an explicit common profile. Only
+Read-only and Contributor submit approved profiles; customization disables issues. Only
 `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh draft without bindings;
 it never enables provisioning. Other failures block submission until retry succeeds.
 
