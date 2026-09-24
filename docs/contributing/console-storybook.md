@@ -102,6 +102,11 @@ Use **Edit Configuration** on the new revision to change native JSON, or edit
 Slack through Channels. Save and compare the draft with the original revision.
 Deploy again to admit a new snapshot. The fixture retains both versions.
 Credential edits likewise need deployment to affect managed runtime configuration.
+In **Components/Credentials → Stop before Slack token replacement**, inspect the
+locked token fields, choose **Request Agent stop**, and enter a replacement after
+the saved stopped state appears. **Slack replacement after stop** starts at that
+editable state with revision history. These fixtures simulate metadata and do
+not prove runtime shutdown or credential propagation.
 Workspace-file writes apply immediately and do not create a revision.
 
 Native JSON editing changes Configuration values, not Agent-owned Provider or

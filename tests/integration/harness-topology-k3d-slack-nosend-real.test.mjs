@@ -10,6 +10,7 @@ import {
   arrangeNoSendSlackTopology,
   assertConnectedSlackChecks,
   assertInvalidAuthRejected,
+  assertMissingCredentialAdmissionDenied,
   assertNoSendSlackPrerequisites,
   assertNoSecretMaterial,
   assertUnreachableSlackNotConnected,
@@ -34,6 +35,15 @@ test(
     assertUnreachableSlackNotConnected(diagnostics);
     assertNoSecretMaterial(diagnostics, protectedValues, "unreachable Slack diagnostics");
     context.diagnostic("slack no-send unreachable proxy: connectivity did not succeed");
+  },
+);
+
+test(
+  "production Slack no-send API rejects missing channel credentials",
+  { ...requiresProductionCluster, timeout: 780_000 },
+  async (context) => {
+    const { response, protectedValues } = await assertMissingCredentialAdmissionDenied(context);
+    assertNoSecretMaterial(response, protectedValues, "missing Slack credential rejection");
   },
 );
 

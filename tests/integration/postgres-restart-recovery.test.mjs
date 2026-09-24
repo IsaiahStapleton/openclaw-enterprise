@@ -406,6 +406,35 @@ test(
         { code: "23514" },
       );
     }
+    await assert.rejects(
+      pool.query(
+        `INSERT INTO occ.controller_work (
+           idempotency_key, namespace_id, agent_id, revision_id, actor_id,
+           state, available_at, attempt_count, completed_at, reason_code,
+           result_data, created_at, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5,
+           'failed_permanent', clock_timestamp(), 0, clock_timestamp(),
+           'CONVERGENCE_DEADLINE_EXCEEDED', $6::jsonb,
+           clock_timestamp(), clock_timestamp()
+         )`,
+        [
+          `agent_revision:${invalidRevisionId}:invalid-timestamp:${randomUUID()}`,
+          namespaceId,
+          agents[0],
+          invalidRevisionId,
+          "queue-test",
+          JSON.stringify({
+            timeoutMs: 900_000,
+            runtimeFailure: {
+              ...runtimeFailure,
+              checkedAt: "2026-02-30T20:30:00.000Z",
+            },
+          }),
+        ],
+      ),
+      { code: "23514" },
+    );
 
     const exhaustedClaim = await claimExpected(queue, exhaustedKey);
     await queue.retry(exhaustedClaim, {

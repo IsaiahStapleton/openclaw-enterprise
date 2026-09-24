@@ -107,6 +107,33 @@ function options(overrides = {}) {
   };
 }
 
+test("plugin-free dedicated runtime status admits only the configured proxy in both runtime namespaces", () => {
+  const configured = options({
+    runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
+    network: { ...options().network, pluginStatusProxySourceCidrs: ["10.42.0.1/32"] },
+  });
+  const driver = new KubernetesComputeDriver(configured);
+  const candidate = routedRevision(driver, { plugins: undefined });
+  const namespace = kubernetesNamespaceName(candidate.namespaceId);
+  const policies = driver
+    .agentNetworkPolicies(candidate, namespace)
+    .filter((policy) => policy.metadata.name.startsWith("allow-plugin-status-proxy-"));
+  assert.deepEqual(
+    new Set(policies.map((policy) => policy.metadata.namespace)),
+    new Set([namespace, kubernetesGatewayNamespaceName(candidate.namespaceId)]),
+  );
+  for (const policy of policies) {
+    assert.deepEqual(policy.spec.ingress, [
+      {
+        from: [{ ipBlock: { cidr: "10.42.0.1/32" } }],
+        ports: [{ protocol: "TCP", port: 18791 }],
+      },
+    ]);
+    assert.equal(policy.spec.podSelector.matchLabels["openclaw.dev/agent"], candidate.agentId);
+    assert.equal(policy.spec.podSelector.matchLabels["openclaw.dev/revision"], candidate.id);
+  }
+});
+
 test("repository capability admits only configured Compute-owned native topologies", () => {
   const configured = options({
     runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
@@ -1920,7 +1947,7 @@ test("Kubernetes drivers require explicit authentication, images, and production
   );
 });
 
-test("the canonical Kubernetes runtime validates channel proxy configuration", () => {
+test("the canonical Kubernetes runtime validates transport credentials and channel proxy egress", () => {
   const runtime = {
     transportSecretPrefix: "transport",
     gatewayStorageClassName: "local-path",
@@ -2163,6 +2190,7 @@ test("dedicated Codex projects the account-owned token and workspace without exp
   assert.equal(gatewayEnvironment.has("SLACK_APP_TOKEN"), false);
   assert.equal(gatewayEnvironment.has("SLACK_BOT_TOKEN"), false);
   assert.equal(gatewayEnvironment.has("MSTEAMS_APP_PASSWORD"), false);
+  assert.equal(gatewayEnvironment.has("HTTPS_PROXY"), true);
 });
 
 test("direct service account token is confined to the model container and exact admitted Secret", () => {
@@ -2292,7 +2320,7 @@ test("account-token authentication grants only the exact Codex revision outbound
   assert.notDeepEqual(successor.spec.podSelector, policy.spec.podSelector);
 });
 
-test("native channel providers require Secret bindings and project them only to the gateway", async () => {
+test("native channel providers supply only owning gateway secrets and reviewed proxy egress", async () => {
   const driver = createKubernetesComputeDriver(
     options({
       runtime: {
@@ -2319,56 +2347,11 @@ test("native channel providers require Secret bindings and project them only to 
     servicePrincipalId: "service-principal-agent-a",
     createdAt: tenant.createdAt,
   };
-  const secretEnvironment = [
-    {
-      name: "SLACK_APP_TOKEN",
-      namespaceId: tenant.id,
-      agentId,
-      secretId: "sec_00000000-0000-4000-8000-000000000001",
-      backendRef: { namespaceName: namespace, name: "occ-slack-app", key: "value", uid: "app-uid" },
-    },
-    {
-      name: "SLACK_BOT_TOKEN",
-      namespaceId: tenant.id,
-      agentId,
-      secretId: "sec_00000000-0000-4000-8000-000000000002",
-      backendRef: { namespaceName: namespace, name: "occ-slack-bot", key: "value", uid: "bot-uid" },
-    },
-    {
-      name: "MSTEAMS_APP_PASSWORD",
-      namespaceId: tenant.id,
-      agentId,
-      secretId: "sec_00000000-0000-4000-8000-000000000003",
-      backendRef: {
-        namespaceName: namespace,
-        name: "occ-teams-password",
-        key: "value",
-        uid: "teams-uid",
-      },
-    },
-  ];
-  const secretBindings = Object.freeze({
-    SLACK_APP_TOKEN: {
-      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[0].secretId },
-      delivery: { type: "env" },
-    },
-    SLACK_BOT_TOKEN: {
-      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[1].secretId },
-      delivery: { type: "env" },
-    },
-    MSTEAMS_APP_PASSWORD: {
-      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[2].secretId },
-      delivery: { type: "env" },
-    },
-  });
 
-  for (const [channels, expectedSecrets] of [
-    [{ slack: {} }, ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]],
-    [{ msteams: { enabled: true } }, ["MSTEAMS_APP_PASSWORD"]],
-    [
-      { slack: { enabled: true }, msteams: { enabled: true } },
-      ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MSTEAMS_APP_PASSWORD"],
-    ],
+  for (const [channels, proxyExpected] of [
+    [{ slack: {} }, true],
+    [{ msteams: { enabled: true } }, true],
+    [{ slack: { enabled: true }, msteams: { enabled: true } }, true],
     [
       {
         defaults: { groupPolicy: "allowlist" },
@@ -2377,28 +2360,15 @@ test("native channel providers require Secret bindings and project them only to 
         msteams: { enabled: false },
         unsupported: { enabled: false },
       },
-      [],
+      false,
     ],
-    [{ defaults: {}, modelByChannel: {} }, []],
+    [{ defaults: {}, modelByChannel: {} }, false],
   ]) {
     const configuredRevision = {
       ...revision,
-      configuration: { agents: { defaults: { model: "codex/gpt-5" } }, channels },
-      secretBindings,
-      secretDriverId: "secret-kubernetes",
+      configuration: { ...revision.configuration, channels },
     };
-    assert.doesNotThrow(() =>
-      driver.validateHarnessAuth(
-        configuredRevision.harness,
-        configuredRevision.harnessAuth,
-        configuredRevision.configuration,
-        configuredRevision.secretBindings,
-      ),
-    );
     const enabled = driver.enabledChannels(configuredRevision);
-    const expectedSecretEnvironment = expectedSecrets.map((name) =>
-      secretEnvironment.find((item) => item.name === name),
-    );
     const gateway = driver.deployment(
       `gateway-${suffix}`,
       { namespaceId: tenant.id, agentId },
@@ -2417,11 +2387,9 @@ test("native channel providers require Secret bindings and project them only to 
       undefined,
       undefined,
       enabled,
-      expectedSecretEnvironment,
     );
     const environment = gateway.spec.template.spec.containers[0].env;
 
-    // Native Teams IDs are ordinary configuration values; only its password is a Secret.
     for (const key of [
       "SLACK_APP_TOKEN",
       "SLACK_BOT_TOKEN",
@@ -2430,37 +2398,25 @@ test("native channel providers require Secret bindings and project them only to 
       "MSTEAMS_TENANT_ID",
     ]) {
       const variable = environment.find(({ name }) => name === key);
-      if (expectedSecrets.includes(key)) {
-        const projection = secretEnvironment.find((item) => item.name === key);
-        assert.deepEqual(variable.valueFrom.secretKeyRef, {
-          name: projection.backendRef.name,
-          key: projection.backendRef.key,
-          optional: false,
-        });
-        assert.equal(environment.filter(({ name }) => name === key).length, 1);
-      } else {
-        assert.equal(variable, undefined);
-      }
+      assert.equal(variable, undefined);
     }
     const proxy = environment.filter(({ name }) => name === "HTTPS_PROXY");
     assert.deepEqual(
       proxy,
-      expectedSecrets.length === 0
-        ? []
-        : [{ name: "HTTPS_PROXY", value: "http://10.42.0.15:3128" }],
+      proxyExpected ? [{ name: "HTTPS_PROXY", value: "http://10.42.0.15:3128" }] : [],
     );
 
     const policy = driver.channelNetworkPolicy(configuredRevision, enabled, namespace);
     assert.deepEqual(
       policy.spec.egress,
-      expectedSecrets.length === 0
-        ? []
-        : [
+      proxyExpected
+        ? [
             {
               to: [{ ipBlock: { cidr: "10.42.0.15/32" } }],
               ports: [{ protocol: "TCP", port: 3128 }],
             },
-          ],
+          ]
+        : [],
     );
 
     // Dedicated Agents never receive gateway-owned channel credentials or their network proxy.
@@ -2482,17 +2438,93 @@ test("native channel providers require Secret bindings and project them only to 
       undefined,
       undefined,
       preparedAuth(driver, namespace, false),
-      [],
-      [],
     );
     const agentEnvironment = agent.spec.template.spec.containers[0].env;
-    for (const key of [...expectedSecrets, "HTTPS_PROXY"]) {
+    for (const key of [
+      "SLACK_APP_TOKEN",
+      "SLACK_BOT_TOKEN",
+      "MSTEAMS_APP_PASSWORD",
+      "HTTPS_PROXY",
+    ]) {
       assert.equal(
         agentEnvironment.some(({ name }) => name === key),
         false,
       );
     }
   }
+
+  const channelConfiguration = {
+    agents: { defaults: { model: "codex/gpt-5" } },
+    channels: {
+      slack: {
+        enabled: true,
+        mode: "socket",
+        appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+        botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      },
+    },
+  };
+  const completeChannelBindings = {
+    SLACK_APP_TOKEN: {
+      source: { kind: "secret", namespaceId: tenant.id, id: "secret-slack-app" },
+    },
+    SLACK_BOT_TOKEN: {
+      source: { kind: "secret", namespaceId: tenant.id, id: "secret-slack-bot" },
+    },
+  };
+  const missingBotBinding = {
+    SLACK_APP_TOKEN: completeChannelBindings.SLACK_APP_TOKEN,
+  };
+  assert.doesNotThrow(() =>
+    driver.validateHarnessAuth(
+      revision.harness,
+      apiKeyAuth,
+      channelConfiguration,
+      completeChannelBindings,
+    ),
+  );
+  assert.throws(
+    () =>
+      driver.validateHarnessAuth(
+        revision.harness,
+        apiKeyAuth,
+        channelConfiguration,
+        missingBotBinding,
+      ),
+    /channel credentials require matching AgentRevision Secret bindings/i,
+  );
+  await assert.rejects(
+    driver.prepareRevision({
+      ...revision,
+      configuration: {
+        ...channelConfiguration,
+        logging: {
+          level: "info",
+          consoleLevel: "info",
+          consoleStyle: "json",
+        },
+        diagnostics: { otel: { logs: false } },
+      },
+      secretBindings: missingBotBinding,
+    }),
+    /channel credentials require matching AgentRevision Secret bindings/i,
+  );
+  assert.doesNotThrow(() =>
+    driver.validateHarnessAuth(
+      revision.harness,
+      apiKeyAuth,
+      {
+        agents: { defaults: { model: "codex/gpt-5" } },
+        channels: {
+          slack: {
+            enabled: false,
+            botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+          },
+        },
+      },
+      missingBotBinding,
+    ),
+  );
 
   // Removing channel runtime must revoke the exact existing grant without needing its old proxy.
   const activeRevision = {
@@ -2563,24 +2595,6 @@ test("native channel providers require Secret bindings and project them only to 
       },
     }),
     /Unsupported OpenClaw channel provider "discord"\./,
-  );
-  assert.throws(
-    () =>
-      driver.validateHarnessAuth(
-        revision.harness,
-        revision.harnessAuth,
-        {
-          agents: { defaults: { model: "codex/gpt-5" } },
-          channels: {
-            slack: {
-              appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
-              botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
-            },
-          },
-        },
-        { SLACK_APP_TOKEN: secretBindings.SLACK_APP_TOKEN },
-      ),
-    /Secret bindings/i,
   );
 
   const ipv6 = createKubernetesComputeDriver(
@@ -2842,13 +2856,25 @@ test("Kubernetes runtime diagnostics reject missing timestamps and raced Pod rea
 });
 
 test("Kubernetes cached runtime failure evidence is native-only and readiness-passive", async () => {
-  const revision = routedRevision(createKubernetesComputeDriver(options()), {
+  const revision = {
     id: "revision-runtime-failure-evidence",
+    namespaceId: tenant.id,
     agentId: "agent-runtime-failure-evidence",
+    revision: 1,
     configurationId: "cfg_runtime_failure_evidence",
+    configurationKind: "agent",
+    configurationGeneration: 1,
+    configuration: {
+      logging: { level: "info", consoleLevel: "info", consoleStyle: "json" },
+      diagnostics: { otel: { logs: false } },
+      agents: { defaults: { model: "codex/gpt-5" } },
+    },
+    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: apiKeyAuth,
+    compute: { id: "kubernetes", implementation: "kubernetes" },
     servicePrincipalId: "service-principal-runtime-failure-evidence",
-  });
-  const namespace = kubernetesNamespaceName(tenant.id);
+    createdAt: tenant.createdAt,
+  };
   const nonNative = createKubernetesComputeDriver(options());
   let attemptedProxy = false;
   nonNative.apiClients = Promise.resolve({
@@ -2860,7 +2886,10 @@ test("Kubernetes cached runtime failure evidence is native-only and readiness-pa
     },
   });
 
-  assert.equal(await nonNative.safeRuntimeFailureObservation(revision, namespace), undefined);
+  assert.equal(
+    await nonNative.safeRuntimeFailureObservation(revision, kubernetesNamespaceName(tenant.id)),
+    undefined,
+  );
   assert.equal(attemptedProxy, false);
 
   const native = createKubernetesComputeDriver(
@@ -2871,10 +2900,6 @@ test("Kubernetes cached runtime failure evidence is native-only and readiness-pa
       },
     }),
   );
-  const nativeRevision = {
-    ...revision,
-    compute: { id: native.id, implementation: native.implementation },
-  };
   native.apiClients = Promise.resolve({
     core: {
       async listNamespacedPod() {
@@ -2882,14 +2907,23 @@ test("Kubernetes cached runtime failure evidence is native-only and readiness-pa
       },
     },
   });
-  assert.equal(await native.safeRuntimeFailureObservation(nativeRevision, namespace), undefined);
+  assert.equal(
+    await native.safeRuntimeFailureObservation(
+      { ...revision, compute: { id: native.id, implementation: native.implementation } },
+      kubernetesNamespaceName(tenant.id),
+    ),
+    undefined,
+  );
 
   const cancellation = new Error("runtime evidence cancelled");
   const owner = new AbortController();
   owner.abort(cancellation);
   await assert.rejects(
     withComputeAbortSignal(owner.signal, () =>
-      native.safeRuntimeFailureObservation(nativeRevision, namespace),
+      native.safeRuntimeFailureObservation(
+        { ...revision, compute: { id: native.id, implementation: native.implementation } },
+        kubernetesNamespaceName(tenant.id),
+      ),
     ),
     (error) => error === cancellation,
   );
@@ -4205,16 +4239,16 @@ function providerReadinessFixture({ provisionHarness, lifecycleDrivers = [] } = 
       return { items: [] };
     },
     async listNamespacedPod(request) {
-      requests.push(request);
       assert.equal(request.namespace, namespace);
-      assert.deepEqual(
-        Object.fromEntries(request.labelSelector.split(",").map((entry) => entry.split("="))),
-        {
-          "openclaw.dev/agent": revision.agentId,
-          "openclaw.dev/revision": revision.id,
-          "openclaw.dev/workload-role": "agent",
-        },
+      const selector = Object.fromEntries(
+        request.labelSelector.split(",").map((entry) => entry.split("=")),
       );
+      assert.equal(selector["openclaw.dev/agent"], revision.agentId);
+      assert.equal(selector["openclaw.dev/revision"], revision.id);
+      if (selector["openclaw.dev/workload-role"] !== "agent") {
+        return { apiVersion: "v1", kind: "PodList", items: [] };
+      }
+      requests.push(request);
       assert.equal(request.timeoutSeconds, 10);
       return observe();
     },

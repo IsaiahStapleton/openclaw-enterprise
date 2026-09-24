@@ -193,6 +193,16 @@ export function kubernetesHash(value, length = 12) {
   return sha256Hex(value, length);
 }
 
+function modelTurnArithmeticChallenge(nonce) {
+  const digest = sha256Hex(nonce, 16);
+  const left = (Number.parseInt(digest.slice(0, 4), 16) % 89) + 11;
+  const right = (Number.parseInt(digest.slice(4, 8), 16) % 89) + 11;
+  return {
+    prompt: `Add ${left} and ${right}. Reply with exactly the decimal sum as digits only, no commas and no words.`,
+    expected: String(left + right),
+  };
+}
+
 export function createKubernetesInstallationConfiguration({
   authentication,
   platformNamespace,
@@ -273,6 +283,7 @@ export async function assertGatewayModelTurn({ gatewayUrl, gatewayPassword, nonc
   });
   assert.ok([401, 403].includes(denied.status), "the real gateway must reject unauthenticated use");
 
+  const challenge = modelTurnArithmeticChallenge(nonce);
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -282,9 +293,7 @@ export async function assertGatewayModelTurn({ gatewayUrl, gatewayPassword, nonc
     body: JSON.stringify({
       model: "openclaw/default",
       stream: false,
-      messages: [
-        { role: "user", content: `Reply with exactly this nonce and no other text: ${nonce}` },
-      ],
+      messages: [{ role: "user", content: challenge.prompt }],
     }),
     signal: AbortSignal.timeout(180_000),
   });
@@ -299,7 +308,11 @@ export async function assertGatewayModelTurn({ gatewayUrl, gatewayPassword, nonc
     }
   }
   assert.equal(response.status, 200, `real provider-backed model turn failed: ${body}`);
-  assert.match(JSON.parse(body).choices?.[0]?.message?.content ?? "", new RegExp(nonce));
+  assert.equal(
+    String(JSON.parse(body).choices?.[0]?.message?.content ?? "").trim(),
+    challenge.expected,
+    "real provider-backed model turn must answer the nonce-derived arithmetic challenge",
+  );
 }
 
 export function createRealKubernetesFixture({

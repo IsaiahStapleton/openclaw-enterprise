@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import {
   arrangeProductionTopology,
+  hash,
   requiresProductionCluster,
 } from "./harness-topology-k3d-real.mjs";
 
+const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? "gpt-4.1").replace(
+  /^(?:openai|codex)\//,
+  "",
+);
 const invalidSlackAppToken = "xapp-invalid-nosend-runtime-diagnostics";
 const invalidSlackBotToken = "xoxb-invalid-nosend-runtime-diagnostics";
 const defaultAllowedUserId = "U0000000000";
@@ -35,6 +42,40 @@ function assertNoSecretMaterial(value, secrets, description) {
   }
 }
 
+function secretBinding(source) {
+  return { source, delivery: { type: "env" } };
+}
+
+function slackNativeConfiguration(slack) {
+  const configuration = createHarnessConfiguration("codex", providerModel);
+  configuration.models.providers.codex.models[0].input = ["text", "image"];
+  configuration.plugins.allow.push("slack");
+  configuration.plugins.entries.slack = { enabled: true };
+  const eventResponsesDisabled = slack.disableEventResponses === true;
+  configuration.channels = {
+    slack: {
+      enabled: true,
+      mode: "socket",
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      allowFrom: eventResponsesDisabled ? [] : [slack.allowedUserId],
+      channels: eventResponsesDisabled
+        ? {}
+        : {
+            [slack.channelId]: {
+              requireMention: true,
+              allowBots: "mentions",
+              users: [slack.allowedUserId],
+              replyToMode: "off",
+            },
+          },
+    },
+  };
+  return configuration;
+}
+
 function noSendSlackFixture(overrides = {}) {
   return {
     proxyUrl: overrides.proxyUrl ?? process.env.OCC_TEST_SLACK_PROXY_URL ?? "http://127.0.0.1:9",
@@ -52,6 +93,66 @@ function requiredNoSendSlackProxy() {
     "OCC_TEST_SLACK_PROXY_URL is required for Slack no-send diagnostics that contact Slack.",
   );
   return process.env.OCC_TEST_SLACK_PROXY_URL;
+}
+
+async function createApiSecret(request, namespaceId, name, value, protectedValues = []) {
+  const response = await request("POST", `/namespaces/${namespaceId}/secrets`, { name, value });
+  assertNoSecretMaterial(response, [value, ...protectedValues], `${name} Secret create response`);
+  assert.equal(response.status, 201, JSON.stringify(response.error));
+  assert.equal(response.data.namespaceId, namespaceId);
+  assert.equal(response.data.name, name);
+  assert.deepEqual(response.data.ref, { kind: "secret", namespaceId, id: response.data.id });
+  return response.data;
+}
+
+function secretOperateRole(role) {
+  return (
+    Array.isArray(role?.permissions) &&
+    role.permissions.length === 1 &&
+    role.permissions[0]?.action === "operate" &&
+    role.permissions[0]?.resourceKind === "secret"
+  );
+}
+
+async function ensureSecretOperateRole(request, namespaceId) {
+  const listed = await request("GET", `/namespaces/${namespaceId}/iam/roles`);
+  assert.equal(listed.status, 200, JSON.stringify(listed.error));
+  const existing = listed.data.find(secretOperateRole);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = await request("POST", `/namespaces/${namespaceId}/iam/roles`, {
+    name: "Slack no-send Secret operate",
+    permissions: [{ action: "operate", resourceKind: "secret" }],
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.error));
+  return created.data;
+}
+
+async function grantSecretOperate(request, namespaceId, subjectId, secretId) {
+  const role = await ensureSecretOperateRole(request, namespaceId);
+  const bindings = await request("GET", `/namespaces/${namespaceId}/iam/access-bindings`);
+  assert.equal(bindings.status, 200, JSON.stringify(bindings.error));
+  const existing = bindings.data.find(
+    (binding) =>
+      binding.subjectKind === "identity" &&
+      binding.subjectId === subjectId &&
+      binding.roleId === role.id &&
+      binding.resourceKind === "secret" &&
+      binding.resourceId === secretId,
+  );
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = await request("POST", `/namespaces/${namespaceId}/iam/access-bindings`, {
+    subjectKind: "identity",
+    subjectId,
+    roleId: role.id,
+    resourceKind: "secret",
+    resourceId: secretId,
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.error));
+  return created.data;
 }
 
 function gatewayChannelChecks(diagnostics) {
@@ -128,6 +229,128 @@ function assertNoSendSlackPrerequisites(revision) {
   );
 }
 
+async function assertMissingCredentialAdmissionDenied(context) {
+  const topology = await arrangeProductionTopology(context, "dedicated");
+  const slack = noSendSlackFixture();
+  const namespaceId = topology.agent.namespaceId;
+  const protectedValues = [slack.appToken, slack.botToken, process.env.OPENAI_API_KEY];
+  const appSecret = await createApiSecret(
+    topology.request,
+    namespaceId,
+    `slack-nosend-app-${hash(randomUUID())}`,
+    slack.appToken,
+    protectedValues,
+  );
+  const botSecret = await createApiSecret(
+    topology.request,
+    namespaceId,
+    `slack-nosend-bot-${hash(randomUUID())}`,
+    slack.botToken,
+    protectedValues,
+  );
+  const completeSecretBindings = {
+    SLACK_APP_TOKEN: secretBinding(appSecret.ref),
+    SLACK_BOT_TOKEN: secretBinding(botSecret.ref),
+  };
+  const completeConfiguration = await topology.request(
+    "POST",
+    `/namespaces/${namespaceId}/configurations`,
+    {
+      kind: "agent",
+      values: slackNativeConfiguration(slack),
+      secretBindings: completeSecretBindings,
+    },
+  );
+  assertNoSecretMaterial(
+    completeConfiguration,
+    protectedValues,
+    "complete Slack credential configuration response",
+  );
+  assert.equal(completeConfiguration.status, 201, JSON.stringify(completeConfiguration.error));
+  assert.deepEqual(
+    completeConfiguration.data.secretBindings,
+    completeSecretBindings,
+    "complete Slack credential control must admit the otherwise identical Configuration",
+  );
+
+  const incompleteSecretBindings = { SLACK_APP_TOKEN: secretBinding(appSecret.ref) };
+  const configuration = await topology.request(
+    "POST",
+    `/namespaces/${namespaceId}/configurations`,
+    {
+      kind: "agent",
+      values: slackNativeConfiguration(slack),
+      secretBindings: incompleteSecretBindings,
+    },
+  );
+  assertNoSecretMaterial(
+    configuration,
+    protectedValues,
+    "missing Slack credential configuration response",
+  );
+  assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
+  assert.deepEqual(configuration.data.secretBindings, incompleteSecretBindings);
+  const created = await topology.request("POST", `/namespaces/${namespaceId}/agents`, {
+    name: `slack-nosend-missing-${hash(randomUUID())}`,
+    executionMode: "dedicated",
+    configurationId: configuration.data.id,
+    harnessAuth: topology.agent.harnessAuth,
+  });
+  assertNoSecretMaterial(created, protectedValues, "missing Slack credential Agent response");
+  assert.equal(created.status, 201, JSON.stringify(created.error));
+  await Promise.all([
+    grantSecretOperate(
+      topology.adminRequest,
+      namespaceId,
+      created.data.servicePrincipalId,
+      topology.secretApi.model.id,
+    ),
+    grantSecretOperate(
+      topology.adminRequest,
+      namespaceId,
+      created.data.servicePrincipalId,
+      appSecret.id,
+    ),
+  ]);
+  const deployed = await topology.request(
+    "POST",
+    `/namespaces/${namespaceId}/agents/${created.data.id}/deploy`,
+  );
+  assertNoSecretMaterial(deployed, protectedValues, "missing Slack credential deploy response");
+  assert.deepEqual(
+    {
+      status: deployed.status,
+      code: deployed.error?.code,
+      message: deployed.error?.message,
+    },
+    {
+      status: 409,
+      code: "RESOURCE_CONFLICT",
+      message: "The requested platform resource already exists.",
+    },
+    "Slack channel configuration missing a required Bot token binding must be rejected before revision admission",
+  );
+  const observed = await topology.request(
+    "GET",
+    `/namespaces/${namespaceId}/agents/${created.data.id}`,
+  );
+  assertNoSecretMaterial(observed, protectedValues, "missing Slack credential Agent read");
+  assert.equal(observed.status, 200, JSON.stringify(observed.error));
+  assert.equal(
+    observed.data.activeRevisionId,
+    undefined,
+    "missing Slack credential deployment must not activate a revision",
+  );
+  const revisions = await topology.request(
+    "GET",
+    `/namespaces/${namespaceId}/agents/${created.data.id}/revisions`,
+  );
+  assert.equal(revisions.status, 200, JSON.stringify(revisions.error));
+  assert.deepEqual(revisions.data, [], "missing channel bindings must not admit a revision");
+  context.diagnostic(`slack no-send missing credential rejected deploy status ${deployed.status}`);
+  return { topology, slack, agent: created.data, response: deployed, protectedValues };
+}
+
 async function arrangeNoSendSlackTopology(context, slack) {
   const topology = await arrangeProductionTopology(context, "dedicated", slack);
   return {
@@ -140,11 +363,12 @@ export {
   arrangeNoSendSlackTopology,
   assertConnectedSlackChecks,
   assertInvalidAuthRejected,
+  assertMissingCredentialAdmissionDenied,
   assertNoSendSlackPrerequisites,
   assertNoSecretMaterial,
   assertUnreachableSlackNotConnected,
-  noSendSlackFixture,
   requiredNoSendSlackProxy,
+  noSendSlackFixture,
   requiresNoSendSlackInvalid,
   requiresNoSendSlackLive,
   requiresProductionCluster,

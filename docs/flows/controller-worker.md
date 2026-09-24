@@ -280,9 +280,9 @@ live claim; deployment status derives `error` and `warnings` from that result.
 Completion needs no runtime receipt acknowledgment or post-commit cleanup.
 Maintenance cannot rewrite the completed deployment's historical startup warnings.
 
-Deployment GET requires exact revision `read` access and reads only durable
-state, surviving Pod deletion and controller restart. Queued, running, and
-successful deployments have no failure error. See [deployment status](../reference/agents.md#deployment-status).
+Deployment GET requires exact revision `read` access and reads durable state
+after Pod deletion or controller restart. Queued, running, and successful
+deployments have no failure error. See [deployment status](../reference/agents.md#deployment-status).
 
 Legacy terminal rows derive `reason_code` from audit evidence: `REVISION_ACTIVATED`
 requires matching activation evidence between creation and completion. Otherwise,
@@ -353,6 +353,8 @@ aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 - 2026-09-21 00:56: Integrate Agent-deletion metrics. (01a0af6f-d097-7ef0-a2b7-c8ce31703bd9 - 1de0877d28f7c77e6ef4aab97531ad7d56b583d0)
 
 - 2026-09-20 17:23: Document cached startup failure persistence. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 1ff76eb2)
+
+- 2026-09-19 20:53: Document the runtime API completion paths and source-owned credential/failure boundaries; live proof is tracked separately.
 
 - 2026-09-20 10:50: Documented legacy terminal work outcome backfill during migration 0019, including unknown result data and fallback behavior. (authoring-run/a2f901df-d27a-4a05-9468-e1ee895ae89d - 08b1b8fe)
 

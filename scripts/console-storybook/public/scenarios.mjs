@@ -1017,6 +1017,25 @@ export const scenarios = {
     description:
       "Only fields with entered replacements are saved. Empty stored fields preserve their existing Secret binding.",
   },
+  credentialsSlackRunning: {
+    group: "Components/Credentials",
+    name: "Stop before Slack token replacement",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    deployed: true,
+    description:
+      "Running Agents keep stored channel tokens locked. Request Agent stop, then enter only the tokens to replace. This simulated metadata change does not prove workload shutdown.",
+  },
+  credentialsSlackStopped: {
+    group: "Components/Credentials",
+    name: "Slack replacement after stop",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    deployed: true,
+    stopped: true,
+    description:
+      "A stopped Agent with revision history can replace channel Secrets. Generated connection credentials remain locked; deploy a new revision after saving replacements.",
+  },
   credentialsSlackPartial: {
     group: "Components/Credentials",
     name: "One Slack token missing",
@@ -1032,7 +1051,7 @@ export const scenarios = {
     path: `${draft}&tab=credentials`,
     deployed: true,
     description:
-      "After the first revision, generated credentials cannot be regenerated here; channel Secrets remain separately editable.",
+      "After the first revision, generated credentials cannot be regenerated here. Stop the Agent before replacing channel Secrets.",
   },
   credentialsError: {
     group: "Components/Credentials",

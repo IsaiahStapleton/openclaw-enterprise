@@ -53,25 +53,38 @@ test("service API keys authenticate scoped automation without replacing sessions
   };
   const iamDriver = new NativeIAMDriver({ loadNativeIAMState: async () => policy });
   const auditSink = new InMemoryAuditSink();
+  const runtimeCredentialStatus = new Map();
   const diagnosticsCalls = [];
   const computeDriver = {
     ...createDevelopmentComputeDriver(),
-    async diagnoseAgentDeployment(binding) {
+    async getAgentRuntimeCredentialStatus({ namespace, agent }) {
+      return (
+        runtimeCredentialStatus.get(`${namespace.id}:${agent.id}`) ?? {
+          transportConfigured: false,
+        }
+      );
+    },
+    async provisionAgentRuntimeCredentials({ namespace, agent }) {
+      const status = { transportConfigured: true };
+      runtimeCredentialStatus.set(`${namespace.id}:${agent.id}`, status);
+      return status;
+    },
+    async diagnoseAgentDeployment({ namespace, agent, revision }) {
       diagnosticsCalls.push({
-        namespaceId: binding.namespace.id,
-        agentId: binding.agent.id,
-        revisionId: binding.revision.id,
+        namespaceId: namespace.id,
+        agentId: agent.id,
+        revisionId: revision.id,
       });
       return {
-        revisionId: binding.revision.id,
+        revisionId: revision.id,
         observedAt: "2026-01-02T03:04:05.000Z",
         checks: [
           {
-            component: "runtime",
-            check: "gateway",
+            component: "gateway",
+            check: "configuration",
             state: "succeeded",
             checkedAt: "2026-01-02T03:04:04.000Z",
-            code: "gateway_ready",
+            code: "ok",
           },
         ],
       };
@@ -90,6 +103,7 @@ test("service API keys authenticate scoped automation without replacing sessions
     createController(installation) {
       controller = new OpenClawController(installation, {
         state: new InMemoryPlatformState({ auditSink }),
+        recordOperations: true,
       });
       return controller;
     },
@@ -130,6 +144,10 @@ test("service API keys authenticate scoped automation without replacing sessions
       { action: "read", resourceKind: "namespace" },
       { action: "create", resourceKind: "configuration" },
       { action: "delete", resourceKind: "configuration" },
+      { action: "create", resourceKind: "secret" },
+      { action: "read", resourceKind: "secret" },
+      { action: "update", resourceKind: "secret" },
+      { action: "delete", resourceKind: "secret" },
       { action: "read", resourceKind: "agent" },
       { action: "read", resourceKind: "agent_revision" },
       { action: "operate", resourceKind: "agent" },
@@ -168,12 +186,30 @@ test("service API keys authenticate scoped automation without replacing sessions
     const directory = await mkdtemp(join(tmpdir(), "openclaw-occ-cli-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const keyFile = join(directory, "service-key.json");
+    const adminKeyFile = join(directory, "admin-service-key.json");
     const bodyFile = join(directory, "configuration.json");
     const ambiguousBodyFile = join(directory, "ambiguous-configuration.json");
+    const secretFile = join(directory, "secret.json");
+    const secretUpdateFile = join(directory, "secret-update.json");
+    const roleFile = join(directory, "role.json");
     await writeFile(keyFile, JSON.stringify(issued), { mode: 0o600 });
     await writeFile(bodyFile, JSON.stringify({ kind: "agent", values: { model: "gpt-test" } }), {
       mode: 0o600,
     });
+    await writeFile(secretFile, JSON.stringify({ name: "cli-secret", value: "initial-secret" }), {
+      mode: 0o600,
+    });
+    await writeFile(secretUpdateFile, JSON.stringify({ value: "rotated-secret" }), {
+      mode: 0o600,
+    });
+    await writeFile(
+      roleFile,
+      JSON.stringify({
+        name: "CLI secret operator",
+        permissions: [{ action: "operate", resourceKind: "secret" }],
+      }),
+      { mode: 0o600 },
+    );
     await writeFile(
       ambiguousBodyFile,
       '{"kind":"agent","kind":"agent","values":{"model":"gpt-test"}}',
@@ -185,6 +221,36 @@ test("service API keys authenticate scoped automation without replacing sessions
       OCC_SERVICE_KEY_FILE: keyFile,
       OCC_NAMESPACE: namespaceId,
     };
+    const installationPrincipal = { kind: "service_principal", id: `sp_${randomUUID()}` };
+    policy.identities.push(installationPrincipal);
+    policy.roles.push({
+      id: "cli-installation-namespace-reader",
+      namespaceId,
+      permissions: [{ action: "read", resourceKind: "namespace" }],
+    });
+    policy.bindings.push({
+      id: "cli-installation-admin",
+      subjectKind: "identity",
+      subjectId: installationPrincipal.id,
+      roleId: seed.bindings[0].roleId,
+      resourceKind: "installation",
+      resourceId: installationId,
+    });
+    policy.bindings.push({
+      id: "cli-installation-namespace-reader",
+      namespaceId,
+      subjectKind: "identity",
+      subjectId: installationPrincipal.id,
+      roleId: "cli-installation-namespace-reader",
+      resourceKind: "namespace",
+      resourceId: namespaceId,
+    });
+    const adminKey = await request("POST", "/api/auth/service-keys", {
+      body: { servicePrincipalId: installationPrincipal.id, name: "cli-installation-admin" },
+    });
+    assert.equal(adminKey.status, 201);
+    await writeFile(adminKeyFile, JSON.stringify(adminKey), { mode: 0o600 });
+    const adminEnv = { ...env, OCC_SERVICE_KEY_FILE: adminKeyFile };
 
     // Reject ambiguous object members before a credentialed mutation can reach OCC.
     await assert.rejects(
@@ -220,14 +286,34 @@ test("service API keys authenticate scoped automation without replacing sessions
     });
     assert.equal((await request("GET", configurationPath)).status, 404);
 
-    // Seed the server-owned resource through the administrator session so the
-    // scoped CLI credential exercises only its granted Agent operations.
+    // Secret material and Agent runtime operations require a ready Namespace.
     const readyNamespace = await controller.handleNamespaceLifecycle(
       seed.principal.id,
       namespaceId,
       "ready",
     );
     assert.equal(readyNamespace.status, "ready");
+    const secretCreated = await run(
+      occCli,
+      ["secret", "create", "--file", secretFile, "--output", "json"],
+      { env },
+    );
+    const cliSecret = JSON.parse(secretCreated.stdout);
+    assert.equal(cliSecret.name, "cli-secret");
+    assert.equal(Object.hasOwn(cliSecret, "value"), false);
+    const secretRead = await run(occCli, ["secret", "get", cliSecret.id, "--output", "json"], {
+      env,
+    });
+    assert.equal(JSON.parse(secretRead.stdout).id, cliSecret.id);
+    const secretUpdated = await run(
+      occCli,
+      ["secret", "update", cliSecret.id, "--file", secretUpdateFile, "--output", "json"],
+      { env },
+    );
+    assert.deepEqual(JSON.parse(secretUpdated.stdout), cliSecret);
+
+    // Seed the server-owned resource through the administrator session so the
+    // scoped CLI credential exercises only its granted Agent operations.
     const agentConfiguration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
       body: { kind: "agent", values: {} },
     });
@@ -266,6 +352,82 @@ test("service API keys authenticate scoped automation without replacing sessions
       resourceKind: "secret",
       resourceId: source.id,
     });
+    const roleCreated = await run(
+      occCli,
+      ["iam", "role", "create", "--file", roleFile, "-o", "json"],
+      {
+        env: adminEnv,
+      },
+    );
+    const role = JSON.parse(roleCreated.stdout);
+    assert.equal(role.name, "CLI secret operator");
+    assert.deepEqual(role.permissions, [{ action: "operate", resourceKind: "secret" }]);
+    const roleList = await run(occCli, ["iam", "role", "list", "-o", "json"], {
+      env: adminEnv,
+    });
+    assert.ok(JSON.parse(roleList.stdout).some((candidate) => candidate.id === role.id));
+    const roleRead = await run(occCli, ["iam", "role", "get", role.id, "-o", "json"], {
+      env: adminEnv,
+    });
+    assert.deepEqual(JSON.parse(roleRead.stdout), role);
+    policy.roles.push({
+      id: "cli-installation-secret-reader",
+      namespaceId,
+      permissions: [{ action: "read", resourceKind: "secret" }],
+    });
+    policy.bindings.push({
+      id: "cli-installation-secret-reader",
+      namespaceId,
+      subjectKind: "identity",
+      subjectId: installationPrincipal.id,
+      roleId: "cli-installation-secret-reader",
+      resourceKind: "secret",
+      resourceId: cliSecret.id,
+    });
+    const bindingFile = join(directory, "binding.json");
+    await writeFile(
+      bindingFile,
+      JSON.stringify({
+        subjectKind: "identity",
+        subjectId: boundAgent.servicePrincipalId,
+        roleId: role.id,
+        resourceKind: "secret",
+        resourceId: cliSecret.id,
+      }),
+      { mode: 0o600 },
+    );
+    const bindingCreated = await run(
+      occCli,
+      ["iam", "access-binding", "create", "--file", bindingFile, "-o", "json"],
+      { env: adminEnv },
+    );
+    const binding = JSON.parse(bindingCreated.stdout);
+    assert.equal(binding.subjectId, boundAgent.servicePrincipalId);
+    assert.equal(binding.roleId, role.id);
+    assert.equal(binding.resourceId, cliSecret.id);
+    const bindingList = await run(occCli, ["iam", "access-binding", "list", "-o", "json"], {
+      env: adminEnv,
+    });
+    assert.ok(JSON.parse(bindingList.stdout).some((candidate) => candidate.id === binding.id));
+    const bindingRead = await run(
+      occCli,
+      ["iam", "access-binding", "get", binding.id, "-o", "json"],
+      { env: adminEnv },
+    );
+    assert.deepEqual(JSON.parse(bindingRead.stdout), binding);
+    const runtimeInitial = await run(
+      occCli,
+      ["agent", "runtime-credentials", "get", agent.data.id, "-o", "json"],
+      { env },
+    );
+    assert.deepEqual(JSON.parse(runtimeInitial.stdout), { transportConfigured: false });
+    const runtimeProvisioned = await run(
+      occCli,
+      ["agent", "runtime-credentials", "provision", agent.data.id, "-o", "json"],
+      { env },
+    );
+    const runtimeMetadata = JSON.parse(runtimeProvisioned.stdout);
+    assert.equal(runtimeMetadata.transportConfigured, true);
     const deployed = await request(
       "POST",
       `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
@@ -276,38 +438,28 @@ test("service API keys authenticate scoped automation without replacing sessions
         .desiredRuntimeState,
       "running",
     );
-
-    const deployment = await run(
+    const deploymentStatus = await run(
       occCli,
-      ["agent", "deployment", "get", agent.data.id, deployed.data.id, "--output", "json"],
+      ["agent", "deployment", "get", agent.data.id, deployed.data.id, "-o", "json"],
       { env },
     );
-    const deploymentStatus = JSON.parse(deployment.stdout);
-    assert.deepEqual(
-      {
-        deploymentId: deploymentStatus.deploymentId,
-        agentId: deploymentStatus.agentId,
-      },
-      { deploymentId: deployed.data.id, agentId: agent.data.id },
-    );
+    assert.deepEqual(JSON.parse(deploymentStatus.stdout), {
+      deploymentId: deployed.data.id,
+      namespaceId,
+      agentId: agent.data.id,
+      status: "queued",
+      error: null,
+      warnings: [],
+    });
     const diagnostics = await run(
       occCli,
-      ["agent", "deployment", "diagnostics", agent.data.id, deployed.data.id, "--output", "json"],
+      ["agent", "deployment", "diagnostics", agent.data.id, deployed.data.id, "-o", "json"],
       { env },
     );
-    assert.deepEqual(JSON.parse(diagnostics.stdout), {
-      revisionId: deployed.data.id,
-      observedAt: "2026-01-02T03:04:05.000Z",
-      checks: [
-        {
-          component: "runtime",
-          check: "gateway",
-          state: "succeeded",
-          checkedAt: "2026-01-02T03:04:04.000Z",
-          code: "gateway_ready",
-        },
-      ],
-    });
+    const diagnosticsData = JSON.parse(diagnostics.stdout);
+    assert.equal(diagnosticsData.revisionId, deployed.data.id);
+    assert.equal(diagnosticsData.checks[0].component, "gateway");
+    assert.equal(diagnosticsData.checks[0].state, "succeeded");
     assert.deepEqual(diagnosticsCalls, [
       { namespaceId, agentId: agent.data.id, revisionId: deployed.data.id },
     ]);
@@ -325,6 +477,36 @@ test("service API keys authenticate scoped automation without replacing sessions
         desiredRuntimeState: currentAgent.desiredRuntimeState,
       },
       { id: agent.data.id, desiredRuntimeState: "stopped" },
+    );
+    const bindingDeleted = await run(
+      occCli,
+      ["iam", "access-binding", "delete", binding.id, "-o", "json"],
+      { env: adminEnv },
+    );
+    assert.deepEqual(JSON.parse(bindingDeleted.stdout), {
+      deleted: true,
+      id: binding.id,
+      kind: "iam access-binding",
+    });
+    const roleDeleted = await run(occCli, ["iam", "role", "delete", role.id, "-o", "json"], {
+      env: adminEnv,
+    });
+    assert.deepEqual(JSON.parse(roleDeleted.stdout), {
+      deleted: true,
+      id: role.id,
+      kind: "iam role",
+    });
+    const secretDeleted = await run(occCli, ["secret", "delete", cliSecret.id, "-o", "json"], {
+      env,
+    });
+    assert.deepEqual(JSON.parse(secretDeleted.stdout), {
+      deleted: true,
+      id: cliSecret.id,
+      kind: "secret",
+    });
+    assert.equal(
+      (await request("GET", `/namespaces/${namespaceId}/secrets/${cliSecret.id}`)).status,
+      404,
     );
 
     const deleting = await run(occCli, ["agent", "delete", agent.data.id], { env });

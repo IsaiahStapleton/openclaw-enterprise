@@ -379,7 +379,7 @@ planning a deployment. Other sandbox execution combinations are rejected.
   Namespace, the Namespace cannot accept new Agents, or a stopping Agent cannot
   accept the requested mutation.
 - `409 AGENT_DELETING`: The Agent is deleting and cannot accept update,
-  deployment, credential-provisioning, or workspace-write mutations.
+  deployment, credential provisioning, or workspace-write mutations.
 - `409 NAMESPACE_NOT_READY`: The backing Namespace infrastructure is not ready
   for deployment.
 - `503 DEPENDENCY_UNAVAILABLE`: A selected Harness descriptor, Compute

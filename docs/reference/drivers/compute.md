@@ -48,13 +48,13 @@ activation after authorization.
 
 ### Optional additions
 
-| Method or declaration                                                  | When it is needed                                                                                                                                                                                                                                   |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bindAgent({ namespace, agent })`                                      | Receives the approved Namespace, Agent, and ServicePrincipal before the worker operates on a revision. It may be asynchronous. Failure stops that attempt before further runtime work.                                                              |
-| `validateHarnessAuth(harness, auth, configuration)`                    | Deployment requires this check of the Harness, authentication snapshot, and native Configuration. It must have no side effects. A missing method causes a dependency-unavailable error; a thrown error becomes a resource conflict before queueing. |
-| `activateRevision(revision, context?)`, `deactivateRevision(revision)` | Production startup requires both. The worker also calls activation if a development Driver provides it. See [revision stages](#production-revision-stages).                                                                                         |
-| `setLifecycleDrivers(drivers)`                                         | Startup requires it when another selected Driver provides [Compute hooks](#optional-selected-driver-hooks).                                                                                                                                         |
-| `activationOrder`, `maintenanceIntervalMs`                             | Control [activation timing](#production-revision-stages) and optional [maintenance](#optional-active-runtime-maintenance).                                                                                                                          |
+| Method or declaration                                                  | When it is needed                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bindAgent({ namespace, agent })`                                      | Receives the approved Namespace, Agent, and ServicePrincipal before the worker operates on a revision. It may be asynchronous. Failure stops that attempt before further runtime work.                                                                                       |
+| `validateHarnessAuth(harness, auth, configuration, secretBindings)`    | Deployment requires this check of the Harness, authentication snapshot, native Configuration, and gateway Secret bindings. It must have no side effects. A missing method causes a dependency-unavailable error; a thrown error becomes a resource conflict before queueing. |
+| `activateRevision(revision, context?)`, `deactivateRevision(revision)` | Production startup requires both. The worker also calls activation if a development Driver provides it. See [revision stages](#production-revision-stages).                                                                                                                  |
+| `setLifecycleDrivers(drivers)`                                         | Startup requires it when another selected Driver provides [Compute hooks](#optional-selected-driver-hooks).                                                                                                                                                                  |
+| `activationOrder`, `maintenanceIntervalMs`                             | Control [activation timing](#production-revision-stages) and optional [maintenance](#optional-active-runtime-maintenance).                                                                                                                                                   |
 
 ### Optional startup preflight
 
@@ -81,14 +81,14 @@ A missing method or unsupported endpoint prevents native admin access.
 See [Kubernetes private routes](kubernetes-compute/networking-and-isolation.md#private-agent-gateway-routes)
 for the bundled route implementation.
 
-### Optional initial runtime credential provisioning
+### Optional runtime credential management
 
 `getAgentRuntimeCredentialStatus(binding)` returns `transportConfigured`: whether
 complete generated transport credentials are stored for this Agent.
 `provisionAgentRuntimeCredentials(binding, input)` accepts an empty input object and
 sets up those transport credentials. Channel credentials use Namespace Secrets and
 Configuration `secretBindings` instead of this endpoint. The caller holds Namespace
-and Agent locks and requires a ready Namespace with no earlier Agent revision. It
+and Agent locks and requires a ready Namespace, stopped Agent intent, and no earlier Agent revision. It
 passes approved identities, never physical storage names. Missing methods return an
 error. External writes can survive a database or audit failure; refresh status
 before retrying. See the [initial credential workflow](../console/create-and-deploy.md#initial-runtime-credentials).
@@ -170,7 +170,8 @@ authentication. None contains credential values. The separate `secretEnvironment
 contains Configuration bindings for gateway credentials. Deliver model credentials
 only to the selected Harness workload. Channel tokens are ordinary Namespace Secrets
 referenced by Configuration bindings; never expose them in responses, Configuration,
-audit, logs, or errors. See the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).
+audit, logs, or errors.
+See the [credential delivery flow](../../flows/native-service-account-credential-delivery.md).
 Installed Drivers run with control-plane privileges. Validating a package does
 not isolate untrusted code.
 
@@ -251,21 +252,22 @@ prove readiness. See [Kubernetes startup status](kubernetes-compute.md#plugin-st
 - Implementations differ in topology, credentials, Namespace deletion, and
   private gateway access; see the [feature matrix](compute-matrix.md). The gateway
   and Harness need not share a cluster or a component that writes their resources.
-- Initial credential helpers cannot rotate credentials, manage model
-  authentication, or prove that credentials work or workloads are ready.
+- Initial credential helpers cannot rotate credentials, manage model authentication,
+  integration credentials, or running workloads. They report storage metadata only; explicit
+  deployment and runtime checks prove later behavior.
 - Compute cannot query runtime logs. Selecting a different Driver does not migrate
   revisions that recorded the previous Driver's identity.
 
 ## Troubleshooting
 
-| Symptom                                 | What to check                                                                                                                                                                                                              |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Startup fails                           | Check the selected Driver, required production stages, hooks, and whether preflight threw an error. Fix the cause and confirm startup completes. Preflight warnings alone do not block it.                                 |
-| Deployment fails before work is queued  | Check the Harness and authentication settings and whether `validateHarnessAuth` exists. Fix the combination or Driver and confirm OCC creates a revision.                                                                  |
-| Revision stays unready                  | Check that the Driver reported the correct Namespace, Agent, and revision; that the workload is ready and authenticated; and that plugin startup status can be trusted. After the fix, confirm the revision becomes ready. |
-| Cleanup or replacement stalls           | Check revocation, hooks, and Sandbox cleanup. Fix it and retry; confirm cleanup or activation completes. A missing workload alone does not prove cleanup succeeded.                                                        |
-| Maintenance stops after a policy change | Check that the original Principal is still authorized and IAM is available. Restore the intended permission or start a newly authorized operation, then confirm reconciliation resumes.                                    |
-| Credential setup partially fails        | Refresh stored status before retrying; confirm the required groups report configured. It does not prove the provider accepts them.                                                                                         |
+| Symptom                                  | What to check                                                                                                                                                                                                              |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Startup fails                            | Check the selected Driver, required production stages, hooks, and whether preflight threw an error. Fix the cause and confirm startup completes. Preflight warnings alone do not block it.                                 |
+| Deployment fails before work is queued   | Check the Harness and authentication settings and whether `validateHarnessAuth` exists. Fix the combination or Driver and confirm OCC creates a revision.                                                                  |
+| Revision stays unready                   | Check that the Driver reported the correct Namespace, Agent, and revision; that the workload is ready and authenticated; and that plugin startup status can be trusted. After the fix, confirm the revision becomes ready. |
+| Cleanup or replacement stalls            | Check revocation, hooks, and Sandbox cleanup. Fix it and retry; confirm cleanup or activation completes. A missing workload alone does not prove cleanup succeeded.                                                        |
+| Maintenance stops after a policy change  | Check that the original Principal is still authorized and IAM is available. Restore the intended permission or start a newly authorized operation, then confirm reconciliation resumes.                                    |
+| Runtime credential setup partially fails | Refresh stored status before retrying initial provisioning. Stored status does not prove the runtime accepts the credentials.                                                                                              |
 
 ## Implementations
 

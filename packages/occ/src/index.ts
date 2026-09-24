@@ -3020,7 +3020,7 @@ export class OpenClawController {
           { ...approvedHarness, mode: lockedAgent.executionMode },
           harnessAuth,
           admittedConfiguration,
-          configuration.secretBindings,
+          secretBindings,
         );
       } catch {
         throw new ResourceConflictError(
@@ -3762,7 +3762,12 @@ export class OpenClawController {
       );
     }
     try {
-      compute.validateHarnessAuth(harness, auth, configuration, plan.configuration.secretBindings);
+      compute.validateHarnessAuth(
+        harness,
+        auth,
+        configuration,
+        plan.configuration.secretBindings ?? {},
+      );
     } catch {
       throw new ResourceConflictError(
         "The configured model, authentication, or channel bindings cannot be provisioned.",
@@ -4569,6 +4574,11 @@ export class OpenClawController {
       }
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
+      }
+      if (agent.desiredRuntimeState !== "stopped") {
+        throw new ResourceConflictError(
+          "Runtime credentials require a stopped Agent before provisioning.",
+        );
       }
       if ((await state.revisions.listRevisions(namespace.id, agent.id)).length > 0) {
         throw new ResourceConflictError(

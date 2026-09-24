@@ -213,31 +213,8 @@ bound through the Agent's Configuration. Model credentials are selected
 separately during Agent creation through `harnessAuth`; runtime credential
 provisioning does not change that key.
 
-Select **Provision generated runtime credentials** to create the transport bundle.
-The Kubernetes Driver generates an app-server transport token and a local
-gateway password. Kubernetes gateway authentication is trusted-proxy only. The
-password is projected only when native Configuration
-explicitly selects the supported environment reference; it is never returned by
-the credential API. Provisioning checks for existing Agent runtime Deployments
-before writing credentials so it does not modify values after a runtime has
-started.
-
-The generated credential API uses `GET` and initial `POST {}` on
-`/namespaces/:namespaceId/agents/:agentId/runtime-credentials`. Reading requires
-exact Agent `read`; provisioning also requires `operate`. Returned status reports
-transport storage only. The server derives Kubernetes names from the admitted
-Namespace, Agent, and Installation driver configuration. Generated credential
-values never pass through the browser. Audit records contain the actor, target,
-action, and outcome, never the values.
-
-Provisioning creates missing whole Secrets before any AgentRevision exists. It
-never rotates or overwrites existing credentials. A retry may reuse complete,
-owned transport groups. The Kubernetes transport group must contain exactly
-`app-server-token` and `gateway-password`. Unexpected keys, foreign ownership,
-or malformed values produce a conflict. If a response is lost or a dependency fails, refresh
-stored status before explicitly retrying. Already-created Secrets remain in place
-even when later storage or audit work fails; there is no automatic retry or
-rollback deletion.
+Select **Provision generated runtime credentials** before the first revision while the Agent is stopped. The API accepts only an empty request and returns storage metadata. Generated values never pass through the browser, Configuration, or audit records.
+Compute checks ownership and existing workloads before creating missing credential Secrets. It never rotates or overwrites stored values. Retries reuse complete, owned groups; malformed values, unexpected keys, or foreign ownership cause a conflict. If a response is lost or storage fails, refresh status before retrying. External Secret writes can survive database or audit failure; no automatic rollback deletion occurs. See [Compute credential ownership](../drivers/compute.md#optional-runtime-credential-management).
 
 On the **Credentials** tab, bound Slack tokens appear as filled password fields using a synthetic mask.
 The browser never reads the saved token values. Focus a field to enter a
@@ -253,6 +230,14 @@ bindings are preserved; the mask is never submitted. Entered values clear after
 a save attempt or when leaving the tab, and bound fields return to their mask.
 Tokens are never stored in local storage, URLs, or native Configuration values. A stored channel Secret confirms storage and binding only; it does not
 prove provider acceptance, runtime readiness, or a channel connection.
+
+## Replace credentials after stopping
+
+1. Request an Agent stop and wait for its runtime to shut down. Stopped intent alone does not prove that workloads and Pods have disappeared.
+2. Save replacement channel tokens through the existing Secret references.
+3. Deploy a new revision to consume the replacement values. Shared Secret consumers require their own deployments.
+
+Generated connection credential rotation and repair are not exposed by this API.
 
 <span id="deploy-a-saved-draft"></span>
 
@@ -275,3 +260,11 @@ without changing stored status or sending a model turn. For response proof, give
 your operator the Namespace ID, Agent ID, and revision ID from the page URL.
 Ask them to [verify that workload and get a real model response](../../guides/deploy/production-agents.md#verify-production-workloads).
 Do not create another Agent to verify this one.
+
+## Current runtime diagnostics
+
+Select **Run current diagnostics** only when a fresh runtime observation is
+needed. The view renders generic checks and their observation times. Unknown
+means evidence is missing or unavailable; successful channel checks do not
+prove that a message was delivered. The action sends no channel messages and
+never repeats a startup model probe.

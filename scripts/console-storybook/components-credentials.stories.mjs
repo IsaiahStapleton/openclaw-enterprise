@@ -16,6 +16,14 @@ export const CredentialsSlackReplacement = {
   ...story("credentialsSlackReplacement"),
   name: "Slack token replacement",
 };
+export const CredentialsSlackRunning = {
+  ...story("credentialsSlackRunning"),
+  name: "Stop before Slack token replacement",
+};
+export const CredentialsSlackStopped = {
+  ...story("credentialsSlackStopped"),
+  name: "Slack replacement after stop",
+};
 export const CredentialsSlackPartial = {
   ...story("credentialsSlackPartial"),
   name: "One Slack token missing",

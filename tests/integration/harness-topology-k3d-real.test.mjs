@@ -4,6 +4,7 @@ import {
   arrangeProductionTopology,
   assertActualModelTurn,
   assertCurrentRuntimeDiagnosticsNoSend,
+  assertConsoleRuntimeApiWorkflow,
   assertInvalidHarnessAuthStaysUnready,
   assertDedicatedAgentsInstructionsInFreshSession,
   assertLegacyModelSecretBindingDenied,
@@ -38,6 +39,7 @@ test(
   async (context) => {
     const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
       gatewayPassword: true,
+      browserConsole: true,
     });
     assert.ok(topology.harnessPod, "dedicated production must start a real separate Codex Pod");
     assert.notEqual(topology.gatewayPod.metadata.uid, topology.harnessPod.metadata.uid);
@@ -133,6 +135,7 @@ test(
       "k3d dedicated: credential recovery passed; testing legacy binding rejection.\n",
     );
     await assertLegacyModelSecretBindingDenied(topology);
+    await assertConsoleRuntimeApiWorkflow(context, topology);
     process.stderr.write("k3d dedicated: retained state and Pod replacement passed.\n");
   },
 );

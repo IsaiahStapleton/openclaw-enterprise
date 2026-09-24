@@ -288,7 +288,13 @@ export async function renderAgentDetail(context) {
         : "No selected revision",
     ),
   );
-  const identity = element("p", { className: "resource-id" }, agent.id);
+  const identity = element(
+    "p",
+    { className: "resource-id" },
+    agent.servicePrincipalId
+      ? `${agent.id} · service principal ${agent.servicePrincipalId}`
+      : agent.id,
+  );
   const stop = createAgentStop(context, path, agent, showDeleting, () =>
     context.navigate(target(selected, selectedTab), namespaceId, true),
   );

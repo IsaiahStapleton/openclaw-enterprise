@@ -56,13 +56,15 @@ input is not supported. The server validates document fields against the
 | `occ iam access-binding create --file FILE`               | Grants a Role to a principal for an exact resource.                                                                                                              |
 | `occ iam access-binding delete ID`                        | Deletes a Namespace AccessBinding.                                                                                                                               |
 | `occ agent delete ID`                                     | Begins asynchronous Agent deletion, including its owned runtime state.                                                                                           |
+| `occ agent runtime-credentials get ID`                    | Reads generated credential storage status.                                                                                                                       |
+| `occ agent runtime-credentials provision ID`              | Creates the initial generated credential bundle.                                                                                                                 |
+| `occ agent deployment get AGENT_ID DEPLOYMENT_ID`         | Reads persisted deployment status and startup failures.                                                                                                          |
+| `occ agent deployment diagnostics AGENT_ID DEPLOYMENT_ID` | Requests current runtime diagnostics without sending a message or model turn.                                                                                    |
 | `occ agent list`                                          | Lists authorized Agents in the selected Namespace.                                                                                                               |
 | `occ agent get ID`                                        | Reads an Agent's desired state and active revision.                                                                                                              |
 | `occ agent create --file FILE`                            | Creates an Agent draft.                                                                                                                                          |
 | `occ agent update ID --file FILE`                         | Updates editable Agent fields; the body must include `configurationId`.                                                                                          |
 | `occ agent deploy ID`                                     | Requests deployment and creates an immutable revision.                                                                                                           |
-| `occ agent deployment get AGENT_ID DEPLOYMENT_ID`         | Reads persisted deployment status and startup failure evidence.                                                                                                  |
-| `occ agent deployment diagnostics AGENT_ID DEPLOYMENT_ID` | Requests current runtime diagnostics without sending a message or model turn.                                                                                    |
 | `occ agent stop ID`                                       | Requests a stop while retaining revisions and persistent state.                                                                                                  |
 
 Use the [HTTP API](api.md) to inspect Agent revisions or to work with

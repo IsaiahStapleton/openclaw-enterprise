@@ -107,8 +107,9 @@ starts; local credential storage alone does not prove provider acceptance.
 Login state stays in its
 bounded ephemeral home. Gateway transport and workload identity credentials
 remain separate. A dedicated gateway receives no model credential. Model auth
-cannot be supplied through Configuration `secretBindings` or the initial runtime
-credential API; those own gateway credentials and transport/channel setup.
+cannot be supplied through Configuration `secretBindings` or the runtime
+credential API. Secret bindings deliver integration credentials; Compute owns
+generated runtime communication credentials.
 
 Kubernetes embedded OpenClaw performs one bounded native model probe in the actual gateway
 startup, for both initial and replacement deployments. Embedded activation uses
@@ -123,7 +124,10 @@ and model fallback. Codex ignores user configuration and rules, disables executi
 and external tools, and uses read-only filesystem policy without approval grants;
 a tool event cannot satisfy its success check. Each probe has a process timeout
 and captures native output, emitting only a fixed failure message if unsuccessful.
-A failed Codex probe also holds the process unready until restart.
+A failed Codex probe also holds the process unready until restart. When convergence
+reaches its deadline, deployment status retains safe startup failure evidence even
+after that process disappears. Explicit [runtime diagnostics](agents.md#deployment-status)
+check the current runtime without repeating either model probe.
 
 These startup checks make provider requests and may incur model usage charges.
 They do not verify access to every other configured model or guarantee continued validity

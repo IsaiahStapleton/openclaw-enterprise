@@ -85,7 +85,8 @@ fails setup; deny-traffic assertions remain required.
 
 Each Kubernetes fixture lane owns an independent cluster with a server and worker node with shared test-owned
 local-path storage. Preparation registers and verifies the fixture image's digest
-on both nodes and derives the API server's proxy source `/32` from its route to
+on both nodes and waits for Flannel's cross-node route before deriving the API
+server's proxy source `/32` from its route to
 the worker Pod network. It supplies that address to the
 [plugin status tests](plugins.md#local-and-integration-suites), which exercise
 the private status endpoint across nodes with NetworkPolicy enforcement.

@@ -139,20 +139,11 @@ function pluginRuntimeReady() {
 }
 
 function pluginRuntimeStatusContainer() {
-  return requireNonEmptyString(process.env.OPENCLAW_PLUGIN_STATUS_CONTAINER, "Plugin status container");
+  return runtimeStatusContainer();
 }
 
 function pluginRuntimeRevisionId() {
   return requireNonEmptyString(process.env.OPENCLAW_AGENT_REVISION_ID, "Plugin status revision ID");
-}
-
-function pluginRuntimeStatusPort() {
-  if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) return undefined;
-  const port = Number(process.env.OPENCLAW_PLUGIN_STATUS_PORT);
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
-    throw new Error("Plugin status port is invalid.");
-  }
-  return port;
 }
 
 function runtimeStatusPort() {
@@ -164,13 +155,23 @@ function runtimeStatusPort() {
   return port;
 }
 
+function pluginRuntimeStatusEnabled() {
+  return pluginRuntimeManifestHasEnabledPlugins(readRuntimePayload()?.manifest);
+}
+
+function pluginRuntimeStatusPort() {
+  const port = runtimeStatusPort();
+  if (pluginRuntimeStatusEnabled()) return port;
+  return undefined;
+}
+
 function runtimeStatusContainer() {
   return requireNonEmptyString(process.env.OPENCLAW_RUNTIME_STATUS_CONTAINER, "Runtime status container");
 }
 
 let pluginStatusReport = {
   revisionId: process.env.OPENCLAW_AGENT_REVISION_ID ?? "",
-  container: process.env.OPENCLAW_PLUGIN_STATUS_CONTAINER ?? "",
+  container: process.env.OPENCLAW_RUNTIME_STATUS_CONTAINER ?? "",
   startupId: pluginRandomUUID(),
   podUid: process.env.OPENCLAW_POD_UID ?? "",
   phase: "starting",
@@ -181,7 +182,7 @@ let pluginStatusReport = {
 let runtimeStartupFailure;
 
 function publishPluginRuntimeStatus(report) {
-  if (pluginRuntimeStatusPort() === undefined) return;
+  if (!pluginRuntimeStatusEnabled()) return;
   const successfulPluginIds = [...new Set(report.successfulPluginIds ?? [])];
   const failures = [
     ...new Map((report.failures ?? []).map((failure) => [failure.pluginId, pluginDiagnostic(failure.pluginId, failure.code)])).values(),
@@ -197,6 +198,20 @@ function publishPluginRuntimeStatus(report) {
     phase: report.phase,
     successfulPluginIds,
     failures,
+  };
+}
+
+function runtimeDiagnosticCheck(check, state, checkedAt, code) {
+  requireNonEmptyString(check, "Runtime diagnostic check");
+  if (code !== undefined && !RUNTIME_DIAGNOSTIC_CODES.has(code)) {
+    throw new Error("Runtime diagnostic code is invalid.");
+  }
+  return {
+    component: runtimeStatusContainer(),
+    check,
+    state,
+    checkedAt,
+    ...(code === undefined ? {} : { code }),
   };
 }
 
@@ -217,29 +232,6 @@ function publishRuntimeFailure(check, code) {
 function publishRuntimeReady() {
   if (runtimeStatusPort() === undefined) return;
   runtimeStartupFailure = undefined;
-}
-
-function runtimeDiagnosticCheck(check, state, checkedAt, code) {
-  requireNonEmptyString(check, "Runtime diagnostic check");
-  if (code !== undefined && !RUNTIME_DIAGNOSTIC_CODES.has(code)) {
-    throw new Error("Runtime diagnostic code is invalid.");
-  }
-  return {
-    component: runtimeStatusContainer(),
-    check,
-    state,
-    checkedAt,
-    ...(code === undefined ? {} : { code }),
-  };
-}
-
-function runtimeStatusReport() {
-  return {
-    revisionId: requireNonEmptyString(process.env.OPENCLAW_AGENT_REVISION_ID, "Runtime status revision ID"),
-    container: runtimeStatusContainer(),
-    podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
-    ...(runtimeStartupFailure === undefined ? {} : { runtimeFailure: runtimeStartupFailure }),
-  };
 }
 
 function statusCheckFromBoolean(check, value, checkedAt, failureCode) {
@@ -375,17 +367,13 @@ function authenticationCheckFromProbe(probe, checkedAt) {
 
 function connectivityCheckFromConnected(connected, checkedAt) {
   if (connected === true) return runtimeDiagnosticCheck("connectivity", "succeeded", checkedAt);
-  if (connected === false) {
-    return runtimeDiagnosticCheck("connectivity", "failed", checkedAt, "DISCONNECTED");
-  }
+  if (connected === false) return runtimeDiagnosticCheck("connectivity", "failed", checkedAt, "DISCONNECTED");
   return runtimeDiagnosticCheck("connectivity", "unknown", checkedAt, "INCOMPATIBLE_RESPONSE");
 }
 
 function slackChecksFromStatusPayload(payload, checkedAt) {
   if (payload?.configOnly === true) {
-    if (!Array.isArray(payload.configuredChannels)) {
-      return unknownSlackChecks(checkedAt, "INCOMPATIBLE_RESPONSE");
-    }
+    if (!Array.isArray(payload.configuredChannels)) return unknownSlackChecks(checkedAt, "INCOMPATIBLE_RESPONSE");
     const configured = payload.configuredChannels.includes("slack");
     if (configured !== true) {
       return [
@@ -453,54 +441,39 @@ async function slackChannelDiagnosticChecks(checkedAt, abortSignal) {
   return slackChecksFromStatusPayload(result.value, checkedAt);
 }
 
-async function runtimeDiagnosticsReport(abortSignal) {
+async function runtimeStatusReport(includeCurrentChecks, abortSignal) {
   const observedAt = new Date().toISOString();
   return {
-    revisionId: requireNonEmptyString(process.env.OPENCLAW_AGENT_REVISION_ID, "Runtime status revision ID"),
+    revisionId: pluginRuntimeRevisionId(),
     container: runtimeStatusContainer(),
     podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
     observedAt,
-    checks: (await slackChannelDiagnosticChecks(observedAt, abortSignal)).slice(0, 32),
+    ...(runtimeStartupFailure === undefined ? {} : { runtimeFailure: runtimeStartupFailure }),
+    checks: includeCurrentChecks ? (await slackChannelDiagnosticChecks(observedAt, abortSignal)).slice(0, 32) : [],
   };
 }
 
 function startPluginRuntimeStatusServer() {
-  const port = runtimeStatusPort() ?? pluginRuntimeStatusPort();
+  const port = runtimeStatusPort();
   if (port === undefined) return;
   const server = pluginCreateServer(async (request, response) => {
-    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const pathname = url.pathname;
     if (
       request.method !== "GET" ||
-      (pathname !== RUNTIME_STATUS_PATH &&
-        pathname !== RUNTIME_DIAGNOSTICS_PATH &&
-        pathname !== PLUGIN_STATUS_PATH)
+      (pathname !== RUNTIME_STATUS_PATH && pathname !== RUNTIME_DIAGNOSTICS_PATH && pathname !== PLUGIN_STATUS_PATH)
     ) {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "not_found" }));
       return;
     }
-    if (pathname === RUNTIME_STATUS_PATH) {
-      if (runtimeStatusPort() === undefined) {
-        response.writeHead(404, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: "not_found" }));
-        return;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(runtimeStatusReport()));
-      return;
-    }
-    if (pathname === RUNTIME_DIAGNOSTICS_PATH) {
-      if (runtimeStatusPort() === undefined) {
-        response.writeHead(404, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: "not_found" }));
-        return;
-      }
+    if (pathname === RUNTIME_STATUS_PATH || pathname === RUNTIME_DIAGNOSTICS_PATH) {
       const abortController = new AbortController();
       const abort = () => abortController.abort();
       request.on?.("aborted", abort);
       response.on?.("close", abort);
       try {
-        const report = await runtimeDiagnosticsReport(abortController.signal);
+        const report = await runtimeStatusReport(pathname === RUNTIME_DIAGNOSTICS_PATH, abortController.signal);
         if (abortController.signal.aborted) return;
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(report));
@@ -510,7 +483,7 @@ function startPluginRuntimeStatusServer() {
       }
       return;
     }
-    if (pluginRuntimeStatusPort() === undefined) {
+    if (!pluginRuntimeStatusEnabled()) {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "not_found" }));
       return;
@@ -522,7 +495,7 @@ function startPluginRuntimeStatusServer() {
 }
 
 function pluginBestEffortEnabled() {
-  return pluginRuntimeStatusPort() !== undefined;
+  return pluginRuntimeStatusEnabled();
 }
 
 function derivePluginAppServerToken(startupId) {
@@ -687,6 +660,12 @@ function pluginFailureIds(failures) {
 
 function hasEnabledPluginSelections(runtime) {
   return Object.values(runtime?.manifest?.selections ?? {}).some((selection) => selection?.enabled === true);
+}
+
+function pluginRuntimeManifestHasEnabledPlugins(manifest) {
+  if (manifest?.kind === "openclaw") return true;
+  if (manifest?.kind !== "codex") return false;
+  return Object.values(manifest.selections ?? {}).some((selection) => selection?.enabled === true);
 }
 
 function readPluginFailuresFromEnvironment() {
@@ -1291,7 +1270,7 @@ async function installCodexPlugins(runtime, failures = []) {
   const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
   let lastError;
   let result = { successfulPluginIds: [], failures };
-  while (Date.now() < deadline) {
+  do {
     try {
       result = await installCodexSelectionSet(selections, failures);
       lastError = undefined;
@@ -1300,7 +1279,7 @@ async function installCodexPlugins(runtime, failures = []) {
       lastError = error;
       await pluginRuntimeDelay(250);
     }
-  }
+  } while (Date.now() < deadline);
   if (lastError !== undefined) {
     throw new Error("Codex plugin installation did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
   }
@@ -1461,7 +1440,6 @@ const pluginResult =
 if (peerStatus !== undefined) {
   pluginResult.successfulPluginIds = peerStatus.successfulPluginIds;
 }
-publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
 const workspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
 if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
   const config = readOpenClawConfig();
@@ -1554,6 +1532,7 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
   writeOpenClawConfig(config);
 }
 publishRuntimeReady();
+publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
 const child = spawn(
   "node",
   ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
@@ -1660,6 +1639,15 @@ delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
 
+function isRecoveredNativeStreamError(event) {
+  if (event.type !== "error" || typeof event.message !== "string") return false;
+  const message = event.message;
+  if (!/^Reconnecting\.\.\. [1-9][0-9]*\/[1-9][0-9]*/.test(message)) return false;
+  if (/auth|401|403/i.test(message)) return false;
+  return message.includes("stream disconnected before completion") ||
+    message.includes("stream disconnected - retrying sampling request");
+}
+
 function probeCodexAuthenticationFailureCode() {
   const directory = mkdtempSync("/tmp/codex-auth-probe-");
   try {
@@ -1699,11 +1687,21 @@ function probeCodexAuthenticationFailureCode() {
     if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const events = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
     const allowed = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "item.updated", "item.completed"]);
-    // Native item.error is an advisory (for example missing catalog metadata),
-    // distinct from fatal top-level error/turn.failed. A completed model turn is
-    // still required; no tool item can satisfy this authentication check.
-    if (events.some((event) => !allowed.has(event.type) ||
-      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return "MODEL_PROBE_FAILED";
+    // Native item.error is advisory (for example missing catalog metadata).
+    // Only a known stream reconnect during a successful turn may recover from a
+    // top-level error; fatal errors and tool items never satisfy this auth check.
+    let turnStarted = false;
+    let turnCompleted = false;
+    for (const event of events) {
+      if (event.type === "turn.started") turnStarted = true;
+      if (event.type === "error") {
+        if (!turnStarted || turnCompleted || !isRecoveredNativeStreamError(event)) return "MODEL_PROBE_FAILED";
+        continue;
+      }
+      if (!allowed.has(event.type) ||
+        (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type))) return "MODEL_PROBE_FAILED";
+      if (event.type === "turn.completed") turnCompleted = true;
+    }
     return events.filter((event) => event.type === "turn.completed").length === 1 &&
       events.filter((event) => event.type === "turn.started").length === 1 &&
       events.at(-1)?.type === "turn.completed" &&
@@ -1735,7 +1733,7 @@ function forwardTermination(child) {
   process.on("SIGINT", () => forward("SIGINT"));
 }
 
-if (pluginRuntimeStatusPort() !== undefined) {
+if (pluginRuntimeStatusEnabled()) {
   process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(pluginStatusReport.startupId);
 }
 publishRuntimeReady();
@@ -1892,7 +1890,26 @@ for (const slot of processes) start(slot);
 // the trusted apiserver proxy source, but its probes have no forwarded headers.
 export const GATEWAY_READINESS_ENTRYPOINT = String.raw`
 const timeout = setTimeout(() => process.exit(1), 2_000);
+const { readFileSync } = require("node:fs");
 const http = require("node:http");
+function pluginStatusRequired() {
+  try {
+    let payload;
+    if (process.env.OPENCLAW_PLUGIN_RUNTIME_JSON !== undefined) {
+      payload = JSON.parse(process.env.OPENCLAW_PLUGIN_RUNTIME_JSON);
+    } else if (process.env.OPENCLAW_PLUGIN_RUNTIME_MANIFEST !== undefined) {
+      payload = { manifest: JSON.parse(readFileSync(process.env.OPENCLAW_PLUGIN_RUNTIME_MANIFEST, "utf8")) };
+    } else {
+      return false;
+    }
+    const manifest = payload?.manifest;
+    if (manifest?.kind === "openclaw") return true;
+    if (manifest?.kind !== "codex") return false;
+    return Object.values(manifest.selections ?? {}).some((selection) => selection?.enabled === true);
+  } catch {
+    return false;
+  }
+}
 function nativeReady() {
   const request = http.get(
     "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
@@ -1904,11 +1921,13 @@ function nativeReady() {
   );
   request.on("error", () => process.exit(1));
 }
-if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) {
+if (!pluginStatusRequired()) {
   nativeReady();
+} else if (process.env.OPENCLAW_RUNTIME_STATUS_PORT === undefined) {
+  process.exit(1);
 } else {
   const request = http.get(
-    "http://127.0.0.1:" + process.env.OPENCLAW_PLUGIN_STATUS_PORT + "/openclaw/plugin-runtime/status",
+    "http://127.0.0.1:" + process.env.OPENCLAW_RUNTIME_STATUS_PORT + "/openclaw/plugin-runtime/status",
     (response) => {
       let body = "";
       response.setEncoding("utf8");
@@ -1933,7 +1952,7 @@ if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) {
 
 export const AGENT_READINESS_ENTRYPOINT = String.raw`
 const timeout = setTimeout(() => process.exit(1), 2_000);
-const { existsSync } = require("node:fs");
+const { existsSync, readFileSync } = require("node:fs");
 const { createHmac } = require("node:crypto");
 const http = require("node:http");
 ${PLUGIN_APP_SERVER_TOKEN_DERIVATION_HELPER}
@@ -1948,6 +1967,24 @@ try {
   ReadinessWebSocket = require("ws");
 } catch {}
 if (ReadinessWebSocket === undefined) process.exit(1);
+function pluginStatusRequired() {
+  try {
+    let payload;
+    if (process.env.OPENCLAW_PLUGIN_RUNTIME_JSON !== undefined) {
+      payload = JSON.parse(process.env.OPENCLAW_PLUGIN_RUNTIME_JSON);
+    } else if (process.env.OPENCLAW_PLUGIN_RUNTIME_MANIFEST !== undefined) {
+      payload = { manifest: JSON.parse(readFileSync(process.env.OPENCLAW_PLUGIN_RUNTIME_MANIFEST, "utf8")) };
+    } else {
+      return false;
+    }
+    const manifest = payload?.manifest;
+    if (manifest?.kind === "openclaw") return true;
+    if (manifest?.kind !== "codex") return false;
+    return Object.values(manifest.selections ?? {}).some((selection) => selection?.enabled === true);
+  } catch {
+    return false;
+  }
+}
 function derivedToken(startupId) {
   try {
     return derivePluginAppServerTokenFromBase(
@@ -1974,11 +2011,13 @@ function checkWebSocket(token) {
   });
   onSocket("error", () => process.exit(1));
 }
-if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) {
+if (!pluginStatusRequired()) {
   checkWebSocket(process.env.APP_SERVER_TOKEN);
+} else if (process.env.OPENCLAW_RUNTIME_STATUS_PORT === undefined) {
+  process.exit(1);
 } else {
   const request = http.get(
-    "http://127.0.0.1:" + process.env.OPENCLAW_PLUGIN_STATUS_PORT + "/openclaw/plugin-runtime/status",
+    "http://127.0.0.1:" + process.env.OPENCLAW_RUNTIME_STATUS_PORT + "/openclaw/plugin-runtime/status",
     (response) => {
       let body = "";
       response.setEncoding("utf8");

@@ -92,24 +92,22 @@ function readStatusFromHandler(handler, path = "/openclaw/plugin-runtime/status"
   return JSON.parse(body);
 }
 
-function readRuntimeStatusFromHandler(handler) {
-  return readStatusFromHandler(handler, "/openclaw/runtime/status");
-}
-
 async function readStatusFromHandlerAsync(handler, path) {
   let body = "";
   await handler(
-    { method: "GET", url: path, on() {}, off() {} },
+    { method: "GET", url: path },
     {
       writeHead() {},
-      on() {},
-      off() {},
       end(chunk) {
         body += chunk;
       },
     },
   );
   return JSON.parse(body);
+}
+
+async function readRuntimeStatusFromHandler(handler) {
+  return readStatusFromHandlerAsync(handler, "/openclaw/runtime/status");
 }
 
 async function readRuntimeChannelChecksFromHandler(handler) {
@@ -675,7 +673,9 @@ test("Codex runtime helper reports plugin install warnings without retrying", as
     },
     {
       env: {
-        OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+        OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify(runtime),
+        OPENCLAW_RUNTIME_STATUS_CONTAINER: "agent",
+        OPENCLAW_RUNTIME_STATUS_PORT: "18791",
       },
     },
   );
@@ -744,7 +744,9 @@ test("Codex runtime helper reports connector-auth warnings with the admitted key
     },
     {
       env: {
-        OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+        OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify(runtime),
+        OPENCLAW_RUNTIME_STATUS_CONTAINER: "agent",
+        OPENCLAW_RUNTIME_STATUS_PORT: "18791",
       },
     },
   );
@@ -1262,12 +1264,7 @@ test("OpenClaw runtime helper keeps install signals generic", () => {
   const result = runOpenClawRuntimeHelper(
     runtime,
     [{ status: null, signal: "SIGTERM", stdout: "", stderr: "" }],
-    {
-      captureError: true,
-      env: {
-        OPENCLAW_PLUGIN_STATUS_PORT: "18791",
-      },
-    },
+    { captureError: true },
   );
 
   assert.match(result.error.message, /OpenClaw plugin install failed/);
@@ -1711,6 +1708,95 @@ test("Kubernetes startup failure evidence requires the exact runtime Pod report"
   ]);
 });
 
+test("Codex runtime publishes safe startup failure evidence before unready hold", async () => {
+  const revisionId = "revision-plugin-compute-1";
+  const idleTimers = [];
+  let statusHandler;
+  const sandbox = {
+    AbortController,
+    AbortSignal,
+    Buffer,
+    JSON,
+    URL,
+    console: { error() {} },
+    process: {
+      env: {
+        APP_SERVER_PORT: "4321",
+        APP_SERVER_TOKEN: "fixture-transport-token",
+        CODEX_HOME: "/tmp/openclaw-codex-home",
+        CODEX_LOGIN_MODE: "api_key",
+        OPENAI_API_KEY: "fixture-api-key",
+        OPENCLAW_AGENT_REVISION_ID: revisionId,
+        OPENCLAW_RUNTIME_STATUS_CONTAINER: "agent",
+        OPENCLAW_RUNTIME_STATUS_PORT: "18791",
+        OPENCLAW_POD_UID: "pod-agent-login-failure-1",
+      },
+      on() {},
+      exit(code) {
+        throw new Error(`unexpected process exit ${code}`);
+      },
+    },
+    setInterval(callback, delay) {
+      idleTimers.push({ callback, delay });
+    },
+    setTimeout() {
+      return { unref() {} };
+    },
+    clearTimeout() {},
+    require(specifier) {
+      if (specifier === "node:http") {
+        return {
+          createServer(handler) {
+            statusHandler = handler;
+            return { listen() {} };
+          },
+        };
+      }
+      if (specifier === "node:fs") {
+        return {
+          existsSync() {
+            return false;
+          },
+          mkdirSync() {},
+          mkdtempSync,
+          rmSync() {},
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawnSync() {
+            return { status: 1 };
+          },
+        };
+      }
+      return nodeRequire(specifier);
+    },
+  };
+
+  vm.runInNewContext(AGENT_RUNTIME_ENTRYPOINT, sandbox);
+
+  assert.ok(statusHandler);
+  assert.equal(idleTimers.length, 1);
+  const status = await readRuntimeStatusFromHandler(statusHandler);
+  assert.equal(status.revisionId, revisionId);
+  assert.equal(status.container, "agent");
+  assert.equal(status.podUid, "pod-agent-login-failure-1");
+  assert.deepEqual(status.checks, []);
+  assert.deepEqual(
+    {
+      component: status.runtimeFailure.component,
+      check: status.runtimeFailure.check,
+      code: status.runtimeFailure.code,
+    },
+    {
+      component: "agent",
+      check: "login",
+      code: "LOGIN_FAILED",
+    },
+  );
+  assert.match(status.runtimeFailure.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
 test("gateway runtime status maps native Slack channel status without provider data", async () => {
   const revisionId = "revision-plugin-compute-1";
   let statusHandler;
@@ -1829,7 +1915,7 @@ test("gateway runtime status maps native Slack channel status without provider d
 
   assert.ok(statusHandler);
   const ready = await readRuntimeStatusFromHandler(statusHandler);
-  assert.equal(ready.revisionId, revisionId);
+  assert.deepEqual(ready.checks, []);
   assert.equal(channelStatusCalls, 0);
   const assertSlackDiagnostics = async (status, expected, description) => {
     channelStatus = status;
@@ -1985,6 +2071,14 @@ test("Codex runtime gates startup and readiness on a successful native authentic
     type: "item.completed",
     item: { type: "error", message: "Model catalog metadata unavailable" },
   };
+  const recoveredStreamError = {
+    type: "error",
+    message: "Reconnecting... 1/3 stream disconnected before completion",
+  };
+  const recoveredRetryingSamplingError = {
+    type: "error",
+    message: "Reconnecting... 2/3 stream disconnected - retrying sampling request",
+  };
   const scenarios = [
     { name: "failed login", loginStatus: 1 },
     {
@@ -1999,8 +2093,34 @@ test("Codex runtime gates startup and readiness on a successful native authentic
       ready: true,
     },
     {
+      name: "recovered native stream error during active turn",
+      events: [started, recoveredStreamError, assistant, completed],
+      ready: true,
+    },
+    {
+      name: "recovered native sampling retry error during active turn",
+      events: [started, recoveredRetryingSamplingError, assistant, completed],
+      ready: true,
+    },
+    {
       name: "fatal top-level error despite assistant output",
       events: [started, assistant, { type: "error", message: "authentication failed" }, completed],
+    },
+    {
+      name: "reconnecting error with auth marker remains fatal",
+      events: [
+        started,
+        {
+          type: "error",
+          message: "Reconnecting... 1/3 stream disconnected before completion after 401 auth",
+        },
+        assistant,
+        completed,
+      ],
+    },
+    {
+      name: "reconnecting error after completed turn remains fatal",
+      events: [started, assistant, completed, recoveredStreamError],
     },
     {
       name: "failed turn",
@@ -2030,7 +2150,7 @@ test("Codex runtime gates startup and readiness on a successful native authentic
     },
   ];
   for (const scenario of scenarios) {
-    await t.test(scenario.name, () => {
+    await t.test(scenario.name, async () => {
       const directory = mkdtempSync(join(tmpdir(), "openclaw-plugin-ready-"));
       const marker = join(directory, "ready");
       writeFileSync(marker, "stale\n", { mode: 0o600 });
@@ -2042,6 +2162,7 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         let appServerStarts = 0;
         let nativeCalls = 0;
         const sandbox = {
+          AbortController,
           URL,
           console: {
             error(message) {
@@ -2133,7 +2254,7 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         vm.runInNewContext(AGENT_RUNTIME_ENTRYPOINT, sandbox);
         assert.equal(nativeCalls, scenario.loginStatus === 1 ? 1 : 2);
         assert.ok(statusHandler);
-        const runtimeStatus = readRuntimeStatusFromHandler(statusHandler);
+        const runtimeStatus = await readRuntimeStatusFromHandler(statusHandler);
         assert.equal(runtimeStatus.revisionId, revisionId);
         assert.equal(runtimeStatus.container, "agent");
         assert.equal(runtimeStatus.podUid, "pod-runtime-auth-gate");
@@ -2173,6 +2294,7 @@ test("Codex agent app-server uses a per-startup plugin status token", () => {
   const marker = join(directory, "ready");
   const baseToken = "capability-token-test-value";
   const revisionId = "revision-plugin-compute-1";
+  const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexLinearPluginState() }));
   let statusHandler;
   let appServerSpawn;
   const files = new Map();
@@ -2193,8 +2315,12 @@ test("Codex agent app-server uses a per-startup plugin status token", () => {
           OPENAI_API_KEY: "fixture-api-key",
           OPENCLAW_HARNESS_MODEL: "openai/gpt-5",
           OPENCLAW_AGENT_REVISION_ID: revisionId,
-          OPENCLAW_PLUGIN_STATUS_CONTAINER: "agent",
-          OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+          OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({
+            manifest: runtime,
+            codexConfigurationToml: "",
+          }),
+          OPENCLAW_RUNTIME_STATUS_CONTAINER: "agent",
+          OPENCLAW_RUNTIME_STATUS_PORT: "18791",
           OPENCLAW_POD_UID: "pod-agent-token-1",
           OPENCLAW_PLUGIN_READY_MARKER: marker,
         },
@@ -2345,8 +2471,8 @@ test("Codex gateway supervisor exits when the peer Agent plugin failure set chan
           OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
           OPENCLAW_GATEWAY_PORT: "8080",
           OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
-          OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
-          OPENCLAW_PLUGIN_STATUS_PORT: String(peerPort),
+          OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
+          OPENCLAW_RUNTIME_STATUS_PORT: String(peerPort),
           OPENCLAW_POD_UID: "gateway-pod-1",
         },
         on() {},
@@ -2436,7 +2562,7 @@ test("Codex gateway supervisor exits when the peer Agent plugin failure set chan
   }
 });
 
-test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin status auth", async () => {
+test("Kubernetes dedicated Codex agent mounts plugin-free runtime with private runtime status", async () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
   const candidate = revision({ plugins: codexNoPluginState() });
   const runtime = pluginRuntimeSpecForRevision(candidate);
@@ -2491,8 +2617,7 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
           "OPENCLAW_AGENT_REVISION_ID",
           "OPENCLAW_RUNTIME_STATUS_CONTAINER",
           "OPENCLAW_RUNTIME_STATUS_PORT",
-          "OPENCLAW_PLUGIN_STATUS_CONTAINER",
-          "OPENCLAW_PLUGIN_STATUS_PORT",
+          "OPENCLAW_PLUGIN_FAILURES_JSON",
         ].includes(variable.name),
       )
       .map((variable) => [variable.name, variable.value]),
@@ -2746,18 +2871,11 @@ test("Kubernetes dedicated Codex gateway mounts bridge runtime and prior plugin 
   assert.deepEqual(
     container.env
       .filter((variable) =>
-        [
-          "OPENCLAW_AGENT_REVISION_ID",
-          "OPENCLAW_PLUGIN_STATUS_CONTAINER",
-          "OPENCLAW_PLUGIN_STATUS_PORT",
-          "OPENCLAW_PLUGIN_FAILURES_JSON",
-        ].includes(variable.name),
+        ["OPENCLAW_AGENT_REVISION_ID", "OPENCLAW_PLUGIN_FAILURES_JSON"].includes(variable.name),
       )
       .map((variable) => [variable.name, variable.value]),
     [
       ["OPENCLAW_AGENT_REVISION_ID", "revision-plugin-compute-1"],
-      ["OPENCLAW_PLUGIN_STATUS_CONTAINER", "gateway"],
-      ["OPENCLAW_PLUGIN_STATUS_PORT", "18791"],
       [
         "OPENCLAW_PLUGIN_FAILURES_JSON",
         JSON.stringify([

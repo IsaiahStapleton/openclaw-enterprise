@@ -50,6 +50,7 @@
       "path": "tests/integration/harness-topology-k3d-slack-nosend-real.test.mjs",
       "expectedTests": [
         "production Slack no-send diagnostics report unreachable channel as not connected",
+        "production Slack no-send API rejects missing channel credentials",
         "production Slack no-send diagnostics map invalid Slack auth to failed code",
         "production Slack no-send diagnostics prove configured authenticated connected without posting"
       ]

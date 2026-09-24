@@ -76,13 +76,17 @@ test(
          WHERE namespace_id = $1 AND id = $3) AS configurations,
        (SELECT count(*)::integer FROM occ.iam_identities
          WHERE namespace_id = $1 AND agent_id = $2
-           AND kind = 'service_principal') AS agent_service_principals`,
+           AND kind = 'service_principal') AS agent_service_principals,
+       (SELECT id FROM occ.iam_identities
+         WHERE namespace_id = $1 AND agent_id = $2
+           AND kind = 'service_principal') AS agent_service_principal_id`,
       [namespace.data.id, agent.id, agent.configurationId],
     );
     assert.ok(persisted.rows[0].audit_events >= 3);
     assert.equal(persisted.rows[0].queued_operations, 1);
     assert.equal(persisted.rows[0].configurations, 1);
     assert.equal(persisted.rows[0].agent_service_principals, 1);
+    assert.equal(agent.servicePrincipalId, persisted.rows[0].agent_service_principal_id);
 
     // The live worker can still produce unrelated lifecycle audit rows, such as
     // bootstrap Namespace convergence, so stop it before measuring this request.
@@ -184,6 +188,7 @@ test(
     assert.notEqual(first.data.servicePrincipalId.trim(), "");
     assert.equal(typeof second.data.servicePrincipalId, "string");
     assert.notEqual(second.data.servicePrincipalId.trim(), "");
+    assert.notEqual(first.data.servicePrincipalId, second.data.servicePrincipalId);
     await Promise.all(
       [first.data, second.data].map((agent) =>
         grantAgentSecretOperate(pool, agent, agent.harnessAuth.source.id),
@@ -212,10 +217,15 @@ test(
       [namespace.data.id],
     );
     assert.equal(persistedAgents.rowCount, 2);
+    const persistedAgentIdentityById = new Map(
+      persistedAgents.rows.map(({ id, service_principal_id }) => [id, service_principal_id]),
+    );
     assert.deepEqual(
       persistedAgents.rows.map(({ id }) => id),
       [first.data.id, second.data.id].sort(),
     );
+    assert.equal(first.data.servicePrincipalId, persistedAgentIdentityById.get(first.data.id));
+    assert.equal(second.data.servicePrincipalId, persistedAgentIdentityById.get(second.data.id));
     assert.notEqual(
       persistedAgents.rows[0].service_principal_id,
       persistedAgents.rows[1].service_principal_id,
@@ -793,15 +803,20 @@ test(
       persistedRevisions.rows[0].service_principal_id,
       persistedRevisions.rows[1].service_principal_id,
     );
+    assert.equal(primary.servicePrincipalId, persistedRevisions.rows[0].service_principal_id);
 
     const identities = await pool.query(
       `SELECT namespace_id, agent_id, id FROM occ.iam_identities
        WHERE kind = 'service_principal' AND agent_id = ANY($1::text[])
        ORDER BY agent_id`,
-      [[primary.id, sibling.id, foreign.id]],
+      [[primary.id, sibling.id, foreign.id, restricted.id]],
     );
-    assert.equal(identities.rowCount, 3);
-    assert.equal(new Set(identities.rows.map(({ id }) => id)).size, 3);
+    assert.equal(identities.rowCount, 4);
+    assert.equal(new Set(identities.rows.map(({ id }) => id)).size, 4);
+    const identityByAgentId = new Map(identities.rows.map(({ agent_id, id }) => [agent_id, id]));
+    for (const agent of [primary, sibling, foreign, restricted]) {
+      assert.equal(agent.servicePrincipalId, identityByAgentId.get(agent.id));
+    }
     const primaryIdentity = identities.rows.find(({ agent_id }) => agent_id === primary.id);
     assert.equal(primaryIdentity.namespace_id, namespaceA);
     assert.equal(primaryIdentity.id, persistedRevisions.rows[0].service_principal_id);

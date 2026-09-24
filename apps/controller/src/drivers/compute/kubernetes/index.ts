@@ -2450,6 +2450,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         [],
         workspaceSetup,
         repositoryConsumer?.role === "agent" ? repositoryMaterial : undefined,
+        sandboxDriver?.provisionHarness === undefined,
       );
       if (node !== undefined) {
         this.addWorkspaceNode(agentDeployment, node.name, node.ca, revision);
@@ -2760,6 +2761,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         [],
         workspaceSetup,
         repositoryMaterial,
+        sandboxDriver?.provisionHarness === undefined,
       );
     if (sandboxDriver?.provisionHarness === undefined) {
       let deployment = await this.getOwned("Deployment", revisionName, namespace, {
@@ -4669,7 +4671,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw new DependencyUnavailableError("Runtime status returned invalid data.");
       }
     }
-    let serialized: string | undefined;
+    let serialized: string;
     try {
       serialized = JSON.stringify(value);
     } catch {
@@ -4733,6 +4735,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return value === "succeeded" || value === "failed" || value === "unknown";
   }
 
+  private validRuntimeStatusIdentifier(value: unknown): value is string {
+    return typeof value === "string" && RUNTIME_STATUS_IDENTIFIER.test(value);
+  }
+
+  private validIsoTimestamp(value: unknown): value is string {
+    return typeof value === "string" && !Number.isNaN(Date.parse(value));
+  }
+
   private runtimeFailureEvidence(value: unknown): RuntimeFailureEvidence | undefined {
     if (value === undefined) {
       return undefined;
@@ -4753,14 +4763,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       checkedAt: failed.checkedAt,
       code: failed.code,
     });
-  }
-
-  private validRuntimeStatusIdentifier(value: unknown): value is string {
-    return typeof value === "string" && RUNTIME_STATUS_IDENTIFIER.test(value);
-  }
-
-  private validIsoTimestamp(value: unknown): value is string {
-    return typeof value === "string" && !Number.isNaN(Date.parse(value));
   }
 
   private cachedRuntimeFailureEvidence(
@@ -4824,33 +4826,40 @@ export class KubernetesComputeDriver implements ComputeDriver {
           }
         }
       }
-      for (const container of this.runtimeStatusContainers(revision)) {
-        const readback = await this.privateStatusReadback(
-          revision,
-          namespace,
-          container,
-          RUNTIME_STATUS_PATH,
-        );
-        if (readback === undefined) {
-          continue;
-        }
-        const failure = this.cachedRuntimeFailureEvidence(
-          readback.status,
-          revision,
-          container,
-          readback.podUid,
-        );
-        if (failure !== undefined) {
-          return failure;
-        }
-      }
-      return undefined;
+      return await this.runtimeFailureObservation(revision, namespace);
     } catch {
       if (ownerSignal?.aborted) {
         throw ownerSignal.reason;
       }
       return undefined;
     }
+  }
+
+  private async runtimeFailureObservation(
+    revision: AgentRevision,
+    namespace: string,
+  ): Promise<RuntimeFailureEvidence | undefined> {
+    for (const container of this.runtimeStatusContainers(revision)) {
+      const readback = await this.privateStatusReadback(
+        revision,
+        namespace,
+        container,
+        RUNTIME_STATUS_PATH,
+      );
+      if (readback === undefined) {
+        continue;
+      }
+      const failure = this.cachedRuntimeFailureEvidence(
+        readback.status,
+        revision,
+        container,
+        readback.podUid,
+      );
+      if (failure !== undefined) {
+        return failure;
+      }
+    }
+    return undefined;
   }
 
   private async pluginRuntimeStatus(
@@ -6694,9 +6703,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const enabledPluginIds = Object.entries(revision.plugins?.plugins ?? {})
       .filter(([, selection]) => selection.enabled)
       .map(([pluginId]) => pluginId);
-    if (enabledPluginIds.length === 0) {
-      return [];
-    }
     const policies =
       statusProxySourceCidrs.length > 0
         ? [
@@ -6727,6 +6733,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
             ...item,
             metadata: { ...item.metadata, namespace: gatewayNamespace },
           }));
+    if (enabledPluginIds.length === 0) {
+      return [...policies, ...gatewayProxyPolicies];
+    }
     return [
       ...policies,
       ...gatewayProxyPolicies,
@@ -7201,6 +7210,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     pluginWarnings: readonly PluginDeploymentWarning[] = [],
     workspaceSetup?: WorkspaceSetup,
     repositoryMaterial?: ResolvedRepositoryMaterialSpec,
+    privateRuntimeStatus = true,
   ): ManagedKubernetesObject {
     const metadata = this.ownershipMetadata(ownership);
     const workloadMetadata =
@@ -7284,6 +7294,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const needsPluginStatus = needsPluginRuntime && hasEnabledPlugins;
     const statusRevisionId = configuration?.revisionId ?? ownership.revisionId;
     const needsRuntimeStatus =
+      privateRuntimeStatus &&
       runtime !== undefined &&
       (role === "agent" || role === "gateway") &&
       statusRevisionId !== undefined;
@@ -7345,16 +7356,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
       );
     }
     if (needsPluginStatus) {
-      variables.push(
-        {
-          name: "OPENCLAW_PLUGIN_STATUS_CONTAINER",
-          value: role,
-        },
-        {
-          name: "OPENCLAW_PLUGIN_STATUS_PORT",
-          value: String(PLUGIN_RUNTIME_STATUS_PORT),
-        },
-      );
       if (pluginWarnings.length > 0) {
         variables.push({
           name: "OPENCLAW_PLUGIN_FAILURES_JSON",
@@ -7506,7 +7507,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         if (enabledChannels.length > 0) {
           const channels = runtime.channels;
           if (channels === undefined) {
-            throw new ConfigurationFailure("Gateway channel credentials are not configured.");
+            throw new ConfigurationFailure("Gateway channel proxy is not configured.");
           }
           variables.push({ name: "HTTPS_PROXY", value: channels.proxyUrl });
         }

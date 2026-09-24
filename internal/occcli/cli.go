@@ -778,7 +778,7 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, stop, deleteAgent, app.agentDeploymentCommand())
+	command.AddCommand(create, list, get, update, deploy, stop, deleteAgent, app.agentDeploymentCommand(), app.agentRuntimeCredentialsCommand())
 	return command
 }
 
@@ -836,6 +836,55 @@ func (app *application) printNamespace(value any, collection bool) error {
 		{title: "STATUS", key: "status"},
 		{title: "KUBERNETES NAMESPACE", key: "existingNamespace"},
 	})
+}
+
+func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
+	command := commandGroup("runtime-credentials", "Manage generated Agent runtime credentials")
+
+	get := &cobra.Command{
+		Use:   "get AGENT_ID",
+		Short: "Show runtime credential metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			credentials, err := client.GetAgentRuntimeCredentials(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printRuntimeCredentials(credentials)
+		},
+	}
+
+	provision := &cobra.Command{
+		Use:   "provision AGENT_ID",
+		Short: "Provision initial runtime credentials with an empty request body",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			credentials, err := client.ProvisionAgentRuntimeCredentials(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printRuntimeCredentials(credentials)
+		},
+	}
+
+	command.AddCommand(get, provision)
+	return command
 }
 
 func (app *application) agentDeploymentCommand() *cobra.Command {
@@ -931,6 +980,12 @@ func (app *application) printAgent(value any, collection bool) error {
 		{title: "DESIRED STATE", key: "desiredRuntimeState"},
 		{title: "STATUS", key: "status"},
 		{title: "ACTIVE REVISION", key: "activeRevisionId"},
+	})
+}
+
+func (app *application) printRuntimeCredentials(value any) error {
+	return app.printItems(value, false, []column{
+		{title: "CONFIGURED", key: "transportConfigured"},
 	})
 }
 

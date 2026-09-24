@@ -394,9 +394,7 @@ test("draft Agent deploy waits for generated runtime credentials", async (t) => 
   await page.getByText("Generated runtime credential metadata refreshed.").waitFor();
   assert.deepEqual(requests, [{}]);
   await page
-    .getByText(
-      "Stored credential metadata is present. This does not confirm live channel readiness.",
-    )
+    .getByText("Stored credential metadata is present. This does not confirm runtime readiness.")
     .waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy new revision" }).isDisabled(), false);
 
@@ -617,6 +615,31 @@ test("Slack credential replacement updates only entered tokens and preserves sto
   assert.equal(await page.getByLabel("Slack app token").inputValue(), "••••••••");
   assert.equal(await page.getByLabel("Slack bot token").inputValue(), "••••••••");
   assert.equal(await page.getByRole("button", { name: "Deploy new revision" }).isDisabled(), false);
+
+  // A saved credential is not permission to replace it while this Agent runs.
+  // Exercise the real deploy/stop APIs; this fixture does not launch workloads.
+  // The browser fixture's IAM policy is separate from managed policy storage.
+  // Grant only these channel sources, as createAgent already does for model auth.
+  for (const secret of [appSecret, botSecret]) {
+    fixture.policy.bindings.push({
+      id: `channel-${agent.id}-${secret.id}`,
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: agent.servicePrincipalId,
+      roleId: `auth-${agent.id}`,
+      resourceKind: "secret",
+      resourceId: secret.id,
+    });
+  }
+  await fixture.deployAgent(namespace.id, agent.id);
+  await page.goto(`${fixture.origin}${detailUrl(fixture, namespace.id, agent.id)}`);
+  await page.getByText("Stop the Agent before replacing stored channel Secrets.").waitFor();
+  assert.equal(await page.getByLabel("Slack app token").isDisabled(), true);
+  await page.getByRole("button", { name: "Request Agent stop" }).click();
+  await page.getByText(/Stop requested/).waitFor();
+  const stopped = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
+  assert.equal(stopped.data.desiredRuntimeState, "stopped");
+  assert.equal(await page.getByLabel("Slack app token").isDisabled(), false);
 });
 
 test("partially bound Slack credentials save only the missing token", async (t) => {

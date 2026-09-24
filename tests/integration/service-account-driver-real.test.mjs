@@ -746,7 +746,7 @@ test(
       secrets: [accessToken, adminKey],
     });
     context.diagnostic(
-      `real ChatGPT provider account ${externalAccountId} completed nonce ${nonce}`,
+      `real ChatGPT provider account ${externalAccountId} completed fresh model challenge seeded by ${nonce}`,
     );
   },
 );

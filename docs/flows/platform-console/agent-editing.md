@@ -163,13 +163,13 @@ endpoint. The response reports stored groups, not
 provider validity or runtime health; an uncertain response requires a status
 refresh before retrying.
 
-OCC authorizes the exact Agent, locks its Namespace and Agent, and rejects
-provisioning after any historical revision exists. The selected Compute Driver
-derives Secret names and verifies Namespace and Agent ownership before writing.
-Kubernetes creates only missing whole Secrets, generates transport tokens on the
-server, and preserves existing matching groups on retry. Neither Configuration
-nor the audit event receives credential bytes. External Secret creation cannot
-be rolled back by a failed database transaction, so errors require readback.
+Channel token submission creates or updates Namespace Secrets, ensures exact
+IAM bindings for the returned `agent.servicePrincipalId`, then updates the
+Configuration's `secretBindings`. Values never enter runtime-credential
+requests. Separate writes may partially succeed; the Agent stays stopped until
+repaired and explicitly deployed. The
+[Secret delivery flow](../secret-storage-and-delivery.md) owns authorization,
+transaction, projection, and stopped-runtime boundaries.
 
 Slack fields separately derive bound state from Configuration `secretBindings`.
 Each bound field renders a synthetic password mask, never a saved Secret value.

@@ -23,7 +23,7 @@ function teamsEnabled(values) {
 }
 
 function servicePrincipalId(agent) {
-  return typeof agent?.servicePrincipalId === "string" && agent.servicePrincipalId.trim().length
+  return typeof agent.servicePrincipalId === "string" && agent.servicePrincipalId.trim().length
     ? agent.servicePrincipalId
     : null;
 }
@@ -99,7 +99,8 @@ function credentialError(error, mutation = false) {
   if (error.status === 403) {
     text = "Access denied. You do not have permission for this credential operation.";
   } else if (error.status === 409) {
-    text = "Credential metadata conflicts with the saved Agent state or selected Secrets.";
+    text =
+      "Credential state conflicts with the saved Agent, selected Secrets, or stopped runtime state.";
   } else if (error.status === 400) {
     text = "Check the entered credential fields and refresh status.";
   } else if (error.status === 429) {
@@ -191,8 +192,14 @@ export function createRuntimeCredentialsPanel({
   };
   const section = element("section", { className: "agent-card runtime-credentials" });
 
-  function canMutateGeneratedCredentials() {
-    return revisionsLoaded && revisionCount === 0 && state.loaded && state.error === null;
+  function stopped() {
+    return state.agent.desiredRuntimeState === "stopped";
+  }
+
+  function canMutateRuntimeCredentialBundle() {
+    return (
+      revisionsLoaded && revisionCount === 0 && state.loaded && state.error === null && stopped()
+    );
   }
 
   function canEnterChannelCredentials() {
@@ -200,8 +207,8 @@ export function createRuntimeCredentialsPanel({
       revisionsLoaded &&
       state.loaded &&
       state.error === null &&
-      slackEnabled(state.values) &&
-      servicePrincipalId(state.agent) !== null
+      servicePrincipalId(state.agent) !== null &&
+      (revisionCount === 0 || stopped())
     );
   }
 
@@ -232,7 +239,7 @@ export function createRuntimeCredentialsPanel({
     if (missing.length) {
       return `Deploy requires stored credential metadata: ${missing.join(", ")}.`;
     }
-    return "Stored credential metadata is present. This does not confirm live channel readiness.";
+    return "Stored credential metadata is present. This does not confirm runtime readiness.";
   }
 
   async function loadStatus() {
@@ -247,10 +254,22 @@ export function createRuntimeCredentialsPanel({
     render();
     onStatusChange();
     try {
-      state.status = normalizedStatus(await context.request(endpoint));
+      const [runtimeStatus, freshAgent, freshConfiguration] = await Promise.all([
+        context.request(endpoint),
+        context.request(path),
+        context.request(
+          `${namespacePath(context.namespaceId)}/configurations/${encodeURIComponent(
+            state.configuration.id,
+          )}`,
+        ),
+      ]);
       if (!context.isCurrent()) {
         return;
       }
+      state.status = normalizedStatus(runtimeStatus);
+      state.agent = freshAgent;
+      state.configuration = freshConfiguration;
+      state.values = freshConfiguration.values;
       state.loaded = true;
     } catch (error) {
       if (!context.isCurrent()) {
@@ -273,35 +292,74 @@ export function createRuntimeCredentialsPanel({
   }
 
   async function saveGeneratedCredentials() {
-    if (state.saving || !canMutateGeneratedCredentials()) {
+    if (state.saving || !canMutateRuntimeCredentialBundle()) {
       return;
     }
     state.saving = true;
     state.saveError = null;
     state.saveMessage = "";
-    state.outcomeUnknown = false;
     render();
-    onStatusChange();
     try {
       state.status = normalizedStatus(
-        await context.request(endpoint, { method: "POST", body: {} }),
+        await context.request(endpoint, {
+          method: "POST",
+          body: {},
+        }),
       );
       if (!context.isCurrent()) {
         return;
       }
       state.loaded = true;
-      state.saveMessage = "Generated runtime credential metadata refreshed.";
-    } catch (cause) {
+      state.outcomeUnknown = false;
+      state.saveMessage =
+        state.status.transportConfigured === true
+          ? "Generated runtime credential metadata refreshed."
+          : "Generated runtime credential storage is still missing.";
+    } catch (error) {
       if (!context.isCurrent()) {
         return;
       }
-      if (cause.status === 401) {
+      if (error.status === 401) {
         context.onExpired();
         return;
       }
-      state.saveError = cause;
+      state.saveError = error;
       state.outcomeUnknown =
-        cause.status === undefined || ![400, 403, 404, 409, 429].includes(cause.status);
+        error.status === undefined || ![400, 403, 404, 409, 429].includes(error.status);
+    } finally {
+      if (context.isCurrent()) {
+        state.saving = false;
+        render();
+        onStatusChange();
+      }
+    }
+  }
+
+  async function requestStop() {
+    if (state.saving) {
+      return;
+    }
+    state.saving = true;
+    state.saveError = null;
+    state.saveMessage = "Requesting Agent stop...";
+    render();
+    try {
+      state.agent = await context.request(`${path}/stop`, { method: "POST" });
+      if (!context.isCurrent()) {
+        return;
+      }
+      state.saveMessage =
+        "Stop requested. Refresh status after the runtime has shut down before rotating credentials.";
+    } catch (error) {
+      if (!context.isCurrent()) {
+        return;
+      }
+      if (error.status === 401) {
+        context.onExpired();
+        return;
+      }
+      state.saveError = error;
+      state.saveMessage = "";
     } finally {
       if (context.isCurrent()) {
         state.saving = false;
@@ -526,18 +584,18 @@ export function createRuntimeCredentialsPanel({
         `Credential metadata unavailable. ${credentialError(state.error)}`,
       );
     }
-    if (slackEnabled(state.values) && servicePrincipalId(state.agent) === null) {
+    if (servicePrincipalId(state.agent) === null) {
       return element(
         "p",
         { className: "error", role: "alert" },
         "The API did not return this Agent's service principal, so the console cannot bind Secrets.",
       );
     }
-    if (revisionCount > 0) {
+    if (revisionCount > 0 && !stopped()) {
       return element(
         "p",
         { className: "muted", role: "status" },
-        "Generated runtime credentials are locked after the first AgentRevision exists.",
+        "Stop the Agent before replacing stored channel Secrets.",
       );
     }
     return null;
@@ -570,8 +628,13 @@ export function createRuntimeCredentialsPanel({
             disabled: state.loading || state.saving,
           }),
           button("Provision generated runtime credentials", () => void saveGeneratedCredentials(), {
-            disabled: state.loading || state.saving || !canMutateGeneratedCredentials(),
+            disabled: state.loading || state.saving || !canMutateRuntimeCredentialBundle(),
           }),
+          !stopped()
+            ? button("Request Agent stop", () => void requestStop(), {
+                disabled: state.loading || state.saving,
+              })
+            : null,
         ),
         renderUnavailableReason(),
         renderChannelForm(),

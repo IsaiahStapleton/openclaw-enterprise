@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import {
   KubernetesComputeDriver,
@@ -469,6 +469,9 @@ async function waitForReadyPluginWarning(fixture, warning) {
     if (!observation.ready) {
       return undefined;
     }
+    if (!isDeepStrictEqual(observation.warnings, [warning])) {
+      return undefined;
+    }
     const pods = (await exactGatewayPods(fixture.namespaceName, fixture.candidate)).filter(
       (pod) => pod.metadata.deletionTimestamp === undefined && isReadyPod(pod),
     );
@@ -485,7 +488,7 @@ async function waitForReadyPluginWarning(fixture, warning) {
     if (status?.phase !== "ready") {
       return undefined;
     }
-    if (JSON.stringify(status.failures) !== JSON.stringify([warning])) {
+    if (!isDeepStrictEqual(status.failures, [warning])) {
       return undefined;
     }
     return { observation, pod, status };
