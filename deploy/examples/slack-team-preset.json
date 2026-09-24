@@ -62,8 +62,11 @@
             "enabled": false
           },
           "auth": {
-            "mode": "token",
-            "token": "${OPENCLAW_GATEWAY_TOKEN}"
+            "password": {
+              "source": "env",
+              "provider": "default",
+              "id": "OPENCLAW_GATEWAY_PASSWORD"
+            }
           },
           "http": {
             "endpoints": {

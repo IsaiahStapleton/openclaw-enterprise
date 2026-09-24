@@ -67,21 +67,30 @@ Fill the Preset variables with:
 - The owner's Slack user ID, a channel ID where the bot is already invited,
   and an IANA timezone. The timezone defaults to `UTC`.
 
+Configure the Installation's [Slack channel proxy](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking)
+and use compatible gateway, Codex plugin, and Codex app-server images before deployment.
+
 The owner is initially the only allowed channel user. DMs and bot messages are
 disabled, and channel messages require a mention. Review the copied Configuration
 to admit other users. Codex starts with the console's read-only sandbox and
 on-request approval policy. Model credentials go only to Codex; Slack credentials
 go only to the gateway.
 
-After saving, complete [transport credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
-and grant the Agent access to its selected Secrets through
+**Create Agent** starts first-time provisioning on supported Dedicated runtimes,
+including transport credentials and access to the selected Secrets. If the console
+saves an ordinary draft instead, complete [transport credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
+and grant the Agent access through
 [Namespace IAM](../../reference/authorization.md#manage-namespace-policy).
+Kubernetes Compute supplies trusted-proxy authentication from the Installation
+settings. The template references its generated gateway password through
+`OPENCLAW_GATEWAY_PASSWORD`; it does not supply credential values.
 The Preset does not create Secrets, Slack apps, infrastructure, or account
 enrollment. It relies on OCE's workspace routing and leaves additional plugins,
 embedding-backed memory, and scheduling configuration to the operator.
 
-The example has template validation and rendering checks, but no live deployment
-or Slack acceptance result. Verify an actual reply and workspace access on your
+Local template rendering, credential validation, and Kubernetes provisioning
+configuration checks pass, but this example has no live deployment or Slack
+acceptance result. Verify an actual reply and workspace access on your
 selected runtime before relying on it.
 
 ## Use it in the console
@@ -97,8 +106,10 @@ selected runtime before relying on it.
    plugin selections, and Secret bindings. Edit any copied setting and fill
    missing values. Enter credentials only in password variables or credential
    fields; never in ordinary variables or native JSON.
-4. Select **Create Agent**. Then follow [credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
-   for that saved Agent. Creating the draft does not start a workload.
+4. Select **Create Agent**. Supported Dedicated runtimes start first-time
+   provisioning and deployment. For an ordinary draft, follow
+   [credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
+   for that saved Agent; saving a draft alone does not start a workload.
 
 Variables are used once to fill the form. Edit the resulting fields directly.
 Before saving, to choose another Preset or supply different variables, select **Start over**
