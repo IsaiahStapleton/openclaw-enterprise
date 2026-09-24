@@ -738,6 +738,7 @@
               "reference/settings/programmatic",
               "flows/platform-startup",
               "flows/production-startup",
+              "flows/coordinated-production-upgrade",
               "flows/docker-compose-development/startup",
               "flows/docker-compose-development/agent-execution",
               "flows/common-logging",
