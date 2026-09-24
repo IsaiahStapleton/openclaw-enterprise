@@ -3633,7 +3633,8 @@ test("Agent deletion recovery returns a missing Agent detail to its Namespace li
     (url) =>
       url.pathname === "/console/agents" && url.searchParams.get("namespace") === namespace.id,
   );
-  await page.getByRole("heading", { name: "Agents" }).waitFor();
+  await page.getByRole("heading", { name: "No Agents yet", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
 });
 
 test("Agent delete denial keeps the Agent visible with permission feedback", async (t) => {
