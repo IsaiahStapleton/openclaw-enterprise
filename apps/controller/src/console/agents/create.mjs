@@ -253,6 +253,7 @@ export function renderCreateAgent(context, draft) {
 }
 
 function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
+  context.drafts.forget("preset");
   const { view, request, namespaceId } = context;
   const agent = rendered.agent ?? {};
   const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -870,6 +871,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   );
   const startOver = button("Start over", () => {
     if (window.confirm("Discard this draft and start again?")) {
+      context.drafts.forget("channels");
       renderCreateAgent(context);
     }
   });
@@ -940,6 +942,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         `Configuration ${savedConfiguration.id} will remain saved. Start a new Agent draft?`,
       )
     ) {
+      context.drafts.forget("channels");
       renderCreateAgent(context);
     }
   });
@@ -1147,6 +1150,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       executionMode: mode.value,
       readOnly: Boolean(savedConfiguration),
       drawerContext: {
+        drafts: context.drafts,
+        baseline: JSON.stringify([values, configurationSecretBindings]),
         namespaceId,
         request,
         agentName: () => name.value,
@@ -1168,6 +1173,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         if (!context.isCurrent() || pending || outcomeUnknown || savedConfiguration) {
           throw new Error("This view has changed. Reopen Agent creation before applying channels.");
         }
+        context.drafts.forget("channels");
         edited = true;
         configuration.value = JSON.stringify(updatedValues, null, 2);
         if (options.secretBindings !== undefined) {

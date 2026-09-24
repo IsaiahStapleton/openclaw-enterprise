@@ -4,6 +4,7 @@ import { createApiClient } from "./api-client.mjs";
 import { createViewLifetime } from "./view-lifetime.mjs";
 import { createNavigation, pages } from "./navigation.mjs";
 import { createShell, panel, sorted } from "./shell.mjs";
+import { createDraftStore } from "./drafts.mjs";
 import { renderRuntimeImages } from "./runtime-images.mjs";
 
 const app = document.querySelector("#app");
@@ -13,9 +14,8 @@ let namespaces = [];
 let namespaceId = null;
 let loggingOut = false;
 let navigateAgentTab = null;
-const createAgentDrafts = new Map();
+const drafts = createDraftStore();
 let draftUserId = null;
-let captureCreateAgentDraft = null;
 const navigation = createNavigation({
   getNamespaceId: () => namespaceId,
   isLoggingOut: () => loggingOut,
@@ -31,8 +31,7 @@ const request = createApiClient({
 });
 
 function resetReads() {
-  captureCreateAgentDraft?.();
-  captureCreateAgentDraft = null;
+  drafts.flush();
   navigateAgentTab = null;
   shellUI.reset();
   return lifetime.reset();
@@ -57,14 +56,13 @@ function clearPrivate() {
   namespaceId = null;
 }
 
-function clearCreateAgentDrafts() {
-  captureCreateAgentDraft = null;
-  createAgentDrafts.clear();
+function clearDrafts() {
+  drafts.clear();
   draftUserId = null;
 }
 
 function showLogin(message = "", returnPath = null) {
-  clearCreateAgentDrafts();
+  clearDrafts();
   resetReads();
   clearPrivate();
   const url = new URL("/console/login", location.origin);
@@ -204,7 +202,7 @@ async function loadPage({ fromNavigation = false } = {}) {
       return;
     }
     if (draftUserId !== session.user.id) {
-      clearCreateAgentDrafts();
+      clearDrafts();
       draftUserId = session.user.id;
     }
     if (current.feature === "login") {
@@ -268,6 +266,8 @@ async function loadPage({ fromNavigation = false } = {}) {
       return;
     }
     const agentContext = {
+      drafts: drafts.scope(namespaceId, current.agentId ?? "create"),
+      flushDrafts: () => drafts.flush(),
       view: shell.view,
       namespaceId,
       request,
@@ -290,18 +290,17 @@ async function loadPage({ fromNavigation = false } = {}) {
       },
     };
     if (current.creating) {
-      const draftNamespaceId = namespaceId;
       renderCreateAgent(
         {
           ...agentContext,
           setDraftCapture(capture) {
-            createAgentDrafts.delete(draftNamespaceId);
-            captureCreateAgentDraft = capture
-              ? () => createAgentDrafts.set(draftNamespaceId, capture())
-              : null;
+            agentContext.drafts.forget("create");
+            if (capture) {
+              agentContext.drafts.track("create", capture);
+            }
           },
         },
-        createAgentDrafts.get(draftNamespaceId),
+        agentContext.drafts.get("create"),
       );
       return;
     }
@@ -391,7 +390,7 @@ async function loadPage({ fromNavigation = false } = {}) {
 
 async function logout() {
   loggingOut = true;
-  clearCreateAgentDrafts();
+  clearDrafts();
   const active = resetReads();
   clearPrivate();
   publicPanel("Signing out…", "Confirming that your session has ended.");
@@ -439,7 +438,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("pagehide", () => {
-  clearCreateAgentDrafts();
+  clearDrafts();
   resetReads();
   clearPrivate();
   document.querySelectorAll('input[type="password"]').forEach((input) => {

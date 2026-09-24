@@ -95,8 +95,19 @@ unsupported catalog or policy choices.
 
 Switching between **Configuration**, **Channels**, **Credentials**, and **Workspace
 files** updates only the tab content. The surrounding Agent panels stay in place,
-and browser Back/Forward restores the selected tab. Password fields are cleared
-when leaving a tab. Use **Refresh** to reload the Agent and its Configuration.
+and browser Back/Forward restores the selected tab. Unsaved Configuration JSON,
+live workspace text, authentication source choices, and open Slack drawers survive
+tab and page navigation. Drafts stay in this document, scoped to the signed-in
+user, Namespace, and Agent. Preset variables and the Agents search filter also
+survive navigation. Password values clear; existing Secret IDs remain references.
+Reloading the browser, leaving the document, or signing out clears local drafts.
+
+**Cancel**, **Start over**, and each editor's explicit **Reload** discard its edits.
+Successful saves clear that editor's draft. **Refresh** rereads saved resources
+while retaining unsaved edits. Restored Configuration and authentication editors
+keep their original save baseline; concurrent changes require the editor's reload.
+Unsaved Configuration edits still block deployment. Pending or uncertain saves
+retain their recovery guard until readback; navigation never retries a mutation.
 
 An Agent detail page has a **New revision** view and immutable AgentRevisions. The new revision view
 reads the current Configuration and supports native JSON editing through **Edit Configuration**,

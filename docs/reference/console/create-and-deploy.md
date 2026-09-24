@@ -76,7 +76,7 @@ Presets and edited Configuration JSON retain their settings.
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no
    update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
 
-Before saving, one in-memory draft per Namespace survives Console navigation,
+Before saving, Preset variables and one Agent draft per Namespace survive navigation,
 including Back/Forward. Reopen **Create Agent** to resume edits; reenter new
 credentials because password fields clear on navigation. **Start over** confirms
 discard. Reload, page exit, and sign-out clear local drafts. Once saving begins,

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-24
-last_updated_session: authoring-run/fdba83e7-9f34-4b8b-8af2-625214851f27
+last_updated_session: 01a0d557-f6e3-7da2-af52-993d05735554
 ---
 
 # Platform console request flow
@@ -250,16 +250,14 @@ sender lists or a `*` channel entry are rejected by the simple editor so native
 Configuration JSON remains the source of truth.
 
 `apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers a
-handler for tab-only navigation with `console.mjs:loadPage`. For the same Agent,
-Namespace, and revision, tab clicks and browser history update the URL and replace
-only the content below the tabs. The shell, native-admin panel, and loaded
-revision controls remain mounted. Configuration and revision reads are shared
+handler for tab-only navigation with `console.mjs:loadPage`. Within one Agent, Namespace, and revision, tabs and browser history replace only
+tab content. The shell, native-admin panel, and revision controls stay mounted. Configuration and revision reads are shared
 within that detail view; a direct Workspace files URL does not wait for or start
 those reads. Refresh, revision changes, and successful channel or authentication
 edits use the full page read path.
 
 Each tab render captures its own generation. Late panel reads and form callbacks
-cannot overwrite a newer tab; leaving a tab clears its password inputs. Channel
+cannot overwrite a newer tab; password values clear while [draft captures](platform-console/agent-editing.md#4-render-draft-revision-or-channels) retain edits. Channel
 Secret saves update the shared draft snapshot used by other tabs and deployment
 preflight. Session expiry still clears the whole private view.
 
@@ -331,6 +329,8 @@ uncertain response disables replay until refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 22:03: Link shared editor draft capture before tab teardown. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)
 
 - 2026-09-24 17:13: Trace the header Namespace selector and preserved navigation scope. (authoring-run/fdba83e7-9f34-4b8b-8af2-625214851f27 - 1a458b227585c572ec0ac70fd10efc3834165075)
 

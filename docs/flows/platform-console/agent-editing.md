@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-09-23
-last_updated_session: 01a0d150-104a-71a3-9e56-6c5e3ee510ea
+updated: 2026-09-24
+last_updated_session: 01a0d557-f6e3-7da2-af52-993d05735554
 ---
 
 # Console Agent editing and runtime requests
@@ -73,9 +73,26 @@ Configuration authorization and generation ownership.
 A successful save reloads the draft; admitted snapshots and active revision
 selection remain unchanged. Invalid input, denied writes, and stale drafts retain
 editor text. An uncertain mutation outcome blocks another save until successful
-readback. Unsaved or unresolved edits block deployment of the old saved values and tab or revision
-navigation until save, cancel, or the required reload resolves them.
+readback. Unsaved or unresolved edits block deployment of the old saved values.
+Ordinary edits survive tab, revision, and page navigation; pending or unresolved
+Configuration saves still block tab and revision changes until readback.
 Saving and deploying remain separate explicit actions.
+
+`apps/controller/src/console/drafts.mjs:createDraftStore` owns document-local
+snapshots. `console.mjs:resetReads` and `detail.mjs:renderTab` flush registered
+editor captures before teardown. Each editor explicitly selects its retained
+fields; actual passwords are excluded. Namespace and Agent keys isolate editors,
+and session expiry, user changes, logout, and page exit clear both snapshots and
+captures. No browser storage or URL carries draft contents. Preset variables,
+Create Agent fields, and Agent search use the same store.
+
+Configuration and authentication snapshots retain their original save baselines,
+so fresh reads on reentry cannot silently authorize overwriting concurrent edits.
+Channel snapshots retain their opening generation, raw controls, and staged Secret
+metadata; a changed baseline disables Save until Cancel discards the drawer.
+Successful saves forget their capture before navigation. Cancel and explicit
+editor reload discard edits; navigation during a pending save retains an
+unknown-outcome guard rather than replaying the request.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders supported
 Slack channel settings in **New revision** only. Slack uses fixed unresolved
@@ -186,7 +203,9 @@ history reads, because workspace contents belong to the live Agent. An Agent
 without an active revision gets an unavailable explanation without file requests.
 
 The editor issues one GET for each supported filename. A successful response
-populates that file's editor; `404` permits an explicit create attempt, and other
+reauthorizes file access before restoring retained text, including empty edits.
+Retained drafts keep their original baseline; explicit Reload replaces them with
+the current file. `404` permits an explicit create attempt, and other
 failures leave it disabled. Save sends `{ content }` to the same exact-Agent PUT
 route. It neither patches Configuration nor admits a revision. The existing
 [workspace flow](../workspace-files.md) owns authorization and native file transport.
@@ -274,6 +293,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 22:03: Trace shared document-local drafts, navigation capture, explicit discard, and retained save baselines. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)
 
 - 2026-09-23 19:52: Record unsupported mixed Slack sender lists, unrepresentable sender IDs, and channel wildcard maps in the simple drawer. (01a0d150-104a-71a3-9e56-6c5e3ee510ea - 77aedc620f443056f9ee859050b8dc657a9c3133)
 
