@@ -360,8 +360,8 @@ function repositoryBoundary({ count = 1, deadlineWallMs = Date.now() + 120_000 }
     implementation: "repository-worker-boundary",
     capability: "repo",
     maintenanceIntervalMs: 3_600_000,
-    listOptions() {
-      return [];
+    async listOptions() {
+      return { options: [], descriptionsPending: false };
     },
     resolve() {
       return { bindings, sessionDurationSeconds: 60 };

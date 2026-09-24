@@ -4436,6 +4436,17 @@
         "operationId": "listRepositoryOptions",
         "parameters": [
           {
+            "description": "Up to 20 visible repository references to enrich with provider descriptions.",
+            "in": "query",
+            "name": "descriptionRefs",
+            "required": false,
+            "schema": {
+              "maxLength": 2579,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,19}$",
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "namespaceId",
             "required": true,
@@ -4468,6 +4479,7 @@
                             "type": "array",
                             "uniqueItems": true
                           },
+                          "description": { "maxLength": 512, "minLength": 1, "type": "string" },
                           "displayName": {
                             "maxLength": 200,
                             "minLength": 1,
@@ -4490,12 +4502,13 @@
                     "meta": {
                       "additionalProperties": false,
                       "properties": {
+                        "descriptionsPending": { "type": "boolean" },
                         "requestId": {
                           "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         }
                       },
-                      "required": ["requestId"],
+                      "required": ["requestId", "descriptionsPending"],
                       "type": "object"
                     }
                   },
@@ -6398,6 +6411,17 @@
         "operationId": "listAgentRepositoryOptions",
         "parameters": [
           {
+            "description": "Up to 20 visible repository references to enrich with provider descriptions.",
+            "in": "query",
+            "name": "descriptionRefs",
+            "required": false,
+            "schema": {
+              "maxLength": 2579,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,19}$",
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "namespaceId",
             "required": true,
@@ -6439,6 +6463,7 @@
                             "type": "array",
                             "uniqueItems": true
                           },
+                          "description": { "maxLength": 512, "minLength": 1, "type": "string" },
                           "displayName": {
                             "maxLength": 200,
                             "minLength": 1,
@@ -6461,12 +6486,13 @@
                     "meta": {
                       "additionalProperties": false,
                       "properties": {
+                        "descriptionsPending": { "type": "boolean" },
                         "requestId": {
                           "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         }
                       },
-                      "required": ["requestId"],
+                      "required": ["requestId", "descriptionsPending"],
                       "type": "object"
                     }
                   },

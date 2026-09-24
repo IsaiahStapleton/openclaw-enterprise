@@ -32,12 +32,16 @@ export async function runService(
     config: loaded.config,
     factory: loaded.factory,
     clock,
+    ...(loaded.providerQueue === undefined ? {} : { providerQueue: loaded.providerQueue }),
   });
   let listeners: BoundListeners;
   try {
     listeners = await startListeners({ ...loaded, service, clock });
   } catch {
-    await service.shutdown(loaded.config.limits.shutdownGraceMs);
+    await Promise.all([
+      service.shutdown(loaded.config.limits.shutdownGraceMs),
+      loaded.repositoryDescriptions?.shutdown(loaded.config.limits.shutdownGraceMs),
+    ]);
     loaded.close();
     throw new Error("startup-failed");
   }
@@ -50,7 +54,17 @@ export async function runService(
     listeners.stopAdmission();
     const grace = loaded.config.limits.shutdownGraceMs;
     // Wall-time process guard is independent of provider callbacks and injected clocks.
-    const pending = service.shutdown(grace);
+    const pending = Promise.all([
+      service.shutdown(grace),
+      loaded.repositoryDescriptions?.shutdown(grace),
+    ]).then(([summary, descriptions]) => ({
+      closedSessions: summary.closedSessions + (descriptions?.closedSessions ?? 0),
+      disposedSessions: summary.disposedSessions + (descriptions?.disposedSessions ?? 0),
+      pendingActions: summary.pendingActions + (descriptions?.pendingActions ?? 0),
+      pendingCredentials: summary.pendingCredentials + (descriptions?.pendingCredentials ?? 0),
+      pendingAuxiliary: summary.pendingAuxiliary + (descriptions?.pendingAuxiliary ?? 0),
+      graceExpired: summary.graceExpired || (descriptions?.graceExpired ?? false),
+    }));
     const forced = setTimeout(() => {
       process.stderr.write(
         `${JSON.stringify({ event: "shutdown", graceExpired: true, unresolved: true })}\n`,

@@ -31,6 +31,7 @@ export type {
   RepositoryBindingRequest,
   RepositoryBindingSelection,
   RepositoryOption,
+  RepositoryOptions,
   RepoDriver,
   RepositoryCredentialGrantIdentity,
   RepositoryCredentialMaterialRef,

@@ -60,6 +60,8 @@ export const RepositorySelection = {
   ...story("createRepositoriesSelected"),
   name: "Repositories using the Agent default",
 };
+export const RepositoryDetails = story("createRepositoriesDetails");
+export const RepositoryDescriptionsPending = story("createRepositoriesDescriptionsPending");
 export const RepositoryContributor = {
   ...story("createRepositoriesContributor"),
   name: "Contributor without issue management",

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-24
-last_updated_session: public-change/repository-picker
+last_updated_session: public-pr/374
 ---
 
 # Platform console request flow
@@ -9,10 +9,10 @@ last_updated_session: public-change/repository-picker
 ## Overview
 
 Opening `/console/` resolves a cookie session and renders authorized resources.
-This trace follows Namespace selection, Agent creation and editing, runtime
-actions, Backends, and logout. It stops at rendered state or a submitted API
-mutation; deletion additionally confirms absence. The [console reference](../reference/console.md)
-owns user-visible behavior, while API and IAM retain resource authority.
+This trace follows Namespace selection, Agent lifecycle, Backends, and logout; it
+stops at rendered state or a submitted API mutation. Deletion confirms absence.
+The [console reference](../reference/console.md) owns user-visible behavior; API
+and IAM retain resource authority.
 
 ## Entry Points
 
@@ -198,13 +198,14 @@ and bindings; grants accumulate. Sender access belongs to each selected channel;
 direct-message `allowFrom` stays unchanged. Cancellation discards selections but
 retains created Secrets.
 
-`GET /namespaces/:namespaceId/agents/repository-options` discovers approved choices.
-`createRepositoryFields` adds search and cards with inherited or custom access;
-submission sends `repositoryAccess`. [Repository admission](agent-repository-credentials.md)
-resolves concrete profiles. Read-only and Contributor use approved profiles;
-customization can disable issue management. Only
-`503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh draft without bindings;
-other failures block submission. Retry discovery before provisioning.
+`createRepositoryFields` loads approved choices, then requests descriptions for
+visible refs asynchronously. Metadata updates leave checkbox focus and selection
+intact; missing descriptions do not block selection. Checking a row selects it;
+unchecking and immediately rechecking or Undo restores its position and override.
+Submission sends `repositoryAccess`; [repository admission](agent-repository-credentials.md)
+resolves profiles. Read-only and Contributor use approved profiles; customization
+can disable issue management. Only `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a
+fresh draft without bindings; other discovery failures block submission.
 
 Supported Dedicated runtimes submit Configuration, repository access, and Secret
 references to [provisioning](agent-provisioning.md). Console polls the job and opens
@@ -237,25 +238,19 @@ workspace reads/writes, stopping, and deletion. Each request returns through the
 response-ordering checks below.
 
 `apps/controller/src/console/channels/slack.mjs:supportSlack` checks whether the
-channel editor can preserve the stored settings. Existing `dmPolicy` and
-`groupPolicy` values do not block editing. `updatedSlack` copies those values
-unchanged, including their absence, when saving channel IDs, channel sender
-users, or mention settings. It preserves unrelated properties on selected
-channel entries, then writes the selected channels' `users` lists from the
-drawer. The everyone option writes `users: ["*"]` on each selected channel;
-direct-message `allowFrom` is not changed by channel edits. Only a new Slack
-configuration receives allowlist defaults. Existing channel maps with mixed
-sender lists or a `*` channel entry are rejected by the simple editor so native
-Configuration JSON remains the source of truth.
+editor can preserve settings. `updatedSlack` preserves `dmPolicy`, `groupPolicy`,
+their absence, and unrelated selected-channel properties while updating IDs,
+senders, and mention settings. Everyone writes `users: ["*"]` per selected
+channel; edits leave direct-message `allowFrom` unchanged. Only new configurations
+receive allowlist defaults. Mixed sender lists and `*` channel entries require
+native Configuration JSON.
 
-`apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers a
-handler for tab-only navigation with `console.mjs:loadPage`. For the same Agent,
-Namespace, and revision, tab clicks and browser history update the URL and replace
-only the content below the tabs. The shell, native-admin panel, and loaded
-revision controls remain mounted. Configuration and revision reads are shared
-within that detail view; a direct Workspace files URL does not wait for or start
-those reads. Refresh, revision changes, and successful channel or authentication
-edits use the full page read path.
+`apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers
+tab-only navigation with `console.mjs:loadPage`. Within the same Agent, Namespace,
+and revision, tabs and history replace content below the tabs while retaining the
+shell, native-admin panel, and revision controls. Detail views share Configuration
+and revision reads; direct Workspace URLs neither start nor await them. Refresh,
+revision changes, and saved channel or authentication edits reread the page.
 
 Each tab render captures its own generation. Late panel reads and form callbacks
 cannot overwrite a newer tab; leaving a tab clears its password inputs. Channel
@@ -315,6 +310,9 @@ uncertain response disables replay until refresh and inspection.
 - API tests cover safe discovery, permission boundaries, empty versus missing
   wiring, static MIME/allowlisting, and unchanged API JSON errors. See
   [Testing](../testing/README.md) for commands and the image smoke boundary.
+- Storybook scenarios **Repository descriptions and selection** and **Repository
+  descriptions loading** simulate metadata refresh and picker focus; they do not
+  establish live GitHub behavior.
 
 ## Related docs
 
@@ -330,6 +328,8 @@ uncertain response disables replay until refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 23:14: Trace asynchronous descriptions and checkbox selection. (public-pr/374 - 6ed3a6de9035b84693a180c28a78765510dd4a2d)
 
 - 2026-09-24: Keep Preset bindings internal.
 

@@ -5,7 +5,7 @@ import type { AddressInfo, Socket } from "node:net";
 import { connect } from "node:net";
 import { chmod, lstat, realpath, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { SessionControl } from "./service-contracts.ts";
+import type { SessionControl, RepositoryDescriptions } from "./service-contracts.ts";
 import type { RunningListeners, TlsMaterial } from "./internal-contracts.ts";
 import { createControlAdmission, handleControl } from "./control.ts";
 import { createAgentHandler } from "./transport/agent.ts";
@@ -15,6 +15,7 @@ import { sendError } from "./transport/errors.ts";
 export interface StartListenersOptions extends AgentHandlerOptions {
   readonly service: AgentHandlerOptions["service"] & SessionControl;
   readonly tls: TlsMaterial;
+  readonly repositoryDescriptions?: RepositoryDescriptions;
 }
 
 export type BoundListeners = RunningListeners & Readonly<{ address: AddressInfo }>;
@@ -125,7 +126,15 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
       void (
         kind === "agent"
           ? onAgent(request, response)
-          : handleControl(request, response, service, config, clock, admissions)
+          : handleControl(
+              request,
+              response,
+              service,
+              config,
+              clock,
+              admissions,
+              options.repositoryDescriptions,
+            )
       ).catch(() => sendError(response, 503, "unavailable"));
     };
   for (const [server, handler, sockets] of [

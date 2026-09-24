@@ -1884,7 +1884,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       throw failure(401, "UNAUTHENTICATED", "A human controller session is required.");
     }
     const params = request.params as Record<string, unknown>;
-    if (Object.keys(request.query as Record<string, unknown>).length > 0) {
+    if (
+      Object.keys(request.query as Record<string, unknown>).length > 0 &&
+      operation.operationId !== "listRepositoryOptions" &&
+      operation.operationId !== "listAgentRepositoryOptions"
+    ) {
       throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
     }
     for (const [parameter, pattern] of Object.entries(RESOURCE_ID)) {
@@ -2349,11 +2353,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       operation.operationId === "listRepositoryOptions" ||
       operation.operationId === "listAgentRepositoryOptions"
     ) {
-      const options = await controller!
+      const query = request.query as { descriptionRefs?: string };
+      const descriptionRefs = query.descriptionRefs?.split(",") ?? [];
+      if (new Set(descriptionRefs).size !== descriptionRefs.length) {
+        throw failure(400, "INVALID_REQUEST", "Repository description references must be unique.");
+      }
+      const result = await controller!
         .listRepositoryOptions(
           context.actorId,
           namespaceId,
           operation.operationId === "listAgentRepositoryOptions" ? params.agentId : undefined,
+          descriptionRefs,
         )
         .catch((error: unknown) => {
           if (error instanceof RepositoryOptionsUnavailableError) {
@@ -2366,12 +2376,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           throw error;
         });
       reply.send({
-        data: options.map(({ repositoryRef, displayName, allowedProfiles }) => ({
-          repositoryRef,
-          displayName,
-          allowedProfiles,
-        })),
-        meta: { requestId: request.id },
+        data: result.options.map(
+          ({ repositoryRef, displayName, allowedProfiles, description }) => ({
+            repositoryRef,
+            displayName,
+            allowedProfiles,
+            ...(description === undefined ? {} : { description }),
+          }),
+        ),
+        meta: { requestId: request.id, descriptionsPending: result.descriptionsPending },
       });
       return;
     }

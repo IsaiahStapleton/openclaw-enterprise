@@ -1308,7 +1308,6 @@ summary:focus-visible {
 }
 .repository-results-list {
   display: grid;
-  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1316,47 +1315,63 @@ summary:focus-visible {
 .repository-result-row {
   display: flex;
 }
+.repository-result-row + .repository-result-row {
+  margin-top: -1px;
+}
 .repository-result {
   display: grid;
-  grid-template-columns: 22px minmax(0, auto) auto auto;
-  align-items: center;
-  gap: 4px 8px;
-  max-width: 100%;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  width: 100%;
   min-height: 44px;
-  padding: 7px 12px;
+  padding: 10px 12px;
   border: 1px solid var(--input-border);
-  border-radius: 22px;
   background: var(--surface);
+  cursor: pointer;
   text-align: left;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
 }
-.repository-result:not(:disabled):hover {
-  background: var(--accent-subtle);
+.repository-result-row:first-child .repository-result {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.repository-result-row:last-child .repository-result {
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.repository-result-row:only-child .repository-result {
+  border-radius: var(--radius);
+}
+.repository-result:hover:has(input:not(:disabled)) {
+  background: var(--surface-muted);
+}
+.repository-result:has(input:checked) {
+  position: relative;
   border-color: var(--accent);
-}
-.repository-add-symbol {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  color: var(--primary-hover);
   background: var(--accent-subtle);
-  font-size: 17px;
-  line-height: 1;
 }
-.repository-add-label {
-  color: var(--primary-hover);
-  font-weight: 600;
+.repository-result:has(input:checked):hover {
+  background: var(--accent-subtle);
 }
-.repository-result.is-added:disabled {
-  background: var(--success-subtle);
-  border-color: var(--success);
-  opacity: 1;
-  cursor: default;
+.repository-result-row:has(input:checked)
+  + .repository-result-row:has(input:checked)
+  .repository-result {
+  border-top-color: var(--line);
 }
-.repository-result.is-added .repository-add-symbol,
-.repository-result.is-added .repository-add-label {
-  color: var(--success);
+.repository-result:has(input:focus-visible) {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+.repository-result:has(input:disabled) {
+  cursor: not-allowed;
+}
+.repository-result input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
 }
 .repository-identity {
   display: grid;
@@ -1373,20 +1388,17 @@ summary:focus-visible {
   font-weight: 600;
 }
 .repository-result-meta {
-  grid-column: 4;
   display: flex;
   flex-wrap: wrap;
   gap: 2px 8px;
   min-width: 0;
-  padding-left: 8px;
-  border-left: 1px solid var(--line);
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.repository-result-meta .hint {
-  margin: 0;
-  font-size: inherit;
+.repository-description {
+  color: var(--muted);
+  font-size: 13px;
 }
 .repository-identity .hint,
 .repository-identity .error {
@@ -1398,15 +1410,11 @@ summary:focus-visible {
   margin-bottom: 8px;
   font-weight: 550;
 }
-.repository-discovery {
-  container-type: inline-size;
-}
 .repository-discovery input[type="search"] {
   min-height: 44px;
 }
 .repository-selected {
   margin-top: 24px;
-  container-type: inline-size;
 }
 .repository-selected-heading {
   flex-wrap: wrap;
@@ -1524,25 +1532,9 @@ summary:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-@container (max-width: 400px) {
+@media (prefers-reduced-motion: reduce) {
   .repository-result {
-    grid-template-columns: 22px minmax(0, auto) auto;
-    border-radius: var(--radius);
-  }
-  .repository-result-meta {
-    grid-column: 2 / -1;
-    padding: 0;
-    border: 0;
-  }
-  .repository-card-heading {
-    flex-wrap: wrap;
-    padding-bottom: 4px;
-  }
-  .repository-card-toggle {
-    flex-basis: 100%;
-  }
-  .repository-remove {
-    margin-left: auto;
+    transition: none;
   }
 }
 

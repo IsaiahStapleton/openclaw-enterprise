@@ -9,6 +9,10 @@ import {
 const MAX_SELECTED = 16;
 const PAGE_SIZE = 20;
 const RECENT_LIMIT = 32;
+const DESCRIPTION_REQUEST_DELAY = 250;
+const DESCRIPTION_REFRESH_DELAY = 2_000;
+const DESCRIPTION_REFRESH_MAX_DELAY = 30_000;
+const DESCRIPTION_REFRESH_TIMEOUT = 30 * 60_000;
 
 function recentRepositories(key) {
   if (!key) {
@@ -25,12 +29,7 @@ function recentRepositories(key) {
   }
 }
 
-function repositoryResults(
-  options,
-  selected,
-  recent,
-  { query: queryText, browsing, page: requestedPage },
-) {
+function repositoryResults(options, recent, { query: queryText, browsing, page: requestedPage }) {
   const small = options.length <= 5;
   const query = queryText.trim().toLocaleLowerCase();
   const rank = (entry) => {
@@ -56,11 +55,8 @@ function repositoryResults(
   const matches = options
     .filter(
       (entry) =>
-        (!query ||
-          [entry.displayName, entry.repositoryRef].some((v) =>
-            v.toLocaleLowerCase().includes(query),
-          )) &&
-        (query || browsing || !selected.has(entry.repositoryRef)),
+        !query ||
+        [entry.displayName, entry.repositoryRef].some((v) => v.toLocaleLowerCase().includes(query)),
     )
     .sort(
       (a, b) =>
@@ -88,6 +84,23 @@ function discoveryFailure(error, { allowDraft }) {
   return "unavailable";
 }
 
+function validOptions(options) {
+  return (
+    Array.isArray(options) &&
+    options.every(
+      (option) =>
+        typeof option?.repositoryRef === "string" &&
+        option.repositoryRef.length > 0 &&
+        typeof option.displayName === "string" &&
+        (option.description === undefined || typeof option.description === "string") &&
+        Array.isArray(option.allowedProfiles) &&
+        option.allowedProfiles.length > 0 &&
+        option.allowedProfiles.every((id) => repositoryProfile(id)),
+    ) &&
+    new Set(options.map((option) => option.repositoryRef)).size === options.length
+  );
+}
+
 export function createRepositoryFields(context, onChange, initial = {}) {
   const intent = initial.repositoryAccess;
   const recentKey = context.operatorId
@@ -113,6 +126,11 @@ export function createRepositoryFields(context, onChange, initial = {}) {
   };
   const initialAccess = JSON.stringify(accessIntent());
   let searchState;
+  let loadGeneration = 0;
+  let descriptionGeneration = 0;
+  let descriptionKey;
+  let descriptionTimer;
+  let descriptionAbort;
   const status = element(
     "p",
     { className: "hint", role: "status", "aria-live": "polite" },
@@ -209,10 +227,10 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     }
   }
 
-  function changed() {
+  function changed({ preserveResults = false } = {}) {
     validation.hidden = true;
     revealInvalidSelections();
-    render();
+    render({ preserveResults });
     onChange(true);
   }
   function controls(profile, allowed, id, change) {
@@ -332,7 +350,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
   function focusDiscovery() {
     (search.isConnected
       ? search
-      : (results.querySelector("button:not(:disabled)") ??
+      : (results.querySelector('input[type="checkbox"]:not(:disabled)') ??
         cards.querySelector(".repository-card:last-of-type .repository-card-toggle") ??
         section)
     ).focus();
@@ -341,11 +359,28 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     if (!editable() || state.selected.has(ref) || state.selected.size >= MAX_SELECTED) {
       return;
     }
-    state.selected.set(ref, null);
+    if (state.undo?.ref === ref) {
+      restoreUndo();
+    } else {
+      state.selected.set(ref, null);
+    }
     state.undo = undefined;
     announcements.textContent = `${option(ref).displayName} added.`;
-    changed();
-    focusDiscovery();
+    changed({ preserveResults: true });
+  }
+  function removeSelection(ref) {
+    const index = [...state.selected.keys()].indexOf(ref);
+    if (state.disabled || index < 0) {
+      return;
+    }
+    state.undo = { ref, override: state.selected.get(ref), index };
+    state.selected.delete(ref);
+    announcements.textContent = `${option(ref)?.displayName ?? ref} removed.`;
+  }
+  function restoreUndo() {
+    const entries = [...state.selected];
+    entries.splice(state.undo.index, 0, [state.undo.ref, state.undo.override]);
+    state.selected = new Map(entries);
   }
   search.addEventListener("focus", () => {
     searchState.dismissed = false;
@@ -363,7 +398,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       event.preventDefault();
       searchState.dismissed = false;
       renderResults();
-      results.querySelector("button[data-add]:not(:disabled)")?.focus();
+      results.querySelector('input[type="checkbox"]:not(:disabled)')?.focus();
     }
     if (event.key === "Enter") {
       event.preventDefault();
@@ -372,7 +407,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         renderResults();
         return;
       }
-      results.querySelector("button[data-add]:not(:disabled)")?.click();
+      results.querySelector('input[type="checkbox"]:not(:checked):not(:disabled)')?.click();
     }
   });
   discovery.addEventListener("keydown", (event) => {
@@ -388,12 +423,12 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     results.hidden = searchState.dismissed;
     const { small, query, matches, count, page, visible } = repositoryResults(
       state.options,
-      state.selected,
       recent,
       searchState,
     );
     results.replaceChildren();
     if (state.discovery !== "ready" || !state.options.length) {
+      requestVisibleDescriptions([]);
       return;
     }
     results.append(
@@ -415,61 +450,64 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       ),
     );
     const list = element("ul", { className: "repository-results-list" });
-    for (const [index, entry] of visible.entries()) {
+    for (const entry of visible) {
       const selected = state.selected.has(entry.repositoryRef);
-      const showReference = entry.displayName !== entry.repositoryRef;
+      const displayName = entry.displayName.toLocaleLowerCase();
+      const reference = entry.repositoryRef.toLocaleLowerCase();
+      const showReference =
+        reference !== displayName && reference !== displayName.split("/").at(-1);
       const readOnly = entry.allowedProfiles.every((profile) => profile === "git-read");
-      const metadataId = `repository-result-info-${index}`;
-      const addButton = button("", () => add(entry.repositoryRef), {
-        className: selected ? "repository-result is-added" : "repository-result",
-        "aria-label": `${selected ? "Added" : "Add"} ${entry.displayName}`,
-        ...(showReference || readOnly ? { "aria-describedby": metadataId } : {}),
-        "data-add": entry.repositoryRef,
-        disabled: !editable() || selected || state.selected.size >= MAX_SELECTED,
+      const checkbox = element("input", {
+        type: "checkbox",
+        "data-repository-ref": entry.repositoryRef,
+        checked: selected,
+        disabled: !editable() || (!selected && state.selected.size >= MAX_SELECTED),
       });
-      addButton.append(
-        element(
-          "span",
-          { className: "repository-add-symbol", "aria-hidden": "true" },
-          selected ? "✓" : "+",
-        ),
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          add(entry.repositoryRef);
+        } else if (editable()) {
+          removeSelection(entry.repositoryRef);
+          changed({ preserveResults: true });
+        }
+      });
+      const row = element(
+        "label",
+        { className: "repository-result" },
+        checkbox,
         element(
           "span",
           { className: "repository-identity" },
           element("strong", {}, entry.displayName),
+          typeof entry.description === "string" && entry.description.trim()
+            ? element("span", { className: "repository-description" }, entry.description)
+            : null,
+          showReference || readOnly
+            ? element(
+                "span",
+                { className: "repository-result-meta" },
+                showReference ? element("span", {}, `Reference: ${entry.repositoryRef}`) : null,
+                readOnly
+                  ? element("span", { className: "repository-approval" }, "Read-only approved")
+                  : null,
+              )
+            : null,
         ),
-        element(
-          "span",
-          { className: "repository-add-label", "aria-hidden": "true" },
-          selected ? "Added" : "Add",
-        ),
-        showReference || readOnly
-          ? element(
-              "span",
-              { id: metadataId, className: "repository-result-meta" },
-              showReference
-                ? element("span", { className: "hint" }, `Reference: ${entry.repositoryRef}`)
-                : null,
-              readOnly
-                ? element("span", { className: "repository-approval" }, "Read-only approved")
-                : null,
-            )
-          : null,
       );
-      addButton.addEventListener("keydown", (event) => {
+      checkbox.addEventListener("keydown", (event) => {
         if (!["ArrowUp", "ArrowDown"].includes(event.key)) {
           return;
         }
         event.preventDefault();
-        const buttons = [...results.querySelectorAll("button[data-add]:not(:disabled)")];
-        const next = buttons.indexOf(addButton) + (event.key === "ArrowDown" ? 1 : -1);
+        const inputs = [...results.querySelectorAll('input[type="checkbox"]:not(:disabled)')];
+        const next = inputs.indexOf(checkbox) + (event.key === "ArrowDown" ? 1 : -1);
         if (next < 0) {
           focusDiscovery();
         } else {
-          buttons[Math.min(next, buttons.length - 1)]?.focus();
+          inputs[Math.min(next, inputs.length - 1)]?.focus();
         }
       });
-      list.append(element("li", { className: "repository-result-row" }, addButton));
+      list.append(element("li", { className: "repository-result-row" }, row));
     }
     if (visible.length) {
       results.append(list);
@@ -479,11 +517,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         element(
           "p",
           { className: "hint" },
-          query
-            ? "No repositories match this search."
-            : state.options.length
-              ? "All repositories added."
-              : "No approved repositories.",
+          query ? "No repositories match this search." : "No approved repositories.",
         ),
       );
     }
@@ -495,7 +529,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
             searchState.browsing = true;
             searchState.page = 0;
             renderResults();
-            results.querySelector("button[data-add]:not(:disabled)")?.focus();
+            results.querySelector('input[type="checkbox"]:not(:disabled)')?.focus();
           },
           { className: "repository-text-action", disabled: !editable() },
         ),
@@ -514,7 +548,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
               searchState.page = page + delta;
               renderResults();
               const focus = results.querySelector(
-                "button[data-add]:not(:disabled), .form-actions button:not(:disabled)",
+                'input[type="checkbox"]:not(:disabled), .form-actions button:not(:disabled)',
               );
               if (focus) {
                 focus.focus();
@@ -531,11 +565,18 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       }
       results.append(pager);
     }
-    if (state.selected.size >= MAX_SELECTED) {
-      results.append(
-        element("p", { className: "hint" }, "16 repositories selected. Remove one to add another."),
-      );
-    }
+    results.append(
+      element(
+        "p",
+        {
+          className: "hint repository-limit",
+          role: "status",
+          hidden: state.selected.size < MAX_SELECTED,
+        },
+        "16 repositories selected. Deselect one to select another.",
+      ),
+    );
+    requestVisibleDescriptions(searchState.dismissed ? [] : visible);
   }
   function renderCards() {
     announcements.querySelector("button")?.remove();
@@ -585,12 +626,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       const remove = button(
         "Remove",
         () => {
-          if (state.disabled) {
-            return;
-          }
-          state.undo = { ref, override, index };
-          state.selected.delete(ref);
-          announcements.textContent = `${label} removed.`;
+          removeSelection(ref);
           changed();
           focusDiscovery();
         },
@@ -706,9 +742,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
             if (state.disabled || state.selected.size >= MAX_SELECTED) {
               return;
             }
-            const entries = [...state.selected];
-            entries.splice(state.undo.index, 0, [state.undo.ref, state.undo.override]);
-            state.selected = new Map(entries);
+            restoreUndo();
             state.undo = undefined;
             announcements.textContent = "Repository restored.";
             changed();
@@ -722,7 +756,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       );
     }
   }
-  function render() {
+  function render({ preserveResults = false } = {}) {
     const expandedDetails = [
       ...section.querySelectorAll("details[data-access-customize][open]"),
     ].map((details) => details.dataset.accessCustomize);
@@ -738,7 +772,18 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       choices.replaceChildren(discovery);
     }
     search.disabled = !editable();
-    renderResults();
+    if (preserveResults) {
+      for (const input of results.querySelectorAll('input[type="checkbox"][data-repository-ref]')) {
+        input.checked = state.selected.has(input.dataset.repositoryRef);
+        input.disabled = !editable() || (!input.checked && state.selected.size >= MAX_SELECTED);
+      }
+      const limit = results.querySelector(".repository-limit");
+      if (limit) {
+        limit.hidden = state.selected.size < MAX_SELECTED;
+      }
+    } else {
+      renderResults();
+    }
     renderCards();
     for (const details of section.querySelectorAll("details[data-access-customize]")) {
       details.open = expandedDetails.includes(details.dataset.accessCustomize);
@@ -795,7 +840,129 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     retry.disabled = disabled || !isSettled();
     render();
   }
+  function updateDescriptions(options, pending, refs) {
+    const refreshed = new Map(options.map((entry) => [entry.repositoryRef, entry]));
+    for (const entry of state.options) {
+      if (!refs.has(entry.repositoryRef)) {
+        continue;
+      }
+      const next = refreshed.get(entry.repositoryRef);
+      if (!next || next.displayName !== entry.displayName) {
+        continue;
+      }
+      if (typeof next.description === "string") {
+        entry.description = next.description;
+      } else if (!pending) {
+        delete entry.description;
+      }
+    }
+    for (const input of results.querySelectorAll('input[type="checkbox"][data-repository-ref]')) {
+      if (!refs.has(input.dataset.repositoryRef)) {
+        continue;
+      }
+      const entry = option(input.dataset.repositoryRef);
+      const identity = input.closest(".repository-result")?.querySelector(".repository-identity");
+      if (!entry || !identity) {
+        continue;
+      }
+      let description = identity.querySelector(".repository-description");
+      if (typeof entry.description === "string" && entry.description.trim()) {
+        if (!description) {
+          description = element("span", { className: "repository-description" });
+          identity.querySelector("strong").after(description);
+        }
+        if (description.textContent !== entry.description) {
+          description.textContent = entry.description;
+        }
+      } else {
+        description?.remove();
+      }
+    }
+  }
+  function refreshDescriptions(
+    generation,
+    visibleGeneration,
+    refs,
+    signal,
+    deadline = performance.now() + DESCRIPTION_REFRESH_TIMEOUT,
+    delay = DESCRIPTION_REQUEST_DELAY,
+  ) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      return;
+    }
+    descriptionTimer = setTimeout(
+      async () => {
+        if (
+          !context.isCurrent() ||
+          !section.isConnected ||
+          generation !== loadGeneration ||
+          visibleGeneration !== descriptionGeneration ||
+          performance.now() >= deadline
+        ) {
+          return;
+        }
+        try {
+          const { data, meta } = await context.request(
+            `${namespacePath(context.namespaceId)}/agents/${initial.agentId ? `${encodeURIComponent(initial.agentId)}/` : ""}repository-options?descriptionRefs=${[...refs].map(encodeURIComponent).join(",")}`,
+            { expectedStatus: 200, includeMeta: true, signal },
+          );
+          if (
+            !context.isCurrent() ||
+            !section.isConnected ||
+            generation !== loadGeneration ||
+            visibleGeneration !== descriptionGeneration
+          ) {
+            return;
+          }
+          if (!validOptions(data)) {
+            return;
+          }
+          const pending = meta?.descriptionsPending === true;
+          updateDescriptions(data, pending, refs);
+          if (pending) {
+            refreshDescriptions(
+              generation,
+              visibleGeneration,
+              refs,
+              signal,
+              deadline,
+              Math.min(
+                Math.max(delay * 2, DESCRIPTION_REFRESH_DELAY),
+                DESCRIPTION_REFRESH_MAX_DELAY,
+              ),
+            );
+          }
+        } catch (error) {
+          if (error.status === 401 && context.isCurrent()) {
+            context.onExpired();
+          }
+        }
+      },
+      Math.min(delay, remaining),
+    );
+  }
+  function requestVisibleDescriptions(visible) {
+    const refs = new Set(visible.map((entry) => entry.repositoryRef));
+    const key = JSON.stringify([...refs]);
+    if (descriptionKey === key) {
+      return;
+    }
+    descriptionKey = key;
+    descriptionGeneration += 1;
+    clearTimeout(descriptionTimer);
+    descriptionAbort?.abort();
+    if (refs.size) {
+      descriptionAbort = new AbortController();
+      refreshDescriptions(loadGeneration, descriptionGeneration, refs, descriptionAbort.signal);
+    }
+  }
   async function load(clearSelections = false) {
+    const generation = ++loadGeneration;
+    descriptionKey = undefined;
+    descriptionGeneration += 1;
+    clearTimeout(descriptionTimer);
+    descriptionAbort?.abort();
     state.discovery = "loading";
     // A new catalog must not inherit filters or pages whose controls may disappear.
     resetSearch();
@@ -817,22 +984,10 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         `${namespacePath(context.namespaceId)}/agents/${initial.agentId ? `${encodeURIComponent(initial.agentId)}/` : ""}repository-options`,
         { expectedStatus: 200 },
       );
-      if (!context.isCurrent()) {
+      if (!context.isCurrent() || generation !== loadGeneration) {
         return { kind: "obsolete" };
       }
-      if (
-        !Array.isArray(options) ||
-        !options.every(
-          (option) =>
-            typeof option?.repositoryRef === "string" &&
-            option.repositoryRef.length > 0 &&
-            typeof option.displayName === "string" &&
-            Array.isArray(option.allowedProfiles) &&
-            option.allowedProfiles.length > 0 &&
-            option.allowedProfiles.every((id) => repositoryProfile(id)),
-        ) ||
-        new Set(options.map((option) => option.repositoryRef)).size !== options.length
-      ) {
+      if (!validOptions(options)) {
         throw new Error("Invalid repository choices response.");
       }
       state.options = options;
@@ -858,7 +1013,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         }
         return { kind: "expired" };
       }
-      if (!context.isCurrent()) {
+      if (!context.isCurrent() || generation !== loadGeneration) {
         return { kind: "obsolete" };
       }
       state.options = [];

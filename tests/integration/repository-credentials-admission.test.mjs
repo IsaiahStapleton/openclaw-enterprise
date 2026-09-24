@@ -308,6 +308,21 @@ test("Repository options expose only Namespace-approved display choices behind A
     /provider|backend|installation|repositoryId|grant|duration|token|key|credential/i,
   );
 
+  // Metadata is advisory: an unavailable service must leave authorized choices usable.
+  const unavailableMetadata = await f.request("GET", `${path}?descriptionRefs=project`);
+  assert.equal(unavailableMetadata.status, 200, JSON.stringify(unavailableMetadata));
+  assert.deepEqual(unavailableMetadata.data, options.data);
+  assert.equal(unavailableMetadata.meta.descriptionsPending, false);
+  for (const query of [
+    "descriptionRefs=project,project",
+    "descriptionRefs=project,invalid%2Fref",
+    `descriptionRefs=${Array.from({ length: 21 }, (_, index) => `repo-${index}`).join(",")}`,
+    "descriptionRefs=project&extra=value",
+  ]) {
+    const malformed = await f.request("GET", `${path}?${query}`);
+    assert.equal(malformed.status, 400, JSON.stringify(malformed));
+  }
+
   f.iamState.restrictions.push({
     id: "deny-repository-options",
     namespaceId: f.namespace.id,

@@ -41,6 +41,7 @@ import type {
   RepositoryAccess,
   RepositoryBindingSelection,
   RepositoryOption,
+  RepositoryOptions,
   RepoDriver,
   RepositoryCredentialResolution,
   RepositoryRevisionState,
@@ -758,6 +759,13 @@ function validRepositoryOption(value: unknown): value is RepositoryOption {
       const code = character.charCodeAt(0);
       return code <= 0x1f || code === 0x7f;
     }) &&
+    (option?.description === undefined ||
+      (isNonEmptyString(option.description) &&
+        option.description.length <= 512 &&
+        ![...option.description].some((character) => {
+          const code = character.charCodeAt(0);
+          return code <= 0x1f || code === 0x7f;
+        }))) &&
     Array.isArray(allowedProfiles) &&
     allowedProfiles.length >= 1 &&
     allowedProfiles.length <= 16 &&
@@ -1147,7 +1155,8 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     agentId?: string,
-  ): Promise<readonly Readonly<RepositoryOption>[]> {
+    descriptionRefs: readonly string[] = [],
+  ): Promise<Readonly<RepositoryOptions>> {
     const namespace = await this.read((state) => this.exactNamespace(state, namespaceId));
     if (namespace.status !== "provisioning" && namespace.status !== "ready") {
       throw new ResourceConflictError("The Namespace does not accept new Agents.");
@@ -1193,9 +1202,9 @@ export class OpenClawController {
         "The selected repository credential Driver is unavailable.",
       );
     }
-    let options: readonly RepositoryOption[];
+    let result: RepositoryOptions;
     try {
-      options = driver.listOptions({ namespaceId: namespace.id });
+      result = await driver.listOptions({ namespaceId: namespace.id, descriptionRefs });
     } catch {
       throw new DependencyUnavailableError(
         "The selected repository credential Driver could not list repository options.",
@@ -1203,10 +1212,13 @@ export class OpenClawController {
     }
     const selected = this.selections.get("repo");
     if (
-      !Array.isArray(options) ||
-      options.length > 1000 ||
-      !options.every(validRepositoryOption) ||
-      new Set(options.map((option) => option.repositoryRef)).size !== options.length ||
+      !result ||
+      typeof result.descriptionsPending !== "boolean" ||
+      !Array.isArray(result.options) ||
+      result.options.length > 1000 ||
+      !result.options.every(validRepositoryOption) ||
+      new Set(result.options.map((option) => option.repositoryRef)).size !==
+        result.options.length ||
       selected?.driver !== driver ||
       !this.unchangedDriver(selected)
     ) {
@@ -1214,7 +1226,7 @@ export class OpenClawController {
         "The selected repository credential Driver returned invalid repository options.",
       );
     }
-    return immutableCopy(options);
+    return immutableCopy(result);
   }
 
   async getAgent(

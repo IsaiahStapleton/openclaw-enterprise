@@ -16,6 +16,23 @@ export type RepositoryCredentialControlOpenResult =
   | { readonly kind: "missing" };
 
 export interface RepositoryCredentialControlClient {
+  descriptions(
+    namespaceId: string,
+    repositoryRefs: readonly string[],
+    signal: AbortSignal,
+  ): Promise<
+    Readonly<{
+      providerInstanceId: string;
+      appId: string;
+      githubInstallationId: string;
+      descriptions: readonly Readonly<{
+        repositoryRef: string;
+        repositoryId: string;
+        description: string;
+      }>[];
+      pending: boolean;
+    }>
+  >;
   open(
     input: RepositoryCredentialBoundSessionInput,
     admissionId: string,
@@ -61,6 +78,14 @@ function hasControlCharacters(value: string): boolean {
     const code = character.charCodeAt(0);
     return code <= 0x1f || code === 0x7f;
   });
+}
+
+function githubId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[1-9][0-9]{0,15}$/.test(value) &&
+    Number.isSafeInteger(Number(value))
+  );
 }
 
 function identity(value: unknown): string {
@@ -227,6 +252,87 @@ export class UnixRepositoryCredentialControlClient implements RepositoryCredenti
     this.#socket = options.controlSocket;
   }
 
+  async descriptions(namespaceId: string, repositoryRefs: readonly string[], signal: AbortSignal) {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(namespaceId) ||
+      !Array.isArray(repositoryRefs) ||
+      repositoryRefs.length < 1 ||
+      repositoryRefs.length > 20 ||
+      new Set(repositoryRefs).size !== repositoryRefs.length ||
+      repositoryRefs.some((ref) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(ref))
+    ) {
+      throw new RepositoryCredentialControlError(false);
+    }
+    const reply = await this.call(
+      "POST",
+      "/v1/repository-descriptions",
+      signal,
+      { namespaceId, repositoryRefs },
+      undefined,
+      64 * 1024,
+    );
+    const parsed = object(reply.body, [
+      "providerInstanceId",
+      "appId",
+      "githubInstallationId",
+      "descriptions",
+      "pending",
+    ]);
+    if (
+      reply.status !== 200 ||
+      typeof parsed.providerInstanceId !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(parsed.providerInstanceId) ||
+      !githubId(parsed.appId) ||
+      !githubId(parsed.githubInstallationId) ||
+      typeof parsed.pending !== "boolean" ||
+      !Array.isArray(parsed.descriptions) ||
+      parsed.descriptions.length > 20
+    ) {
+      return unavailable();
+    }
+    const descriptions = new Map<string, { repositoryId: string; description: string }>();
+    const duplicates = new Set<string>();
+    for (const value of parsed.descriptions) {
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const entry = value as Record<string, unknown>;
+      const ref = entry.repositoryRef;
+      if (typeof ref !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(ref)) {
+        continue;
+      }
+      if (descriptions.has(ref) || duplicates.has(ref)) {
+        descriptions.delete(ref);
+        duplicates.add(ref);
+        continue;
+      }
+      if (
+        Object.keys(entry).some(
+          (key) => !["repositoryRef", "repositoryId", "description"].includes(key),
+        ) ||
+        !githubId(entry.repositoryId) ||
+        typeof entry.description !== "string" ||
+        entry.description.trim().length === 0 ||
+        entry.description.length > 512 ||
+        hasControlCharacters(entry.description)
+      ) {
+        continue;
+      }
+      descriptions.set(ref, { repositoryId: entry.repositoryId, description: entry.description });
+    }
+    return Object.freeze({
+      providerInstanceId: parsed.providerInstanceId,
+      appId: parsed.appId,
+      githubInstallationId: parsed.githubInstallationId,
+      descriptions: Object.freeze(
+        [...descriptions].map(([repositoryRef, entry]) =>
+          Object.freeze({ repositoryRef, ...entry }),
+        ),
+      ),
+      pending: parsed.pending,
+    });
+  }
+
   async open(
     input: RepositoryCredentialBoundSessionInput,
     admissionId: string,
@@ -318,8 +424,11 @@ export class UnixRepositoryCredentialControlClient implements RepositoryCredenti
     method: "GET" | "POST",
     path: string,
     signal: AbortSignal,
-    input?: RepositoryCredentialBoundSessionInput,
+    input?:
+      | RepositoryCredentialBoundSessionInput
+      | Readonly<{ namespaceId: string; repositoryRefs: readonly string[] }>,
     admissionId?: string,
+    maximumResponseBytes = 16 * 1024,
   ): Promise<Reply> {
     const body = input === undefined ? "" : JSON.stringify(input);
     if (Buffer.byteLength(body) > 16 * 1024) {
@@ -347,7 +456,7 @@ export class UnixRepositoryCredentialControlClient implements RepositoryCredenti
           (incoming) => {
             incoming.on("data", (chunk: Buffer) => {
               size += chunk.length;
-              if (size > 16 * 1024) {
+              if (size > maximumResponseBytes) {
                 incoming.destroy();
                 outgoing.destroy();
                 reject(new RepositoryCredentialControlError(true));

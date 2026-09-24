@@ -32,6 +32,8 @@ capability.
 ```mermaid
 graph TD
   Console["<b>Console create form</b><br/>Load safe Namespace choices"] --> Options["<b>Repo Driver projection</b><br/>Refs, names, allowed profiles"]
+  Options -->|Visible refs| Metadata["<b>Credential service</b><br/>Optional repository descriptions"]
+  Metadata -->|Available| Console
   Options --> API["<b>Agent API</b><br/>Recheck and save refs"]
   Options -->|Unverified authorization or discovery error| CreateBlocked["<b>Create blocked</b><br/>Retry before any write"]
   API -->|Known zero-binding rejection| OrdinaryRetry["<b>Ordinary retry</b><br/>Reuse Configuration directly"]
@@ -80,7 +82,7 @@ graph TD
   classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
   classDef condition fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
   class API,Revision,Attempt,Queue,FormLocked state
-  class Console,Options,Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
+  class Console,Options,Metadata,Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
   class Recover,Repair,Refuse,Wait,ViewStop,CreateBlocked,OrdinaryRetry,Reselect,PushRefs,PushDenied condition
 ```
 
@@ -97,18 +99,27 @@ to `503 REPOSITORY_OPTIONS_UNAVAILABLE` via `RepositoryOptionsUnavailableError`.
 Generic failures do not establish authorization.
 
 `createRepositoryFields` searches up to 1,000 choices with 16 attachments.
-Cards record inheritance or overrides. `repositorySettings` resolves intent through
-RepoDriver; the database checks consistency with concrete bindings.
-Draft edits preserve admitted revisions. Only fresh, empty drafts permit the
-classified optional discovery outage; other failures block saves.
+Checkboxes stay visible when selected; immediate recheck or Undo restores a
+removed selection's position and access override. `repositorySettings` resolves
+intent through RepoDriver; the database checks concrete bindings. Draft edits
+preserve admitted revisions. Only fresh, empty drafts permit classified discovery
+outage; other failures block saves.
 
-The form saves Configuration first. Known Agent rejections (400, 403, 404, 409, 429)
-preserve it. Ordinary retries reuse it; repository-scoped retries require successful
-reload, clearing stale selections, then nonempty reselection and approved access.
-Empty selections cannot downgrade the attempt. Recovery stays visible; new drafts
-preserve the Configuration. Failed reloads block creation, expiry signs out, and
-obsolete completions cannot mutate the view.
-Unknown outcomes require stored Agent and Configuration reads.
+The Console asynchronously requests descriptions for up to 20 visible refs.
+`apps/controller/src/drivers/repo/github/driver.ts:GitHubRepoDriver.listOptions`
+filters by Namespace and checks returned provider, App, installation and repository IDs.
+`apps/controller/src/drivers/repo/github/credentials/descriptions.ts:createGitHubRepositoryDescriptions`
+rechecks the service registry and fetches each description with a repository-scoped,
+metadata-only token. It checks GitHub's numeric repository ID, shares the provider
+queue and credential cleanup lifecycle, and bounds work and caching. Missing metadata
+never blocks selection. The initial catalog needs no GitHub request.
+
+The form saves Configuration first and preserves it after known Agent rejections
+(400, 403, 404, 409, 429). Ordinary retries reuse it; repository-scoped retries
+require successful reload and nonempty reselection with approved access. Empty
+selections cannot downgrade the attempt. Failed reloads block creation, expiry signs
+out, and obsolete completions cannot mutate the view. Unknown outcomes require
+stored Agent and Configuration reads.
 
 `packages/occ/src/index.ts:OpenClawController.repositoryBindingSelections`
 calls `resolveRepositoryBindings` after authorization. Public input contains distinct
@@ -131,11 +142,10 @@ preserves them and an empty array clears them.
 ### 2. Freeze a deployable revision
 
 `packages/occ/src/index.ts:OpenClawController.admitRepositoryCredentials`
-re-resolves the draft, validates topology through Compute and freezes Driver
-identity, exact grants and an absolute deadline unaffected by renewal or recovery.
-Duration `86400` allows 24 hours from admission. The public `clientRevision`
-serializer in `apps/controller/src/index.ts` returns only Driver identity,
-references, profiles and deadline.
+re-resolves the draft, validates Compute topology and freezes Driver identity,
+grants and an absolute deadline unaffected by renewal or recovery. Duration
+`86400` allows 24 hours. `apps/controller/src/index.ts:clientRevision` returns
+only Driver identity, references, profiles and deadline.
 
 `apps/controller/src/composition/repository-credentials/platform.ts:composeRepoDriver`
 constructs `GitHubRepoDriver` for capability `repo` from a Backend-owned Unix
@@ -147,11 +157,10 @@ sidecar launch; the service validates protected inputs before listening.
 ### 3. Record ownership before opening a session
 
 `apps/controller/src/worker/repository-credentials.ts:RepositoryCredentialLifecycle.prepare`
-rechecks the original actor, ready Namespace, running Agent, exact revision,
-selected Driver, unchanged grant and deadline. Fresh attempts commit request identity
-in State under the live work claim and Namespace/Agent locks before dispatch. State
-derives immutable cleanup context from the admitted Driver and binding, rejecting
-new attempts for stopped or deleting owners.
+rechecks actor, ready Namespace, running Agent, revision, Driver, grant and
+deadline. Before dispatch, fresh attempts commit request identity under the work
+claim and Namespace/Agent locks. State derives immutable cleanup context from the
+admitted binding and rejects stopped or deleting owners.
 `RepositoryCredentialLifecycle.open` calls the Driver outside the transaction.
 State stores recovery identifiers and phases, never bearers or client files.
 
@@ -159,11 +168,9 @@ State stores recovery identifiers and phases, never bearers or client files.
 sends the bound request over the private socket. The service independently
 resolves and compares the grant through
 `apps/controller/src/drivers/repo/github/credentials/registry-factory.ts:createGitHubRegistryDriverFactory`.
-The client validates cleanup counts and terminal-state consistency before
-projecting the private response into four-field status and three-field binding
-objects. `DISPOSED` permits historical revoked/expired counts, but no active uses,
-active/pending/uncertain credentials or pending auxiliary work. Created-open,
-recovered-open, status and close require validation before projection.
+The client validates private responses before projecting status and binding.
+`DISPOSED` permits historical revoked/expired counts, but no active uses,
+active/pending/uncertain credentials or pending auxiliary work.
 
 Only a created control response contains the bearer. The Driver uses
 `apps/controller/src/drivers/repo/github/credentials/client/config.ts:encodeRepositoryCredentialSessionFiles`
@@ -205,9 +212,9 @@ files into memory-backed storage. `REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT` mounts
 that private subPath at `/run/oce/repository-credentials`, avoiding the
 fsGroup-writable volume root. It calls
 `apps/controller/src/drivers/repo/github/credentials/client/native-git.ts:prepareNativeGitConfiguration`
-with unchanged private-file checks. Retry removes only a validated private
-`gitconfig`. Both init completions gate consumer startup; the consumer mounts
-material read-only. Public metadata and gateway bearers remain separate files.
+with private-file checks. Retry removes only a validated private `gitconfig`.
+Both init steps gate startup; the consumer mounts material read-only. Public
+metadata and gateway bearers remain separate.
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.activateRevision`
 replaces the embedded gateway or revision-specific Dedicated Agent when material
@@ -218,13 +225,11 @@ preserves workspace-node enrollment and its revision-private state mount.
 asynchronous plugin status, then dedicated gateway and workspace-node
 observations, including successor preparation while the prior gateway serves.
 Changed generation or lost readiness returns incomplete.
-The separate gateway receives neither repository material nor repository-gateway
-egress. Compute grants consumer egress; Helm admits embedded and dedicated
-consumers through the
-[credential-sidecar ingress selectors](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking). Native preparation
-writes aggregate `gitconfig` without reading bearers. The runtime image includes
-`/run/oce/repository-credentials/gitconfig` in system Git configuration, preserving
-HOME/global configuration and routing for `gh` child Git.
+The gateway receives neither repository material nor repository-gateway egress.
+Compute grants consumer egress; Helm uses
+[credential-sidecar ingress selectors](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking). Native preparation writes aggregate
+`gitconfig` without reading bearers. System Git includes it, preserving HOME/global
+configuration and routing for `gh` child Git.
 Embedded `repositoryNativeConfiguration` keeps the `gh` router first in
 `tools.exec.pathPrepend`, preserving other paths and per-agent settings. Dedicated
 `AGENT_RUNTIME_ENTRYPOINT` sets Codex's `allow_login_shell=false` and
@@ -234,13 +239,11 @@ tokens and the control socket never enter this material set.
 
 ### 5. Authenticate native Git and route GitHub CLI commands
 
-Stock Git resolves commands, remotes, push URLs, worktrees and settings.
-Configuration rewrites canonical HTTPS hosts to their admitted gateway origin.
-The scoped helper checks effective host/path, pinned generation and deadline,
-then supplies the selected gateway bearer. `OCE_REPOSITORY_REF` disambiguates
-bindings, not connection destinations. Local identity, hooks, aliases, native
-overrides and additional helpers remain available; there is no whole-command
-preflight or egress confinement.
+Stock Git resolves commands, remotes, worktrees and settings. Configuration
+rewrites canonical HTTPS hosts to the gateway. The helper checks host/path, pinned
+generation and deadline before supplying a bearer. `OCE_REPOSITORY_REF` selects a
+binding, not a destination. Native settings and helpers remain available; there
+is no whole-command preflight or egress confinement.
 See the [routing limits](../reference/repository-credentials.md#client-routing-and-limits).
 
 `pushRefAllowlist` selects image-owned hooks.
@@ -275,9 +278,8 @@ fresh installation tokens under the same grant until the revision deadline.
 `apps/controller/src/worker.ts:ControllerWorker.completeActivatedRevision`
 commits completion and maintenance together, preserving the original actor.
 Repository revisions use the Driver's 30-second interval or a shorter Compute
-interval. Worker restart resumes queued work without inventing actors; open
-sessions and Compute material can survive it. After service restart, a missing known
-session is invalidated with cleanup Work retained.
+interval. Worker restart resumes queued work; sessions and material can survive it.
+After service restart, a missing known session is invalidated with cleanup retained.
 `REPOSITORY_SESSION_RECOVERY_UNSAFE` permanently fails observation and queues
 exact runtime retirement; later workers cannot remint for that revision. An
 authorized user can deploy a new revision without settling old cleanup or
@@ -336,12 +338,11 @@ identity and deadline before retrying.
 or `name-one-repository-ref` requires explicit selection. Inspect material metadata
 and Pod generation without printing bearers or Secrets.
 
-The [test guide](../testing/repository-credentials.md) separates browser recovery,
-Driver lifecycle, State/worker, installed-runtime and live-provider proof. The
-required [image volume case](../testing/images.md#repository-runtime-volume-test-environment)
-checks installed-client Docker mounts; Helm checks rendered ingress. Neither proves
-live CNI enforcement. Console recordings prove fixture/API paths, not model,
-Slack or GitHub execution; Ready Pods and local commands do not prove live writes.
+The [test guide](../testing/repository-credentials.md) separates browser, Driver,
+State/worker, installed-runtime and live-provider proof. The required
+[image volume case](../testing/images.md#repository-runtime-volume-test-environment)
+checks Docker mounts; Helm checks rendered ingress, not live CNI. Console recordings
+prove fixture/API paths, not model, Slack or GitHub execution.
 
 ## Related docs
 
@@ -356,6 +357,8 @@ Slack or GitHub execution; Ready Pods and local commands do not prove live write
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 23:14: Trace bounded description discovery and checkbox selection. (public-pr/374 - 6ed3a6de9035b84693a180c28a78765510dd4a2d)
 
 - 2026-09-24 19:41: Trace request-order persistence after Driver resolution. (public-pr/374 - 43d99e7dce02fbd34b072c877868ad1beef4d245)
 

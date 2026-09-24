@@ -8,6 +8,13 @@ import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers
 import { createConsoleRepositoryLaunchFixture } from "../helpers/console-repository-launch.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
+function repositoryCheckbox(page, name) {
+  return page
+    .locator("#repository-results .repository-result-row")
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .getByRole("checkbox");
+}
+
 for (const issuesEnabled of [true, false]) {
   test(`one Dedicated Agent retains repository scope through Slack setup, credentials and deployment admission (issues ${issuesEnabled ? "on" : "off"})`, async (t) => {
     const { fixture, namespace, modelSecret, grantModelAccess } =
@@ -62,7 +69,7 @@ for (const issuesEnabled of [true, false]) {
     await page.getByRole("button", { name: "Access for example/application" }).click();
     await page.locator("#repository-inherit-application").check();
     await page.getByRole("button", { name: "Access for example/application" }).click();
-    await page.getByRole("button", { name: "Add example/documentation", exact: true }).click();
+    await repositoryCheckbox(page, "example/documentation").click();
     await page.getByRole("radio", { name: /^Contributor / }).check();
     assert.equal(await page.locator(".repository-write-access").isVisible(), false);
     const customize = page.getByText("Customize access", { exact: true });
@@ -102,7 +109,7 @@ for (const issuesEnabled of [true, false]) {
       await page.getByRole("checkbox", { name: /^Create and manage issues/ }).uncheck();
       // Changing the repository set must not silently restore issue management.
       await page.getByRole("button", { name: "Remove example/documentation" }).click();
-      await page.getByRole("button", { name: "Add example/documentation", exact: true }).click();
+      await repositoryCheckbox(page, "example/documentation").click();
       assert.equal(
         await page.getByRole("checkbox", { name: /^Create and manage issues/ }).isChecked(),
         false,

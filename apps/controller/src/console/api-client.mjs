@@ -1,14 +1,14 @@
 export function createApiClient({ lifetime, hasSession, onExpired }) {
   async function request(
     path,
-    { method = "GET", body, signal = lifetime.signal, expectedStatus } = {},
+    { method = "GET", body, signal = lifetime.signal, expectedStatus, includeMeta = false } = {},
   ) {
     const active = lifetime.capture();
     const response = await fetch(path, {
       method,
       credentials: "same-origin",
       cache: "no-store",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+      signal: AbortSignal.any([lifetime.signal, signal, AbortSignal.timeout(15_000)]),
       ...(body === undefined
         ? {}
         : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
@@ -44,7 +44,7 @@ export function createApiClient({ lifetime, hasSession, onExpired }) {
       }
       throw error;
     }
-    return payload.data;
+    return includeMeta ? { data: payload.data, meta: payload.meta } : payload.data;
   }
 
   return request;

@@ -29,8 +29,8 @@ The optional `repo` capability uses `RepoDriver extends Driver`, with the bundle
 `drivers.repo` select the same configured Driver ID. The
 [shared contract](../../packages/contracts/src/repo.ts) exposes five operations:
 
-- `listOptions` returns Namespace-approved opaque references, display names and
-  profiles.
+- `listOptions` returns Namespace-approved opaque references, names, profiles
+  and optional descriptions.
 - `resolve` checks Namespace policy and returns admitted bindings and duration.
 - `open` returns `created` with private runtime files, `recovered` with status
   only, or `missing`. `recoverOnly` cannot create authority.
@@ -57,26 +57,24 @@ inventory and `invalidated` attempts retain cleanup Work and the deleting Agent.
 Deadlines do not settle provider cleanup. Evidence pruning and durable token
 recovery are unimplemented.
 
-Worker restart can retain surviving service sessions and Compute material.
-Known closing sessions block same-revision replacement, including Compute repair,
-with retryable `REPOSITORY_CLEANUP_PENDING` until confirmed `DISPOSED`. Existing
-Work bounds and the original revision deadline still apply. Missing exposed
-sessions remain irrecoverable: `REPOSITORY_SESSION_RECOVERY_UNSAFE` fails the
-revision and queues runtime retirement while retaining cleanup. Never-delivered openings
-without a recorded session ID remain recoverable; known sessions require disposal
-before replacement. Users may explicitly deploy a new authorized revision. This
-neither settles old cleanup nor replays Git/API mutations; credential disposal
-does not establish their outcomes.
+Worker restart can retain sessions and Compute material. Known closing sessions
+block same-revision replacement, including Compute repair, with retryable
+`REPOSITORY_CLEANUP_PENDING` until `DISPOSED`; Work bounds and the original
+revision deadline still apply. Missing exposed sessions are irrecoverable:
+`REPOSITORY_SESSION_RECOVERY_UNSAFE` fails the revision, queues runtime retirement
+and retains cleanup. Never-delivered openings without a recorded session ID can
+recover; known sessions require disposal before replacement. A new authorized
+revision does not settle old cleanup or replay mutations; disposal does not
+establish their outcomes.
 
 ## Configuration
 
 ### Canonical platform registry
 
-The GitHub Backend selects one registry through `configuration.registryPath`;
-its `drivers.repo` names the selected Driver. API, worker and
-service load the same immutable, versioned ConfigMap. The registry contains
-nonsecret identity and Namespace policy for one App installation and multiple
-repositories:
+The GitHub Backend selects a registry through `configuration.registryPath`;
+`drivers.repo` names its Driver. API, worker and service load the same immutable
+ConfigMap with nonsecret identity and Namespace policy for one App installation
+and multiple repositories:
 
 ```json
 {
@@ -97,11 +95,11 @@ repositories:
 }
 ```
 
-Use actual platform Namespace IDs. App, installation and repository IDs are
-positive decimal safe integers represented as strings. Repository names are
-canonicalized to lowercase. The registry admits at most 1,000 repositories, 128
-Namespace policies per repository and 4,096 policies overall. References, numeric
-repository IDs and canonical names must be unique.
+Use platform Namespace IDs. App, installation and repository IDs are positive
+decimal safe integers as strings. Repository names are canonicalized to lowercase.
+The registry admits at most 1,000 repositories, 128 Namespace policies per
+repository and 4,096 overall. References, numeric IDs and canonical names must be
+unique.
 
 The resolved grant fingerprint covers provider/App/installation identity,
 repository identity, maximum duration, Namespace, its complete allowed-profile
@@ -115,32 +113,38 @@ Each Namespace policy may set an optional
 accidental native Git pushes outside selected branches. This is not server-side
 branch authorization.
 
-The selected Driver configuration supplies `controlSocket`,
-`sessionDurationSeconds` and `publicCaPath`; it contains no App key. See
-[Backend configuration](backends.md) and the
-[installation procedure](../guides/deploy/production-installation.md) for wiring.
+Driver configuration supplies `controlSocket`, `sessionDurationSeconds` and
+`publicCaPath`, never the App key. See [Backend configuration](backends.md) and
+the [installation procedure](../guides/deploy/production-installation.md).
 
 ### Repository options
 
-`GET /namespaces/:namespaceId/agents/repository-options` requires Agent `create`
-and returns only `repositoryRef`, `displayName` and `allowedProfiles`. Authorized
-optional discovery failure yields `503 REPOSITORY_OPTIONS_UNAVAILABLE`; no approvals
-yields `[]`; a closed Namespace yields 409. Only successful discovery or that
-explicit outage permits a fresh ordinary draft. Other failures block creation.
-Writes reauthorize and re-resolve choices. Editing uses
-`GET /namespaces/:namespaceId/agents/:agentId/repository-options`, authorized by
-`update` on that exact Agent. Editing requires successful discovery; the
-fresh-draft outage exception does not apply.
+`GET /namespaces/:namespaceId/agents/repository-options` requires Agent `create`;
+the exact-Agent editing route requires `update`. Both return Namespace-approved
+`repositoryRef`, `displayName`, `allowedProfiles` and optional `description`.
+`descriptionRefs` accepts at most 20 unique, comma-separated refs; the initial
+catalog requires no GitHub call. Missing descriptions or provider errors do not
+block selection. `meta.descriptionsPending` signals background work. Authorized
+discovery failure yields `503 REPOSITORY_OPTIONS_UNAVAILABLE`; no approvals yields
+`[]`; a closed Namespace yields 409. Only successful discovery
+or that explicit outage permits a fresh ordinary draft. Other failures block
+creation; editing requires successful discovery. Writes reauthorize and resolve.
+
+The service rechecks approved refs and fetches metadata with a private,
+repository-scoped Metadata-read token. It validates GitHub's numeric repository ID;
+the Driver checks provider, App, installation and repository IDs before attaching it.
+Lookup shares provider capacity and token cleanup with Agent sessions. Successful
+lookups are cached for five minutes; an open picker retains text until its refs
+are requested again or it reloads. Descriptions never grant access: admission
+reauthorizes selections.
 
 ### Profiles
 
 The Console offers **Read-only** (`git-read`) and **Contributor** (`git-full`).
-Contributor includes pushes, PR work, and issue management by default. Open
-**Customize access** to turn off issue management (`git-write`) when approved for
-the repository. Push and PR access remain bundled; this UI does not
-create new permission profiles. Direct binding requests still default to `git-write`; inherited access is
-recorded separately in `repositoryAccess`.
-All three enforced profiles include GitHub API access.
+Contributor includes pushes, PRs and issue management by default.
+**Customize access** can disable issue management (`git-write`) when approved. Push and PR
+access remain bundled. Direct binding requests default to `git-write`; inherited
+access is recorded in `repositoryAccess`. All profiles include GitHub API access.
 
 The [access-level reference](repository-credentials/access-levels.md) defines the
 exact permissions, supported commands and GraphQL boundary. Every session selects
@@ -197,15 +201,14 @@ Kubernetes composition copies selected projection generations into service-owned
 private files before protected-path validation. API and worker receive
 registry/public CA inputs; only the service receives App and TLS private keys.
 
-The privileged GitHub transport captures the installation, repository and exact
-permission profile when the backend is constructed. Its only operations are
-issuance for that captured scope and revocation of an owned token; callers cannot
-supply an HTTP URL, method, path, request body or extra headers. Extending those
-operations changes a credential boundary and requires security review.
+The privileged GitHub transport captures installation, repository and permission
+profile at construction. Its operations issue scoped tokens and revoke owned
+tokens; callers cannot supply HTTP requests. Extending those operations changes
+a credential boundary and requires security review.
 
-The service image must trust GitHub's HTTPS certificate chain. For an approved
-private CA, supply an image with a readable CA bundle and `NODE_EXTRA_CA_CERTS`;
-keep certificate and hostname verification enabled.
+The service image must trust GitHub's HTTPS certificate chain. For a private CA,
+supply a readable bundle and `NODE_EXTRA_CA_CERTS`; keep certificate and hostname
+verification enabled.
 
 Git discovery, upload-pack and receive-pack accept case differences in the
 admitted owner/repository and an optional `.git` suffix. The backend constructs
@@ -308,11 +311,10 @@ workflows are outside supported acceptance.
 
 The generated defaults scope helper reset, `credential.useHttpPath=true`, verified
 TLS, optional CA trust and disabled redirects to the exact gateway HTTPS origin.
-The helper checks the effective protocol, host/port, username and repository path;
+The helper checks effective protocol, host/port, username and repository path;
 escaped paths, dot segments, extra components and unmatched names receive no
-bearer. A literal repository name ending in `.git` can overlap another admitted
-identity, so the helper compares both spellings and refuses ambiguous selection.
-It never chooses a first, stronger or unexpired alternate grant.
+bearer. A literal name ending in `.git` can overlap another admitted identity;
+the helper compares both spellings and refuses ambiguity or alternate grants.
 
 Duplicate repository bindings remain valid. Select one with `OCE_REPOSITORY_REF`;
 gh also propagates `OCE_REPOSITORY_SELECTION` containing generation, repository

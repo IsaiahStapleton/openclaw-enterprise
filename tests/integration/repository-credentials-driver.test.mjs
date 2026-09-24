@@ -543,3 +543,131 @@ test("Unix control rejects malformed status and preserves authoritative absence 
     );
   }
 });
+
+test("repository descriptions remain scoped and reject stale identity without blocking choices", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "repository-description-reply-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const socket = join(directory, "control.sock");
+  let reply = {
+    providerInstanceId: "instance",
+    appId: "1",
+    githubInstallationId: "2",
+    pending: false,
+    descriptions: [],
+  };
+  const requests = [];
+  // An independent control peer can return malformed or stale identity data.
+  const server = createServer(async (incoming, response) => {
+    const chunks = [];
+    for await (const chunk of incoming) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(reply));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socket, resolve);
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const driver = driverFor(
+    {
+      version: 1,
+      backendId: "github-test",
+      providerInstanceId: "instance",
+      appId: "1",
+      githubInstallationId: "2",
+      maximumDurationSeconds: 3600,
+      repositories: [
+        {
+          repositoryRef: "project",
+          repositoryId: "73",
+          repository: "example/project",
+          namespaces: [{ namespaceId: "namespace", profiles: ["git-read"] }],
+        },
+        {
+          repositoryRef: "helper",
+          repositoryId: "74",
+          repository: "example/helper",
+          namespaces: [{ namespaceId: "namespace", profiles: ["git-read"] }],
+        },
+        {
+          repositoryRef: "foreign",
+          repositoryId: "75",
+          repository: "example/foreign",
+          namespaces: [{ namespaceId: "other", profiles: ["git-read"] }],
+        },
+      ],
+    },
+    socket,
+    1,
+  );
+  const initial = await driver.listOptions({ namespaceId: "namespace" });
+  assert.equal(requests.length, 0);
+  assert.equal(initial.descriptionsPending, false);
+  assert.deepEqual(
+    initial.options.map((option) => option.repositoryRef),
+    ["helper", "project"],
+  );
+
+  reply = {
+    providerInstanceId: "instance",
+    appId: "1",
+    githubInstallationId: "2",
+    pending: true,
+    descriptions: [
+      { repositoryRef: "project", repositoryId: "73", description: "Approved project" },
+      { repositoryRef: "helper", repositoryId: "74", description: "invalid\ntext" },
+      { repositoryRef: "foreign", repositoryId: "75", description: "Private foreign project" },
+    ],
+  };
+  const input = { namespaceId: "namespace", descriptionRefs: ["project", "helper", "foreign"] };
+  let result = await driver.listOptions(input);
+  assert.deepEqual(requests[0], {
+    namespaceId: "namespace",
+    repositoryRefs: ["project", "helper"],
+  });
+  assert.equal(result.descriptionsPending, true);
+  assert.equal(
+    result.options.find((option) => option.repositoryRef === "project").description,
+    "Approved project",
+  );
+  assert.equal(
+    result.options.find((option) => option.repositoryRef === "helper").description,
+    undefined,
+  );
+  assert.doesNotMatch(JSON.stringify(result), /Private foreign project/);
+
+  // Registry drift must not relabel private metadata from an old repository or App installation.
+  reply = {
+    providerInstanceId: "instance",
+    appId: "1",
+    githubInstallationId: "2",
+    pending: false,
+    descriptions: [
+      { repositoryRef: "project", repositoryId: "999", description: "Stale project" },
+      { repositoryRef: "helper", repositoryId: "74", description: "Current helper" },
+    ],
+  };
+  result = await driver.listOptions(input);
+  assert.equal(
+    result.options.find((option) => option.repositoryRef === "project").description,
+    undefined,
+  );
+  assert.equal(
+    result.options.find((option) => option.repositoryRef === "helper").description,
+    "Current helper",
+  );
+  const matchingReply = reply;
+  for (const changedIdentity of [
+    { providerInstanceId: "old-instance" },
+    { appId: "99" },
+    { githubInstallationId: "99" },
+    { appId: 1 },
+    { githubInstallationId: "invalid" },
+  ]) {
+    reply = { ...matchingReply, ...changedIdentity };
+    result = await driver.listOptions(input);
+    assert.ok(result.options.every((option) => option.description === undefined));
+    assert.equal(result.options.length, 2);
+  }
+});

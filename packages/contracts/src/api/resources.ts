@@ -409,6 +409,7 @@ export const RepositoryOptionSchema = Type.Object(
   {
     repositoryRef: RepositoryBindingSelectionSchema.properties.repositoryRef,
     displayName: Name,
+    description: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
     allowedProfiles: Type.Array(RepositoryBindingSelectionSchema.properties.profile, {
       minItems: 1,
       maxItems: 16,
@@ -520,7 +521,13 @@ export const BackendListResponse = Type.Object(
 );
 
 export const RepositoryOptionListResponse = Type.Object(
-  { data: Type.Array(RepositoryOptionSchema, { maxItems: 1000 }), meta: Meta },
+  {
+    data: Type.Array(RepositoryOptionSchema, { maxItems: 1000 }),
+    meta: Type.Object(
+      { ...Meta.properties, descriptionsPending: Type.Boolean() },
+      { additionalProperties: false },
+    ),
+  },
   { additionalProperties: false },
 );
 

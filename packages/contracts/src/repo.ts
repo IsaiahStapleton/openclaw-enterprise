@@ -34,6 +34,13 @@ export interface RepositoryOption {
   readonly repositoryRef: string;
   readonly displayName: string;
   readonly allowedProfiles: readonly string[];
+  /** Optional provider-supplied plain text; selection never depends on its availability. */
+  readonly description?: string;
+}
+
+export interface RepositoryOptions {
+  readonly options: readonly RepositoryOption[];
+  readonly descriptionsPending: boolean;
 }
 
 export interface AdmittedRepositoryBinding extends RepositoryBindingSelection {
@@ -75,7 +82,10 @@ export type OpenRepositorySessionResult =
 export interface RepoDriver extends Driver {
   readonly capability: "repo";
   readonly maintenanceIntervalMs: number;
-  listOptions(input: { readonly namespaceId: string }): readonly RepositoryOption[];
+  listOptions(input: {
+    readonly namespaceId: string;
+    readonly descriptionRefs?: readonly string[];
+  }): Promise<RepositoryOptions>;
   resolve(input: {
     readonly namespaceId: string;
     readonly bindings: readonly RepositoryBindingRequest[];

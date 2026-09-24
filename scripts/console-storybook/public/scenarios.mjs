@@ -192,7 +192,7 @@ const pluginDiscoveryGap =
 const repositoryOptionsPath =
   "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/repository-options";
 const account = [{ selector: ".account-toggle", click: true }];
-const devdayRepositorySelector = 'input[value="openclaw/openclaw-enterprise"]';
+const devdayRepositorySelector = 'input[data-repository-ref="openclaw/openclaw-enterprise"]';
 const createSlackBotSecret = [
   { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
   { selector: "#create-slack-bot-token-value", value: "simulated-bot-token" },
@@ -1007,13 +1007,65 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: 'button[data-add="application"]', click: true },
-      { selector: 'button[data-add="handbook"]', click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
       { selector: "#repository-default-git-read", click: true },
     ],
     description:
       "Two approved repositories inherit Read-only access. Expand a repository header to customize its access; an explicit override stays fixed when the Agent default changes.",
     gap: "An operator supplies Namespace approvals, GitHub App configuration, credential service, compatible runtime images, and network policy. Repository grants do not change Harness filesystem or approval policy.",
+  },
+  createRepositoriesDetails: {
+    group: "Pages/Create Agent",
+    name: "Repository descriptions and selection",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: 'input[data-repository-ref="design-system"]', click: true },
+    ],
+    repositoryOptions: [
+      {
+        repositoryRef: "application",
+        displayName: "example/application",
+        description: "The application and services used by the team.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "design-system",
+        displayName: "example/design-system",
+        description: "Shared components and styles for product interfaces.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "handbook",
+        displayName: "example/handbook",
+        description: "Guides and operating practices for the team.",
+        allowedProfiles: ["git-read"],
+      },
+      {
+        repositoryRef: "prod-infra",
+        displayName: "example/infrastructure",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "web",
+        displayName: "example/web",
+        description: "The public website and documentation.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+    ],
+    description:
+      "Adjacent selected repositories share a highlighted surface. Descriptions are optional; select or clear a repository with its checkbox or row.",
+  },
+  createRepositoriesDescriptionsPending: {
+    group: "Pages/Create Agent",
+    name: "Repository descriptions loading",
+    path: create,
+    actions: repositoryForm,
+    repositoryDescriptionsPending: true,
+    description:
+      "Repository choices are usable while descriptions load. Descriptions appear without changing selections or moving focus.",
   },
   createRepositoriesContributor: {
     group: "Pages/Create Agent",
@@ -1021,7 +1073,7 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: 'button[data-add="application"]', click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
       { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
       { selector: "#repository-default-issues", click: true },
@@ -1035,7 +1087,7 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: 'button[data-add="application"]', click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
       { selector: "#repository-default-git-full", click: true },
     ],
     description:
@@ -1056,7 +1108,7 @@ export const scenarios = {
         })),
         description:
           count <= 5
-            ? "A small catalog shows compact Add controls for approved repositories and their references. Access inherits the Agent default."
+            ? "A small catalog shows selectable approved repositories and their references. Access inherits the Agent default."
             : "Search and six initial repository choices keep a large catalog bounded. Browse all uses pages of twenty; selected repositories have their own access settings.",
       },
     ]),
@@ -1088,11 +1140,11 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: 'button[data-add="application"]', click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
       { selector: '[aria-label="Access for example/application"]', click: true },
       { selector: "#repository-inherit-application", click: true },
       { selector: "#repository-default-git-read", click: true },
-      { selector: 'button[data-add="handbook"]', click: true },
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
     ],
     description:
       "The application keeps custom Contributor access while the handbook inherits Read-only. The broader exception remains explicit beside the default.",
@@ -1101,7 +1153,10 @@ export const scenarios = {
     group: "Pages/Create Agent",
     name: "Repair a restricted repository",
     path: create,
-    actions: [...repositoryForm, { selector: 'button[data-add="handbook"]', click: true }],
+    actions: [
+      ...repositoryForm,
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
+    ],
     description:
       "A repository restricted to Read-only remains expanded. The operator must explicitly repair the selection before saving.",
   },
@@ -1168,7 +1223,7 @@ export const scenarios = {
     ],
     actions: [
       ...repositoryForm,
-      { selector: 'button[data-add="application"]', click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
       { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
       { selector: "#repository-default-issues", click: true },
