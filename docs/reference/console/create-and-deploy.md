@@ -1,9 +1,9 @@
 # Create and deploy Agents in the console
 
-Use the [platform console](../console.md) to create an Agent and start first-time
-provisioning for supported Dedicated runtimes. On an existing Kubernetes Installation,
-start with [production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
-you need a ready Namespace and configured Secret storage. New tokens require
+Use the [platform console](../console.md) to create an Agent and provision supported
+Dedicated runtimes. On Kubernetes, check the
+[production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
+a ready Namespace and configured Secret storage. New tokens require
 Secret creation permission. First-time provisioning grants access to accepted
 Secret references; ordinary draft creation also requires permission to grant
 Agent key access. After deployment, [verify this same
@@ -49,12 +49,10 @@ Presets and edited Configuration JSON retain their settings.
    models must use the same supported provider and Harness. For custom settings,
    open **Advanced settings**. Selection changes preserve unrelated JSON edits;
    **Reset template** replaces them.
-5. Optional: under **Repository access**, select up to 16 repositories approved
-   for this Namespace and set their access levels. Kubernetes supports Codex
-   (Dedicated) or OpenClaw (Embedded),
-   without a Sandbox Driver. Use Codex when this Agent needs Slack. Leave every
-   repository unselected for an ordinary Agent without
-   repository access.
+5. Under **Repository access**, optionally select up to 16 approved repositories
+   and set their access levels. Kubernetes supports Codex (Dedicated) or OpenClaw
+   (Embedded), without a Sandbox Driver. Use Codex for Slack. Leave repositories
+   unselected to create an ordinary Agent without repository access.
 
 6. If you need Slack, use OpenAI with the **Codex** harness and its channel card.
    Each token menu lets you select a readable Namespace Secret or **Create new Secret...**.
@@ -148,7 +146,7 @@ Repository discovery is independent of model authentication. Select up to 16 app
 repositories. Small catalogs offer **Add**; larger ones support search and paging.
 Suggestions prefer repositories recently saved in this browser for your identity and
 Namespace; unsaved selections do not change that history. Other suggestions sort
-alphabetically, as do all suggestions without browser storage.
+alphabetically, including when browser storage is unavailable.
 
 **Default repository access** starts at **Contributor** for code pushes, PRs,
 and issue management. Choose **Read-only**, or customize Contributor to turn off

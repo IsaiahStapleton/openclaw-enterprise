@@ -10,6 +10,24 @@ const MAX_SELECTED = 16;
 const PAGE_SIZE = 20;
 const RECENT_LIMIT = 32;
 
+function repositoryIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.6");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute(
+    "d",
+    "M5 4.5h12.5A1.5 1.5 0 0 1 19 6v13H7a2 2 0 0 1-2-2V4.5Zm0 12.5a2 2 0 0 1 2-2h12M9 8h6",
+  );
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return element("span", { className: "repository-icon", "aria-hidden": "true" }, svg);
+}
+
 function recentRepositories(key) {
   if (!key) {
     return [];
@@ -393,26 +411,42 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       searchState,
     );
     results.replaceChildren();
-    if (!small) {
-      results.append(
+    if (state.discovery !== "ready" || !state.options.length) {
+      return;
+    }
+    results.append(
+      element(
+        "div",
+        { className: "repository-results-heading" },
+        element("h3", {}, "Approved repositories"),
         element(
           "p",
           { className: "hint", role: "status" },
           query
             ? `${matches.length} matching ${matches.length === 1 ? "repository" : "repositories"}`
-            : !searchState.browsing && matches.some((entry) => recent.includes(entry.repositoryRef))
-              ? `Recently used · ${state.options.length} repositories available`
-              : `${state.options.length} repositories available`,
+            : !small &&
+                !searchState.browsing &&
+                matches.some((entry) => recent.includes(entry.repositoryRef))
+              ? `Recently used · ${state.options.length} total`
+              : `${state.options.length} total`,
         ),
-      );
-    }
+      ),
+    );
     for (const entry of visible) {
       const selected = state.selected.has(entry.repositoryRef);
       const addButton = button(selected ? "Added" : "Add", () => add(entry.repositoryRef), {
+        className: "repository-add",
         "aria-label": `${selected ? "Added" : "Add"} ${entry.displayName}`,
         "data-add": entry.repositoryRef,
         disabled: !editable() || selected || state.selected.size >= MAX_SELECTED,
       });
+      addButton.prepend(
+        element(
+          "span",
+          { className: "repository-add-symbol", "aria-hidden": "true" },
+          selected ? "✓" : "+",
+        ),
+      );
       addButton.addEventListener("keydown", (event) => {
         if (!["ArrowUp", "ArrowDown"].includes(event.key)) {
           return;
@@ -429,18 +463,18 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       results.append(
         element(
           "div",
-          { className: "repository-result" },
+          { className: selected ? "repository-result is-added" : "repository-result" },
+          repositoryIcon(),
           element(
             "div",
             { className: "repository-identity" },
             element("strong", {}, entry.displayName),
-            element(
-              "span",
-              { className: "hint" },
-              entry.allowedProfiles.every((p) => p === "git-read")
-                ? "Read-only approved"
-                : entry.repositoryRef,
-            ),
+            entry.displayName === entry.repositoryRef
+              ? null
+              : element("span", { className: "hint" }, `Reference: ${entry.repositoryRef}`),
+            entry.allowedProfiles.every((p) => p === "git-read")
+              ? element("span", { className: "repository-approval" }, "Read-only approved")
+              : null,
           ),
           addButton,
         ),
@@ -555,7 +589,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         },
       );
       const remove = button(
-        "×",
+        "Remove",
         () => {
           if (state.disabled) {
             return;
@@ -581,7 +615,12 @@ export function createRepositoryFields(context, onChange, initial = {}) {
           element("strong", {}, label),
           element(
             "span",
-            { id: `repository-summary-${ref}`, className: invalid(ref) ? "error" : "hint" },
+            {
+              id: `repository-summary-${ref}`,
+              className: invalid(ref)
+                ? "repository-access-summary is-error"
+                : "repository-access-summary",
+            },
             accessSummary(ref, override),
           ),
         ),

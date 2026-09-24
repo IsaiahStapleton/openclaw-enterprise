@@ -1055,8 +1055,8 @@ export const scenarios = {
         })),
         description:
           count <= 5
-            ? "A small catalog offers direct Add actions without search. Access inherits the Agent default."
-            : "Search and six initial suggestions keep a large catalog bounded. Browse all uses pages of twenty.",
+            ? "A small catalog shows each approved repository and its reference with a direct Add action. Access inherits the Agent default."
+            : "Search and six initial repository cards keep a large catalog bounded. Browse all uses pages of twenty; selected repositories have their own access cards.",
       },
     ]),
   ),

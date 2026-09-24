@@ -13,7 +13,6 @@ import {
   CodexPluginDriver,
   OCCPluginDriver,
 } from "../../apps/controller/src/drivers/plugin/index.ts";
-import { secretIdForBinding } from "../../apps/controller/src/console/agents/credentials.mjs";
 import {
   WORKSPACE_DEFAULTS,
   WORKSPACE_DEFAULTS_ID,
@@ -2362,6 +2361,8 @@ for (const count of [1, 5, 25, 140]) {
     await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
     await page.getByRole("button", { name: "Start without Preset" }).click();
     await page.getByRole("button", { name: "Add example/repository-001", exact: true }).waitFor();
+    await page.getByRole("heading", { name: "Approved repositories" }).waitFor();
+    await page.getByText("Reference: repository-001", { exact: true }).waitFor();
     assert.equal(
       await page.locator("#repository-results button[data-add]").count(),
       Math.min(count, 6),
@@ -2396,6 +2397,10 @@ for (const count of [1, 5, 25, 140]) {
       await page
         .getByRole("button", { name: "Added example/repository-025", exact: true })
         .waitFor();
+      assert.equal(
+        await page.getByRole("button", { name: "Added example/repository-025" }).isDisabled(),
+        true,
+      );
       await page.getByRole("button", { name: "Remove example/repository-025" }).click();
       await search.fill("");
     }
@@ -2442,6 +2447,54 @@ for (const count of [1, 5, 25, 140]) {
     }
   });
 }
+
+test("Repository cards distinguish names, references, and restricted access", async (t) => {
+  const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) => [
+    {
+      repositoryRef: "application",
+      repositoryId: "1900",
+      repository: "example/application",
+      namespaces: [{ namespaceId, profiles: ["git-read", "git-write", "git-full"] }],
+    },
+  ]);
+  const { page } = await newPage(t, fixture);
+  await page.route(`**/namespaces/${namespace.id}/agents/repository-options`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [
+          {
+            repositoryRef: "example/application",
+            displayName: "example/application",
+            allowedProfiles: ["git-read", "git-write", "git-full"],
+          },
+          {
+            repositoryRef: "handbook",
+            displayName: "example/handbook",
+            allowedProfiles: ["git-read"],
+          },
+        ],
+      }),
+    }),
+  );
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  const application = page.locator(".repository-result").filter({ hasText: "example/application" });
+  const handbook = page.locator(".repository-result").filter({ hasText: "example/handbook" });
+  await application.getByRole("button", { name: "Add example/application" }).waitFor();
+  assert.equal(await application.getByText(/Reference:/).count(), 0);
+  await handbook.getByText("Reference: handbook", { exact: true }).waitFor();
+  await handbook.getByText("Read-only approved", { exact: true }).waitFor();
+  await handbook.getByRole("button", { name: "Add example/handbook" }).click();
+  await page.getByText("Choose approved access", { exact: true }).waitFor();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Access for example/handbook" })
+      .getAttribute("aria-expanded"),
+    "true",
+  );
+});
 
 test("Agent repository pagination keeps focus when every result on a page is selected", async (t) => {
   const { fixture, namespace } = await createRepositoryLaunchFixture(t, (namespaceId) =>
