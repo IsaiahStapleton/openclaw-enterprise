@@ -160,7 +160,8 @@ must equal its pre-provisioned Kubernetes namespace, so OCC uses a stable
 
 The Kubernetes development profile acts as the operator for its disposable
 cluster. `OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell` installs one pinned Gateway
-in `openshell-system` with workspace resources disabled. The helper renders the
+beside the OCE control plane in `oce-system`, with workspace resources disabled.
+The upstream Agent Sandbox controller remains in `agent-sandbox-system`. The helper renders the
 pinned `openshell-workspace` chart once and stores its namespace-agnostic
 resources in the trusted Installation configuration. For every OCC Namespace,
 the Driver applies those resources before creating its Workspace through the

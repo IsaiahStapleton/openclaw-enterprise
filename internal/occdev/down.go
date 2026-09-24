@@ -71,7 +71,7 @@ func Down(ctx context.Context, opts Options) error {
 		}
 		r.env["KUBECONFIG"] = filepath.Join(directory, "kubeconfig")
 		r.engine = state.ContainerEngine
-		if r.engine == "podman" {
+		if r.engine == "podman" && state.DeploymentMode == "" {
 			provider, err := exec.LookPath("podman-compose")
 			if err != nil {
 				return err
@@ -93,6 +93,19 @@ func Down(ctx context.Context, opts Options) error {
 }
 func (r *runner) cleanup(ctx context.Context, s *developmentState, clusterAttempted bool) error {
 	var failures []error
+	if s.DeploymentMode == "k3d" {
+		if clusterAttempted {
+			exists, err := r.clusterExists(ctx, s.Cluster)
+			if err != nil {
+				failures = append(failures, err)
+			} else if exists {
+				if err := r.run(ctx, "k3d", "cluster", "delete", s.Cluster); err != nil {
+					failures = append(failures, err)
+				}
+			}
+		}
+		return errors.Join(failures...)
+	}
 	// Stop reconcilers before removing their cluster and database. Continue after failures to reclaim what we can.
 	if err := r.compose(ctx, s, "stop", "controller", "worker-kubernetes"); err != nil {
 		failures = append(failures, err)

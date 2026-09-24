@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
-updated: "2026-09-23"
-last_updated_session: "authoring-run/dc7a0b75-945c-4091-8600-eb919ad138dd"
+updated: "2026-09-24"
+last_updated_session: "authoring-run/3903cc3f-3260-4dfa-9706-5d622cb9e151"
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -16,16 +16,18 @@ workspace-chart resources, and creates or adopts an OpenShell Workspace with
 the same physical name. Managed mode is recognized but fails before mutation.
 Sandbox requests are homed in the operator-mode Workspace.
 
-The regular Agent workflow currently stops before Sandbox creation because
-OpenShell `v0.1.0-pre.7` cannot accept the required Secret-backed environment or
-projected workload identity.
+The regular Agent workflow with stock OpenShell currently stops before Sandbox
+creation because `v0.1.0-pre.7` cannot accept the required Secret-backed
+environment or projected workload identity. The verification-only compatibility
+path stages those inputs without changing the production fail-closed contract
+and completes a real model turn inside the Sandbox.
 
-The local Kubernetes development profile installs the pinned Gateway chart in
-`openshell-system`, renders the pinned workspace chart into the Installation
-configuration, and lets the Driver reconcile those resources in every
-Compute-created namespace. It proves the real Workspace through the Gateway API
-and the same supported fail-closed Agent path; it does not use the CI-only
-compatibility projection.
+The local Kubernetes development profile installs PostgreSQL, the OCE Helm
+release, and the pinned Gateway chart in `oce-system`. It renders the pinned
+workspace chart into the Installation configuration and lets the Driver
+reconcile those resources in every Compute-created namespace. It proves the
+real Workspace through the Gateway API and the same supported fail-closed Agent
+path; it does not use the verification-only compatibility projection.
 
 ## Entry Points
 
@@ -42,28 +44,70 @@ compatibility projection.
 
 ```mermaid
 graph TD
-  A["Worker reconciles Agent revision"] --> B["Kubernetes prepares Namespace isolation"]
-  B --> M{"Configured workspace mode"}
-  M -- "managed" --> X["Fail before Kubernetes<br/>or Gateway mutation"]
-  M -- "operator" --> C["Label namespace and reconcile<br/>rendered workspace-chart resources"]
-  C --> W["Check Gateway health, then create or adopt<br/>the owned OpenShell Workspace"]
-  W --> D["Compute derives dedicated Harness requirements"]
-  D --> E{"Requirements contain Secret-backed environment?"}
-  E -- "yes: regular Codex path" --> F["Driver rejects provisioning; candidate stays inactive"]
-  E -- "no" --> G["Client sends Sandbox request<br/>to the Namespace Workspace"]
-  G --> K{"Gateway supports exact identity and mounts?"}
-  K -- "no: stock pre.7" --> F
-  K -. "yes: compatibility proof" .-> H["Create Sandbox and expose app-server port"]
-  H --> L["OpenShell returns gateway-routed service URL"]
-  L --> M["Test observes protected 401 after OpenShell strips authorization"]
-  M --> N["Test runs authenticated model turn on Sandbox loopback"]
-  H --> I["Compute waits for provider Harness readiness"]
-  I --> J["Revision cleanup deletes the Sandbox"]
-  J --> N["Namespace cleanup deletes the Workspace"]
-  N --> O["Compute deletes the Kubernetes namespace"]
+  A["<b>Reconcile revision</b><br/>Worker selects Drivers"] --> B["<b>Prepare Namespace</b><br/>Kubernetes isolation"]
+  B --> C{"<b>Workspace mode</b><br/>Installation setting"}
+  C -- "managed" --> X["<b>Reject configuration</b><br/>Before mutation"]
+  C -- "operator" --> D["<b>Reconcile resources</b><br/>Labels and workspace chart"]
+  D --> E["<b>Own Workspace</b><br/>Create or adopt"]
+  E --> F["<b>Derive Harness</b><br/>Compute requirements"]
+  F --> G{"<b>Secret environment</b><br/>Required by Codex?"}
+  G -- "yes" --> R["<b>Reject provisioning</b><br/>Candidate stays inactive"]
+  G -- "no" --> H["<b>Create Sandbox</b><br/>Workspace and exposure"]
+  H --> I{"<b>Native projections</b><br/>Supported?"}
+  I -- "no: stock pre.7" --> R
+  I -. "verification bridge" .-> J["<b>Sandbox ready</b><br/>App-server route"]
+  J --> K["<b>Verify route</b><br/>Protected 401"]
+  K --> L["<b>Run model turn</b><br/>Sandbox loopback"]
+  J --> M["<b>Wait for Harness</b><br/>Compute readiness"]
+  M --> N["<b>Delete Sandbox</b><br/>Revision cleanup"]
+  N --> O["<b>Delete Workspace</b><br/>Namespace cleanup"]
+  O --> P["<b>Delete Namespace</b><br/>Compute cleanup"]
+
+  classDef state fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
+  classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
+  classDef gate fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
+  classDef blocked fill:#F3F4F6,stroke:#98A2AE,color:#44505F,stroke-width:1px
+  class A,B,F state
+  class D,E,H,J,K,L,M,N,O,P operation
+  class C,G,I gate
+  class X,R blocked
+  linkStyle default stroke:#8B949E,stroke-width:1px
 ```
 
 ## Execution Trace
+
+### 0. Create the Kubernetes-only development control plane
+
+`scripts/dev-up`, `internal/occdev/openshell_k3d.go:upOpenShellK3d`,
+`internal/occdev/openshell.go:prepareOpenShell`,
+`internal/occdev/kubernetes.go:writeInstallation`
+
+The environment selects Kubernetes Compute and OpenShell. `scripts/dev-up`
+validates that combination and delegates lifecycle ownership to `occ dev up`.
+The CLI records the exact engine endpoint, cluster,
+platform Namespace, API port, and key destination before creating resources.
+It creates k3d without a Compose network, imports the OCE controller, Agent
+runtime, PostgreSQL, and three OpenShell images, and resolves their in-cluster
+digests.
+
+`installKubernetesControlPlane` creates protected PostgreSQL and bootstrap PVCs,
+runs migration and bootstrap through the production OCE Helm chart, and deploys
+the API and worker in `oce-system`. The Installation selects in-cluster
+Kubernetes authentication and the central Gateway's ClusterIP DNS name. A
+labeled development proxy is the API NetworkPolicy's only local client; k3d
+publishes its NodePort on host loopback. A separate development NetworkPolicy
+admits only the worker-to-Gateway port. Because the cluster is disposable, the
+helper also binds the Helm chart's tenant roles to the OCE service accounts for
+all Namespaces. A development ClusterRole lets the worker manage the workspace
+Role and RoleBinding, with `bind` and `escalate` limited to the pinned OpenShell
+workspace Role. Production retains operator-owned tenant-local RoleBindings.
+Startup copies the generated service key
+through a temporary PVC reader Pod, verifies it against the live Installation,
+and removes the reader.
+
+Cleanup validates the private state and recorded engine endpoint before deleting
+the named cluster. The Kubernetes-only state contains no Compose snapshot, and
+the cleanup path never calls a Compose provider.
 
 ### 1. Prepare the Namespace and OpenShell Workspace
 
@@ -132,6 +176,12 @@ mounted by Kubernetes Compute. Any request that reaches
 the gateway without those shapes still fails closed. Any other gateway failure
 also prevents readiness.
 
+For private node routing, OpenShell's policy proxy opens the connection from its
+supervisor Pod rather than the Harness Pod. The Helm-owned Envoy NetworkPolicy
+therefore admits supervisor Pods only from tenant namespaces bearing the exact
+Gateway attachment label. OpenShell still restricts the destination and calling
+binary through the Sandbox network policy.
+
 ### 5. Observe readiness or clean up
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:prepareRevision`
@@ -153,10 +203,11 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Debugging and Verification
 
-- `./scripts/openshell test` prepares or reuses the owned pre.7 environment and
-  runs the verification-only compatibility path. `./scripts/openshell info`
-  reports its non-secret cluster state, and `./scripts/openshell down` removes
-  only resources recorded by that helper.
+- `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell ./scripts/dev-up`
+  creates the reusable Kubernetes-only development environment: PostgreSQL, the
+  Helm-installed OCE control plane, and the central Gateway share `oce-system`;
+  tenant resources remain in OCC-owned Namespaces. `scripts/dev-down` removes
+  only the recorded cluster and private state.
 - `node --test tests/integration/ci-openshell.test.mjs` checks bootstrap safety
   and immutable Helm image value rendering without selecting a real cluster.
 - `node --test tests/integration/sandbox-driver-startup.test.mjs` checks Driver
@@ -175,9 +226,12 @@ Kubernetes Compute delete the Kubernetes namespace.
   Sandbox exposes its app-server port at create time. The test observes the
   protected app server's `401` response because pre.7 strips its bearer header,
   then runs the real model and tool checks from inside the Pod. This mode proves
-  pre.7 containment, exposed-route reachability, and lifecycle behavior. It does
-  not prove native workload projection, an authenticated model turn through the
-  exposed route, or production Compute gateway-to-agent routing.
+  pre.7 containment, the Compute-created node route, Helm NetworkPolicy
+  enforcement, exposed-route reachability, and lifecycle behavior. It does not
+  prove native workload projection or an authenticated model turn through the
+  exposed route. The tested runtime image pins OpenClaw `2026.9.6` because the
+  workspace-node entrypoint uses `--pair-if-needed` and `--commands`; earlier
+  2026.9 releases do not provide both options.
 - `OpenShell v0.1.0-pre.7 cannot receive secretKeyRef environment ...` identifies
   the current fail-closed boundary.
 
@@ -194,6 +248,9 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Changelog
 
+- 2026-09-24 07:02: Consolidated reusable OpenShell startup and cleanup under the common development scripts. (authoring-run/3903cc3f-3260-4dfa-9706-5d622cb9e151 - d972d1ac64847c428ba334a7c12b6ddf4fefb317)
+- 2026-09-24 06:37: Documented the verified pre.7 model-turn path, the OpenShell supervisor-to-Envoy policy boundary, and the required workspace-node CLI flags. (authoring-run/c524c9aa-b229-42cf-9bc8-b47f7a92075e - d972d1ac64847c428ba334a7c12b6ddf4fefb317)
+- 2026-09-23 10:48: Combined the operator Workspace lifecycle with pre.7 create-time service exposure and clarified the stock fail-closed versus CI compatibility paths. (authoring-run/9b10135a-a94c-4761-9e07-6c49b19f7c90 - 10d8805b0b3a52d87febc4ba9b923eb569d046ff)
 - 2026-09-22 17:19: Corrected the pre.7 service-routing boundary: the route reaches the protected app server, but OpenShell strips its bearer authorization, so the real model turn stays on the authenticated Sandbox loopback endpoint. (authoring-run/df798764-b1d9-4722-bccb-4ffe2bbb2980 - a9965e452145e2a5b9677338e75ef008fdf10e06)
 - 2026-09-22 16:45: Documented pre.7 create-time app-server exposure, stable Create replay, and the gateway-routed real model turn. (authoring-run/aa808c3e-483e-408b-8915-7017b839c09a - f2b14314188ab7aecdbcbfb465c92868cb4f73a1)
 - 2026-09-23 01:52: Documented explicit managed/operator selection and Driver-owned workspace-chart reconciliation before operator Workspace creation. (authoring-run/dc7a0b75-945c-4091-8600-eb919ad138dd - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)

@@ -117,7 +117,11 @@ func (r *runner) prepareOpenShell(ctx context.Context, state *developmentState, 
 		return nil, err
 	}
 	assets := &openShellDevelopmentAssets{gatewayChart: gatewayChart}
-	assets.workspaceResources, err = r.renderOpenShellWorkspaceResources(ctx, workspaceChart)
+	gatewayNamespace := openShellGatewayNamespace
+	if state.PlatformNamespace != "" {
+		gatewayNamespace = state.PlatformNamespace
+	}
+	assets.workspaceResources, err = r.renderOpenShellWorkspaceResources(ctx, workspaceChart, gatewayNamespace)
 	if err != nil {
 		return nil, err
 	}
@@ -139,14 +143,14 @@ func (r *runner) prepareOpenShell(ctx context.Context, state *developmentState, 
 	return assets, nil
 }
 
-func (r *runner) renderOpenShellWorkspaceResources(ctx context.Context, chart string) ([]any, error) {
+func (r *runner) renderOpenShellWorkspaceResources(ctx context.Context, chart, gatewayNamespace string) ([]any, error) {
 	output, err := r.output(
 		ctx,
 		"helm", "template", "openshell-workspace", chart,
 		"--namespace", "openclaw-workspace-template",
 		"--set-string=fullnameOverride=openshell-workspace",
 		"--set-string=gateway.serviceAccount.name="+openShellGatewayService,
-		"--set-string=gateway.serviceAccount.namespace="+openShellGatewayNamespace,
+		"--set-string=gateway.serviceAccount.namespace="+gatewayNamespace,
 		"--set-string=gateway.networkPolicy.podSelector.app\\.kubernetes\\.io/instance="+openShellGatewayService,
 		"--set-string=sandboxServiceAccount.name=openshell-sandbox",
 	)
@@ -478,8 +482,10 @@ func (r *runner) waitForOpenShellNamespace(ctx context.Context, timeout time.Dur
 }
 
 func (r *runner) installOpenShellGateway(ctx context.Context, state *developmentState, assets *openShellDevelopmentAssets, namespace string, timeout time.Duration) error {
-	if err := r.run(ctx, "kubectl", "create", "namespace", namespace); err != nil {
-		return err
+	if _, err := r.output(ctx, "kubectl", "get", "namespace", namespace); err != nil {
+		if err := r.run(ctx, "kubectl", "create", "namespace", namespace); err != nil {
+			return err
+		}
 	}
 	if err := r.ensureOpenShellJWTSecret(ctx, state, namespace); err != nil {
 		return err
@@ -500,8 +506,11 @@ func (r *runner) installOpenShellGateway(ctx context.Context, state *development
 		"--set=image.pullPolicy=Never",
 		"--set=sandboxRuntime.image.pullPolicy=Never",
 		"--set=supervisor.image.pullPolicy=Never",
-		"--set=service.type=NodePort",
-		fmt.Sprintf("--set=service.nodePort=%d", openShellNodePort),
+	}
+	if state.DeploymentMode == "k3d" {
+		values = append(values, "--set=service.type=ClusterIP")
+	} else {
+		values = append(values, "--set=service.type=NodePort", fmt.Sprintf("--set=service.nodePort=%d", openShellNodePort))
 	}
 	for _, selected := range []struct{ prefix, image string }{
 		{"image", assets.gatewayImage},
@@ -515,12 +524,14 @@ func (r *runner) installOpenShellGateway(ctx context.Context, state *development
 	if err := r.run(ctx, "helm", args...); err != nil {
 		return err
 	}
-	data, err := r.output(ctx, "kubectl", "get", "service", openShellGatewayService, "--namespace", namespace, "-o", "jsonpath={.spec.ports[0].nodePort}")
-	if err != nil {
-		return err
-	}
-	if string(data) != fmt.Sprint(openShellNodePort) {
-		return fmt.Errorf("OpenShell gateway did not retain its development NodePort")
+	if state.DeploymentMode != "k3d" {
+		data, err := r.output(ctx, "kubectl", "get", "service", openShellGatewayService, "--namespace", namespace, "-o", "jsonpath={.spec.ports[0].nodePort}")
+		if err != nil {
+			return err
+		}
+		if string(data) != fmt.Sprint(openShellNodePort) {
+			return fmt.Errorf("OpenShell gateway did not retain its development NodePort")
+		}
 	}
 	return nil
 }

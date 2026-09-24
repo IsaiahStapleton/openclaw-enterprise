@@ -129,19 +129,18 @@ import, authenticated readiness, and cleanup through the recorded engine.
 
 ### 5. Prepare the optional OpenShell development profile
 
+`internal/occdev/openshell_k3d.go:upOpenShellK3d`,
 `internal/occdev/openshell.go:prepareOpenShell`,
 `apps/controller/src/drivers/sandbox/openshell.ts:ensureNamespace`
 
-The OpenShell selection pins its K3s node, AdmissionConfiguration, RuntimeClass,
-Agent Sandbox controller, Gateway and workspace charts, and three OpenShell
-images. The host installs one Gateway in `openshell-system` with operator
-workspace mode. The worker creates the owned bootstrap Kubernetes Namespace
-through the regular Compute workflow. The host renders the workspace chart into
-the Installation configuration, and the Sandbox Driver applies its resources
-and operator label before creating the corresponding Gateway Workspace. The
-Gateway NodePort is reachable only over the shared Compose network. Startup
-waits until the OCC Namespace becomes ready. A dedicated Codex deployment still
-rejects unsupported Secret projection before OpenShell creates a Sandbox.
+OpenShell branches into the Kubernetes-only lifecycle before Compose rendering.
+It pins K3s and OpenShell inputs, installs PostgreSQL, OCE, and one central
+Gateway in `oce-system`, and publishes only an admitted API proxy on host
+loopback. The worker creates the bootstrap Namespace through the regular Compute
+workflow. The Sandbox Driver applies rendered workspace resources and the
+operator label before creating the corresponding Gateway Workspace. Startup
+waits until the OCC Namespace becomes ready. See the
+[OpenShell flow](openshell-sandbox-provisioning.md#create-the-kubernetes-only-development-control-plane).
 
 ## Debugging and Verification
 
@@ -154,7 +153,7 @@ rejects unsupported Secret projection before OpenShell creates a Sandbox.
   report Kubernetes Compute, a private kubeconfig, and the disposable k3d
   context; it does not mount the engine socket into the Kubernetes worker.
 - With `OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell`, startup should also report
-  OpenShell, one ready `openshell-system/openshell-gateway` Service, the
+  Kubernetes-only deployment, one ready `oce-system/openshell-gateway` Service, the
   `openshell-sandbox` RuntimeClass, the Agent Sandbox CRD, and workspace
   resources in the bootstrap Namespace. The selected real dev-up case also
   reads the owned Workspace through the Gateway API. This proves infrastructure

@@ -489,6 +489,8 @@ if (command === "docker") {
   } else if (args[0] === "exec" && args.includes("images")) {
     if (args.includes("list")) output([
       "docker.io/library/openclaw-enterprise-runtime:kubernetes-quickstart application/vnd.oci.image.manifest.v1+json sha256:" + "a".repeat(64),
+      "docker.io/library/openclaw-enterprise-controller:kubernetes-quickstart application/vnd.oci.image.manifest.v1+json sha256:" + "b".repeat(64),
+      "docker.io/openclaw-development/import-b9b4e5950649:occ-dev-owned application/vnd.oci.image.manifest.v1+json sha256:" + "c".repeat(64),
       "docker.io/openclaw-development/openshell-gateway:occ-dev-owned application/vnd.oci.image.manifest.v1+json sha256:0d58d9bb9fbad1f5bceafaea0f5af2e57e9b520809fef85cfc6d10027f095bba",
       "docker.io/openclaw-development/openshell-sandbox:occ-dev-owned application/vnd.oci.image.manifest.v1+json sha256:6b133b8e97083f6e6218811401b6c1e11d127484c83c3818730f9cd465146c2f",
       "docker.io/openclaw-development/openshell-supervisor:occ-dev-owned application/vnd.oci.image.manifest.v1+json sha256:40febe95703b2a810f264003499a8e094de7c54020328d17c1c0279b4e09e6f9",
@@ -523,6 +525,15 @@ if (command === "docker") {
 } else if (command === "kubectl") {
   if (args.includes("get") && args.includes("--raw=/version")) {}
   else if (args[0] === "apply" || args[0] === "rollout" || args[0] === "create" || args[0] === "patch") {}
+  else if (args[0] === "get" && args[1] === "namespace") output(JSON.stringify({ metadata: { name: args[2] } }));
+  else if (args[0] === "-n" && args.includes("wait")) {}
+  else if (args[0] === "-n" && args.includes("rollout")) {}
+  else if (args[0] === "-n" && args.includes("delete")) {}
+  else if (args[0] === "-n" && args.includes("exec")) output(JSON.stringify({ data: { id: "key_fixture", key: ${JSON.stringify(serviceKey)} }, meta: { installationId: ${JSON.stringify(matchingInstallationId)} } }));
+  else if (args[0] === "-n" && args.includes("pod") && args.includes("bootstrap-password-prepare")) output("Succeeded");
+  else if (args[0] === "-n" && args.includes("pod") && args.includes("postgres")) output("10.42.0.20");
+  else if (args[0] === "-n" && args.includes("endpoints") && args.includes("kubernetes") && args.includes("jsonpath={.subsets[0].ports[0].port}")) output("6443");
+  else if (args[0] === "-n" && args.includes("endpoints") && args.includes("kubernetes")) output("10.43.0.1");
   else if (args[0] === "get" && args[1] === "service" && args[2] === "kubernetes") output(JSON.stringify({ spec: { clusterIP: "10.43.0.1" } }));
   else if (args[0] === "get" && args[1] === "endpoints" && args[2] === "kubernetes") output(JSON.stringify({ subsets: [{ addresses: [{ ip: "172.30.41.4" }] }] }));
   else if (args[0] === "get" && args[1] === "namespaces") output(JSON.stringify({ items: [{ metadata: { name: "oce-123456789012345", labels: { "openclaw.dev/namespace": "namespace_fixture" }, annotations: { "openclaw.dev/namespace-id": "namespace_fixture" } } }] }));

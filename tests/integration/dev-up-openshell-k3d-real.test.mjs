@@ -14,6 +14,8 @@ import { GrpcOpenShellGatewayClient } from "../../apps/controller/src/drivers/sa
 const execute = promisify(execFile);
 const repository = resolve(import.meta.dirname, "../..");
 const occ = join(repository, "bin", "occ");
+const devUp = join(repository, "scripts", "dev-up");
+const devDown = join(repository, "scripts", "dev-down");
 const selected = process.env.OCC_TEST_DEV_UP_OPENSHELL_REAL === "1";
 
 async function unusedPort() {
@@ -121,19 +123,15 @@ test(
     const stateDirectory = join(root, "state");
     const suffix = randomUUID().slice(0, 8);
     const cluster = `occ-dev-openshell-${suffix}`;
-    const project = `oce_dev_openshell_${suffix}`;
     const apiPort = await unusedPort();
     const kubernetesPort = await unusedPort();
-    const postgresPort = await unusedPort();
     const environment = {
       ...process.env,
       OPENCLAW_DEV_PORT: String(apiPort),
-      OCC_POSTGRES_PORT: String(postgresPort),
       OCC_DEVELOPMENT_COMPUTE_DRIVER: "kubernetes",
       OCC_DEVELOPMENT_SANDBOX_DRIVER: "openshell",
       OCC_DEVELOPMENT_CONTAINER_ENGINE: process.env.OCC_TEST_DEV_UP_CONTAINER_ENGINE ?? "docker",
       OCC_DEVELOPMENT_STATE_DIRECTORY: stateDirectory,
-      OCC_DEVELOPMENT_COMPOSE_PROJECT: project,
       OCC_DEVELOPMENT_KUBERNETES_CLUSTER: cluster,
       OCC_DEVELOPMENT_KUBERNETES_API_PORT: String(kubernetesPort),
       OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT:
@@ -150,7 +148,7 @@ test(
         if (!(await exists(stateDirectory))) {
           return;
         }
-        await execute(occ, ["dev", "down"], {
+        await execute(devDown, [], {
           cwd: repository,
           env: environment,
           timeout: 300_000,
@@ -161,7 +159,7 @@ test(
       }
     });
 
-    const result = await execute(occ, ["dev", "up"], {
+    const result = await execute(devUp, [], {
       cwd: repository,
       env: environment,
       timeout: 1_100_000,
@@ -175,6 +173,9 @@ test(
     const state = JSON.parse(await readFile(join(stateDirectory, "state.json"), "utf8"));
     assert.equal(state.cluster, cluster);
     assert.equal(state.sandboxDriver, "openshell");
+    assert.equal(state.deploymentMode, "k3d");
+    assert.equal(state.platformNamespace, "oce-system");
+    assert.equal(await exists(join(stateDirectory, "compose.yaml")), false);
     const kubectl = [
       "--kubeconfig",
       join(stateDirectory, "kubeconfig"),
@@ -207,7 +208,7 @@ test(
             "service",
             "openshell-gateway",
             "--namespace",
-            "openshell-system",
+            "oce-system",
             "-o",
             "json",
           ],
@@ -219,8 +220,38 @@ test(
         )
       ).stdout,
     );
-    assert.equal(service.spec.type, "NodePort");
-    assert.equal(service.spec.ports.find(({ name }) => name === "grpc")?.nodePort, 30051);
+    assert.equal(service.spec.type, "ClusterIP");
+    for (const [component, selector] of [
+      ["PostgreSQL", "app=postgres"],
+      ["OCE API", "app.kubernetes.io/component=api"],
+      ["OCE worker", "app.kubernetes.io/component=worker"],
+    ]) {
+      const pods = JSON.parse(
+        (
+          await execute(
+            "kubectl",
+            [
+              ...kubectl,
+              "get",
+              "pods",
+              "--namespace",
+              "oce-system",
+              "--selector",
+              selector,
+              "--output",
+              "json",
+            ],
+            { cwd: repository, env: environment, maxBuffer: 4 * 1024 * 1024 },
+          )
+        ).stdout,
+      );
+      assert.equal(pods.items.length, 1, `${component} must have one Pod`);
+      assert.equal(pods.items[0].status.phase, "Running", `${component} Pod must be running`);
+      assert.ok(
+        pods.items[0].status.containerStatuses?.every(({ ready }) => ready),
+        `${component} containers must be ready`,
+      );
+    }
     await execute(
       "kubectl",
       [...kubectl, "get", "serviceaccount", "openshell-sandbox", "--namespace", namespace],
@@ -234,6 +265,22 @@ test(
       cwd: repository,
       env: environment,
     });
+    for (const name of [
+      "openclaw-development-tenant-worker",
+      "openclaw-development-openshell-workspace-rbac",
+      "openclaw-development-tenant-configuration",
+      "openclaw-development-tenant-secrets",
+    ]) {
+      await execute("kubectl", [...kubectl, "get", "clusterrolebinding", name], {
+        cwd: repository,
+        env: environment,
+      });
+    }
+    await execute(
+      "kubectl",
+      [...kubectl, "get", "clusterrole", "openclaw-development-openshell-workspace-rbac"],
+      { cwd: repository, env: environment },
+    );
 
     // The namespace is not ready until the Sandbox Driver has created and
     // adopted its corresponding Gateway Workspace through the real gRPC API.
@@ -244,7 +291,7 @@ test(
         ...kubectl,
         "port-forward",
         "--namespace",
-        "openshell-system",
+        "oce-system",
         "service/openshell-gateway",
         `${gatewayPort}:8080`,
       ],

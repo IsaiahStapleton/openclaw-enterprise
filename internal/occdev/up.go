@@ -28,6 +28,9 @@ func Up(ctx context.Context, opts Options) (result error) {
 	if sandboxDriver != "none" && sandboxDriver != "openshell" {
 		return fmt.Errorf("OCC_DEVELOPMENT_SANDBOX_DRIVER must be none or openshell")
 	}
+	if sandboxDriver == "openshell" {
+		return upOpenShellK3d(ctx, opts)
+	}
 	timeout, err := positiveSetting(r, "OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS", 300, 86400)
 	if err != nil {
 		return err
@@ -60,11 +63,6 @@ func Up(ctx context.Context, opts Options) (result error) {
 	for _, name := range []string{"k3d", "kubectl"} {
 		if _, err := exec.LookPath(name); err != nil {
 			return fmt.Errorf("%s is required on PATH", name)
-		}
-	}
-	if sandboxDriver == "openshell" {
-		if _, err := exec.LookPath("helm"); err != nil {
-			return fmt.Errorf("helm is required on PATH for OpenShell development")
 		}
 	}
 	if err := r.selectEngine(ctx, r.setting("OCC_DEVELOPMENT_CONTAINER_ENGINE", "auto")); err != nil {

@@ -34,7 +34,9 @@ function hash(value) {
 }
 
 function gatewayHostname(platformNamespace) {
-  return `occ-gateway-${hash(`${platformNamespace}/${gatewayName}`)}.${envoyNamespace}.svc`;
+  return `occ-gateway-${hash(
+    `${platformNamespace}/${gatewayName}`,
+  )}.${envoyNamespace}.svc.cluster.local`;
 }
 
 async function command(
@@ -66,6 +68,7 @@ async function renderGatewayRoutingManifests({
   releaseNamespace,
   apiKeySecretName,
   gatewayClassName,
+  hostname,
 }) {
   const { stdout } = await command(
     helmBin,
@@ -85,6 +88,8 @@ async function renderGatewayRoutingManifests({
       `gatewayRouting.gatewayClassName=${gatewayClassName}`,
       "--set",
       `gatewayRouting.envoyNamespace=${envoyNamespace}`,
+      "--set",
+      `gatewayRouting.hostname=${hostname}`,
       "--set",
       `gatewayRouting.apiKeySecretName=${apiKeySecretName}`,
       "--set",
@@ -157,6 +162,7 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
     releaseNamespace: platformNamespace,
     apiKeySecretName,
     gatewayClassName,
+    hostname: gatewayHostname(platformNamespace),
   });
   registerRenderedExternalCleanup(context, gatewayRoutingManifests, platformNamespace, helpers);
   await helpers.applyManifest(gatewayRoutingManifests);
@@ -178,6 +184,7 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
       gatewayName,
       gatewayNamespace: platformNamespace,
       envoyNamespace,
+      hostname: gatewayHostname(platformNamespace),
     },
     nativeOptions: {
       gatewayAuth: {
