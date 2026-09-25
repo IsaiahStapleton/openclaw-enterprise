@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
 updated: 2026-09-25
-last_updated_session: 01a0d5ee-ab06-7571-8d4a-9ae0f33d5737
+last_updated_session: 01a0d5e6-743e-7743-8a5e-2d8c24b78b81
 ---
 
 # Console Agent editing and runtime requests
@@ -110,16 +110,19 @@ references, wildcard channel maps, mixed Slack mention settings, mixed channel
 sender lists, sender IDs that cannot be represented in a comma-separated field,
 and unsupported plugin shapes.
 
-`apps/controller/src/console/channels/slack.mjs:appendFields` renders channel
-sender access separately from direct-message access. Existing `users: ["*"]`,
-empty `users`, or omitted `users` on supported channel entries check **Allow
-everyone in these channels to mention the agent**; explicit Slack user IDs fill
-the **Allowed channel user IDs** input. The input disables the everyone checkbox
-while it contains IDs, and the checkbox disables the input while selected.
-**Require a mention** reads `requireMention` and stays independent.
-`updatedSlack` writes `users: ["*"]` or the explicit user ID list onto each
-selected channel entry while copying unrelated per-channel properties, `dmPolicy`,
-`groupPolicy`, `allowFrom`, token references, and unrelated Secret bindings.
+`apps/controller/src/console/channels/slack.mjs:appendFields` separates channel
+senders from DMs. Wildcard, empty, or omitted channel `users` selects **Allow
+everyone**; explicit IDs fill the mutually exclusive user input. Mention
+requirements remain independent. `updatedSlack` replaces selected channels'
+`users`, preserving unrelated settings and bindings.
+
+The DM selector preserves omitted policies on existing configurations; new setup
+starts with Allowlist. `validate` rejects empty/wildcard DM allowlists and
+unsupported organization-wide policies. Selecting Open writes `allowFrom: ["*"]`;
+leaving it for Allowlist or Pairing clears the wildcard input. Untouched lists
+and native `dm.enabled` remain unchanged. Configuration save persists the
+selection; redeployment applies it. See
+[Slack policies](../../reference/configuration/secrets.md#native-channel-configuration).
 
 `apps/controller/src/console/agents/detail.mjs:renderAgentDetail` passes the
 selected Namespace, saved Secret bindings, and draft Credentials URL to the
@@ -318,6 +321,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-25 01:15: Trace DM policy selection, sender validation, and organization-wide restrictions. (01a0d5e6-743e-7743-8a5e-2d8c24b78b81 - 919f92c3bb3ea63acf7042b138e9a0c6e1d97719)
 
 - 2026-09-25 00:24: Trace authentication Secret grants, partial-save recovery, and persistent deployment errors in the accompanying change. (01a0d5ee-ab06-7571-8d4a-9ae0f33d5737 - 5f2f3a7448c7f5f0f4a5ed08be2395f2c5623ed7)
 - 2026-09-24 22:03: Trace shared document-local drafts, navigation capture, explicit discard, and retained save baselines. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)

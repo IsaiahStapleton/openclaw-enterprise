@@ -7332,3 +7332,22 @@ test("runtime image provenance survives missing metadata but never crosses Pod o
     );
   }
 });
+
+// This checks the native document rendered by Compute, not live Slack delivery.
+test("gateway configuration preserves Slack reply modes and native overrides", () => {
+  const driver = createKubernetesComputeDriver(options());
+  for (const policy of [
+    {},
+    { replyToModeByChatType: { channel: "all" }, dmPolicy: "disabled" },
+    { replyToMode: "off" },
+    {
+      replyToMode: "all",
+      replyToModeByChatType: { direct: "off", channel: "first" },
+      channels: { CEXAMPLE: { replyToMode: "off" } },
+    },
+  ]) {
+    const configuration = { channels: { slack: { enabled: true, mode: "socket", ...policy } } };
+    const rendered = driver.kubernetesGatewayConfigurationDocument(configuration);
+    assert.deepEqual(rendered.channels, configuration.channels);
+  }
+});

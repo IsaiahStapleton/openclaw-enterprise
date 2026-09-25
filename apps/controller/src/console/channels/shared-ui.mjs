@@ -295,6 +295,7 @@ function openDrawer(section, state, provider, retained) {
   const config = isRecord(support.config) ? support.config : {};
   const drawerContext = {
     ...state.drawerContext,
+    isConfigured: providerConfig(state.values, provider.id) !== undefined,
     secretBindings:
       state.drawerContext.secretBindings === undefined
         ? undefined
