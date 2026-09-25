@@ -1415,6 +1415,10 @@ test(
             namespaceSelector: { matchLabels: { "openclaw-enterprise.io/gateway": label } },
             podSelector: { matchLabels: { "openclaw.dev/workload-role": "agent" } },
           },
+          {
+            namespaceSelector: { matchLabels: { "openclaw-enterprise.io/gateway": label } },
+            podSelector: { matchLabels: { "openshell.ai/boundary-role": "supervisor" } },
+          },
         ],
         ports: [{ protocol: "TCP", port: 10443 }],
       },

@@ -13,6 +13,18 @@ occ_cli="$repo_root/bin/occ"
 cd "$repo_root"
 
 development_compute_driver="${OCC_DEVELOPMENT_COMPUTE_DRIVER:-docker}"
+development_sandbox_driver="${OCC_DEVELOPMENT_SANDBOX_DRIVER:-none}"
+case "$development_sandbox_driver" in
+  none | openshell) ;;
+  *)
+    echo "dev-up: configuration failed: OCC_DEVELOPMENT_SANDBOX_DRIVER must be none or openshell" >&2
+    exit 2
+    ;;
+esac
+if [ "$development_sandbox_driver" = openshell ] && [ "$development_compute_driver" != kubernetes ]; then
+  echo "dev-up: configuration failed: OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell requires OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes" >&2
+  exit 2
+fi
 case "$development_compute_driver" in
   docker) ;;
   kubernetes)

@@ -82,7 +82,8 @@ These settings belong to the checkout's development stack. See
 for supported engines, images, and security restrictions.
 
 - `OCC_DEVELOPMENT_COMPUTE_DRIVER` — `docker` (default) or `kubernetes`; only the Kubernetes quickstart can deploy Agents.
-- `OCC_DEVELOPMENT_CONTAINER_ENGINE` — `auto` (default), `docker`, or `podman`.
+- `OCC_DEVELOPMENT_SANDBOX_DRIVER` — `none` (default) or `openshell`; OpenShell requires Kubernetes Compute and selects the Kubernetes-only local profile.
+- `OCC_DEVELOPMENT_CONTAINER_ENGINE` — `auto` (default), `docker`, or `podman`; the OpenShell profile uses it only for k3d and image operations.
 - `OPENCLAW_DEV_PORT` — Published API port on host loopback; default: `3000`.
 - `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` — Compose bridge allowed to reach the development API.
 - `OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR` — Single private forwarding IP; supplied automatically for rootful macOS Podman.
@@ -90,13 +91,20 @@ for supported engines, images, and security restrictions.
 - `OCC_DOCKER_RUNTIME_IMAGE` — Shared image for the Docker gateway and Agent; may replace the two separate images.
 - `OCC_DOCKER_GATEWAY_IMAGE` — Docker gateway image when a shared image is not used.
 - `OCC_DOCKER_AGENT_IMAGE` — Docker Codex Agent image when a shared image is not used.
-- `OCC_KUBERNETES_RUNTIME_IMAGE` — Existing local Kubernetes runtime image; otherwise the helper builds its default image.
+- `OCC_KUBERNETES_RUNTIME_IMAGE` — Existing local Kubernetes runtime image; otherwise each startup rebuilds the default from the checkout.
+- `OCC_DEVELOPMENT_CONTROLLER_IMAGE` — Existing local OCE controller image for the Kubernetes-only OpenShell profile; otherwise each startup rebuilds it from the checkout.
+- `OCC_DEVELOPMENT_POSTGRES_IMAGE` — Existing local PostgreSQL image for the Kubernetes-only OpenShell profile; defaults to the pinned PostgreSQL 18.6 image.
+- `OCC_DEVELOPMENT_NODE_BASE_IMAGE` — Immutable Node 24 base used only when building the OpenShell profile's OCE controller image.
 - `OCC_DEVELOPMENT_STATE_DIRECTORY` — Private Kubernetes profile state; default: `/tmp/openclaw-development`. Use the same value for cleanup.
-- `OCC_DEVELOPMENT_COMPOSE_PROJECT` — Kubernetes profile's Compose project; default: `openclaw-enterprise-development-kubernetes`.
+- `OCC_DEVELOPMENT_COMPOSE_PROJECT` — Ordinary Kubernetes profile's Compose project; default: `openclaw-enterprise-development-kubernetes`. The OpenShell profile does not use Compose.
+- `OCC_DEVELOPMENT_KUBERNETES_NAMESPACE` — OpenShell profile's platform Namespace; default: `oce-system`.
 - `OCC_DEVELOPMENT_KUBERNETES_CLUSTER` — Disposable k3d cluster; default: a generated name beginning with `occ-dev-`.
-- `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` — Kubernetes profile startup timeout; default: `300` seconds per wait.
+- `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` — Kubernetes profile startup timeout; default: `300` seconds per wait, or `600` for OpenShell.
 - `OCC_DEVELOPMENT_KUBERNETES_API_PORT` — Local Kubernetes API port; default: `6443`.
 - `OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT` — Disposable cluster disk-pressure threshold; default: `5`.
+- `OCC_DEVELOPMENT_OPENSHELL_HELM_CHART` — Optional absolute OpenShell Gateway chart directory or archive; set it together with the workspace chart override.
+- `OCC_DEVELOPMENT_OPENSHELL_WORKSPACE_HELM_CHART` — Optional absolute OpenShell workspace chart directory or archive; set it together with the Gateway chart override.
+- `OCC_DEVELOPMENT_OPENSHELL_AGENT_SANDBOX_MANIFEST` — Optional absolute Agent Sandbox manifest; otherwise the helper downloads its checksum-verified pinned manifest.
 - `OCC_CONTAINER_ENGINE_SOCKET` — Podman API socket; the development helper supplies it automatically.
 - `DOCKER_HOST`, `DOCKER_CONTEXT` — Docker endpoint or named context; an explicit context takes precedence. The Kubernetes profile requires a local `unix:///` socket and records the selected endpoint.
 - `CONTAINER_CONNECTION`, `CONTAINER_HOST` — Podman's connection selection; preserved during Docker-profile cleanup when Podman is the engine.

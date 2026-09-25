@@ -17,7 +17,9 @@ implementation, so native project names, profiles, and override files keep
 their normal precedence. This trace covers the default
 `OCC_DEVELOPMENT_COMPUTE_DRIVER=docker` path. Selecting `kubernetes` dispatches
 to the [local Kubernetes development profile](../../guides/deploy/local-kubernetes-development.md),
-which keeps OCC in Compose and uses k3d for Compute.
+which keeps OCC in Compose and uses k3d for Compute. That profile accepts
+`OCC_DEVELOPMENT_SANDBOX_DRIVER=none` or `openshell`; OpenShell is rejected
+with Docker Compute.
 
 The Docker Compute path first probes a running Docker Engine and the JSON
 configuration capability required from Docker Compose. If that probe fails, it
@@ -157,7 +159,8 @@ does not mount the configuration volume.
 `internal/occdev/command.go:pinEndpoint`,
 `internal/occdev/up.go:Up`.
 
-The Kubernetes lifecycle selects Docker or Podman, resolves the selected local
+The ordinary Kubernetes lifecycle, with no Sandbox Driver selected, chooses
+Docker or Podman, resolves the selected local
 Unix socket, and records it with the Compose project and generated `occ-dev-*`
 cluster name in a private state directory. Cleanup validates that state and
 reuses the recorded endpoint. Changing the active Docker context after startup
@@ -175,19 +178,26 @@ operator overrides the subnet. Startup and
 cleanup both use that snapshot, so later `.env` edits cannot change the saved
 project configuration.
 
+Selecting `OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell` branches before Compose
+rendering into `internal/occdev/openshell_k3d.go:upOpenShellK3d`. That profile
+uses the engine only for k3d and image operations; the
+[OpenShell provisioning flow](../openshell-sandbox-provisioning.md#0-create-the-kubernetes-only-development-control-plane)
+owns its Kubernetes-only control-plane sequence.
+
 ### 13. Bootstrap OCC, create k3d, and prepare runtime configuration
 
 `internal/occdev/up.go:Up`, `internal/occdev/up.go:waitCompleted`,
 `internal/occdev/kubernetes.go:writeKubeconfigs`,
 `internal/occdev/kubernetes.go:importRuntime`,
-`internal/occdev/kubernetes.go:writeInstallation`.
+`internal/occdev/kubernetes.go:writeInstallation`,
+`internal/occdev/openshell.go:prepareOpenShell`.
 
 Compose starts PostgreSQL, migration, and bootstrap. The lifecycle waits for
 successful migration and bootstrap exits before creating the dedicated k3d
-cluster on the Compose network. k3d resolves the latest K3s patch in the 1.35
-family, which matches the supported Kubernetes minimum. The cluster API binds
-host loopback; creation leaves the default kubeconfig and current context
-unchanged.
+cluster on the Compose network. The default Sandbox profile resolves the latest
+K3s patch in the 1.35 family, which matches the supported Kubernetes minimum.
+The cluster API binds host loopback; creation leaves the default kubeconfig and
+current context unchanged.
 
 The host kubeconfig remains owner-readable. The container kubeconfig uses the
 cluster's internal load-balancer hostname with TLS verification. The lifecycle
@@ -210,18 +220,18 @@ into the API and Kubernetes worker. Neither service receives the engine socket.
 The lifecycle starts the API and Kubernetes worker, waits for API health and
 worker readiness, copies bootstrap output to a private temporary file, and
 uses `occclient` to read the Installation. Its ID must match the bootstrap
-response before the final key file is written exclusively and readiness is
-reported. This hands an initialized profile to the operator; it does not prove
-Agent deployment or a model turn.
+response before the final key file is written exclusively.
 
 On failure, startup attempts resource cleanup. Explicit Kubernetes shutdown
 validates the marker, state, and Compose snapshot before using the recorded
 engine endpoint. Cleanup stops the API and worker before deleting the named
 k3d cluster and Compose project volumes. It continues cleanup after individual
 errors and retains state when any cleanup step fails. Complete cleanup removes
-the state directory and its helper-owned key; an external `--key-output` file
-remains operator-owned.
+the state directory and its helper-owned key. A successfully returned external
+`--key-output` file remains operator-owned; startup removes a newly written
+external key if a later OpenShell readiness step fails.
 
 ## Related
 
 - [Return to the parent flow](../docker-compose-development.md).
+- [OpenShell Sandbox provisioning](../openshell-sandbox-provisioning.md).

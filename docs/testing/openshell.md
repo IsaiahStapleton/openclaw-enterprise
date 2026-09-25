@@ -4,6 +4,62 @@ Verify provider-owned Codex execution and OpenShell filesystem and network
 enforcement. Prepare [credentials](README.md#requirements-and-credentials)
 and use the suite-specific infrastructure below.
 
+## Start a reusable development environment
+
+Use the [local Kubernetes OpenShell profile](../guides/deploy/local-kubernetes-development.md#start-the-openshell-fail-closed-profile)
+for an ordinary OpenClaw Enterprise development stack. That profile starts the
+real control plane, Gateway, and operator Workspaces. It prepares the supported
+fail-closed Agent path but does not create an Agent.
+
+Create the private Kubernetes-only OpenShell `v0.1.0-pre.7` environment from the
+repository root:
+
+```sh
+pnpm cli:build
+export OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes
+export OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell
+./scripts/dev-up
+```
+
+The launcher uses Docker or Podman only to host k3d and build or import images.
+PostgreSQL, the OCE API and worker, and OpenShell Gateway run inside the cluster.
+It leaves the environment running and does not change the default kubeconfig or
+context. No model credential is needed because stock pre.7 cannot run the
+regular Agent path.
+
+Stop the reusable environment before proving the setup and cleanup lifecycle in
+a separate fresh cluster:
+
+```sh
+./scripts/dev-down
+OCC_TEST_DEV_UP_OPENSHELL_REAL=1 \
+  node --test tests/integration/dev-up-openshell-k3d-real.test.mjs
+```
+
+The command verifies control-plane Pods, Workspace reconciliation, and cleanup;
+it does not use the compatibility bridge or perform a model turn. The reusable
+environment's startup output prints its API URL, kubeconfig, context, and
+service-key file without printing credential contents.
+
+The OpenShell CI lane runs this lifecycle through `scripts/dev-up` and
+`scripts/dev-down` before its credentialed Sandbox case.
+
+Remove the owned environment when finished:
+
+```sh
+./scripts/dev-down
+```
+
+Cleanup permanently deletes this helper's cluster and in-cluster database. A
+partial setup remains recorded for safe cleanup; run `down` before retrying. Set
+the absolute `OCC_DEVELOPMENT_STATE_DIRECTORY` before every command to keep
+multiple checkouts separate. Set `OCC_DEVELOPMENT_CONTAINER_ENGINE=docker` or
+`podman` when automatic engine selection is ambiguous.
+
+This launcher does not start a supported production Installation or an
+interactive OCC Agent. The credentialed compatibility experiment remains the
+separate real Sandbox suite below.
+
 ## OpenShell Sandbox
 
 This suite needs the owned OpenShell CI recipe: a disposable K3s v1.36.4 k3d
@@ -60,6 +116,13 @@ privileges, denied secret exposure, allowed and denied tool egress, replacement,
 and cleanup. It separately checks the OpenClaw Control Plane (OCC) Agent Service
 selector. Missing prerequisites fail rather than skip.
 
+Use an OCE runtime image built from the OpenClaw source commit pinned by
+`deploy/runtime/Dockerfile`. The test requires the workspace-node
+`--pair-if-needed` and `--commands` CLI options. The test configures
+the private Gateway with its fully qualified `.svc.cluster.local` hostname so
+OpenShell policy DNS, the listener certificate, the HTTPRoute, and node pairing
+use the same name.
+
 ### Test bridge and upstream prerequisite
 
 The integration uses an operator-owned Helm wrapper to install the OpenShell
@@ -71,8 +134,12 @@ workload identity through its gateway configuration.
 Positive mode bridges those shapes only inside this test. Its bootstrap Job
 mounts the production Secret references, immutable `runtime.json` and
 `config.toml` ConfigMap entries, and an audience-bound ServiceAccount token. It
-copies them into private PVC subpaths, and the compatibility request mounts
-those paths read-only in the Sandbox. OpenShell pre.7 also removes the
+copies them into private PVC subpaths. The compatibility request mounts the
+credentials, plugin runtime, and workload token read-only; revision-owned node
+state, runtime assets, and the Harness workspace remain writable. Helm permits
+the OpenShell supervisor Pod to reach Envoy only from the Gateway-attached
+tenant namespace because the supervisor owns the policy-enforced outbound
+socket. OpenShell pre.7 also removes the
 `Authorization` header before forwarding an exposed service request, while the
 Codex app server accepts only bearer authorization. The integration therefore
 proves exposed-route reachability and app-server rejection separately from its
@@ -84,6 +151,36 @@ and the [pre.5 experiment handoff](openshell-pre5-local-experiment.md).
 Local `sandbox-driver-startup`, `controller-lifecycle`, and
 `postgres-platform-state` integration tests cover driver selection, revision
 lifecycle, and persistence. They do not exercise these real OpenShell tools.
+
+### Development profile
+
+The opt-in development-profile integration installs PostgreSQL and OCE with
+Helm in the owned k3d cluster, installs the checksum-pinned OpenShell assets,
+and verifies the bootstrap Namespace, RuntimeClass, Agent Sandbox API,
+deployment Gateway, operator label, workspace ServiceAccount, and actual
+matching Workspace through the Gateway API. It then creates another
+OCC Namespace and verifies that the Driver applies the same ServiceAccount and
+creates its matching Workspace without another Helm release:
+
+```sh
+OCC_TEST_DEV_UP_OPENSHELL_REAL=1 \
+  node --test tests/integration/dev-up-openshell-k3d-real.test.mjs
+```
+
+The Driver, rather than a per-Namespace Helm release, applies the rendered
+workspace-chart resources before creating the Workspace. The case requires an
+executable checkout-local `bin/occ`, Docker or Podman, k3d, kubectl, Helm, and
+network access to the pinned sources and images. Set
+`OCC_TEST_DEV_UP_CONTAINER_ENGINE=podman` to select a prepared Podman engine.
+It creates unique cluster, state, API, and Kubernetes port names and removes
+only those resources. Missing selected prerequisites fail.
+
+This case proves development orchestration, the two real charts, Driver-owned
+operator resource reconciliation, and Gateway Workspace creation. It does not
+create an Agent or Sandbox. The
+`OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` real Sandbox Driver case remains the
+Agent-level proof that the ordinary dedicated Codex workflow rejects unsupported
+Secret projection without creating a Sandbox or Agent Pod.
 
 ## OpenShell test environment
 
