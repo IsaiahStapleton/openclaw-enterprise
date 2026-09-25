@@ -1,6 +1,6 @@
 # Unsaved Preset draft navigation evidence
 
-Tested Console source: `870708383a0484cb87254c9c5b1181201510cbea`.
+Tested Console source: `0a5e27d68655ca96c8e5fc5a533110f925a2e71f`.
 Environment: Linux, Node.js 26.5.0, Playwright 1.63.0, Chromium 153,
 1280 × 900 viewport. Storybook was rebuilt from this source.
 

@@ -1,6 +1,6 @@
 # Console draft navigation evidence
 
-Tested Console source: `870708383a0484cb87254c9c5b1181201510cbea`.
+Tested Console source: `0a5e27d68655ca96c8e5fc5a533110f925a2e71f`.
 Environment: Linux, Node.js 26.5.0, Playwright 1.63.0, Chromium 153,
 1280 × 900 viewport. Storybook was rebuilt from this source.
 
@@ -25,3 +25,12 @@ IAM with in-memory platform storage; workspace transport uses Agent-scoped local
 files. They check isolation, stale save baselines, explicit discard, and write
 outcome recovery. Existing permission-denied, missing-file, and uncertain-write
 Storybook previews were also checked in Chromium.
+
+Story: **Pages / Create Agent / Keep repository choices through an outage**
+(`pages-create-agent--repository-navigation-outage`).
+The [6-second recovery walkthrough](repository-outage.mp4) selects a repository
+and Contributor access, navigates away and back, then retries failed discovery.
+[During the outage](repository-outage.png), the form reports retained selections
+and blocks creation. [After retry](repository-recovered.png), the same repository
+and access level return. The browser regression additionally navigates twice
+through both 503 and 500 failures, then creates an Agent with its original bindings.
