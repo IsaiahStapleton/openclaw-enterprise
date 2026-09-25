@@ -321,7 +321,7 @@ test(
 );
 
 test(
-  "native Collector preserves Kubernetes identity and worker teardown correlation",
+  "native Collector preserves Kubernetes identity after a dropped record sharing Pod metadata",
   {
     skip: selected
       ? false
