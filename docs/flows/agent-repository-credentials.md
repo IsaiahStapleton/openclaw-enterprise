@@ -292,7 +292,8 @@ and terminal queue transitions persist exact revision-owned obligations. Termina
 revision work records the `terminal-runtime` purpose with its terminal transition,
 even when sessions are settled or no admission attempt exists.
 `RepositoryCredentialLifecycle.closeRevision` records session-only cleanup with
-the attempts it marks closing.
+the attempts it marks closing. Cleanup retries at the Driver interval without
+consuming Work retries.
 
 `ControllerWorker.processRepositoryCleanup` consumes validated owner-bound Work
 without policy resolution, admission or material delivery, even after the actor
