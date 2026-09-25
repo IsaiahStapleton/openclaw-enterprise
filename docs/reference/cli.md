@@ -70,7 +70,7 @@ ServiceAccounts and configured Providers; the CLI has no commands for these.
 Neither the CLI nor the HTTP API offers Configuration
 listing. An accepted deploy returns a revision; `agent get`
 shows desired state and the selected revision, not runtime health. Use the
-[deployment status command](#namespace-resources) and verify the model
+[deployment status command](#resource-commands) and verify the model
 separately.
 
 The `installation get`, `installation deployment-inventory`, and `namespace
