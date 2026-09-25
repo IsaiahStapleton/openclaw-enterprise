@@ -940,6 +940,57 @@ test(
 );
 
 test(
+  "optional model discovery grants only API HTTPS egress to configured hosts",
+  tooling,
+  async () => {
+    const name = "openclaw-enterprise-api-model-discovery-egress";
+    const defaults = await resources((await render()).stdout);
+    assert.ok(!defaults.some(({ metadata }) => metadata.name === name));
+    const objects = await resources(
+      (
+        await render({
+          "api.modelDiscoveryCidrs[0]": "198.51.100.25/32",
+          "api.modelDiscoveryCidrs[1]": "198.51.100.26/32",
+        })
+      ).stdout,
+    );
+    const policy = objects.find(
+      ({ kind, metadata }) => kind === "NetworkPolicy" && metadata.name === name,
+    );
+    assert.ok(policy, "configured discovery destinations must render an egress policy");
+    assert.deepEqual(policy.spec, {
+      podSelector: {
+        matchLabels: {
+          "app.kubernetes.io/name": "openclaw-enterprise",
+          "app.kubernetes.io/instance": "oce",
+          "app.kubernetes.io/component": "api",
+        },
+      },
+      policyTypes: ["Egress"],
+      egress: [
+        {
+          to: [
+            { ipBlock: { cidr: "198.51.100.25/32" } },
+            { ipBlock: { cidr: "198.51.100.26/32" } },
+          ],
+          ports: [{ protocol: "TCP", port: 443 }],
+        },
+      ],
+    });
+    for (const cidr of ["0.0.0.0/0", "198.51.100.0/24", "api.openai.com", "999.1.1.1/32"]) {
+      await assert.rejects(
+        render({ "api.modelDiscoveryCidrs[0]": cidr }),
+        /api.modelDiscoveryCidrs/,
+      );
+    }
+    await assert.rejects(
+      render({ "api.modelDiscoveryCidrs": "198.51.100.25/32" }),
+      /api.modelDiscoveryCidrs/,
+    );
+  },
+);
+
+test(
   "optional database CA Secret mounts into every production database client",
   tooling,
   async () => {
@@ -1235,7 +1286,9 @@ test(
     const serviceName = gatewayServiceName(gatewayNamespace, gatewayName);
     const hostname = defaultGatewayHostname(gatewayNamespace, gatewayName, envoyNamespace);
     const rootSecret = rootSecretName(gatewayNamespace, gatewayName);
-    const configured = await resources((await render(gatewayRoutingValues)).stdout);
+    const configured = await resources(
+      (await render({ ...gatewayRoutingValues, ...controlPlaneSelectorValues })).stdout,
+    );
     const alternateNamespace = "openclaw-alt";
     const alternateObjects = await resources(
       (await render(gatewayRoutingValues, { namespace: alternateNamespace })).stdout,
@@ -1297,6 +1350,10 @@ test(
     const envoyProxy = configured.find(({ kind }) => kind === "EnvoyProxy");
     assert.equal(envoyProxy.metadata.name, gatewayName);
     assert.equal(envoyProxy.metadata.namespace, gatewayNamespace);
+    // The credential-checking proxy must stay on the trusted control-plane pool.
+    assert.deepEqual(envoyProxy.spec.provider.kubernetes.envoyDeployment?.pod?.nodeSelector, {
+      "oce-role": "control",
+    });
     assert.deepEqual(envoyProxy.spec.provider.kubernetes.envoyService, {
       name: serviceName,
       type: "ClusterIP",
@@ -1570,6 +1627,7 @@ test(
       },
     });
     const envoyProxy = configured.find(({ kind }) => kind === "EnvoyProxy");
+    assert.equal(envoyProxy.spec.provider.kubernetes.envoyDeployment, undefined);
     assert.deepEqual(envoyProxy.spec.provider.kubernetes.envoyService, {
       name: serviceName,
       type: "ClusterIP",
