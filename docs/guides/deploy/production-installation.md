@@ -407,6 +407,10 @@ helm upgrade --install oce deploy/helm/openclaw-enterprise \
   --wait --timeout 5m
 ```
 
+For the [published chart](../../../.github/chart-publication.md#pull-and-install),
+replace the chart path with `oci://ghcr.io/openclaw/charts/openclaw-enterprise`
+and pass `--version "$OCE_VERSION"`. Authenticate Helm and verify the receipt first.
+
 Helm owns migration and bootstrap ordering through its initialization hook.
 Readiness covers the API and worker probes. It does not prove authenticated API
 access, Agent deployment, or a model turn.
