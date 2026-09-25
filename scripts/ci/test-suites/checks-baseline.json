@@ -161,6 +161,13 @@
       ]
     },
     {
+      "path": "tests/integration/first-agent-startup.test.mjs",
+      "expectedTests": [
+        "first-Agent accepts current Compose-backed Kubernetes development state",
+        "first-Agent rejects OpenShell development state before external calls"
+      ]
+    },
+    {
       "path": "tests/integration/compute-singleton-worker.test.mjs",
       "expectedTests": [
         "before-commit Compute Drivers must expose an activation operation",
