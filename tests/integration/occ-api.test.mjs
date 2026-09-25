@@ -1532,6 +1532,7 @@ test("Installation deployment inventory fails closed on incomplete authorization
           id: agent.id,
           status: "active",
           desiredRuntimeState: "running",
+          executionMode: "embedded",
           activeRevisionId: admitted.data.id,
           deploymentInProgress: false,
         },
@@ -1563,6 +1564,14 @@ test("Installation deployment inventory fails closed on incomplete authorization
       resourceKind: "agent",
       resourceId: agent.id,
       action: "deploy",
+      effect: "deny",
+    },
+    {
+      id: "deny-inventory-revision-read",
+      namespaceId: namespace.id,
+      resourceKind: "agent_revision",
+      resourceId: admitted.data.id,
+      action: "read",
       effect: "deny",
     },
   ]) {

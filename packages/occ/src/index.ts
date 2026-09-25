@@ -979,12 +979,18 @@ export class OpenClawController {
               id: agent.id,
               namespaceId: namespace.id,
             });
+            await this.authorize(principalId, "read", {
+              kind: "agent_revision",
+              id: agent.activeRevisionId,
+              namespaceId: namespace.id,
+            });
           }
           agents.push(
             Object.freeze({
               id: agent.id,
               status: agent.status,
               desiredRuntimeState: agent.desiredRuntimeState,
+              executionMode: agent.executionMode,
               ...(agent.activeRevisionId === undefined
                 ? {}
                 : { activeRevisionId: agent.activeRevisionId }),

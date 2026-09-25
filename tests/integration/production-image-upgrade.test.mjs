@@ -105,7 +105,7 @@ fi
     occ,
     `#!/usr/bin/env bash
 if [[ "$*" == *'deployment-inventory'* ]]; then
-  printf '%s\\n' '{"installationId":"ins_upgrade_test","namespaces":[{"id":"ns_test","status":"ready","agents":[{"id":"agt_test","status":"active","desiredRuntimeState":"running","activeRevisionId":"rev_test","deploymentInProgress":false}]}]}'
+  printf '%s\\n' '{"installationId":"ins_upgrade_test","namespaces":[{"id":"ns_test","status":"ready","agents":[]}]}'
 else
   printf '%s\\n' '{"id":"ins_upgrade_test"}'
 fi
@@ -141,6 +141,7 @@ fi
   await writeFile(liveInstallation, installationDocument, { mode: 0o600 });
   protectedFiles.values = join(directory, "values");
   protectedFiles.installation = join(directory, "installation");
+  await writeFile(protectedFiles.values, valuesDocument, { mode: 0o600 });
   await writeFile(protectedFiles.installation, installationDocument, { mode: 0o600 });
 
   const upgradeArguments = (evidenceDirectory) => [
@@ -177,6 +178,14 @@ fi
     PATH: `${bin}:/bin:/usr/bin`,
   };
 
+  await assert.rejects(
+    execute(upgradeScript, upgradeArguments(join(directory, "http-evidence")), {
+      cwd: repository,
+      env: { ...environment, OCC_URL: "http://occ.example.invalid" },
+    }),
+    /OCC_URL must use HTTPS/,
+  );
+
   // Refuse stale recovery input before rendering or mutating the release.
   await writeFile(
     protectedFiles.values,
@@ -212,13 +221,13 @@ fi
     (error) => {
       assert.equal(error.code, 47);
       assert.doesNotMatch(error.stderr, /must not grant group or other permissions/);
-      assert.doesNotMatch(error.stderr, /controller image already selects/);
       assert.doesNotMatch(error.stderr, /contains no running Agents/);
       return true;
     },
   );
 
   const readinessCounter = join(directory, "readiness-counter");
+  const runtimeCountCounter = join(directory, "runtime-count-counter");
   await writeFile(
     helm,
     `#!/usr/bin/env bash
@@ -239,9 +248,15 @@ case "$*" in
   *'openclaw.dev/installation-id'*) printf '%s\\n' "$CLUSTER_INSTALLATION_ID" ;;
   *'.installationId == '*) exit 0 ;;
   *'.deploymentInProgress'*|*'.activeRevisionId == null'*|*'.status != "ready"'*) exit 1 ;;
-  *'namespaceId: $namespace.id'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","baselineRevisionId":"rev_test"}' ;;
-  *'{namespaceId: $namespaceId'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","deploymentId":"rev_candidate"}' ;;
-  *'spec.containers'*'length'*) printf '2\\n' ;;
+  *'namespaceId: $namespace.id'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","executionMode":"dedicated","baselineRevisionId":"rev_test"}' ;;
+  *'{namespaceId: $namespaceId'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","executionMode":"dedicated","deploymentId":"rev_candidate"}' ;;
+  *'spec.containers'*'length'*)
+    attempts=0
+    [[ ! -f "$RUNTIME_COUNT_COUNTER" ]] || attempts=$(cat "$RUNTIME_COUNT_COUNTER")
+    attempts=$((attempts + 1))
+    printf '%s\\n' "$attempts" >"$RUNTIME_COUNT_COUNTER"
+    if ((attempts == 1)); then printf '1\\n'; else printf '2\\n'; fi
+    ;;
   *'all(.items[].spec.containers'*) exit 0 ;;
   *'.status.phase == "Running"'*)
     attempts=0
@@ -251,6 +266,7 @@ case "$*" in
     ((attempts >= 2))
     ;;
   *'.activeRevisionId'*) cat >/dev/null; printf 'rev_candidate\\n' ;;
+  *'.executionMode'*) cat >/dev/null; printf 'dedicated\\n' ;;
   *'.deploymentId'*) printf 'rev_candidate\\n' ;;
   *'.namespaceId'*) cat >/dev/null; printf 'ns_test\\n' ;;
   *'.agentId'*) cat >/dev/null; printf 'agt_test\\n' ;;
@@ -273,7 +289,7 @@ esac
     occ,
     `#!/usr/bin/env bash
 case "$*" in
-  *'deployment-inventory'*) printf '%s\\n' '{"installationId":"ins_upgrade_test","namespaces":[{"id":"ns_test","status":"ready","agents":[{"id":"agt_test","status":"active","desiredRuntimeState":"running","activeRevisionId":"rev_test","deploymentInProgress":false}]}]}' ;;
+  *'deployment-inventory'*) printf '%s\\n' '{"installationId":"ins_upgrade_test","namespaces":[{"id":"ns_test","status":"ready","agents":[{"id":"agt_test","status":"active","desiredRuntimeState":"running","executionMode":"dedicated","activeRevisionId":"rev_test","deploymentInProgress":false}]}]}' ;;
   *'agent deploy'*) printf '%s\\n' '{"id":"rev_candidate"}' ;;
   *'deployment-status'*) printf '%s\\n' '{"status":"succeeded"}' ;;
   *'agent get'*) printf '%s\\n' '{"activeRevisionId":"rev_candidate"}' ;;
@@ -289,11 +305,16 @@ esac
     upgradeArguments(join(directory, "ready-evidence")),
     {
       cwd: repository,
-      env: { ...environment, READINESS_COUNTER: readinessCounter },
+      env: {
+        ...environment,
+        READINESS_COUNTER: readinessCounter,
+        RUNTIME_COUNT_COUNTER: runtimeCountCounter,
+      },
     },
   );
   assert.match(completed.stdout, /1 running Agents selected new revisions/);
   assert.equal((await readFile(readinessCounter, "utf8")).trim(), "2");
+  assert.equal((await readFile(runtimeCountCounter, "utf8")).trim(), "3");
   assert.equal(
     (await readFile(join(directory, "ready-evidence", "installation-checksum"), "utf8")).trim(),
     "e".repeat(64),

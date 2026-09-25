@@ -11,10 +11,9 @@ Usage: scripts/upgrade-production-images \
   --source-revision FULL_GIT_SHA --evidence-dir NEW_DIRECTORY \
   [--occ PATH] [--timeout-seconds SECONDS]
 
-Replace the production controller/runtime image pair, restart the OCC control
-plane through Helm, then concurrently deploy every Agent that was running in
-the authenticated baseline inventory. OCC_URL, OCC_SERVICE_KEY_FILE, and
-OCC_CA_BUNDLE configure the OCC CLI connection.
+Update the production controller and runtime images, restart OCC through Helm,
+then redeploy every Agent that was running when the command began. OCC_URL,
+OCC_SERVICE_KEY_FILE, and OCC_CA_BUNDLE configure the OCC CLI connection.
 EOF
 }
 
@@ -125,6 +124,7 @@ require_private_file "$kubeconfig"
 require_private_file "$values"
 require_private_file "$installation"
 : "${OCC_URL:?Set OCC_URL to the trusted HTTPS OCC origin.}"
+[[ "$OCC_URL" == https://* ]] || die "OCC_URL must use HTTPS."
 : "${OCC_SERVICE_KEY_FILE:?Set OCC_SERVICE_KEY_FILE to a protected service-key response.}"
 require_private_file "$OCC_SERVICE_KEY_FILE"
 if [[ -n "${OCC_CA_BUNDLE:-}" ]]; then
@@ -226,13 +226,13 @@ jq -c '
   {
     namespaceId: $namespace.id,
     agentId: .id,
+    executionMode: .executionMode,
     baselineRevisionId: .activeRevisionId
   }
 ' "$inventory" >"$targets"
 
 target_count=$(wc -l <"$targets" | tr -d ' ')
 
-current_controller=$(yq -er '.images.controller' "$values")
 current_gateway=$(yq -er '.drivers.compute.configuration.images.gateway' "$installation")
 current_agent=$(yq -er '.drivers.compute.configuration.images.agent' "$installation")
 [[ "$runtime_image" != "$current_gateway" || "$runtime_image" != "$current_agent" ]] ||
@@ -317,11 +317,13 @@ deployments="$evidence_dir/deployments.jsonl"
 while IFS= read -r target; do
   namespace_id=$(jq -r '.namespaceId' <<<"$target")
   agent_id=$(jq -r '.agentId' <<<"$target")
+  execution_mode=$(jq -r '.executionMode' <<<"$target")
   output="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").json"
   deployment_id=$(jq -er '.id' "$output")
   jq -cn --arg namespaceId "$namespace_id" --arg agentId "$agent_id" \
-    --arg deploymentId "$deployment_id" \
-    '{namespaceId: $namespaceId, agentId: $agentId, deploymentId: $deploymentId}' >>"$deployments"
+    --arg executionMode "$execution_mode" --arg deploymentId "$deployment_id" \
+    '{namespaceId: $namespaceId, agentId: $agentId, executionMode: $executionMode, deploymentId: $deploymentId}' \
+    >>"$deployments"
 done <"$targets"
 
 pending=$target_count
@@ -351,16 +353,26 @@ done
 while IFS= read -r deployment; do
   namespace_id=$(jq -r '.namespaceId' <<<"$deployment")
   agent_id=$(jq -r '.agentId' <<<"$deployment")
+  execution_mode=$(jq -r '.executionMode' <<<"$deployment")
   deployment_id=$(jq -r '.deploymentId' <<<"$deployment")
+  case "$execution_mode" in
+    embedded) expected_runtime_count=1 ;;
+    dedicated) expected_runtime_count=2 ;;
+    *) die "Agent $agent_id returned unsupported execution mode $execution_mode." ;;
+  esac
   selected=$("${occ_json[@]}" --namespace "$namespace_id" agent get "$agent_id" | jq -er '.activeRevisionId')
   [[ "$selected" == "$deployment_id" ]] ||
     die "Agent $agent_id selected $selected instead of deployment $deployment_id."
   pods="$evidence_dir/status/$(json_file_name "$namespace_id--$agent_id--$deployment_id").pods.json"
   while true; do
-    "${kube[@]}" get pods --all-namespaces --selector "openclaw.dev/revision=$deployment_id" \
+    remaining_seconds=$((deadline - SECONDS))
+    ((remaining_seconds > 0)) ||
+      die "Agent $agent_id revision Pods did not become ready before the upgrade timeout."
+    "${kube[@]}" --request-timeout="${remaining_seconds}s" get pods --all-namespaces \
+      --selector "openclaw.dev/revision=$deployment_id" \
       --output json >"$pods"
     runtime_count=$(jq '[.items[].spec.containers[] | select(.name == "gateway" or .name == "agent")] | length' "$pods")
-    if ((runtime_count > 0)); then
+    if ((runtime_count == expected_runtime_count)); then
       jq -e --arg image "$runtime_image" '
         all(.items[].spec.containers[] | select(.name == "gateway" or .name == "agent"); .image == $image)
       ' "$pods" >/dev/null ||

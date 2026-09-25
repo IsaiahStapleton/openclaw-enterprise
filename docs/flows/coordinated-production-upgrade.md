@@ -1,180 +1,150 @@
 ---
 created: 2026-09-23
 updated: "2026-09-24"
-last_updated_session: "authoring-run/0fc7c19b-0e15-498c-8328-e436bc702f37"
+last_updated_session: "authoring-run/613d1e94-a661-4781-bae5-e28613aa3cf9"
 ---
 
 # Coordinated production image upgrade flow
 
 ## Overview
 
-An operator runs `scripts/upgrade-production-images` to replace the matched
-controller and runtime image pair for a production Kubernetes Installation.
-The script establishes a running-Agent baseline, which may be empty, lets Helm
-replace the OCC API and worker, then submits exact-Agent deployments
-concurrently and waits for all new revisions. The flow ends after image and
-deployment convergence; model, channel, and data-recovery proof remain operator
-checks.
+`scripts/upgrade-production-images` updates the production Helm release and then
+deploys a new revision for every Agent that was running when the command began.
+The flow ends when OCC and the selected Agent Pods are ready on the requested
+images. Model, channel, workspace, and restore checks remain operator tasks.
 
 ## Entry Points
 
-- Trigger: Run `scripts/upgrade-production-images` with explicit protected
-  inputs, image digests, source SHA, cluster selection, and evidence directory.
-- Required state: A healthy production Helm release, complete administrator
-  inventory, private API access, reviewed release companions, and no concurrent
-  upgrade or Agent draft edits.
+- Trigger: an operator runs `scripts/upgrade-production-images` with explicit
+  cluster, release, image, source, and protected-file inputs.
+- Required state: a healthy production Helm release, complete authorized fleet
+  inventory, matching OCC and Kubernetes Installation identity, and no Agent
+  deployment in progress.
 - Source: `scripts/upgrade-production-images`,
   `packages/occ/src/index.ts:OpenClawController.getInstallationDeploymentInventory`,
-  `deploy/helm/openclaw-enterprise/templates/deployments.yaml`, and
-  `packages/occ/src/index.ts:OpenClawController.deployAgent`.
+  and `packages/occ/src/index.ts:OpenClawController.deployAgent`.
 
 ## Flow
 
 ```mermaid
 graph TD
-    A["Operator supplies matched immutable images and protected inputs"] --> P{"Current OCC exposes complete inventory?"}
-    P -->|No| Q["Operator replaces only API and worker on the candidate controller digest"]
-    Q --> R["Verify controller digest, authentication, and inventory operation"]
-    R --> B["OCC authorizes Installation administration and exact access to the complete fleet"]
-    P -->|Yes| B
-    B --> U{"Authenticated OCC ID matches the live Installation Secret marker?"}
-    U -->|No| T
-    U -->|Yes| S{"Protected inputs match live state outside target image fields?"}
-    S -->|No| T["Preserve evidence and stop before mutation"]
-    S -->|Yes| C{"Inventory complete and free of nonterminal deployment work?"}
-    C -->|No| D["Reject the whole inventory and stop before mutation"]
-    C -->|Yes| E["Script records the baseline, renders the candidate, and runs Helm server-side dry run"]
-    E --> F["Update protected inputs and Installation startup Secret"]
-    F --> G["Helm replaces initialization, API, and worker on the controller digest"]
-    G --> H{"API and worker ready and authenticated?"}
-    H -->|No| I["Preserve evidence and stop before Agent fan-out"]
-    H -->|Yes| J["Submit exact-Agent deployments for the complete baseline concurrently"]
-    J --> K["Worker admits, prepares, and activates each immutable revision on the runtime digest"]
-    K --> L{"Every durable deployment succeeded?"}
-    L -->|No| M["Preserve partial results for forward repair or reviewed rollback"]
-    L -->|Yes| N["Confirm selected revisions and runtime Pod images"]
-    N --> O["Operator performs model, channel, workspace, and data checks"]
+    A["Validate protected inputs and target Installation"] --> B{"Complete inventory available?"}
+    B -->|No| C["Stop before mutation"]
+    B -->|Yes| D["Freeze running Agent baseline"]
+    D --> E["Render and server-side dry-run candidate"]
+    E --> F["Replace Installation Secret and run Helm"]
+    F --> G{"API and worker ready?"}
+    G -->|No| H["Stop before Agent deployment"]
+    G -->|Yes| I["Deploy every baseline Agent concurrently"]
+    I --> J{"All deployments and Pods ready?"}
+    J -->|No| K["Preserve partial results for recovery"]
+    J -->|Yes| L["Hand off runtime checks to operator"]
 ```
 
 ## Execution Trace
 
-### 1. Bootstrap the inventory operation when required
+### 1. Bootstrap complete inventory when required
 
-`docs/guides/deploy/production-upgrade.md:60`
+`docs/guides/deploy/production-upgrade.md:Adopt the inventory API once`
 
-An older controller cannot prove complete fleet visibility because its
-collection operations omit unauthorized resources. For first adoption, the
-operator performs a reviewed controller-only Helm upgrade while retaining the
-old Installation startup Secret and runtime images. The operator verifies the
-candidate controller digest, OCC authentication, and the complete-inventory
-operation before starting the coordinated command. This prerequisite is not an
-automatic fallback and does not redeploy Agents.
+An older controller cannot return a complete fleet inventory. For first adoption,
+the operator updates only the API and worker, leaving runtime configuration and
+Agent revisions unchanged. The coordinated command starts only after the new
+controller image, OCC authentication, and inventory operation are verified.
 
-### 2. Admit inputs and freeze the baseline
+### 2. Validate the target and freeze the fleet
 
 `packages/occ/src/index.ts:OpenClawController.getInstallationDeploymentInventory`
 
-The script requires owner-only kubeconfig, values, Installation, service-key,
-and optional CA files. It rejects mutable image tags, abbreviated source SHAs,
-an existing evidence path, and unavailable dependencies. It saves live and
-protected inputs before mutation. The live Installation startup Secret must
-carry the `openclaw.dev/installation-id` marker established after production
-bootstrap. The script requires that marker to equal the authenticated OCC
-Installation ID, binding API operations to the selected kube context and
-namespace. It then canonicalizes the protected and live Helm values without the
-controller image and the protected and live Installation configuration without
-the two runtime images. Any other difference stops the upgrade before rendering
-or mutation, so stale recovery files cannot overwrite live configuration.
+The script requires private protected files and immutable image references. It
+compares the authenticated OCC Installation ID with the marker on the live
+Installation Secret, then compares protected configuration with live Helm and
+Secret state while excluding only the image fields it owns.
 
-The script calls `occ installation deployment-inventory`. OCC requires
-Installation `administer`, then checks exact `read` access to every Namespace
-and Agent. It also checks exact `deploy` access for each eligible running Agent.
-Any denial fails the complete operation; it never becomes an omitted resource.
+OCC requires Installation `administer`, exact `read` access to every Namespace
+and Agent, exact `read` access to each selected Agent's active revision, and exact
+`deploy` access to every eligible running Agent. It fails the whole inventory
+when authorization or durable work data is incomplete. The operator's revision
+read grant must also cover each replacement revision so status polling can
+continue after deployment.
 
-OCC correlates every recorded Agent-revision operation with its durable work.
-Malformed or missing work fails the request. Queued and claimed work is marked
-in progress, and the script rejects the baseline before mutation when any such
-work exists. The target set freezes Agents that are active, desire `running`,
-have an active revision, and belong to a ready Namespace. A running Agent without
-an active revision also blocks the upgrade because initial deployment may still
-be in flight.
+The baseline includes active Agents that request `running`, have an active
+revision, and belong to a ready Namespace. Any nonterminal deployment, running
+Agent without a revision, or running Agent in an unready Namespace stops the
+command. Stopped and deleting Agents are excluded. An empty baseline is valid.
 
-### 3. Render the matched image candidate
+### 3. Build and validate the candidate
 
 `scripts/upgrade-production-images:188`
 
-The script writes the controller digest to candidate Helm values and one runtime
-digest to both Kubernetes Compute image slots. It hashes the complete candidate
-Installation file and writes that SHA-256 digest to
-`controlPlane.installationChecksum`. `helm template` and Kubernetes server-side
-dry run check the chart against the selected cluster before mutation. These
-checks establish structural rendering only; they do not prove image contents,
-startup, compatibility, or model behavior.
+The script writes the controller digest to candidate Helm values and the runtime
+digest to both Kubernetes Compute image fields. It hashes the complete candidate
+Installation document and places that checksum on both OCC Pod templates, so a
+runtime configuration change restarts the API and worker even when the controller
+digest is unchanged.
+
+`helm template` and Helm server-side dry run validate the chart against the
+selected cluster. They do not prove image contents, startup, compatibility, or
+model behavior.
 
 ### 4. Replace OCC through Helm
 
 `deploy/helm/openclaw-enterprise/templates/deployments.yaml:20`
 
-The script copies the admitted candidates to the protected operator inputs,
-replaces the Installation startup Secret, and invokes the canonical Helm chart.
-Helm runs its initialization hook and replaces API and worker Pods when either
-the controller image or Installation checksum changes. The checksum is a Pod
-template annotation, so a controller-only first adoption cannot prevent the
-later runtime configuration from restarting both processes. The script waits
-for rollout and verifies both named containers use the candidate digest before
-retrying authenticated Installation access. A failure here stops before Agent
-deployment fan-out.
+The script saves recovery inputs, updates the protected files, replaces the
+Installation Secret without losing its identity marker, and runs Helm. Helm owns
+initialization, database migration, and the OCC rollout.
 
-### 5. Fan out exact-Agent deployment
+The script waits for both Deployments and verifies their controller image before
+retrying authenticated OCC access. A failure stops the flow before Agent fan-out.
+
+### 5. Deploy the recorded fleet
 
 `internal/occcli/cli.go:application.agentCommand`
 
-The script starts every `occ agent deploy` request before waiting for any
-request process. OCC handles each as an independent exact-Agent mutation:
-`OpenClawController.deployAgent` authorizes the Agent and referenced resources,
-reads the current draft, freezes a new immutable revision, records attributable
-work, and returns its revision ID. Failed or unknown responses remain separate;
-the script never converts the group into one unauditable bulk mutation.
-An empty target set skips this fan-out and continues to final Helm evidence. It
-updates the persisted runtime selection but does not prove that runtime image
-can start.
+The script starts one ordinary `occ agent deploy` process for each baseline
+Agent before waiting for any process. Each request repeats exact-resource IAM,
+creates an immutable revision from the current draft, records durable work, and
+emits the normal deployment audit event.
 
-### 6. Fan in on durable results
+Responses remain separate. A failed or unknown response is never converted into
+a bulk success or automatically replayed.
+
+### 6. Wait for durable and runtime readiness
 
 `internal/occclient/client.go:Client.GetAgentDeployment`
 
-The `occ agent deployment-status` command reads the existing durable deployment
-resource. The script polls all returned revision IDs until each succeeds, one
-fails, or the shared timeout expires. It then verifies every Agent selected its
-returned revision and waits for every revision-labeled Pod to report `Running`
-and `Ready`. Gateway and Agent containers must use the runtime digest; a wrong
-image fails immediately, while missing or unready Pods share the bounded upgrade
-deadline. The script preserves before/after workload inventories and every
-response under the private evidence directory.
+The script polls every returned revision until all succeed, one fails, or the
+shared deadline expires. It then confirms that each Agent selected its returned
+revision and that revision-labeled Pods are `Running` and `Ready`. Gateway and
+Agent containers must use the candidate runtime digest. Embedded execution
+requires one gateway workload; dedicated execution requires both gateway and
+Agent workloads.
 
-### 7. Hand off runtime acceptance
+The evidence directory retains dispatch responses, durable status, Pod state,
+Helm status, and before/after workload inventories.
 
-`docs/guides/deploy/production-upgrade.md:96`
+### 7. Hand off application verification
 
-Script success proves Helm convergence, durable OCC deployment completion,
-active-revision selection, and observed container image references. The
-operator next proves fresh model responses, provider/channel behavior,
-credential boundaries, workspace continuity, native UI access, and any required
-restore capability. Those checks are intentionally outside automatic upgrade
-success.
+`docs/guides/deploy/production-upgrade.md:Verify the release`
+
+Command success proves image selection, Helm convergence, durable deployment
+completion, active revision selection, and Pod readiness. The operator next
+checks real model responses, providers, channels, credential delivery, workspace
+continuity, native access, and required restore behavior.
 
 ## Debugging and Verification
 
-- Inspect `server-dry-run.txt` for chart or admission failures before mutation.
-- Inspect `helm-upgrade.txt`, initialization Job logs, and API/worker rollout
-  status when OCC does not recover.
-- Inspect `dispatch/*.error`, revision history, and `status/*.json` before
-  deciding whether a failed or unknown Agent request can be retried.
-- Compare `before-workloads.json` and `after-workloads.json` for PVC identity and
-  untargeted workload changes.
-- Run the credentialed production Kubernetes integration with distinct old and
-  candidate image pairs for end-to-end proof. Source checks and mocked commands
-  do not establish a real upgrade.
+- Before mutation, inspect `server-dry-run.txt` for chart or admission failures.
+- For OCC rollout failures, inspect `helm-upgrade.txt`, initialization Job logs,
+  and API and worker rollout status.
+- For Agent failures, inspect `dispatch/*.error`, revision history, and
+  `status/*.json` before retrying anything.
+- Compare `before-workloads.json` and `after-workloads.json` for PVC continuity
+  and unexpected workload changes.
+- Use the credentialed production Kubernetes integration with distinct baseline
+  and candidate image pairs for end-to-end proof. Mocked commands prove only
+  script control flow.
 
 ## Related docs
 
@@ -192,6 +162,7 @@ success.
 
 ## Changelog
 
+- 2026-09-24 21:21: Separate operator instructions from the runtime trace; require revision-read admission, HTTPS, bounded Kubernetes reads, and the complete execution-mode workload set. (authoring-run/613d1e94-a661-4781-bae5-e28613aa3cf9 - c799988036f43ce1bb828373233f03cc77bb0ea9)
 - 2026-09-24: Record cluster/OCC identity binding, live/protected input equivalence, the supported empty-fleet path, and runtime Pod readiness discovered by the production rehearsal.
 - 2026-09-24 13:43: Trace fail-closed inventory admission, nonterminal deployment rejection, and the one-time controller-only bootstrap for older OCC versions. (authoring-run/0fc7c19b-0e15-498c-8328-e436bc702f37 - a7a609d5867398dd0dfd3bb77cfebf91b2cad116)
 - 2026-09-23 12:32: Trace matched image replacement and concurrent exact-Agent deployment through durable status convergence. (authoring-run/d29bdbc5-2a6a-46fa-a8e5-6ad78ea2e486 - 78cf9fd25f08e91158617fbd0ae3e42a22e54361)

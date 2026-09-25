@@ -79,11 +79,12 @@ Namespace-scoped key, use `namespace get ID` to read that exact Namespace
 instead.
 
 `installation deployment-inventory` requires Installation `administer`, exact
-`read` access to every Namespace and Agent, and exact `deploy` access to every
-running Agent that is eligible for coordinated deployment. It fails instead of
-silently omitting an unauthorized resource. JSON and YAML output include each
-Agent's desired runtime state, active revision, and whether deployment work is
-queued or claimed.
+`read` access to every Namespace and Agent, exact `read` access to each selected
+Agent's active revision, and exact `deploy` access to every running Agent that is
+eligible for coordinated deployment. It fails instead of silently omitting an
+unauthorized resource. JSON and YAML output include each Agent's desired runtime
+state, execution mode, active revision, and whether deployment work is queued or
+claimed.
 
 ## Output and errors
 

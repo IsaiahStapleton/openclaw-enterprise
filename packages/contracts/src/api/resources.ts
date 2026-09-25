@@ -435,6 +435,7 @@ export const InstallationDeploymentInventorySchema = Type.Object(
                 id: AgentId,
                 status: AgentSchema.properties.status,
                 desiredRuntimeState: AgentSchema.properties.desiredRuntimeState,
+                executionMode: AgentSchema.properties.executionMode,
                 activeRevisionId: Type.Optional(RevisionId),
                 deploymentInProgress: Type.Boolean(),
               },

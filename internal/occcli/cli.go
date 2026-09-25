@@ -118,7 +118,7 @@ func (app *application) installationCommand() *cobra.Command {
 			})
 		},
 	}
-	inventory := &cobra.Command{
+	deploymentInventory := &cobra.Command{
 		Use:   "deployment-inventory",
 		Short: "Show the complete authorized Agent deployment inventory",
 		Args:  cobra.NoArgs,
@@ -127,17 +127,17 @@ func (app *application) installationCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			inventory, err := client.GetInstallationDeploymentInventory()
+			result, err := client.GetInstallationDeploymentInventory()
 			if err != nil {
 				return err
 			}
-			return app.printItems(inventory, false, []column{
+			return app.printItems(result, false, []column{
 				{title: "INSTALLATION", key: "installationId"},
 				{title: "NAMESPACES", key: "namespaces"},
 			})
 		},
 	}
-	command.AddCommand(get, inventory)
+	command.AddCommand(get, deploymentInventory)
 	return command
 }
 

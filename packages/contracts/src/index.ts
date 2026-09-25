@@ -457,6 +457,7 @@ export interface InstallationDeploymentInventoryAgent {
   readonly id: string;
   readonly status: AgentStatus;
   readonly desiredRuntimeState: AgentDesiredRuntimeState;
+  readonly executionMode: HarnessExecutionMode;
   readonly activeRevisionId?: string;
   readonly deploymentInProgress: boolean;
 }

@@ -1,52 +1,39 @@
-# Upgrade production controller and runtime images
+# Upgrade production images
 
-Use the coordinated upgrade command to replace the OpenClaw Control Plane
-(OCC) controller image and the Kubernetes Compute runtime image, then deploy a
-new revision for every Agent that was running when the command began. This first
-version restarts the fleet together. Use it only during an approved interruption
-window with enough capacity for overlapping Agent revisions.
+Use `scripts/upgrade-production-images` to update the OpenClaw Control Plane
+(OCC) and redeploy every Agent that is running when the upgrade begins.
 
-The command supports the production Helm and Kubernetes Compute path. It is not
-an Amazon EKS-specific workflow. It does not provision infrastructure, build or
-publish images, take backups, or verify a model response after the restart.
-When the baseline contains no running Agents, it still updates the controller
-and persisted runtime image selections and reports that zero Agent revisions
-were deployed. That outcome does not prove the runtime image starts correctly.
+V1 restarts the fleet concurrently. Schedule an interruption window and provide
+enough cluster capacity for old and replacement Agent revisions to overlap.
 
-## Prepare the release and recovery inputs
+The command supports the production Helm and Kubernetes Compute path. It does
+not build or publish images, create backups, provision infrastructure, or prove
+that a model or external integration works after deployment.
 
-Complete the following before invoking the command:
+## Before you begin
 
-1. Build the controller and runtime images from one reviewed source commit.
-   Require passing checks for that exact commit and immutable registry digests.
-   Keep the build receipts and full source SHA.
-2. Review compatibility across OCC, gateway, Harness, configured plugins, and
-   model providers. The command cannot infer compatibility from image names.
-3. Back up PostgreSQL and Agent volumes when your recovery plan requires data
-   restoration. PVC identifiers and file hashes prove continuity; they are not
-   backups.
-4. Review every saved Agent and Configuration draft. Coordinated deployment
-   snapshots the current drafts, not each Agent's prior active revision.
-5. Provision capacity for the old and candidate Agent revisions to overlap.
-   The command submits the complete baseline fleet before waiting for any
-   individual deployment.
-6. Establish the same protected API access used for normal production Agent
-   operations. The service identity must have Installation `administer`, exact
-   `read` access to every Namespace and Agent, exact `deploy` access to every
-   eligible running Agent, and exact-revision read access. The
-   `occ installation deployment-inventory` operation fails instead of returning
-   a partial fleet when any required authorization is missing.
+Prepare:
 
-Run from the checkout containing the reviewed chart. Keep the protected Helm
-values, Installation YAML, kubeconfig, and service key in owner-only files. The
-optional public CA bundle must be a regular file, not a symbolic link. The
-evidence directory must not exist yet; the command creates
-it with mode `0700` and stores inventory and rollout results there. Refresh the
-protected Helm values and Installation YAML from their live owners before the
-upgrade. The command rejects any live/protected difference outside the
-controller and runtime image fields before it mutates the cluster. The live
-Installation startup Secret must carry the `openclaw.dev/installation-id`
-annotation created during production installation.
+- controller and runtime images built from one reviewed commit and referenced by
+  immutable `@sha256:` digests;
+- passing checks and build records for that commit;
+- a PostgreSQL and Agent-volume backup when recovery requires data restoration;
+- enough capacity to replace all running Agents concurrently;
+- the production kubeconfig, Helm values, Installation YAML, OCC service key,
+  and optional CA bundle in protected files; and
+- an OCC identity with Installation `administer`, exact `read` access to every
+  Namespace, Agent, and active Agent revision, and exact `deploy` access to every
+  running Agent. Revision read access must also cover the replacement revisions
+  created during the upgrade.
+
+Review saved Agent and Configuration drafts. Each deployment snapshots the
+current draft, not the Agent's previous active revision.
+
+Run from the checkout containing the installed chart. Make the kubeconfig,
+values, Installation, and service-key files owner-only. The evidence directory
+must not exist; the command creates it with mode `0700`.
+
+Set the connection and release inputs:
 
 ```bash
 umask 077
@@ -59,17 +46,16 @@ export RELEASE_SOURCE_SHA='<full-40-character-git-sha>'
 export UPGRADE_EVIDENCE="/secure/occ/upgrades/$(date -u +%Y%m%dT%H%M%SZ)"
 ```
 
-Confirm no other operator is changing the Helm release, Installation startup
-Secret, protected inputs, or Agent drafts. Resolve any initial Agent deployment
-that is still running. The command rejects queued or claimed deployment work and
-a running Agent without an active revision instead of guessing whether either
-belongs in the baseline.
+Stop other Helm changes, Agent deployments, and draft edits until the upgrade or
+recovery is complete. Resolve any queued or running Agent deployment first.
 
-### Bind the Installation once
+## Bind the Installation once
 
-After initial production bootstrap, annotate the operator-owned startup Secret
-with the Installation ID retained in the bootstrap key. Repeat this only when
-repairing a missing marker; do not replace a different existing ID:
+Skip this step when the live Installation Secret already has the correct
+`openclaw.dev/installation-id` annotation.
+
+After initial production bootstrap, read the Installation ID from the retained
+bootstrap key and annotate the Secret:
 
 ```bash
 export OCC_INSTALLATION_ID="$(jq -er '.meta.installationId' "$OCC_BOOTSTRAP_KEY_FILE")"
@@ -80,20 +66,22 @@ kubectl --kubeconfig /secure/occ/kubeconfig \
   openclaw.dev/installation-id="$OCC_INSTALLATION_ID"
 ```
 
-The coordinated command requires this live marker to match authenticated OCC
-before changing either system.
+Do not replace a different existing ID. Investigate why the cluster and
+bootstrap record disagree.
 
-### Bootstrap the inventory API once
+## Adopt the inventory API once
 
-Skip this section when
-`occ installation deployment-inventory --output json` already succeeds. If the
-current controller returns `404`, it predates the complete-inventory operation
-and cannot safely admit a fleet upgrade.
+Run:
 
-For first adoption, save the current protected values and Helm evidence. Change
-only `images.controller` in the protected Helm values to `$CONTROLLER_IMAGE`.
-Leave the Installation startup Secret and both runtime image selections
-unchanged:
+```bash
+occ installation deployment-inventory --output json
+```
+
+If it succeeds, continue to [Run the upgrade](#run-the-upgrade). A `404` means
+the installed controller predates the complete-inventory API.
+
+For first adoption only, save the current values and change only
+`images.controller`. Leave the Installation Secret and runtime images unchanged:
 
 ```bash
 export CONTROLLER_BOOTSTRAP_EVIDENCE="${UPGRADE_EVIDENCE}-controller-bootstrap"
@@ -107,6 +95,11 @@ helm get values oce \
   > "$CONTROLLER_BOOTSTRAP_EVIDENCE/before-live-values.yaml"
 CONTROLLER_IMAGE="$CONTROLLER_IMAGE" yq -i \
   '.images.controller = strenv(CONTROLLER_IMAGE)' /secure/occ/values.yaml
+```
+
+Render, server-side dry-run, and apply that controller-only change:
+
+```bash
 helm template oce deploy/helm/openclaw-enterprise \
   --kubeconfig /secure/occ/kubeconfig \
   --kube-context '<reviewed-context>' \
@@ -124,28 +117,22 @@ helm upgrade --install oce deploy/helm/openclaw-enterprise \
   --kubeconfig /secure/occ/kubeconfig \
   --kube-context '<reviewed-context>' \
   --namespace openclaw-system \
-  --values /secure/occ/values.yaml --wait --timeout 5m \
+  --values /secure/occ/values.yaml \
+  --wait --timeout 5m \
   > "$CONTROLLER_BOOTSTRAP_EVIDENCE/helm-upgrade.txt"
 ```
 
-Verify the API and worker use the candidate controller digest. Then verify OCC
-authentication and the complete inventory:
+Verify both `openclaw-enterprise-api` and `openclaw-enterprise-worker` use
+`$CONTROLLER_IMAGE`, OCC authentication works, and the inventory command now
+succeeds. Confirm that no Agent revision changed.
 
-```bash
-occ installation deployment-inventory --output json \
-  > "$CONTROLLER_BOOTSTRAP_EVIDENCE/deployment-inventory.json"
-```
+Keep this bootstrap evidence separately. The coordinated command accepts the
+already-selected controller digest and performs the runtime update.
 
-Do not continue if this operation fails. Preserve the controller-only bootstrap
-evidence separately, then run the coordinated command below with the same
-controller digest and its companion runtime digest. The command accepts an
-already-selected controller digest; at least one runtime image slot must still
-change. This prerequisite does not modify the Installation startup Secret or
-redeploy Agents.
+## Run the upgrade
 
-## Run the coordinated upgrade
-
-Invoke the command with explicit cluster and input ownership:
+Refresh the protected values and Installation files from their live owners, then
+run:
 
 ```bash
 scripts/upgrade-production-images \
@@ -162,73 +149,60 @@ scripts/upgrade-production-images \
   --occ /secure/occ/bin/occ
 ```
 
-Before mutation, the command saves the complete deployment inventory returned by
-OCC under `inventory/deployment-inventory.json`. It checks the Installation ID,
-rejects nonterminal Agent deployment work, and selects every active Agent that
-desires `running`, has an active revision, and belongs to a ready Namespace.
-It also compares canonical protected inputs with the live Helm release and
-Installation Secret after removing only the image fields that this command
-owns. The authenticated OCC Installation ID must equal the live Secret's
-`openclaw.dev/installation-id` annotation. Any mismatch fails before rendering
-or mutation, preventing one cluster from being upgraded while another OCC
-Installation receives the Agent deployments.
+Before mutation, the command verifies:
 
-The command performs these mutations only after that inventory, candidate
-rendering, and Helm server-side dry run succeed:
+- the authenticated OCC Installation matches the selected Kubernetes
+  Installation;
+- protected configuration matches live configuration outside the image fields
+  owned by the command;
+- the complete inventory is authorized and has no deployment in progress;
+- every running Agent has a readable active revision in a ready Namespace; and
+- the candidate chart passes rendering and server-side dry run.
 
-1. It writes the candidate controller digest into the protected Helm values and
-   the runtime digest into both Kubernetes Compute image slots. It also writes
-   the candidate Installation file's SHA-256 checksum into
-   `controlPlane.installationChecksum`. Original bytes remain in the private
-   evidence directory.
-2. It replaces `occ-installation-startup` from the protected Installation file.
-3. It runs `helm upgrade --install --wait`. The controller digest or Installation
-   checksum replaces the API and worker Pods, so a controller-only first adoption
-   cannot leave them using the old runtime configuration. Helm initialization
-   owns migration and bootstrap checks.
-4. After both Deployments use the candidate controller and OCC authentication
-   recovers, it concurrently submits the bodyless deployment operation for all
-   baseline running Agents.
-5. It waits for every returned revision's durable deployment status, confirms
-   each Agent selected that revision, and waits for the revision Pods to report
-   `Running` and `Ready`. Their gateway and Agent containers must use the
-   candidate runtime digest.
+It then updates the protected image selections, replaces the Installation
+Secret, and runs Helm. A checksum of the Installation document restarts both the
+API and worker even when the controller image is unchanged.
 
-Stopped and deleting Agents remain untouched. The command succeeds only after
-every baseline running Agent reaches the new revision. It does not send a model
-request, post a channel message, or prove external provider behavior.
+After OCC recovers, the command deploys every recorded running Agent, waits for
+durable success, confirms each new active revision, and requires its Pods to be
+`Running` and `Ready` on the candidate runtime digest. Stopped and deleting
+Agents remain untouched. An empty fleet updates the saved runtime selection but
+does not prove that the image starts.
+
+Success looks like:
+
+```text
+Upgraded controller and runtime images; <count> running Agents selected new revisions.
+```
 
 ## Verify the release
 
-Retain the evidence directory privately. Review at least:
+Keep the evidence directory private. Check:
 
-- `before-live-values.yaml`, `before-live-installation.yaml`, and the candidate
-  inputs for the intended image-only change;
-- `before-workloads.json` and `after-workloads.json` for persistent volume and
-  untargeted workload continuity;
-- `deployments.jsonl` and `status/` for one successful new revision per baseline
+- `before-live-values.yaml` and `before-live-installation.yaml` against the
+  candidate files for the intended image-only change;
+- `before-workloads.json` and `after-workloads.json` for PVC and untargeted
+  workload continuity;
+- `deployments.jsonl` and `status/` for one successful revision per recorded
   Agent; and
-- the final Helm status plus live API and worker images.
+- the final Helm status and live API, worker, gateway, and Agent images.
 
-Then run the [production workload verification](production-agents.md#verify-production-workloads)
-for every execution mode and model/provider represented by the fleet. Require a
-fresh harmless model response and the relevant channel, credential-delivery,
-workspace, and native UI checks. Script success is deployment evidence, not a
-model or data-restore proof.
+Then follow [Verify production workloads](production-agents.md#verify-production-workloads)
+for every execution mode and provider used by the fleet. Require a fresh model
+response and check relevant channels, credentials, workspace data, and native UI
+access. Script success proves deployment convergence, not application behavior.
 
-## Recover from partial failure
+## Recover from a partial failure
 
-The workflow is coordinated but not transactional. If Helm succeeds and one or
-more Agent deployments fail, keep the healthy control plane on the candidate
-release, preserve all evidence, and diagnose the exact failed deployment. Do
-not resubmit an unknown deployment response until revision history establishes
-whether OCC admitted it; another accepted request creates another revision.
+The workflow is not transactional. If OCC succeeds but an Agent deployment
+fails, keep the healthy control plane, preserve the evidence, and inspect the
+exact failed deployment. Do not retry an unknown response until revision history
+shows whether OCC accepted it; a retry can create another revision.
 
-Prefer a reviewed forward fix. For image rollback, first verify that the prior
-controller and runtime can read state written by the candidate. Restore the
-saved controller and runtime selections to the protected inputs. Recompute
-`controlPlane.installationChecksum` from the complete restored Installation file
-before replacing the Installation Secret and running Helm:
+Prefer a reviewed forward fix. Before rolling images back, verify that the
+previous release can read state written by the candidate. Restore the previous
+controller and runtime selections, then recompute the checksum before replacing
+the Installation Secret:
 
 ```bash
 export ROLLBACK_INSTALLATION_CHECKSUM="$(
@@ -241,28 +215,22 @@ ROLLBACK_INSTALLATION_CHECKSUM="$ROLLBACK_INSTALLATION_CHECKSUM" yq -i \
   /secure/occ/values.yaml
 ```
 
-Wait for both `openclaw-enterprise-api` and `openclaw-enterprise-worker` rollouts,
-verify they loaded the restored Installation configuration, then explicitly
-deploy the affected running Agents again. Restoring only Helm values does not
-replace tenant workloads. Helm rollback does not undo database migrations or
-runtime data changes.
+Run Helm, wait for both OCC Deployments, verify the restored configuration, and
+deploy the affected running Agents again. Helm rollback alone does not replace
+Agent workloads or reverse database migrations and runtime data changes.
 
-Never delete Agents, revisions, PVCs, or the bootstrap volume to make recovery
-appear successful. If the prior release cannot read the new state, stop and
-prepare a forward repair or coordinated data restore.
+Never delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
+If the previous release cannot read the new state, stop and prepare a forward
+repair or coordinated data restore.
 
 ## Current limits
 
-- V1 has no canary, batch size, automatic compatibility check, or automatic
-  rollback.
-- The first release needs the one-time controller-only inventory API bootstrap
-  above. Later releases begin directly with the coordinated command.
-- All baseline Agent requests are submitted concurrently. Large fleets must
-  prove cluster, database, and worker capacity before using this version.
-- Deployment uses current drafts. Exact active-revision restart is not yet a
-  supported operation.
-- The command requires one runtime image for gateway and Agent containers.
-- Real completion still requires the manual runtime and model checks above.
+- No canary, batching, automatic compatibility check, or automatic rollback.
+- No upgrade lock; operators must prevent concurrent fleet changes.
+- All recorded Agent deployments start concurrently.
+- Deployment uses current drafts rather than recreating active revisions.
+- One runtime image is used for both gateway and Agent containers.
+- Runtime, model, channel, and restore checks remain manual.
 
 See the [coordinated upgrade flow](../../flows/coordinated-production-upgrade.md)
-for source ownership and failure boundaries.
+for implementation details and failure boundaries.
