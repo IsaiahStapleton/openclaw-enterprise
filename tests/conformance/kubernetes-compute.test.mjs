@@ -971,11 +971,11 @@ test("dedicated Agent shared claims retain ownership inside an existing tenant n
   const ownership = { namespaceId: tenant.id, agentId };
 
   // Exercise the real PVC serializer against discovered placement, not a simulated cluster.
-  const claim = driver.sharedWorkspaceClaim(agentId, ownership, "customer-support");
+  const claim = driver.harnessWorkspaceClaim(agentId, ownership, "customer-support");
   assert.equal(claim.metadata.namespace, "customer-support");
   assert.equal(claim.metadata.annotations["openclaw.dev/namespace-id"], tenant.id);
   assert.equal(claim.metadata.annotations["openclaw.dev/agent-id"], agentId);
-  assert.deepEqual(claim.spec.accessModes, ["ReadWriteMany"]);
+  assert.deepEqual(claim.spec.accessModes, ["ReadWriteOnce"]);
   assert.equal(claim.spec.resources.requests.storage, "40Gi");
 });
 
@@ -4825,7 +4825,7 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
   );
   assert.notEqual(
     claim.metadata.name,
-    driver.sharedWorkspaceClaim(agentId, ownership, namespace).metadata.name,
+    driver.harnessWorkspaceClaim(agentId, ownership, namespace).metadata.name,
   );
 
   // Whole directories retain SQLite WAL/SHM siblings; only the gateway receives the private claim.
@@ -5040,6 +5040,61 @@ test("runtime node selector schedules gateways and their private-state initializ
     "oce-role": "control-plane",
   });
   assert.equal(pod.initContainers[0].name, "prepare-private-state");
+});
+
+test("Harness claim reuse retains owned RWO and RWX storage without mutation and rejects foreign or invalid claims", async () => {
+  const driver = createKubernetesComputeDriver(options());
+  const ownership = { namespaceId: tenant.id, agentId: "agent-workspace-ownership" };
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const desired = driver.harnessWorkspaceClaim(ownership.agentId, ownership, namespace);
+  let observed;
+  const mutations = [];
+  driver.apiClients = Promise.resolve({
+    core: {
+      async readNamespacedPersistentVolumeClaim() {
+        return structuredClone(observed);
+      },
+      async patchNamespacedPersistentVolumeClaim(request) {
+        mutations.push(request);
+      },
+      async deleteNamespacedPersistentVolumeClaim(request) {
+        mutations.push(request);
+      },
+    },
+  });
+  for (const mode of ["ReadWriteOnce", "ReadWriteMany"]) {
+    observed = structuredClone(desired);
+    observed.metadata.uid = "retained-workspace";
+    observed.spec.accessModes = [mode];
+    await driver.reconcile(desired, ownership, namespace);
+    assert.deepEqual(
+      mutations,
+      [],
+      "compatible workspace claims must never be patched or replaced",
+    );
+    for (const mutate of [
+      (claim) => {
+        claim.metadata.annotations["openclaw.dev/agent-id"] = "foreign";
+      },
+      (claim) => {
+        claim.spec.accessModes = ["ReadOnlyMany"];
+      },
+      (claim) => {
+        claim.spec.volumeMode = "Block";
+      },
+      (claim) => {
+        claim.spec.resources.requests.storage = "1Gi";
+      },
+    ]) {
+      const valid = structuredClone(observed);
+      mutate(observed);
+      await assert.rejects(driver.reconcile(desired, ownership, namespace), /Refusing/);
+      assert.deepEqual(mutations, []);
+      observed = valid;
+    }
+    await driver.deleteHarnessWorkspaceClaim(ownership, namespace);
+    assert.deepEqual(mutations.pop().body.preconditions, { uid: "retained-workspace" });
+  }
 });
 
 test("private gateway claim reuse and deletion verify exact ownership and storage before mutation", async () => {
@@ -5970,7 +6025,7 @@ test("retirement preserves active storage and node routing and deletes exact own
   const nodeResources = new Map();
   const claims = [
     driver.gatewayPrivateStateClaim(agentId, ownership, namespace),
-    driver.sharedWorkspaceClaim(agentId, ownership, harnessNamespace),
+    driver.harnessWorkspaceClaim(agentId, ownership, harnessNamespace),
   ];
   for (const claim of claims) {
     claim.metadata.uid = claim.metadata.name + "-uid";
