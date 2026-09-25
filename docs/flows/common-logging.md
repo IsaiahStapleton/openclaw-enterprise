@@ -1,7 +1,7 @@
 ---
 created: 2026-09-02
-updated: 2026-09-04
-last_updated_session: cody/01a06dd0-9fff-7e90-aae3-4e7099a6d154
+updated: 2026-09-25
+last_updated_session: codex/01a0d57b-51eb-7551-874e-38c5b633af76
 ---
 
 # Common Operational Logging Flow
@@ -83,7 +83,9 @@ output separate from structured failure diagnostics. The source sanitizer keeps
 reviewed scalar fields and drops unapproved fields, credentials, provider
 payloads, request/reply objects, and unsafe strings before Pino writes the
 record. This source boundary is distinct from the Collector export filter in
-step 7.
+step 7. Exported worker stop and deletion results keep their `work.operation`
+and durable `work.id` as log attributes. Stop keys include the operation UUID;
+deletion keys have no operation suffix. Unsupported key shapes remain excluded.
 
 ### 3. Admission freezes runtime logging
 
@@ -191,6 +193,8 @@ reconciliation, or PostgreSQL audit persistence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-25 09:56: Documented worker teardown correlation with the accompanying Collector allowlist repair. (codex/01a0d57b-51eb-7551-874e-38c5b633af76 - 939ae63ac2be06d424cdbd5c626cfa675561d127)
 
 - 2026-09-04 21:04: Documented that native logging admission drops the retired redaction key while preserving JSON levels, disabled OTLP logs, runtime redaction ownership and read-only Kubernetes config mounting. (cody/01a06dd0-9fff-7e90-aae3-4e7099a6d154 - 87234e1766e5802b45424523246a52a4b2d45590)
 

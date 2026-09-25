@@ -321,7 +321,7 @@ test(
 );
 
 test(
-  "native Collector preserves Kubernetes identity after a dropped record sharing Pod metadata",
+  "native Collector preserves Kubernetes identity and worker teardown correlation",
   {
     skip: selected
       ? false
@@ -463,5 +463,89 @@ test(
     ]) {
       assert.equal(serialized.includes(internal), false, `${internal} must not leak downstream`);
     }
+
+    // Stop work includes a per-operation UUID; deletion work has no suffix.
+    // Unsupported shapes must lose correlation fields without losing the event.
+    const agentId = `agt_${randomUUID()}`;
+    const stopWorkId = `agent:${agentId}:reconcile:stopped:${randomUUID()}`;
+    const deleteWorkId = `agent:${agentId}:reconcile:deleted`;
+    const cases = [
+      { operation: "agent.stop", workId: stopWorkId },
+      { operation: "agent.delete", workId: deleteWorkId },
+      {
+        operation: "agent.stop",
+        workId: `agent:${agentId}:reconcile:stopped`,
+        discardWorkId: true,
+      },
+      {
+        operation: "agent.delete",
+        workId: `${deleteWorkId}:${randomUUID()}`,
+        discardWorkId: true,
+      },
+      {
+        operation: "agent.stop",
+        workId: `agent:${agentId}:reconcile:stopped:CANARY_SESSION`,
+        discardWorkId: true,
+      },
+      {
+        operation: "agent.stop",
+        workId: `agent:agt_${"a".repeat(36)}:reconcile:stopped:${randomUUID()}`,
+        discardWorkId: true,
+      },
+      { operation: "agent.restart", workId: stopWorkId, discardOperation: true },
+    ].map((entry) => ({ ...entry, requestId: `req_${randomUUID()}` }));
+    const workerResource = {
+      resource: {
+        attributes: payload.resourceLogs[0].resource.attributes.map((entry) =>
+          entry.key === "occ.component" ? { ...entry, value: { stringValue: "worker" } } : entry,
+        ),
+      },
+      scopeLogs: [
+        {
+          logRecords: cases.map(({ operation, workId, requestId }) => ({
+            timeUnixNano: String(BigInt(Date.now()) * 1000000n),
+            body: {
+              stringValue: JSON.stringify({
+                event: "worker.completed",
+                severity: "INFO",
+                operation,
+                workId,
+                requestId,
+                message: "CANARY_RAW_MESSAGE",
+                sessionId: "CANARY_SESSION",
+                "service.name": "CANARY_FORGED_SERVICE",
+              }),
+            },
+            attributes: [{ key: "log.iostream", value: { stringValue: "stdout" } }],
+          })),
+        },
+      ],
+    };
+    const workerResponse = await fetch(`http://${receiverAddress}/v1/logs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceLogs: [workerResource] }),
+    });
+    assert.equal(workerResponse.status, 200, await workerResponse.text());
+    await waitFor(async () => (await records()).length === 1 + cases.length);
+    const workerRecords = (await records()).filter(
+      ({ resource }) => resource["service.name"] === "occ-worker",
+    );
+    assert.equal(workerRecords.length, cases.length);
+    for (const entry of cases) {
+      const actual = workerRecords.find(
+        ({ attributes }) => attributes["request.id"] === entry.requestId,
+      );
+      assert.equal(actual.record.body.stringValue, "worker.completed");
+      assert.equal(actual.record.severityNumber, 9);
+      assert.deepEqual(actual.attributes, {
+        "event.name": "worker.completed",
+        "log.iostream": "stdout",
+        "request.id": entry.requestId,
+        ...(entry.discardOperation ? {} : { "work.operation": entry.operation }),
+        ...(entry.discardWorkId ? {} : { "work.id": entry.workId }),
+      });
+    }
+    assert.doesNotMatch(JSON.stringify(workerRecords), /CANARY_/);
   },
 );
