@@ -77,11 +77,10 @@ Follow these pages in order in the same operator shell:
    offers a TUI and an HTTP check using the optional loopback password on
    Kubernetes trusted-proxy gateways.
 
-For an installed production release, use the
-[coordinated image upgrade](deploy/production-upgrade.md) to replace the
-controller/runtime image pair and redeploy the baseline running Agent fleet.
-The first version performs a fleet-wide restart and requires an interruption
-window.
+For an installed production release, use [production image upgrades](deploy/production-upgrade.md)
+to release the control plane without replacing Agent revisions, or to update
+Agent runtimes and redeploy the running fleet. Runtime releases require an
+interruption window.
 
 For ongoing business operation, use [production handoff](deploy/production-handoff.md)
 to record owners, credential renewal, alert response, and recovery decisions.

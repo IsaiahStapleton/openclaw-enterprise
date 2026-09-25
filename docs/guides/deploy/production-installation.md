@@ -450,11 +450,11 @@ Agent deployment, and a [real model-response check](production-agents.md#verify-
 that matches the Agent's native gateway authentication mode.
 
 For later releases, follow the
-[coordinated production image upgrade](production-upgrade.md).
+[production image upgrade](production-upgrade.md).
 
 ## Related
 
 Continue with [production Agent deployment](production-agents.md), or use the
-[coordinated image upgrade](production-upgrade.md) for an existing release. For failed
+[production image upgrade](production-upgrade.md) for an existing release. For failed
 initialization, preserve state and follow [bootstrap recovery](../../reference/authentication/service-api-keys.md#recover-an-incomplete-bootstrap)
 and the [production startup flow](../../flows/production-startup.md).

@@ -499,7 +499,7 @@ test(
       assert.equal(stagedServiceKey.installationId, installation.data.id);
       const guideInstallation = await runGuideOcc(["installation", "get"]);
       assert.equal(guideInstallation.id, installation.data.id);
-      // Complete the documented one-time binding before any coordinated image upgrade.
+      // Bind the cluster and OCC identities before either image workflow can mutate the release.
       await kubectl(
         "-n",
         system,
@@ -1174,42 +1174,55 @@ test(
       context.diagnostic(`Evidence directory: ${directory}`);
     }
 
-    async function exerciseCoordinatedImageUpgrade(finalGateway) {
+    async function exerciseIndependentImageUpgrades(finalGateway) {
       if (!upgradeSelected) {
         context.diagnostic(
-          "SKIP coordinated image upgrade: set both OCC_TEST_PRODUCTION_UPGRADE_*_IMAGE values",
+          "SKIP independent image upgrades: set both OCC_TEST_PRODUCTION_UPGRADE_*_IMAGE values",
         );
         return finalGateway;
       }
 
       const sourceRevision = (await run("git", ["rev-parse", "HEAD"], { timeout: 30_000 })).trim();
-      // First adoption upgrades only OCC so the old fleet remains unchanged
-      // while the candidate controller supplies fail-closed inventory admission.
       const valuesPath = join(directory, "values.json");
-      const bootstrapValues = JSON.parse(await readFile(valuesPath, "utf8"));
-      bootstrapValues.images.controller = upgradeImages.controller;
-      await writeFile(valuesPath, JSON.stringify(bootstrapValues), { mode: 0o600 });
-      await run(
-        "helm",
+      const installationPath = join(directory, "installation.json");
+      const controllerEvidence = join(directory, "controller-upgrade");
+      const controllerOutput = await run(
+        "scripts/upgrade-production-images",
         [
-          "upgrade",
-          "--install",
-          release,
-          "deploy/helm/openclaw-enterprise",
-          "-n",
-          system,
           "--kubeconfig",
           selection.kubeconfigPath,
-          "--kube-context",
+          "--context",
           selection.kubernetesContext,
-          "-f",
+          "--namespace",
+          system,
+          "--release",
+          release,
+          "--values",
           valuesPath,
-          "--wait",
-          "--timeout",
-          "300s",
+          "--installation",
+          installationPath,
+          "--controller-image",
+          upgradeImages.controller,
+          "--source-revision",
+          sourceRevision,
+          "--evidence-dir",
+          controllerEvidence,
+          "--occ",
+          occCli,
+          "--timeout-seconds",
+          "600",
         ],
-        { timeout: 330_000 },
+        {
+          timeout: 900_000,
+          env: {
+            OCC_URL: baseURL,
+            OCC_SERVICE_KEY_FILE: localServiceKeyFile,
+            OCC_CA_BUNDLE: join(directory, "tls.crt"),
+            OPENAI_API_KEY: undefined,
+          },
+        },
       );
+      assert.match(controllerOutput, /no Agent deployments were requested/u);
       for (const component of ["api", "worker"]) {
         const deployment = `openclaw-enterprise-${component}`;
         await kubectl("-n", system, "rollout", "status", `deployment/${deployment}`);
@@ -1223,8 +1236,8 @@ test(
         );
         assert.equal(observed, upgradeImages.controller);
       }
-      const bootstrapInventory = await waitFor(
-        "controller-only inventory through the production HTTPS proxy",
+      const controllerInventory = await waitFor(
+        "fleet inventory after the independent controller upgrade",
         async () => {
           try {
             return await runGuideOcc(["installation", "deployment-inventory"]);
@@ -1237,7 +1250,7 @@ test(
         },
         30_000,
       );
-      assert.ok(bootstrapInventory.namespaces.some((candidate) => candidate.id === namespace.id));
+      assert.ok(controllerInventory.namespaces.some((candidate) => candidate.id === namespace.id));
       assert.equal(
         (await api("GET", `/namespaces/${namespace.id}/agents/${agent.id}`)).activeRevisionId,
         finalGateway.revisionId,
@@ -1247,11 +1260,11 @@ test(
           .activeRevisionId,
         secondaryBaselineRevision,
       );
-      await record("Controller-only inventory API bootstrap retained Agent revisions", {
+      await record("Independent controller upgrade retained Agent revisions", {
         controllerImage: upgradeImages.controller,
       });
 
-      const upgradeEvidence = join(directory, "coordinated-upgrade");
+      const upgradeEvidence = join(directory, "runtime-upgrade");
       const output = await run(
         "scripts/upgrade-production-images",
         [
@@ -1266,9 +1279,7 @@ test(
           "--values",
           valuesPath,
           "--installation",
-          join(directory, "installation.json"),
-          "--controller-image",
-          upgradeImages.controller,
+          installationPath,
           "--runtime-image",
           upgradeImages.runtime,
           "--source-revision",
@@ -1290,7 +1301,21 @@ test(
           },
         },
       );
-      assert.match(output, /2 running Agents selected new revisions/u);
+      assert.match(
+        output,
+        /runtime image; controller image remained unchanged and 2 running Agents selected new revisions/u,
+      );
+      for (const component of ["api", "worker"]) {
+        const observed = await kubectl(
+          "-n",
+          system,
+          "get",
+          `deployment/openclaw-enterprise-${component}`,
+          "-o",
+          `jsonpath={.spec.template.spec.containers[?(@.name=='${component}')].image}`,
+        );
+        assert.equal(observed, upgradeImages.controller);
+      }
       const deployments = (await readFile(join(upgradeEvidence, "deployments.jsonl"), "utf8"))
         .trim()
         .split("\n")
@@ -1378,7 +1403,7 @@ test(
         assert.ok(!modelOutput.includes(value), "Upgrade TUI output leaked a credential");
       }
       assert.equal(JSON.parse(modelOutput).exitCode, 0);
-      await record("Coordinated controller/runtime image upgrade and fresh model reply", {
+      await record("Independent runtime image upgrade and fresh model reply", {
         previousRevisionId: finalGateway.revisionId,
         revisionId: upgradedRevision,
         controllerImage: upgradeImages.controller,
@@ -1498,7 +1523,7 @@ test(
     const { foreignIP, probe } = await proveProductionApiNetworkPolicy();
     const finalGateway = await exerciseRevisionCutover();
     await assertProductionOtelLogs(finalGateway);
-    const releaseGateway = await exerciseCoordinatedImageUpgrade(finalGateway);
+    const releaseGateway = await exerciseIndependentImageUpgrades(finalGateway);
     await verifyCredentialBoundariesAndPrepareHandoff(releaseGateway);
   },
 );

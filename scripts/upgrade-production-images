@@ -6,13 +6,14 @@ usage() {
 Usage: scripts/upgrade-production-images \
   --kubeconfig FILE --context NAME --namespace NAME --release NAME \
   --values FILE --installation FILE \
-  --controller-image IMAGE@sha256:DIGEST \
-  --runtime-image IMAGE@sha256:DIGEST \
+  [--controller-image IMAGE@sha256:DIGEST] \
+  [--runtime-image IMAGE@sha256:DIGEST] \
   --source-revision FULL_GIT_SHA --evidence-dir NEW_DIRECTORY \
   [--occ PATH] [--timeout-seconds SECONDS]
 
-Update the production controller and runtime images, restart OCC through Helm,
-then redeploy every Agent that was running when the command began. OCC_URL,
+Select at least one image. A controller-only upgrade leaves the Installation and
+Agent revisions unchanged. A runtime upgrade restarts OCC on its current image,
+then redeploys every Agent that was running when the command began. OCC_URL,
 OCC_SERVICE_KEY_FILE, and OCC_CA_BUNDLE configure the OCC CLI connection.
 EOF
 }
@@ -108,13 +109,15 @@ while (($#)); do
   esac
 done
 
-for input in kubeconfig context namespace release values installation controller_image runtime_image source_revision evidence_dir; do
+for input in kubeconfig context namespace release values installation source_revision evidence_dir; do
   [[ -n "${!input}" ]] || die "--${input//_/-} is required."
 done
+[[ -n "$controller_image" || -n "$runtime_image" ]] ||
+  die "select --controller-image, --runtime-image, or both."
 [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || die "--timeout-seconds must be positive."
-immutable_image "$controller_image" ||
+[[ -z "$controller_image" ]] || immutable_image "$controller_image" ||
   die "--controller-image must be an approved immutable SHA-256 image reference."
-immutable_image "$runtime_image" ||
+[[ -z "$runtime_image" ]] || immutable_image "$runtime_image" ||
   die "--runtime-image must be an approved immutable SHA-256 image reference."
 [[ "$source_revision" =~ ^[a-f0-9]{40}$ ]] ||
   die "--source-revision must be a full lowercase Git commit SHA."
@@ -137,10 +140,12 @@ done
 
 umask 077
 mkdir -m 700 "$evidence_dir"
-mkdir -m 700 "$evidence_dir/inventory" "$evidence_dir/dispatch" "$evidence_dir/status"
+if [[ -n "$runtime_image" ]]; then
+  mkdir -m 700 "$evidence_dir/inventory" "$evidence_dir/dispatch" "$evidence_dir/status"
+fi
 printf '%s\n' "$source_revision" >"$evidence_dir/source-revision"
-printf '%s\n' "$controller_image" >"$evidence_dir/controller-image"
-printf '%s\n' "$runtime_image" >"$evidence_dir/runtime-image"
+[[ -z "$controller_image" ]] || printf '%s\n' "$controller_image" >"$evidence_dir/controller-image"
+[[ -z "$runtime_image" ]] || printf '%s\n' "$runtime_image" >"$evidence_dir/runtime-image"
 cp "$values" "$evidence_dir/before-values.yaml"
 cp "$installation" "$evidence_dir/before-installation.yaml"
 
@@ -171,15 +176,22 @@ jq -er --arg key "$installation_key" '.data[$key]' "$live_installation_secret" |
   python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))' \
     >"$evidence_dir/before-live-installation.yaml"
 
-normalize_yaml_without "$values" 'del(.images.controller)' \
+values_filter='.'
+if [[ -n "$controller_image" ]]; then
+  values_filter='del(.images.controller)'
+fi
+normalize_yaml_without "$values" "$values_filter" \
   "$evidence_dir/before-values-without-controller.json"
-normalize_yaml_without "$evidence_dir/before-live-values.yaml" 'del(.images.controller)' \
+normalize_yaml_without "$evidence_dir/before-live-values.yaml" "$values_filter" \
   "$evidence_dir/before-live-values-without-controller.json"
 cmp -s "$evidence_dir/before-values-without-controller.json" \
   "$evidence_dir/before-live-values-without-controller.json" ||
   die "the protected Helm values differ from the live release outside the controller image; refresh --values before upgrading."
 
-runtime_filter='del(.drivers.compute.configuration.images.gateway, .drivers.compute.configuration.images.agent)'
+runtime_filter='.'
+if [[ -n "$runtime_image" ]]; then
+  runtime_filter='del(.drivers.compute.configuration.images.gateway, .drivers.compute.configuration.images.agent)'
+fi
 normalize_yaml_without "$installation" "$runtime_filter" \
   "$evidence_dir/before-installation-without-runtime-images.json"
 normalize_yaml_without "$evidence_dir/before-live-installation.yaml" "$runtime_filter" \
@@ -191,70 +203,85 @@ cmp -s "$evidence_dir/before-installation-without-runtime-images.json" \
 "${kube[@]}" get deployments,statefulsets,pods,persistentvolumeclaims --all-namespaces \
   --output json >"$evidence_dir/before-workloads.json"
 "${occ_json[@]}" installation get >"$evidence_dir/installation.json"
-inventory="$evidence_dir/inventory/deployment-inventory.json"
-"${occ_json[@]}" installation deployment-inventory >"$inventory"
 installation_id=$(jq -er '.id' "$evidence_dir/installation.json")
 [[ "$installation_id" == "$cluster_installation_id" ]] ||
   die "OCC Installation $installation_id does not match Kubernetes Installation $cluster_installation_id."
-jq -e --arg installationId "$installation_id" '.installationId == $installationId' \
-  "$inventory" >/dev/null || die "the deployment inventory belongs to another Installation."
-
-if jq -e '.namespaces[].agents[] | select(.deploymentInProgress)' "$inventory" >/dev/null; then
-  die "the deployment inventory contains nonterminal Agent work; wait for it to finish before upgrading."
-fi
-if jq -e \
-  '.namespaces[].agents[] | select(.status == "active" and .desiredRuntimeState == "running" and (.activeRevisionId == null))' \
-  "$inventory" >/dev/null; then
-  die "the deployment inventory contains a running Agent without an active revision; resolve its initial deployment first."
-fi
-if jq -e \
-  '.namespaces[] | select(.status != "ready") | .agents[] | select(.status == "active" and .desiredRuntimeState == "running")' \
-  "$inventory" >/dev/null; then
-  die "the deployment inventory contains a running Agent in a Namespace that is not ready."
-fi
 
 targets="$evidence_dir/targets.jsonl"
-jq -c '
-  .namespaces[] as $namespace |
-  $namespace.agents[] |
-  select(
-    $namespace.status == "ready" and
-    .status == "active" and
-    .desiredRuntimeState == "running" and
-    (.activeRevisionId != null)
-  ) |
-  {
-    namespaceId: $namespace.id,
-    agentId: .id,
-    executionMode: .executionMode,
-    baselineRevisionId: .activeRevisionId
-  }
-' "$inventory" >"$targets"
+: >"$targets"
+target_count=0
+if [[ -n "$runtime_image" ]]; then
+  inventory="$evidence_dir/inventory/deployment-inventory.json"
+  "${occ_json[@]}" installation deployment-inventory >"$inventory"
+  jq -e --arg installationId "$installation_id" '.installationId == $installationId' \
+    "$inventory" >/dev/null || die "the deployment inventory belongs to another Installation."
 
-target_count=$(wc -l <"$targets" | tr -d ' ')
+  if jq -e '.namespaces[].agents[] | select(.deploymentInProgress)' "$inventory" >/dev/null; then
+    die "the deployment inventory contains nonterminal Agent work; wait for it to finish before upgrading."
+  fi
+  if jq -e \
+    '.namespaces[].agents[] | select(.status == "active" and .desiredRuntimeState == "running" and (.activeRevisionId == null))' \
+    "$inventory" >/dev/null; then
+    die "the deployment inventory contains a running Agent without an active revision; resolve its initial deployment first."
+  fi
+  if jq -e \
+    '.namespaces[] | select(.status != "ready") | .agents[] | select(.status == "active" and .desiredRuntimeState == "running")' \
+    "$inventory" >/dev/null; then
+    die "the deployment inventory contains a running Agent in a Namespace that is not ready."
+  fi
 
-current_gateway=$(yq -er '.drivers.compute.configuration.images.gateway' "$installation")
-current_agent=$(yq -er '.drivers.compute.configuration.images.agent' "$installation")
-[[ "$runtime_image" != "$current_gateway" || "$runtime_image" != "$current_agent" ]] ||
-  die "both runtime image slots already select the candidate digest."
+  jq -c '
+    .namespaces[] as $namespace |
+    $namespace.agents[] |
+    select(
+      $namespace.status == "ready" and
+      .status == "active" and
+      .desiredRuntimeState == "running" and
+      (.activeRevisionId != null)
+    ) |
+    {
+      namespaceId: $namespace.id,
+      agentId: .id,
+      executionMode: .executionMode,
+      baselineRevisionId: .activeRevisionId
+    }
+  ' "$inventory" >"$targets"
+  target_count=$(wc -l <"$targets" | tr -d ' ')
+
+  current_gateway=$(yq -er '.drivers.compute.configuration.images.gateway' "$installation")
+  current_agent=$(yq -er '.drivers.compute.configuration.images.agent' "$installation")
+  [[ "$runtime_image" != "$current_gateway" || "$runtime_image" != "$current_agent" ]] ||
+    die "both runtime image slots already select the candidate digest."
+fi
+
+current_controller=$(yq -er '.images.controller' "$values")
+if [[ -n "$controller_image" && -z "$runtime_image" && "$controller_image" == "$current_controller" ]]; then
+  die "the controller image already selects the candidate digest."
+fi
+selected_controller=${controller_image:-$current_controller}
 
 candidate_values="$evidence_dir/candidate-values.yaml"
 candidate_installation="$evidence_dir/candidate-installation.yaml"
 cp "$values" "$candidate_values"
 cp "$installation" "$candidate_installation"
-CONTROLLER_IMAGE="$controller_image" yq -i '.images.controller = strenv(CONTROLLER_IMAGE)' "$candidate_values"
-RUNTIME_IMAGE="$runtime_image" yq -i \
-  '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
-   .drivers.compute.configuration.images.agent = strenv(RUNTIME_IMAGE)' \
-  "$candidate_installation"
-installation_checksum=$(
-  python3 -c \
-    'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+if [[ -n "$controller_image" ]]; then
+  CONTROLLER_IMAGE="$controller_image" yq -i \
+    '.images.controller = strenv(CONTROLLER_IMAGE)' "$candidate_values"
+fi
+if [[ -n "$runtime_image" ]]; then
+  RUNTIME_IMAGE="$runtime_image" yq -i \
+    '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
+     .drivers.compute.configuration.images.agent = strenv(RUNTIME_IMAGE)' \
     "$candidate_installation"
-)
-INSTALLATION_CHECKSUM="$installation_checksum" yq -i \
-  '.controlPlane.installationChecksum = strenv(INSTALLATION_CHECKSUM)' "$candidate_values"
-printf '%s\n' "$installation_checksum" >"$evidence_dir/installation-checksum"
+  installation_checksum=$(
+    python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+      "$candidate_installation"
+  )
+  INSTALLATION_CHECKSUM="$installation_checksum" yq -i \
+    '.controlPlane.installationChecksum = strenv(INSTALLATION_CHECKSUM)' "$candidate_values"
+  printf '%s\n' "$installation_checksum" >"$evidence_dir/installation-checksum"
+fi
 
 rendered="$evidence_dir/rendered.yaml"
 helm template "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
@@ -266,14 +293,15 @@ helm upgrade --install "$release" deploy/helm/openclaw-enterprise "${helm_args[@
 # The protected local inputs become the recovery source before either cluster
 # mutation. Their original bytes remain in the private evidence directory.
 install -m 600 "$candidate_values" "$values"
-install -m 600 "$candidate_installation" "$installation"
-
-"${kube[@]}" --namespace "$namespace" create secret generic "$installation_secret" \
-  --from-file="$installation_key=$installation" --dry-run=client --output yaml |
-  INSTALLATION_ID="$installation_id" yq \
-    '.metadata.annotations."openclaw.dev/installation-id" = strenv(INSTALLATION_ID)' |
-  "${kube[@]}" --namespace "$namespace" apply --filename - \
-  >"$evidence_dir/installation-secret-apply.txt"
+if [[ -n "$runtime_image" ]]; then
+  install -m 600 "$candidate_installation" "$installation"
+  "${kube[@]}" --namespace "$namespace" create secret generic "$installation_secret" \
+    --from-file="$installation_key=$installation" --dry-run=client --output yaml |
+    INSTALLATION_ID="$installation_id" yq \
+      '.metadata.annotations."openclaw.dev/installation-id" = strenv(INSTALLATION_ID)' |
+    "${kube[@]}" --namespace "$namespace" apply --filename - \
+    >"$evidence_dir/installation-secret-apply.txt"
+fi
 
 helm upgrade --install "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
   --values "$values" --wait --timeout 5m >"$evidence_dir/helm-upgrade.txt"
@@ -283,8 +311,8 @@ for component in api worker; do
   "${kube[@]}" --namespace "$namespace" rollout status "deployment/$deployment" --timeout=180s
   observed=$("${kube[@]}" --namespace "$namespace" get "deployment/$deployment" \
     --output "jsonpath={.spec.template.spec.containers[?(@.name=='$component')].image}")
-  [[ "$observed" == "$controller_image" ]] ||
-    die "$deployment uses $observed instead of the candidate controller image."
+  [[ "$observed" == "$selected_controller" ]] ||
+    die "$deployment uses $observed instead of the selected controller image."
 done
 
 deadline=$((SECONDS + timeout_seconds))
@@ -295,7 +323,7 @@ done
 rm -f "$evidence_dir/occ-recovery-error.txt"
 
 dispatch_failed=0
-if ((target_count > 0)); then
+if [[ -n "$runtime_image" ]] && ((target_count > 0)); then
   pids=()
   while IFS= read -r target; do
     namespace_id=$(jq -r '.namespaceId' <<<"$target")
@@ -396,4 +424,10 @@ done <"$deployments"
 helm status "$release" "${helm_args[@]}" >"$evidence_dir/after-helm-status.txt"
 "${kube[@]}" get deployments,statefulsets,pods,persistentvolumeclaims --all-namespaces \
   --output json >"$evidence_dir/after-workloads.json"
-printf 'Upgraded controller and runtime images; %s running Agents selected new revisions.\n' "$target_count"
+if [[ -n "$runtime_image" && -n "$controller_image" ]]; then
+  printf 'Upgraded controller and runtime images; %s running Agents selected new revisions.\n' "$target_count"
+elif [[ -n "$runtime_image" ]]; then
+  printf 'Upgraded runtime image; controller image remained unchanged and %s running Agents selected new revisions.\n' "$target_count"
+else
+  printf 'Upgraded controller image; runtime configuration stayed unchanged and no Agent deployments were requested.\n'
+fi

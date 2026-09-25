@@ -13,9 +13,10 @@ const upgradeScript = fileURLToPath(
   new URL("../../scripts/upgrade-production-images", import.meta.url),
 );
 
-test("production image upgrade guards protected inputs, supports an empty fleet, and waits for ready Pods", async (t) => {
+test("production image upgrades preserve controller/runtime ownership and wait for ready Pods", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "occ-production-upgrade-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  const baselineControllerImage = `registry.example.invalid/controller@sha256:${"f".repeat(64)}`;
   const controllerImage = `registry.example.invalid/controller@sha256:${"a".repeat(64)}`;
   const runtimeImage = `registry.example.invalid/runtime@sha256:${"b".repeat(64)}`;
 
@@ -75,7 +76,7 @@ case "$*" in
     ;;
   *'.installation.secretName'*) printf 'occ-installation-startup\\n' ;;
   *'.installation.key'*) printf 'installation.yaml\\n' ;;
-  *'.images.controller'*) printf '%s\\n' '${controllerImage}' ;;
+  *'.images.controller'*) printf '%s\\n' "$CURRENT_CONTROLLER_IMAGE" ;;
   *'.images.gateway'*) printf '%s\\n' 'registry.example.invalid/runtime@sha256:${"d".repeat(64)}' ;;
   *'.images.agent'*) printf '%s\\n' 'registry.example.invalid/runtime@sha256:${"d".repeat(64)}' ;;
 esac
@@ -125,7 +126,7 @@ fi
   const liveInstallation = join(directory, "live-installation.json");
   const valuesDocument = JSON.stringify({
     database: { host: "current.example.invalid" },
-    images: { controller: controllerImage },
+    images: { controller: baselineControllerImage },
     installation: { key: "installation.yaml", secretName: "occ-installation-startup" },
   });
   const installationDocument = JSON.stringify({
@@ -144,7 +145,7 @@ fi
   await writeFile(protectedFiles.values, valuesDocument, { mode: 0o600 });
   await writeFile(protectedFiles.installation, installationDocument, { mode: 0o600 });
 
-  const upgradeArguments = (evidenceDirectory) => [
+  const upgradeArguments = (evidenceDirectory, images = ["controller", "runtime"]) => [
     "--kubeconfig",
     protectedFiles.kubeconfig,
     "--context",
@@ -157,10 +158,8 @@ fi
     protectedFiles.values,
     "--installation",
     protectedFiles.installation,
-    "--controller-image",
-    controllerImage,
-    "--runtime-image",
-    runtimeImage,
+    ...(images.includes("controller") ? ["--controller-image", controllerImage] : []),
+    ...(images.includes("runtime") ? ["--runtime-image", runtimeImage] : []),
     "--source-revision",
     "c".repeat(40),
     "--evidence-dir",
@@ -171,6 +170,7 @@ fi
   const environment = {
     ...process.env,
     CLUSTER_INSTALLATION_ID: "ins_upgrade_test",
+    CURRENT_CONTROLLER_IMAGE: baselineControllerImage,
     LIVE_INSTALLATION_FILE: liveInstallation,
     LIVE_VALUES_FILE: liveValues,
     OCC_SERVICE_KEY_FILE: protectedFiles["service-key"],
@@ -228,6 +228,7 @@ fi
 
   const readinessCounter = join(directory, "readiness-counter");
   const runtimeCountCounter = join(directory, "runtime-count-counter");
+  const commandLog = join(directory, "commands.log");
   await writeFile(
     helm,
     `#!/usr/bin/env bash
@@ -279,8 +280,9 @@ esac
   await writeFile(
     kubectl,
     `#!/usr/bin/env bash
+printf 'kubectl %s\\n' "$*" >>"$COMMAND_LOG"
 case "$*" in
-  *'jsonpath='*) printf '%s\\n' '${controllerImage}' ;;
+  *'jsonpath='*) printf '%s\\n' "$OBSERVED_CONTROLLER_IMAGE" ;;
   *'get pods'*) printf '%s\\n' '{"items":[]}' ;;
 esac
 `,
@@ -288,6 +290,7 @@ esac
   await writeFile(
     occ,
     `#!/usr/bin/env bash
+printf 'occ %s\\n' "$*" >>"$COMMAND_LOG"
 case "$*" in
   *'deployment-inventory'*) printf '%s\\n' '{"installationId":"ins_upgrade_test","namespaces":[{"id":"ns_test","status":"ready","agents":[{"id":"agt_test","status":"active","desiredRuntimeState":"running","executionMode":"dedicated","activeRevisionId":"rev_test","deploymentInProgress":false}]}]}' ;;
   *'agent deploy'*) printf '%s\\n' '{"id":"rev_candidate"}' ;;
@@ -298,21 +301,46 @@ esac
 `,
   );
 
-  // Durable deployment completion can precede Kubernetes readiness. The
-  // command must observe a ready revision before reporting fleet success.
-  const completed = await execute(
+  // A controller release changes only the Helm-owned image. It must not replace
+  // the Installation Secret, request fleet inventory, or create Agent revisions.
+  const controllerOnly = await execute(
     upgradeScript,
-    upgradeArguments(join(directory, "ready-evidence")),
+    upgradeArguments(join(directory, "controller-evidence"), ["controller"]),
     {
       cwd: repository,
       env: {
         ...environment,
+        COMMAND_LOG: commandLog,
+        OBSERVED_CONTROLLER_IMAGE: controllerImage,
+      },
+    },
+  );
+  assert.match(controllerOnly.stdout, /no Agent deployments were requested/u);
+  const controllerCommands = await readFile(commandLog, "utf8");
+  assert.doesNotMatch(controllerCommands, /deployment-inventory|agent deploy|apply --filename/u);
+  assert.equal(await readFile(protectedFiles.installation, "utf8"), installationDocument);
+  await rm(commandLog);
+
+  // Durable deployment completion can precede Kubernetes readiness. The
+  // command must observe a ready revision before reporting fleet success.
+  const completed = await execute(
+    upgradeScript,
+    upgradeArguments(join(directory, "ready-evidence"), ["runtime"]),
+    {
+      cwd: repository,
+      env: {
+        ...environment,
+        COMMAND_LOG: commandLog,
+        OBSERVED_CONTROLLER_IMAGE: baselineControllerImage,
         READINESS_COUNTER: readinessCounter,
         RUNTIME_COUNT_COUNTER: runtimeCountCounter,
       },
     },
   );
-  assert.match(completed.stdout, /1 running Agents selected new revisions/);
+  assert.match(
+    completed.stdout,
+    /runtime image; controller image remained unchanged and 1 running Agents selected new revisions/u,
+  );
   assert.equal((await readFile(readinessCounter, "utf8")).trim(), "2");
   assert.equal((await readFile(runtimeCountCounter, "utf8")).trim(), "3");
   assert.equal(

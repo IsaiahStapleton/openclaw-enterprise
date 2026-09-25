@@ -28,8 +28,8 @@ inside the embedded gateway.
 | `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`            | Imported immutable runtime image reference used for the embedded OpenClaw gateway.                                      |
 | `OCC_TEST_PRODUCTION_POSTGRES_IMAGE`           | Imported immutable PostgreSQL image reference for the task-owned database Pod.                                          |
 | `OCC_TEST_PRODUCTION_NODE_IMAGE`               | Imported immutable Node image reference for the operator HTTPS proxy and network probes.                                |
-| `OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE` | Optional second immutable controller image; set with the matching runtime image to exercise coordinated upgrade.        |
-| `OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE`    | Optional second immutable runtime image from the same reviewed source as the upgrade controller.                        |
+| `OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE` | Optional second immutable controller image; set with the runtime candidate to exercise both independent release paths.  |
+| `OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE`    | Optional second immutable runtime image; set with the controller candidate to exercise both independent release paths.  |
 | `OPENAI_API_KEY`                               | Existing authorized provider credential used only by the Agent-owned embedded gateway path.                             |
 | `OCC_TEST_OPENAI_MODEL`                        | Authorized provider model; defaults to `gpt-6-astra`.                                                                   |
 | `OCC_TEST_PRODUCTION_TUI_KEEP`                 | Optional `1` retains the owned Helm release, namespaces, final gateway, `attach.sh`, and `proof.json` rehearsal output. |
@@ -43,15 +43,13 @@ for operator rehearsal: it keeps the owned setup running, leaves an executable
 cluster, image, Namespace, Agent, revision, Pod, and nonce-response evidence.
 Do not treat an in-progress run as passing live proof until the test completes.
 
-When both upgrade image variables are set, the test runs
-the first-adoption controller-only bootstrap and then
-`scripts/upgrade-production-images` after the initial revision and model proof.
-It requires different controller and runtime digests, verifies the bootstrap
-retains the old Agent revisions, then verifies the resulting revisions and
-images for two running Agents, preserves one stopped Agent without a new
-revision, and sends a fresh model turn. Setting only one variable fails the
-selected test. Omitting both keeps the original installation and TUI coverage
-but does not prove coordinated upgrade behavior.
+When both upgrade image variables are set, the test runs a controller-only
+release and then a runtime-only release after the initial revision and model
+proof. It verifies that the controller release retains every Agent revision and
+that the runtime release keeps the controller digest, replaces two running
+Agents, preserves one stopped Agent, and completes a fresh model turn. Setting
+only one variable fails the selected test. Omitting both keeps the original
+installation and TUI coverage but does not prove either upgrade path.
 
 ## Run the suite
 
