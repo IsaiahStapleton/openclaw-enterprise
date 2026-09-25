@@ -15,6 +15,8 @@
     "OCC_TEST_OPENSHELL_RUNTIME_CLASS"
   ],
   "env": {
+    "OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL": "1",
+    "OCC_TEST_DEV_UP_OPENSHELL_REAL": "1",
     "OCC_TEST_OPENSHELL_K3D_REAL": "1"
   },
   "prepare": {
@@ -31,6 +33,13 @@
     ]
   },
   "files": [
+    {
+      "path": "tests/integration/dev-up-openshell-k3d-real.test.mjs",
+      "expectedTests": [
+        "dev-up installs the pinned OpenShell profile in its owned k3d cluster",
+        "dev-up runs OCC in Compose with OpenShell and Kubernetes Compute in k3d"
+      ]
+    },
     {
       "path": "tests/integration/sandbox-driver-openshell-k3d-real.test.mjs",
       "expectedTests": ["OpenShell enforces the selected Secret projection contract"]

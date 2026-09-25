@@ -13,6 +13,31 @@ occ_cli="$repo_root/bin/occ"
 cd "$repo_root"
 
 development_compute_driver="${OCC_DEVELOPMENT_COMPUTE_DRIVER:-docker}"
+development_sandbox_driver="${OCC_DEVELOPMENT_SANDBOX_DRIVER:-none}"
+development_control_plane="${OCC_DEVELOPMENT_CONTROL_PLANE:-}"
+case "$development_sandbox_driver" in
+  none | openshell) ;;
+  *)
+    echo "dev-up: configuration failed: OCC_DEVELOPMENT_SANDBOX_DRIVER must be none or openshell" >&2
+    exit 2
+    ;;
+esac
+case "$development_control_plane" in
+  "" | compose | kubernetes) ;;
+  *)
+    echo "dev-up: configuration failed: OCC_DEVELOPMENT_CONTROL_PLANE must be compose or kubernetes" >&2
+    exit 2
+    ;;
+esac
+if [ "$development_sandbox_driver" = openshell ] && [ "$development_compute_driver" != kubernetes ]; then
+  echo "dev-up: configuration failed: OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell requires OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes" >&2
+  exit 2
+fi
+if [ "$development_control_plane" = kubernetes ] &&
+  { [ "$development_compute_driver" != kubernetes ] || [ "$development_sandbox_driver" != openshell ]; }; then
+  echo "dev-up: configuration failed: OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes requires Kubernetes Compute with OpenShell" >&2
+  exit 2
+fi
 case "$development_compute_driver" in
   docker) ;;
   kubernetes)

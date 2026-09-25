@@ -66,7 +66,7 @@ input is not supported. The server validates document fields against the
 | `occ agent stop ID`                            | Requests a stop while retaining revisions and persistent state.                                                                                                  |
 
 Use the [HTTP API](api.md) to inspect revision history or to work with
-ServiceAccounts and configured Providers; the CLI has no commands for these.
+ServiceAccounts and configured Backends; the CLI has no commands for these.
 Neither the CLI nor the HTTP API offers Configuration
 listing. An accepted deploy returns a revision; `agent get`
 shows desired state and the selected revision, not runtime health. Use the
@@ -105,12 +105,15 @@ Run these from a repository checkout. They use local development configuration,
 not the remote connection or output options above. Kubernetes is the supported
 local setup for deploying an Agent; follow [Local Setup](../guides/quickstart.md).
 
-| Command                        | What it does                                                                                                                                                     |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `occ dev up`                   | Starts the profile selected by `OCC_DEVELOPMENT_COMPUTE_DRIVER`: `docker` (default) or `kubernetes`. Docker is a control-plane preview and cannot deploy Agents. |
-| `occ dev up --key-output PATH` | Writes the bootstrap service-key file to an absent absolute path in a private directory.                                                                         |
-| `occ dev down`                 | Stops the selected profile. Docker keeps Compose volumes by default; Kubernetes removes its k3d cluster, Compose volumes, and private state.                     |
-| `occ dev down --volumes`       | Also removes Docker Compose volumes; Kubernetes cleanup already removes its volumes.                                                                             |
+| Command                        | What it does                                                                                                                                                      |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `occ dev up`                   | Starts the profile selected by `OCC_DEVELOPMENT_COMPUTE_DRIVER`: `docker` (default) or `kubernetes`. Docker is a control-plane preview and cannot deploy Agents.  |
+| `occ dev up --key-output PATH` | Writes the bootstrap service-key file to an absent absolute path in a private directory.                                                                          |
+| `occ dev down`                 | Stops the selected profile. Docker keeps Compose volumes by default. Kubernetes removes its owned k3d cluster; the ordinary profile also removes Compose volumes. |
+| `occ dev down --volumes`       | Also removes Docker Compose volumes; Kubernetes cleanup already removes its volumes.                                                                              |
 
 Compose global options, when needed, must follow `--`. Keep the cleanup command
 printed by startup so it selects the same profile and state directory.
+The OpenShell Kubernetes-only profile rejects Compose options. Use
+`scripts/dev-up` and `scripts/dev-down` as the common entry points for every
+profile; the Compute and Sandbox Driver settings select the implementation.

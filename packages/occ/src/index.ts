@@ -36,8 +36,8 @@ import type {
   PluginCatalogPage,
   PluginDriver,
   PluginRevisionState,
-  ProviderDefinition,
-  ProviderRef,
+  BackendDefinition,
+  BackendRef,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
   RepositoryOption,
@@ -94,12 +94,12 @@ import {
   ScopeViolationError,
 } from "./errors.ts";
 import {
-  assertConfiguredProvider,
-  providerDefinitionMap,
-  validateProviderDefinitions,
-  validateSelectedProviderDrivers,
-  validateServiceAccountProviderBinding,
-} from "./providers.ts";
+  assertConfiguredBackend,
+  backendDefinitionMap,
+  validateBackendDefinitions,
+  validateSelectedBackendDrivers,
+  validateServiceAccountBackendBinding,
+} from "./backends.ts";
 import {
   InMemoryPlatformState,
   type PlatformReadView,
@@ -158,11 +158,11 @@ export {
   ScopeViolationError,
 } from "./errors.ts";
 export {
-  providerDefinitionMap,
-  validateProviderDefinitions,
-  validateSelectedProviderDrivers,
-  validateServiceAccountProviderBinding,
-} from "./providers.ts";
+  backendDefinitionMap,
+  validateBackendDefinitions,
+  validateSelectedBackendDrivers,
+  validateServiceAccountBackendBinding,
+} from "./backends.ts";
 export {
   provisioningEffectReceipt,
   provisioningPendingEffect,
@@ -259,7 +259,7 @@ export interface ControllerOptions {
   readonly createId?: (kind: ResourceKind) => string;
   readonly state?: PlatformStateStore;
   readonly recordOperations?: boolean;
-  readonly providers?: readonly ProviderDefinition[];
+  readonly backends?: readonly BackendDefinition[];
   readonly defaultPresets?: readonly Pick<Preset, "name" | "template">[];
   readonly loggingLevel?: LoggingLevel;
   readonly configuredServiceAccountDriverId?: string;
@@ -276,7 +276,7 @@ export interface CreateAgentInput {
   readonly namespaceId: string;
   readonly name: string;
   readonly configurationId: string;
-  readonly providerId?: string | null;
+  readonly backendId?: string | null;
   readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
@@ -287,7 +287,7 @@ export interface UpdateAgentInput {
   readonly namespaceId: string;
   readonly agentId: string;
   readonly configurationId: string;
-  readonly providerId?: string | null;
+  readonly backendId?: string | null;
   readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
@@ -785,10 +785,10 @@ export class OpenClawController {
   private readonly shouldRecordOperations: boolean;
   private readonly registry = new Map<string, RegisteredDriver>();
   private readonly selections = new Map<DriverCapability, RegisteredDriver>();
-  private readonly providers: readonly ProviderDefinition[];
+  private readonly backends: readonly BackendDefinition[];
   private readonly defaultPresets: readonly Pick<Preset, "name" | "template">[];
   private readonly loggingLevel: LoggingLevel;
-  private readonly providerMap: ReadonlyMap<string, ProviderDefinition>;
+  private readonly backendMap: ReadonlyMap<string, BackendDefinition>;
   private readonly configuredServiceAccountDriverId: string | undefined;
 
   constructor(installation: Installation, options: ControllerOptions = {}) {
@@ -811,7 +811,7 @@ export class OpenClawController {
     this.identifier = options.createId;
     this.state = options.state ?? new InMemoryPlatformState();
     this.shouldRecordOperations = options.recordOperations ?? true;
-    this.providers = validateProviderDefinitions(options.providers ?? []);
+    this.backends = validateBackendDefinitions(options.backends ?? []);
     this.defaultPresets = immutableCopy(options.defaultPresets ?? []);
     const presetNames = new Set<string>();
     for (const preset of this.defaultPresets) {
@@ -821,7 +821,7 @@ export class OpenClawController {
       presetNames.add(preset.name);
     }
     this.loggingLevel = normalizeLoggingLevel(options.loggingLevel);
-    this.providerMap = providerDefinitionMap(this.providers);
+    this.backendMap = backendDefinitionMap(this.backends);
     if (
       options.configuredServiceAccountDriverId !== undefined &&
       !isNonEmptyString(options.configuredServiceAccountDriverId)
@@ -893,9 +893,9 @@ export class OpenClawController {
     return selected.driver as DriverFor<Capability>;
   }
 
-  async validateProviderConfiguration(): Promise<void> {
-    validateSelectedProviderDrivers(
-      this.providers,
+  async validateBackendConfiguration(): Promise<void> {
+    validateSelectedBackendDrivers(
+      this.backends,
       this.selections.get("service_account")?.driver,
       this.selections.get("repo")?.driver,
     );
@@ -1467,7 +1467,7 @@ export class OpenClawController {
     if (!validExecutionMode(executionMode)) {
       throw new ScopeViolationError("The Agent Harness execution mode is invalid.");
     }
-    const providerId = this.providerId(input.providerId);
+    const backendId = this.backendId(input.backendId);
     const plugins = normalizeAgentPlugins(input.plugins);
     const workspace = normalizeProvisioningWorkspace(
       input.initialWorkspaceFiles,
@@ -1502,7 +1502,7 @@ export class OpenClawController {
       ...(workspace.workspaceDefaultsId === undefined
         ? {}
         : { workspaceDefaultsId: workspace.workspaceDefaultsId }),
-      ...(providerId === undefined ? {} : { providerId }),
+      ...(backendId === undefined ? {} : { backendId }),
       harnessAuth,
       executionMode,
       ...(plugins === undefined ? {} : { plugins }),
@@ -1579,7 +1579,7 @@ export class OpenClawController {
           configuration: configurationInput,
           harnessAuth,
           executionMode,
-          ...(providerId === undefined ? {} : { providerId }),
+          ...(backendId === undefined ? {} : { backendId }),
           ...(plugins === undefined ? {} : { plugins }),
           ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
           ...(workspace.initialWorkspaceFiles === undefined
@@ -2884,7 +2884,7 @@ export class OpenClawController {
     if (!validExecutionMode(executionMode)) {
       throw new ScopeViolationError("The Agent Harness execution mode is invalid.");
     }
-    const providerId = this.providerId(input.providerId);
+    const backendId = this.backendId(input.backendId);
     const plugins = normalizeAgentPlugins(input.plugins);
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, input.namespaceId);
@@ -2931,7 +2931,7 @@ export class OpenClawController {
         namespaceId: namespace.id,
         name: input.name,
         configurationId: input.configurationId,
-        providerId,
+        backendId,
         harnessAuth,
         executionMode,
         ...(plugins === undefined ? {} : { plugins }),
@@ -3007,7 +3007,7 @@ export class OpenClawController {
       }
       const secretBindings = this.bindings(configuration.secretBindings);
       await this.authorizeBindings(state, principalId, namespace.id, secretBindings);
-      const providerId = this.providerId(input.providerId, agent.providerId);
+      const backendId = this.backendId(input.backendId, agent.backendId);
       const repositoryBindings =
         input.repositoryBindings === undefined
           ? undefined
@@ -3019,7 +3019,7 @@ export class OpenClawController {
         input.configurationId,
         input.executionMode,
         requestedAuth,
-        input.providerId === undefined ? undefined : providerId,
+        input.backendId === undefined ? undefined : backendId,
         plugins,
         repositoryBindings,
       );
@@ -3076,7 +3076,7 @@ export class OpenClawController {
       if (lockedAgent.status !== "active") {
         throw new AgentDeletingError();
       }
-      const providerId = this.providerId(lockedAgent.providerId);
+      const backendId = this.backendId(lockedAgent.backendId);
       if (sandbox !== undefined && lockedAgent.executionMode !== "dedicated") {
         throw new ScopeViolationError(
           "The selected Sandbox Driver supports only dedicated Harness execution.",
@@ -3205,7 +3205,7 @@ export class OpenClawController {
           namespaceId: namespace.id,
           agentId: lockedAgent.id,
           revision: previous.length + 1,
-          providerId,
+          backendId,
           configurationId: configuration.id,
           configurationKind: configuration.kind,
           configurationGeneration: configuration.generation,
@@ -3883,7 +3883,7 @@ export class OpenClawController {
         "Agent provisioning requires dedicated Harness authentication.",
       );
     }
-    const providerId = this.providerId(record.plan.providerId as ProviderRef | undefined);
+    const backendId = this.backendId(record.plan.backendId as BackendRef | undefined);
     const agent =
       record.agentId === undefined
         ? undefined
@@ -3899,7 +3899,7 @@ export class OpenClawController {
       binding.method === "api_key" || binding.method === "codex_pat"
         ? { ...binding, secretDriverId: secretDriver!.id }
         : agent === undefined
-          ? await this.serviceAccountHarnessAuthSnapshot(state, namespaceId, providerId, binding)
+          ? await this.serviceAccountHarnessAuthSnapshot(state, namespaceId, backendId, binding)
           : await this.admitHarnessAuth(state, principalId, { ...agent, harnessAuth: binding });
     const configuration =
       this.sandboxDriver()?.configureAgent?.(plan.configuration.values) ??
@@ -4318,7 +4318,7 @@ export class OpenClawController {
           "Agent provisioning requires dedicated Harness authentication.",
         );
       }
-      const providerId = this.providerId(planRecord.providerId as ProviderRef | undefined);
+      const backendId = this.backendId(planRecord.backendId as BackendRef | undefined);
       const plugins = normalizeAgentPlugins(
         planRecord.plugins as Readonly<Record<string, PluginDesiredSelection>> | undefined,
       );
@@ -4355,7 +4355,7 @@ export class OpenClawController {
           namespaceId: namespace.id,
           name,
           configurationId: metadata.id,
-          providerId,
+          backendId,
           harnessAuth: plan.harnessAuth,
           executionMode: plan.executionMode,
           ...(plugins === undefined ? {} : { plugins }),
@@ -4557,7 +4557,7 @@ export class OpenClawController {
   private async serviceAccountHarnessAuthSnapshot(
     state: PlatformUnitOfWork,
     namespaceId: string,
-    providerId: ProviderRef,
+    backendId: BackendRef,
     binding: Extract<HarnessAuthBinding, { readonly method: "chatgpt_service_account" }>,
   ): Promise<HarnessAuthSnapshot> {
     const account = await state.serviceAccounts.lockServiceAccount(
@@ -4569,21 +4569,21 @@ export class OpenClawController {
         "ChatGPT Harness authentication requires an issued account access-token credential.",
       );
     }
-    const providerBinding = await state.serviceAccounts.findServiceAccountProviderBinding(
+    const backendBinding = await state.serviceAccounts.findServiceAccountBackendBinding(
       namespaceId,
       binding.serviceAccountId,
     );
-    validateServiceAccountProviderBinding(this.providerMap, providerId, providerBinding);
+    validateServiceAccountBackendBinding(this.backendMap, backendId, backendBinding);
     const driverId = this.serviceAccountDriverId();
-    if (providerBinding === undefined || driverId !== providerBinding.driverId) {
+    if (backendBinding === undefined || driverId !== backendBinding.driverId) {
       throw new DependencyUnavailableError(
-        "The Harness ServiceAccount Driver does not match the admitted Provider.",
+        "The Harness ServiceAccount Driver does not match the admitted Backend.",
       );
     }
     return immutableCopy({
       ...binding,
       credential: { kind: "access_token" as const, secretRef: account.credential.secretRef },
-      providerBinding,
+      backendBinding,
     });
   }
 
@@ -4630,21 +4630,21 @@ export class OpenClawController {
         "ChatGPT Harness authentication requires an issued account access-token credential.",
       );
     }
-    const providerBinding = await state.serviceAccounts.findServiceAccountProviderBinding(
+    const backendBinding = await state.serviceAccounts.findServiceAccountBackendBinding(
       agent.namespaceId,
       binding.serviceAccountId,
     );
-    validateServiceAccountProviderBinding(this.providerMap, agent.providerId, providerBinding);
+    validateServiceAccountBackendBinding(this.backendMap, agent.backendId, backendBinding);
     const driverId = this.serviceAccountDriverId();
-    if (providerBinding === undefined || driverId !== providerBinding.driverId) {
+    if (backendBinding === undefined || driverId !== backendBinding.driverId) {
       throw new DependencyUnavailableError(
-        "The Harness ServiceAccount Driver does not match the admitted Provider.",
+        "The Harness ServiceAccount Driver does not match the admitted Backend.",
       );
     }
     return immutableCopy({
       ...binding,
       credential: { kind: "access_token" as const, secretRef: account.credential.secretRef },
-      providerBinding,
+      backendBinding,
     });
   }
 
@@ -5099,14 +5099,14 @@ export class OpenClawController {
       requested.size !== bindings.length ||
       resolution.bindings.length !== bindings.length ||
       resolution.bindings.some((binding) => {
-        const provider = this.providerMap.get(binding.providerId);
+        const backend = this.backendMap.get(binding.backendId);
         return (
           !requested.has(binding.repositoryRef) ||
           (requested.get(binding.repositoryRef) !== undefined &&
             requested.get(binding.repositoryRef) !== binding.profile) ||
-          provider === undefined ||
-          !("repo" in provider.drivers) ||
-          provider.drivers.repo !== driver.id
+          backend === undefined ||
+          !("repo" in backend.drivers) ||
+          backend.drivers.repo !== driver.id
         );
       })
     ) {
@@ -5291,13 +5291,13 @@ export class OpenClawController {
     return `${selectedCapability}\u0000${driverId}`;
   }
 
-  private providerId(value: ProviderRef | undefined, preserve?: ProviderRef): ProviderRef {
-    const providerId = value === undefined ? (preserve ?? null) : value;
-    const provider = assertConfiguredProvider(this.providerMap, providerId, "Provider");
-    if (provider !== undefined && provider.type !== "chatgpt") {
-      throw new ScopeViolationError("The Agent Provider must support its Harness association.");
+  private backendId(value: BackendRef | undefined, preserve?: BackendRef): BackendRef {
+    const backendId = value === undefined ? (preserve ?? null) : value;
+    const backend = assertConfiguredBackend(this.backendMap, backendId, "Backend");
+    if (backend !== undefined && backend.type !== "chatgpt") {
+      throw new ScopeViolationError("The Agent Backend must support its Harness association.");
     }
-    return providerId;
+    return backendId;
   }
 
   private applyDriverSelection<Capability extends DriverCapability>(
