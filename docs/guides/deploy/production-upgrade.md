@@ -99,9 +99,11 @@ protected files match live state, renders the chart, and performs a server-side
 dry run. It then changes only `images.controller`, runs Helm, waits for the API
 and worker, verifies their image, and confirms OCC authentication recovers.
 
-Helm runs the migration and bootstrap hooks during this release. The gateway
-Pods keep serving their existing revisions and images; the command does not
-request fleet inventory or Agent deployment authority.
+Helm runs the candidate controller's database migration init container with the
+migration role, then runs bootstrap. The API and worker do not roll out unless
+both hooks succeed. Gateway Pods keep serving their existing revisions and
+images; the command does not request fleet inventory or Agent deployment
+authority.
 
 For the first release that introduces `occ installation deployment-inventory`,
 verify that operation after the controller upgrade before attempting a runtime
@@ -148,6 +150,14 @@ durable success, confirms each new active revision, and requires its Pods to be
 Agents remain untouched. An empty fleet updates the saved runtime selection but
 does not prove that the image starts.
 
+OpenClaw runs startup-safe migrations and plugin convergence before each gateway
+becomes ready. This workflow replaces immutable images instead of running
+`openclaw update`, so the command then runs
+`openclaw doctor --lint --json --severity-min error` inside every replacement
+gateway. Doctor is read-only here; a reported error fails the upgrade and is
+saved under `status/*.doctor.*`. The command never runs `doctor --fix` across
+the fleet.
+
 Success looks like:
 
 ```text
@@ -166,11 +176,13 @@ worker images.
 
 For a controller-only release, confirm representative existing gateways remain
 ready on their original revisions. For a runtime release, inspect
-`deployments.jsonl`, `status/`, and the before/after workload inventories. Then
-follow [Verify production workloads](production-agents.md#verify-production-workloads)
+`deployments.jsonl`, `status/*.doctor.json`, and the before/after workload
+inventories. Then follow
+[Verify production workloads](production-agents.md#verify-production-workloads)
 for every execution mode and provider used by the fleet. Require a fresh model
 response and check relevant channels, credentials, workspace data, and native UI
-access. Command success proves deployment convergence, not application behavior.
+access. Doctor lint proves that OpenClaw found no error-level diagnostic; it does
+not prove those application paths.
 
 ## Recover from a partial failure
 
@@ -196,7 +208,7 @@ Never delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
 - Runtime upgrades start all recorded Agent deployments concurrently.
 - Agent deployments use current drafts rather than recreating active revisions.
 - One runtime image is used for both gateway and Agent containers.
-- Runtime, model, channel, and restore checks remain manual.
+- Model, channel, provider, native-access, and restore checks remain manual.
 
 See the [production image upgrade flow](../../flows/coordinated-production-upgrade.md)
 for implementation details and failure boundaries.

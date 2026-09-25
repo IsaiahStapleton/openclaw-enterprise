@@ -3,7 +3,7 @@ import { defaultAgentModel } from "../../apps/controller/src/console/agents/star
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, writeFile, rm } from "node:fs/promises";
 import https from "node:https";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -1330,6 +1330,16 @@ test(
       assert.ok(secondaryDeployment);
       assert.notEqual(primaryDeployment.deploymentId, finalGateway.revisionId);
       assert.notEqual(secondaryDeployment.deploymentId, secondaryBaselineRevision);
+      const doctorEvidence = (await readdir(join(upgradeEvidence, "status"))).filter((name) =>
+        name.endsWith(".doctor.json"),
+      );
+      assert.equal(doctorEvidence.length, 2);
+      for (const name of doctorEvidence) {
+        assert.equal(
+          JSON.parse(await readFile(join(upgradeEvidence, "status", name), "utf8")).ok,
+          true,
+        );
+      }
       const stoppedAfter = await api(
         "GET",
         `/namespaces/${namespace.id}/agents/${stoppedAgent.id}`,

@@ -378,6 +378,8 @@ while ((pending > 0)); do
   ((pending == 0)) || sleep 2
 done
 
+doctor_targets="$evidence_dir/doctor-targets.jsonl"
+: >"$doctor_targets"
 while IFS= read -r deployment; do
   namespace_id=$(jq -r '.namespaceId' <<<"$deployment")
   agent_id=$(jq -r '.agentId' <<<"$deployment")
@@ -419,7 +421,54 @@ while IFS= read -r deployment; do
       die "Agent $agent_id revision Pods did not become ready before the upgrade timeout."
     sleep 2
   done
+
+  if ! gateway=$(
+    jq -er '
+      [
+        .items[] |
+        select(any(.spec.containers[]; .name == "gateway")) |
+        {namespace: .metadata.namespace, name: .metadata.name}
+      ] |
+      if length == 1 then .[0] else error("expected exactly one gateway Pod") end
+    ' "$pods"
+  ); then
+    die "Agent $agent_id revision does not expose exactly one gateway Pod."
+  fi
+  gateway_namespace=$(jq -er '.namespace' <<<"$gateway")
+  gateway_name=$(jq -er '.name' <<<"$gateway")
+  jq -cn --arg namespaceId "$namespace_id" --arg agentId "$agent_id" \
+    --arg deploymentId "$deployment_id" --arg gatewayNamespace "$gateway_namespace" \
+    --arg gatewayName "$gateway_name" \
+    '{namespaceId: $namespaceId, agentId: $agentId, deploymentId: $deploymentId,
+      gatewayNamespace: $gatewayNamespace, gatewayName: $gatewayName}' \
+    >>"$doctor_targets"
 done <"$deployments"
+
+remaining_seconds=$((deadline - SECONDS))
+((target_count == 0 || remaining_seconds > 0)) ||
+  die "OpenClaw Doctor did not run before the upgrade timeout."
+doctor_failed=0
+if ((target_count > 0)); then
+  pids=()
+  while IFS= read -r target; do
+    namespace_id=$(jq -r '.namespaceId' <<<"$target")
+    agent_id=$(jq -r '.agentId' <<<"$target")
+    deployment_id=$(jq -r '.deploymentId' <<<"$target")
+    gateway_namespace=$(jq -r '.gatewayNamespace' <<<"$target")
+    gateway_name=$(jq -r '.gatewayName' <<<"$target")
+    doctor_prefix="$evidence_dir/status/$(json_file_name "$namespace_id--$agent_id--$deployment_id").doctor"
+    ("${kube[@]}" --request-timeout="${remaining_seconds}s" \
+      --namespace "$gateway_namespace" exec "$gateway_name" --container gateway -- \
+      node /app/openclaw.mjs doctor --lint --json --severity-min error \
+      >"$doctor_prefix.json" 2>"$doctor_prefix.error") &
+    pids+=("$!")
+  done <"$doctor_targets"
+  for pid in "${pids[@]}"; do
+    wait "$pid" || doctor_failed=1
+  done
+fi
+((doctor_failed == 0)) ||
+  die "OpenClaw Doctor failed for at least one replacement gateway; inspect $evidence_dir/status/*.doctor.error."
 
 helm status "$release" "${helm_args[@]}" >"$evidence_dir/after-helm-status.txt"
 "${kube[@]}" get deployments,statefulsets,pods,persistentvolumeclaims --all-namespaces \

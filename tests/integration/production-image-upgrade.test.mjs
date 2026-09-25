@@ -250,7 +250,9 @@ case "$*" in
   *'.installationId == '*) exit 0 ;;
   *'.deploymentInProgress'*|*'.activeRevisionId == null'*|*'.status != "ready"'*) exit 1 ;;
   *'namespaceId: $namespace.id'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","executionMode":"dedicated","baselineRevisionId":"rev_test"}' ;;
+  *'gatewayNamespace: $gatewayNamespace'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","deploymentId":"rev_candidate","gatewayNamespace":"tenant-test","gatewayName":"gateway-test"}' ;;
   *'{namespaceId: $namespaceId'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","executionMode":"dedicated","deploymentId":"rev_candidate"}' ;;
+  *'{namespace: .metadata.namespace, name: .metadata.name}'*) printf '%s\\n' '{"namespace":"tenant-test","name":"gateway-test"}' ;;
   *'spec.containers'*'length'*)
     attempts=0
     [[ ! -f "$RUNTIME_COUNT_COUNTER" ]] || attempts=$(cat "$RUNTIME_COUNT_COUNTER")
@@ -269,7 +271,11 @@ case "$*" in
   *'.activeRevisionId'*) cat >/dev/null; printf 'rev_candidate\\n' ;;
   *'.executionMode'*) cat >/dev/null; printf 'dedicated\\n' ;;
   *'.deploymentId'*) printf 'rev_candidate\\n' ;;
+  *'.gatewayNamespace'*) cat >/dev/null; printf 'tenant-test\\n' ;;
+  *'.gatewayName'*) cat >/dev/null; printf 'gateway-test\\n' ;;
   *'.namespaceId'*) cat >/dev/null; printf 'ns_test\\n' ;;
+  *'.namespace'*) cat >/dev/null; printf 'tenant-test\\n' ;;
+  *'.name'*) cat >/dev/null; printf 'gateway-test\\n' ;;
   *'.agentId'*) cat >/dev/null; printf 'agt_test\\n' ;;
   *'.status'*) printf 'succeeded\\n' ;;
   *'.id'*'installation.json'*) printf 'ins_upgrade_test\\n' ;;
@@ -282,6 +288,13 @@ esac
     `#!/usr/bin/env bash
 printf 'kubectl %s\\n' "$*" >>"$COMMAND_LOG"
 case "$*" in
+  *'exec gateway-test --container gateway -- node /app/openclaw.mjs doctor --lint --json --severity-min error'*)
+    if [[ "$DOCTOR_FAILURE" == "1" ]]; then
+      printf 'doctor found an error\\n' >&2
+      exit 53
+    fi
+    printf '%s\\n' '{"status":"ok"}'
+    ;;
   *'jsonpath='*) printf '%s\\n' "$OBSERVED_CONTROLLER_IMAGE" ;;
   *'get pods'*) printf '%s\\n' '{"items":[]}' ;;
 esac
@@ -321,6 +334,32 @@ esac
   assert.equal(await readFile(protectedFiles.installation, "utf8"), installationDocument);
   await rm(commandLog);
 
+  // Kubernetes readiness does not cover OpenClaw's own state and configuration
+  // diagnostics. A replacement gateway with a Doctor error must fail the release.
+  await assert.rejects(
+    execute(
+      upgradeScript,
+      upgradeArguments(join(directory, "doctor-failure-evidence"), ["runtime"]),
+      {
+        cwd: repository,
+        env: {
+          ...environment,
+          COMMAND_LOG: commandLog,
+          DOCTOR_FAILURE: "1",
+          OBSERVED_CONTROLLER_IMAGE: baselineControllerImage,
+          READINESS_COUNTER: readinessCounter,
+          RUNTIME_COUNT_COUNTER: runtimeCountCounter,
+        },
+      },
+    ),
+    /OpenClaw Doctor failed for at least one replacement gateway/u,
+  );
+  await writeFile(protectedFiles.values, valuesDocument, { mode: 0o600 });
+  await writeFile(protectedFiles.installation, installationDocument, { mode: 0o600 });
+  await rm(commandLog, { force: true });
+  await rm(readinessCounter, { force: true });
+  await rm(runtimeCountCounter, { force: true });
+
   // Durable deployment completion can precede Kubernetes readiness. The
   // command must observe a ready revision before reporting fleet success.
   const completed = await execute(
@@ -343,6 +382,10 @@ esac
   );
   assert.equal((await readFile(readinessCounter, "utf8")).trim(), "2");
   assert.equal((await readFile(runtimeCountCounter, "utf8")).trim(), "3");
+  assert.match(
+    await readFile(commandLog, "utf8"),
+    /exec gateway-test --container gateway -- node \/app\/openclaw\.mjs doctor --lint --json --severity-min error/u,
+  );
   assert.equal(
     (await readFile(join(directory, "ready-evidence", "installation-checksum"), "utf8")).trim(),
     "e".repeat(64),

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-23
 updated: "2026-09-25"
-last_updated_session: "authoring-run/ab700e2e-1baf-400c-ab18-0aa9a351f351"
+last_updated_session: "authoring-run/d35fd05b-5bbd-4f21-a747-820c2df23b2c"
 ---
 
 # Production image upgrade flow
@@ -12,7 +12,8 @@ last_updated_session: "authoring-run/ab700e2e-1baf-400c-ab18-0aa9a351f351"
 Agent runtimes, or both. A controller-only release ends after the OCC API and
 worker recover; it does not request Agent deployments. A runtime release deploys
 a new revision for every Agent that was running when the command began and ends
-after the selected Pods are ready. Application checks remain operator tasks.
+after the selected Pods are ready and each replacement gateway passes read-only
+Doctor lint. Model and external integration checks remain operator tasks.
 
 ## Entry Points
 
@@ -44,7 +45,9 @@ graph TD
     L -->|Yes| N["Deploy every baseline Agent concurrently"]
     N --> O{"All revisions and Pods ready?"}
     O -->|No| P["Preserve partial results for recovery"]
-    O -->|Yes| Q["Hand off application checks"]
+    O -->|Yes| Q{"Doctor lint passes in each gateway?"}
+    Q -->|No| R["Stop with diagnostic evidence"]
+    Q -->|Yes| S["Hand off application checks"]
 ```
 
 ## Execution Trace
@@ -82,8 +85,9 @@ application behavior.
 
 When only `--controller-image` is present, the script updates the protected Helm
 values and runs Helm without replacing the Installation Secret. Helm runs the
-migration and bootstrap hooks, then rolls the API and worker to the candidate
-controller image.
+candidate controller's database migrator as a pre-upgrade init container using
+the migration role. Bootstrap runs only after migration succeeds, and the API
+and worker roll out only after both hooks succeed.
 
 The script verifies both OCC Deployments and authenticated OCC recovery. It does
 not request deployment inventory or invoke `occ agent deploy`. Existing gateway
@@ -144,15 +148,29 @@ Agent workloads.
 The evidence directory retains dispatch responses, durable status, Pod state,
 Helm status, and before/after workload inventories.
 
-### 8. Hand off application verification
+### 8. Run OpenClaw Doctor lint
+
+`scripts/upgrade-production-images:422`
+
+OpenClaw gateway startup performs startup-safe migrations and plugin convergence
+before Kubernetes readiness. Because this workflow replaces immutable images
+instead of invoking `openclaw update`, the script separately runs
+`openclaw doctor --lint --json --severity-min error` inside the gateway container
+for each replacement revision.
+
+The command uses the gateway's mounted state and configuration but does not pass
+`--fix`. Any error-level finding or command failure stops the release and leaves
+the JSON and stderr output in the private `status/` evidence directory.
+
+### 9. Hand off application verification
 
 `docs/guides/deploy/production-upgrade.md:Verify the release`
 
 Controller success proves Helm convergence, image selection, and authenticated
 OCC recovery. Runtime success additionally proves durable deployment completion,
-active revision selection, and Pod readiness. The operator next checks model
-responses, providers, channels, credential delivery, workspace continuity,
-native access, and required restore behavior.
+active revision selection, Pod readiness, and error-free read-only Doctor lint.
+The operator next checks model responses, providers, channels, credential
+delivery, workspace continuity, native access, and required restore behavior.
 
 ## Debugging and Verification
 
@@ -160,7 +178,8 @@ native access, and required restore behavior.
 - For OCC rollout failures, inspect `helm-upgrade.txt`, initialization Job logs,
   and API and worker rollout status.
 - For runtime failures, inspect `dispatch/*.error`, revision history, and
-  `status/*.json` before retrying anything.
+  `status/*.json` before retrying anything. Doctor failures are recorded in
+  `status/*.doctor.json` and `status/*.doctor.error`.
 - Compare `before-workloads.json` and `after-workloads.json` for unexpected
   workload changes. Controller-only proof should retain Agent revision IDs;
   runtime proof should show the intended replacements.
@@ -184,6 +203,7 @@ native access, and required restore behavior.
 
 ## Changelog
 
+- 2026-09-25 13:40: Document Helm migration ordering and add post-readiness OpenClaw Doctor lint for replacement gateways. (authoring-run/d35fd05b-5bbd-4f21-a747-820c2df23b2c - 077e26ba0c0babe033569105e3a7e89abf06f40d)
 - 2026-09-25 12:29: Split controller and runtime releases while retaining an optional combined path. (authoring-run/ab700e2e-1baf-400c-ab18-0aa9a351f351 - 5e747ac1722f757d7949746e9ff9982142c8536b)
 - 2026-09-24 21:21: Separate operator instructions from the runtime trace; require revision-read admission, HTTPS, bounded Kubernetes reads, and the complete execution-mode workload set. (authoring-run/613d1e94-a661-4781-bae5-e28613aa3cf9 - c799988036f43ce1bb828373233f03cc77bb0ea9)
 - 2026-09-24: Record cluster/OCC identity binding, live/protected input equivalence, the supported empty-fleet path, and runtime Pod readiness discovered by the production rehearsal.
