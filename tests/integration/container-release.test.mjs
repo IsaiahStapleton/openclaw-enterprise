@@ -18,6 +18,7 @@ import {
   validatePreparedImage,
   verifyGhcr,
 } from "../../scripts/ci/container-release.mjs";
+import { writeBootstrapChart } from "../../scripts/ci/chart-package.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
@@ -31,6 +32,28 @@ const env = {
   SOURCE_SHA: sourceSha,
 };
 const repo = { full_name: repository, private: true, default_branch: "main" };
+
+test("chart bootstrap package is valid OCI chart content but cannot be installed", async (t) => {
+  const helm = process.env.OCC_HELM_BIN ?? "helm";
+  try {
+    execFileSync(helm, ["version", "--short"], { stdio: "ignore" });
+  } catch {
+    t.skip("Helm is required for the chart bootstrap package proof.");
+    return;
+  }
+  const directory = await mkdtemp(join(tmpdir(), "oce-chart-bootstrap-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeBootstrapChart(directory, "0.0.0-bootstrap.123.1");
+  execFileSync(helm, ["package", directory, "--destination", directory]);
+  const archive = join(directory, "openclaw-enterprise-0.0.0-bootstrap.123.1.tgz");
+  const metadata = execFileSync(helm, ["show", "chart", archive], { encoding: "utf8" });
+  assert.match(metadata, /^name: openclaw-enterprise$/m);
+  assert.match(metadata, /^version: 0\.0\.0-bootstrap\.123\.1$/m);
+  assert.throws(
+    () => execFileSync(helm, ["template", "oce", archive], { stdio: "pipe" }),
+    (error) => error.stderr?.toString().includes("This bootstrap marker is not a deployable"),
+  );
+});
 
 test("container release requires manual execution of the trusted main workflow", () => {
   for (const context of [
