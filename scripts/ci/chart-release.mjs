@@ -183,6 +183,12 @@ async function publish(directory, env) {
       entry.metadata?.container?.tags?.includes(version),
     );
     assert.ok(existingCharts.length <= 1, "Chart version must resolve to one package version.");
+    const existingChartDigest = remoteTagDigest(
+      chartPackage,
+      version,
+      authfile,
+      existingCharts.length > 0,
+    );
     const imageTags = [];
     for (const image of images) {
       const listed = await verifyGhcr(image.destination, image.digest, version);
@@ -197,7 +203,7 @@ async function publish(directory, env) {
       );
       imageTags.push({ ...image, exists: Boolean(actual) });
     }
-    if (existingCharts.length > 0) {
+    if (existingChartDigest) {
       const pulled = join(temporary, "existing");
       await mkdir(pulled);
       helmCommand(["pull", `oci://${chartPackage}`, "--version", version, "--destination", pulled]);
@@ -212,7 +218,12 @@ async function publish(directory, env) {
         continue;
       }
       await verifyReleaseContext(env, packagePath);
-      await verifyGhcr(image.destination, image.digest, version);
+      const listed = await verifyGhcr(image.destination, image.digest, version);
+      assert.equal(
+        remoteTagDigest(image.destination, version, authfile, listed),
+        null,
+        "Image release tag appeared before publication.",
+      );
       skopeo(
         [
           "copy",
@@ -236,11 +247,16 @@ async function publish(directory, env) {
         image.digest,
       );
     }
-    if (existingCharts.length === 0) {
+    if (!existingChartDigest) {
       await verifyReleaseContext(env, packagePath);
       const refreshed = await githubPages(`${packagePath}/versions`);
       assert.ok(
         refreshed.every((entry) => !entry.metadata?.container?.tags?.includes(version)),
+        "Chart version appeared before publication.",
+      );
+      assert.equal(
+        remoteTagDigest(chartPackage, version, authfile, false),
+        null,
         "Chart version appeared before publication.",
       );
       helmCommand(["push", archive, chartPushParent], { stdio: "inherit" });
