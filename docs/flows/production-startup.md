@@ -235,9 +235,11 @@ operator.
 From an approved client environment, `occ installation get` uses the protected
 key file through the OCC client and displays the Installation. The production
 startup proof succeeds only when its `ID` matches the key response's
-`meta.installationId`. Agent runtime,
-gateway WebSocket authentication, and model calls remain unproven until the
-tenant deployment and TUI procedures run.
+`meta.installationId`. The operator records that ID in the
+`openclaw.dev/installation-id` annotation on the Installation startup Secret;
+coordinated upgrades use the marker to bind their OCC endpoint to the selected
+Kubernetes Installation. Agent runtime, gateway WebSocket authentication, and
+model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Debugging and Verification
 
@@ -283,6 +285,8 @@ tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24: Record the post-bootstrap Kubernetes Installation identity marker used by coordinated upgrades.
 
 - 2026-09-25 12:02: Document optional API model-discovery egress in the accompanying chart change. (01a0cf72-6985-7712-ba92-d8cc32470f24 - b2521074873ca46e1a5024248852a32b97cfc8a9)
 

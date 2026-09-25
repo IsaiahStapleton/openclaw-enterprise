@@ -121,6 +121,9 @@
       "path": "tests/integration/production-healthcheck.test.mjs"
     },
     {
+      "path": "tests/integration/production-image-upgrade.test.mjs"
+    },
+    {
       "path": "tests/integration/sandbox-driver-startup.test.mjs"
     },
     {

@@ -127,6 +127,7 @@ cluster:
 
 controlPlane:
   nodeSelector: {}
+  installationChecksum: ""
 
 dns:
   namespace: kube-system

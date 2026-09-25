@@ -1862,6 +1862,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (operation.operationId === "getInstallationDeploymentInventory") {
+      reply.send({
+        data: await controller.getInstallationDeploymentInventory(context.actorId),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
     if (operation.operationId === "listBackends") {
       await requireInstallationAdmin(request, operation, context);
       const backends = options.backendSummaries;

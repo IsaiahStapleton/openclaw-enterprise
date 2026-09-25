@@ -319,6 +319,25 @@ test("control-plane node selectors are optional unless configured", tooling, asy
   }
 });
 
+test("Installation checksum rolls both control-plane Deployments", tooling, async () => {
+  const checksum = "c".repeat(64);
+  const objects = await resources(
+    (await render({ "controlPlane.installationChecksum": checksum })).stdout,
+  );
+  const deployments = objects.filter(({ kind }) => kind === "Deployment");
+  assert.equal(deployments.length, 2);
+  for (const deployment of deployments) {
+    assert.equal(
+      deployment.spec.template.metadata.annotations["openclaw.dev/installation-checksum"],
+      checksum,
+    );
+  }
+  await assert.rejects(
+    render({ "controlPlane.installationChecksum": "not-a-checksum" }),
+    /must be an empty string or a lowercase SHA-256 digest/,
+  );
+});
+
 test(
   "Agent native admin pilot renders public host settings with private gateway routing",
   tooling,

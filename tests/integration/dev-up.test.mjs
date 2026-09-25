@@ -105,6 +105,18 @@ test("dev-up builds the default runtime only when real Compose leaves runtime im
   assert.doesNotMatch(JSON.stringify(occLogs), new RegExp(serviceKey));
 });
 
+test("dev-up starts Docker without Compose options on Bash 3.2", async (t) => {
+  // The documented no-options invocation must not trip nounset on an empty Bash array.
+  const fixture = await createFixture(t);
+  const keyOutput = join(fixture.directory, "docker-no-options-service-key.json");
+
+  const result = runDevUp(["--key-output", keyOutput], fixture.env);
+
+  assert.equal(result.status, 0, result.stderr ?? result.error?.message ?? "dev-up did not exit");
+  assert.match(result.stdout, /OpenClaw Enterprise development stack is ready/);
+  assert.match(result.stdout, /Container engine: Docker/);
+});
+
 test("dev-up preserves a selected custom runtime image and skips the quickstart build", async (t) => {
   const fixture = await createFixture(t);
   const keyOutput = join(fixture.directory, "custom-service-key.json");
