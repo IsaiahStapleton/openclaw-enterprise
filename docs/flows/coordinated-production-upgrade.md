@@ -104,10 +104,12 @@ be in flight.
 `scripts/upgrade-production-images:188`
 
 The script writes the controller digest to candidate Helm values and one runtime
-digest to both Kubernetes Compute image slots. `helm template` and Kubernetes
-server-side dry run check the chart against the selected cluster before
-mutation. These checks establish structural rendering only; they do not prove
-image contents, startup, compatibility, or model behavior.
+digest to both Kubernetes Compute image slots. It hashes the complete candidate
+Installation file and writes that SHA-256 digest to
+`controlPlane.installationChecksum`. `helm template` and Kubernetes server-side
+dry run check the chart against the selected cluster before mutation. These
+checks establish structural rendering only; they do not prove image contents,
+startup, compatibility, or model behavior.
 
 ### 4. Replace OCC through Helm
 
@@ -115,10 +117,13 @@ image contents, startup, compatibility, or model behavior.
 
 The script copies the admitted candidates to the protected operator inputs,
 replaces the Installation startup Secret, and invokes the canonical Helm chart.
-Helm runs its initialization hook and replaces API and worker Pods because both
-use `images.controller`. The script waits for rollout and verifies both named
-containers use the candidate digest before retrying authenticated Installation
-access. A failure here stops before Agent deployment fan-out.
+Helm runs its initialization hook and replaces API and worker Pods when either
+the controller image or Installation checksum changes. The checksum is a Pod
+template annotation, so a controller-only first adoption cannot prevent the
+later runtime configuration from restarting both processes. The script waits
+for rollout and verifies both named containers use the candidate digest before
+retrying authenticated Installation access. A failure here stops before Agent
+deployment fan-out.
 
 ### 5. Fan out exact-Agent deployment
 

@@ -247,6 +247,14 @@ RUNTIME_IMAGE="$runtime_image" yq -i \
   '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
    .drivers.compute.configuration.images.agent = strenv(RUNTIME_IMAGE)' \
   "$candidate_installation"
+installation_checksum=$(
+  python3 -c \
+    'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+    "$candidate_installation"
+)
+INSTALLATION_CHECKSUM="$installation_checksum" yq -i \
+  '.controlPlane.installationChecksum = strenv(INSTALLATION_CHECKSUM)' "$candidate_values"
+printf '%s\n' "$installation_checksum" >"$evidence_dir/installation-checksum"
 
 rendered="$evidence_dir/rendered.yaml"
 helm template "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \

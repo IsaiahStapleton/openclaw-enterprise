@@ -84,7 +84,17 @@ esac
   await chmod(yq, 0o755);
 
   const python = join(bin, "python3");
-  await writeFile(python, '#!/usr/bin/env bash\ncat >/dev/null\ncat "$LIVE_INSTALLATION_FILE"\n');
+  await writeFile(
+    python,
+    `#!/usr/bin/env bash
+if (($# == 3)); then
+  printf '%s\\n' '${"e".repeat(64)}'
+else
+  cat >/dev/null
+  cat "$LIVE_INSTALLATION_FILE"
+fi
+`,
+  );
   await chmod(python, 0o755);
   const kubectl = join(bin, "kubectl");
   await writeFile(kubectl, "#!/usr/bin/env bash\nexit 0\n");
@@ -284,4 +294,8 @@ esac
   );
   assert.match(completed.stdout, /1 running Agents selected new revisions/);
   assert.equal((await readFile(readinessCounter, "utf8")).trim(), "2");
+  assert.equal(
+    (await readFile(join(directory, "ready-evidence", "installation-checksum"), "utf8")).trim(),
+    "e".repeat(64),
+  );
 });

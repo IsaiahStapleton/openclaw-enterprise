@@ -15,7 +15,9 @@ cutover, and records nonsecret evidence as it progresses. The test sets
 `agents.defaults.skipBootstrap` to `true` in the disposable demo Agent
 Configuration so fresh-workspace `BOOTSTRAP.md` onboarding does not replace the
 nonce reply; existing workspaces with bootstrap files are unaffected. Missing
-prerequisites fail the selected test instead of skipping.
+prerequisites fail the selected test instead of skipping. Allow at least 4 GiB
+per gateway container because the test runs the TUI as a second OpenClaw process
+inside the embedded gateway.
 
 | Variable                                       | Requirement or default                                                                                                  |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |

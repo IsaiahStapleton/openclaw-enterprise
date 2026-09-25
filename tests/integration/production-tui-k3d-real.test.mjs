@@ -246,6 +246,8 @@ test(
         codexImage: images.runtime,
         cluster: `production-tui-${suffix}`,
       });
+      // The native TUI runs as a second OpenClaw process inside the gateway container.
+      configuration.drivers.compute.configuration.resources.gateway.limits.memory = "4Gi";
       await writeFile(join(directory, "installation.json"), JSON.stringify(configuration), {
         mode: 0o600,
       });
@@ -497,6 +499,15 @@ test(
       assert.equal(stagedServiceKey.installationId, installation.data.id);
       const guideInstallation = await runGuideOcc(["installation", "get"]);
       assert.equal(guideInstallation.id, installation.data.id);
+      // Complete the documented one-time binding before any coordinated image upgrade.
+      await kubectl(
+        "-n",
+        system,
+        "annotate",
+        "secret",
+        "occ-installation-startup",
+        `openclaw.dev/installation-id=${installation.data.id}`,
+      );
       const externalUnauthenticatedInstallation = await externalRequest(
         "GET",
         "/installation",
@@ -625,6 +636,13 @@ test(
         { kind: "agent", values: nativeConfiguration },
         201,
       );
+      const modelSecret = await api(
+        "POST",
+        `/namespaces/${namespace.id}/secrets`,
+        { name: `model-${suffix}`, value: process.env.OPENAI_API_KEY },
+        201,
+      );
+      const harnessAuth = { method: "api_key", source: modelSecret.ref };
       const agent = await api(
         "POST",
         `/namespaces/${namespace.id}/agents`,
@@ -632,6 +650,7 @@ test(
           name: `tui-${suffix}`,
           configurationId: agentConfiguration.id,
           executionMode: "embedded",
+          harnessAuth,
         },
         201,
       );
@@ -642,6 +661,7 @@ test(
           name: `stopped-${suffix}`,
           configurationId: agentConfiguration.id,
           executionMode: "embedded",
+          harnessAuth,
         },
         201,
       );
@@ -652,29 +672,45 @@ test(
           name: `secondary-${suffix}`,
           configurationId: agentConfiguration.id,
           executionMode: "embedded",
+          harnessAuth,
         },
         201,
       );
-      const prepareRuntimeSecrets = async (target) => {
-        const targetHash = hash(target.id);
-        const gatewayPassword = secret();
-        secrets.push(gatewayPassword);
-        await createSecret(
-          `openclaw-agent-transport-${targetHash}`,
-          { "app-server-token": secret(), "gateway-password": gatewayPassword },
-          tenant,
+      const secretOperator = await api(
+        "POST",
+        `/namespaces/${namespace.id}/iam/roles`,
+        {
+          name: `Model Secret operator ${suffix}`,
+          permissions: [{ action: "operate", resourceKind: "secret" }],
+        },
+        201,
+      );
+      for (const target of [agent, stoppedAgent, secondaryAgent]) {
+        // Each Agent service principal needs exact authority over its selected model Secret.
+        await api(
+          "POST",
+          `/namespaces/${namespace.id}/iam/access-bindings`,
+          {
+            subjectKind: "identity",
+            subjectId: target.servicePrincipalId,
+            roleId: secretOperator.id,
+            resourceKind: "secret",
+            resourceId: modelSecret.id,
+          },
+          201,
         );
-        await createSecret(
-          `openclaw-agent-model-${targetHash}`,
-          { OPENAI_API_KEY: process.env.OPENAI_API_KEY },
-          tenant,
+        // The Compute Driver, rather than this fixture, owns transport credential materialization.
+        assert.deepEqual(
+          await api(
+            "POST",
+            `/namespaces/${namespace.id}/agents/${target.id}/runtime-credentials`,
+            {},
+          ),
+          { transportConfigured: true },
         );
-        return targetHash;
-      };
-      const agentHash = await prepareRuntimeSecrets(agent);
-      await prepareRuntimeSecrets(stoppedAgent);
-      await prepareRuntimeSecrets(secondaryAgent);
-      await record("API-created Namespace ready and embedded Agents provisioned", {
+      }
+      const agentHash = hash(agent.id);
+      await record("API-created Namespace ready with authenticated embedded Agents", {
         namespaceId: namespace.id,
         tenant,
         agentId: agent.id,
@@ -908,6 +944,8 @@ test(
           const output = await run("python3", [
             "tests/helpers/tui-pty.py",
             "expect-failure",
+            "--deny-pattern",
+            "gateway password mismatch",
             "--nonce",
             nonce,
             "--prompt",
@@ -1185,7 +1223,20 @@ test(
         );
         assert.equal(observed, upgradeImages.controller);
       }
-      const bootstrapInventory = await runGuideOcc(["installation", "deployment-inventory"]);
+      const bootstrapInventory = await waitFor(
+        "controller-only inventory through the production HTTPS proxy",
+        async () => {
+          try {
+            return await runGuideOcc(["installation", "deployment-inventory"]);
+          } catch (error) {
+            if (String(error).includes("HTTP 502")) {
+              return false;
+            }
+            throw error;
+          }
+        },
+        30_000,
+      );
       assert.ok(bootstrapInventory.namespaces.some((candidate) => candidate.id === namespace.id));
       assert.equal(
         (await api("GET", `/namespaces/${namespace.id}/agents/${agent.id}`)).activeRevisionId,

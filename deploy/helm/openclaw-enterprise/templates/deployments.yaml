@@ -21,6 +21,10 @@ spec:
     metadata:
       labels:
         {{- include "openclaw.labels" (dict "root" $ "component" $component) | nindent 8 }}
+      {{- with $.Values.controlPlane.installationChecksum }}
+      annotations:
+        openclaw.dev/installation-checksum: {{ . | quote }}
+      {{- end }}
     spec:
       serviceAccountName: openclaw-enterprise-{{ $component }}
       {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}

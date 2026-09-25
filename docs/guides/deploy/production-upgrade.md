@@ -177,12 +177,15 @@ The command performs these mutations only after that inventory, candidate
 rendering, and Helm server-side dry run succeed:
 
 1. It writes the candidate controller digest into the protected Helm values and
-   the runtime digest into both Kubernetes Compute image slots. Original bytes
-   remain in the private evidence directory.
+   the runtime digest into both Kubernetes Compute image slots. It also writes
+   the candidate Installation file's SHA-256 checksum into
+   `controlPlane.installationChecksum`. Original bytes remain in the private
+   evidence directory.
 2. It replaces `occ-installation-startup` from the protected Installation file.
-3. It runs `helm upgrade --install --wait`. The changed controller digest
-   replaces the API and worker; Helm initialization owns migration and bootstrap
-   checks.
+3. It runs `helm upgrade --install --wait`. The controller digest or Installation
+   checksum replaces the API and worker Pods, so a controller-only first adoption
+   cannot leave them using the old runtime configuration. Helm initialization
+   owns migration and bootstrap checks.
 4. After both Deployments use the candidate controller and OCC authentication
    recovers, it concurrently submits the bodyless deployment operation for all
    baseline running Agents.
@@ -223,10 +226,26 @@ whether OCC admitted it; another accepted request creates another revision.
 
 Prefer a reviewed forward fix. For image rollback, first verify that the prior
 controller and runtime can read state written by the candidate. Restore the
-saved image selections to the protected inputs, replace the Installation Secret,
-run the same Helm upgrade, and explicitly deploy the affected running Agents
-again. Restoring only Helm values does not replace tenant workloads. Helm
-rollback does not undo database migrations or runtime data changes.
+saved controller and runtime selections to the protected inputs. Recompute
+`controlPlane.installationChecksum` from the complete restored Installation file
+before replacing the Installation Secret and running Helm:
+
+```bash
+export ROLLBACK_INSTALLATION_CHECKSUM="$(
+  python3 -c \
+    'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+    /secure/occ/installation.yaml
+)"
+ROLLBACK_INSTALLATION_CHECKSUM="$ROLLBACK_INSTALLATION_CHECKSUM" yq -i \
+  '.controlPlane.installationChecksum = strenv(ROLLBACK_INSTALLATION_CHECKSUM)' \
+  /secure/occ/values.yaml
+```
+
+Wait for both `openclaw-enterprise-api` and `openclaw-enterprise-worker` rollouts,
+verify they loaded the restored Installation configuration, then explicitly
+deploy the affected running Agents again. Restoring only Helm values does not
+replace tenant workloads. Helm rollback does not undo database migrations or
+runtime data changes.
 
 Never delete Agents, revisions, PVCs, or the bootstrap volume to make recovery
 appear successful. If the prior release cannot read the new state, stop and
