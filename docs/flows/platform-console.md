@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-24
-last_updated_session: authoring-run/fdba83e7-9f34-4b8b-8af2-625214851f27
+last_updated_session: authoring-run/bb42c16a-c6e1-4900-adf5-9ba37629e491
 ---
 
 # Platform console request flow
@@ -124,22 +124,21 @@ these reads. Missing provenance and failures remain explicit. The
 
 `apps/controller/src/console/console.mjs:loadPage`
 
-The browser clears the prior view, advances its generation, and requests
-`GET /api/auth/session`. Missing sessions open login; failed reads offer Retry.
-Login submits email and password.
-`apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` checks browser
-Origin before sign-in/out, including SDK calls that bypass Better Auth middleware.
-Headerless CLI requests remain supported. Better Auth owns session cookies and
-password verification; the browser stores no credentials or tokens.
+The browser clears prior content, advances its generation, and requests
+`GET /api/auth/session`: missing sessions open login; failures offer Retry.
+`apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` checks sign-in/out
+Origins, including SDK calls. Headerless CLI requests remain supported. Better
+Auth verifies passwords and owns cookies; the browser stores no credentials.
 
 After authentication, `loadPage` reads `GET /namespaces`, preserving explicit URL
 selection or choosing the first ready/readable Namespace. Unreadable IDs stay
 unavailable; selection never becomes an API query selector.
 
 `shell.mjs:namespaceSelector` lists readable choices in headers except Namespaces,
-disabled while loading or empty. Changes call `navigation.mjs:navigate` with the
-current feature and chosen ID: Agent detail/creation return to the Agents list;
-global pages stay open.
+disabled while loading or empty. Namespaces embeds it only in unavailable-selection
+recovery, or shows access guidance without readable alternatives. Selection calls
+`navigation.mjs:navigate`: Agent detail/creation return to Agents; global pages
+stay open and recovered warnings disappear.
 
 ### 3. Authorize the selected page resource
 
@@ -331,6 +330,8 @@ uncertain response disables replay until refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-24 20:03: Recover unavailable Namespace selection inline. (authoring-run/bb42c16a-c6e1-4900-adf5-9ba37629e491 - 09a392cbda669a99e69d5f6a905921b9f10b43d9)
 
 - 2026-09-24 17:13: Trace the header Namespace selector and preserved navigation scope. (authoring-run/fdba83e7-9f34-4b8b-8af2-625214851f27 - 1a458b227585c572ec0ac70fd10efc3834165075)
 

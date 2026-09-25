@@ -53,14 +53,17 @@ no external font service is required.
 
 Use the **Namespace** selector in the page header to switch scope on desktop or
 mobile. It lists readable Namespaces and shows the current selection. The
-Installation-wide Namespaces page omits the selector. The bottom
+Installation-wide Namespaces page omits the header selector. The bottom
 **OpenClaw Enterprise** menu contains **Settings** and **Logout**. Settings shows
 the signed-in account and no configurable settings.
 
 The selected Namespace stays in `?namespace=<id>` across pages, reload, and Back.
 An unreadable explicit ID shows **Namespace unavailable** and requires another
-selection. With no readable Namespaces, Agents explains that provisioning or
-access is needed; global pages remain available.
+selection. On Namespaces, use **Choose a valid namespace** inside that message;
+selecting a readable Namespace updates the URL and removes the warning without
+leaving the page. With no readable alternatives, the empty collection explains
+how to request provisioning or access. Agents also shows access guidance when
+no Namespaces are readable; global pages remain available.
 
 Switching Namespace from Agent detail or creation returns to the Agents list in
 the new scope. Other global pages stay open. The API makes all authorization decisions; the selector does

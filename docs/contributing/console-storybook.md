@@ -91,6 +91,17 @@ Back behavior, and confirm the Namespaces page omits the selector.
 opening the drawer. The existing no-readable, unavailable, loading, and denied
 Namespace stories cover the selector's restricted states.
 
+In **Pages → Namespaces → Unavailable selection**, choose a readable Namespace
+inside the warning. Verify that the warning disappears, the URL changes, and the
+Namespaces page stays open. Browser Back restores the warning. **Unavailable
+selection mobile** covers the same flow at 390px; **Unavailable selection without
+access** shows guidance when there is nothing to select. See the simulated
+[desktop recovery](../assets/console-namespace-recovery/desktop.png),
+[mobile recovery](../assets/console-namespace-recovery/mobile.png),
+[recovered page](../assets/console-namespace-recovery/recovered.png),
+[no-access state](../assets/console-namespace-recovery/no-access.png), and
+[walkthrough](../assets/console-namespace-recovery/walkthrough.webm).
+
 Saved simulated UI examples show the [desktop selector](../assets/console-namespace-selector/desktop.png),
 [mobile empty collection](../assets/console-namespace-selector/mobile.png),
 [Namespaces page without a selector](../assets/console-namespace-selector/namespaces.png),
