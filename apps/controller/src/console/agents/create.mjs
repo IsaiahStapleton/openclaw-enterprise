@@ -1066,9 +1066,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     pendingProviderModel,
     configurationSecretBindings,
     stagedChannelSecrets,
-    repositoryBindings: repositories.isSettled()
-      ? repositories.bindings()
-      : draft.repositoryBindings,
+    repositoryBindings: repositories.draftBindings(),
   }));
   function parseObject(input, reportInvalid = false) {
     try {

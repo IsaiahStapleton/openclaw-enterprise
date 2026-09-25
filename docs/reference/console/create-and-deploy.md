@@ -167,13 +167,15 @@ all of them and always submits the chosen level explicitly. The server rechecks
 current Namespace policy when it creates the Agent and again when it admits a
 deployment.
 
-Only `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh ordinary draft without
-repository bindings: Agent-create authorization succeeded, but optional discovery
-is unavailable. Even on a provisioning-capable Dedicated runtime, this exception
-saves only a draft; retry discovery before provisioning. Other failures, including generic
-`503`, throttling and connection errors, block **Create Agent** before either
-write and offer retry. Denial and Namespace lifecycle conflict remain distinct.
-This preflight does not replace authorization on either subsequent write.
+Failed rediscovery retains unsaved repository choices across navigation and retry.
+**Create Agent** stays blocked until discovery succeeds and filters choices against
+current policy. **Start over** discards selections.
+
+Only `503 REPOSITORY_OPTIONS_UNAVAILABLE` with no selected repositories permits
+saving a draft; provisioning requires successful discovery.
+Other failures, including generic `503`, throttling and connection errors, block
+both writes and offer retry. Denial and Namespace lifecycle conflict remain
+distinct. Each subsequent write rechecks authorization.
 
 If the Configuration saves but Agent creation fails, the form shows its ID and
 keeps its JSON and Secret bindings fixed. After a known rejection of an ordinary

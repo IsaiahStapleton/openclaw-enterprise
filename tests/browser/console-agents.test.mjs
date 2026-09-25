@@ -856,6 +856,34 @@ test("Agent creation selects approved repositories with one common explicit prof
   assert.equal(await page.locator("#repository-application").isChecked(), true);
   assert.equal(await page.locator("#repository-documentation").isChecked(), true);
   assert.equal(await page.locator("#repository-profile-git-write").isChecked(), true);
+  // Discovery failures must not erase the draft, even after another navigation.
+  const optionsUrl = `**/namespaces/${namespace.id}/agents/repository-options`;
+  for (const status of [503, 500]) {
+    await page.route(optionsUrl, (route) =>
+      route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: status === 503 ? "REPOSITORY_OPTIONS_UNAVAILABLE" : "INTERNAL_ERROR",
+            message: "Repository discovery is temporarily unavailable.",
+          },
+        }),
+      }),
+    );
+    for (let navigation = 0; navigation < 2; navigation += 1) {
+      await page.getByRole("link", { name: "← Agents" }).click();
+      await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+      await page.getByRole("button", { name: "Retry repository choices" }).waitFor();
+      assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
+    }
+    await page.unroute(optionsUrl);
+    await page.getByRole("button", { name: "Retry repository choices" }).click();
+    await page.locator("#repository-application").waitFor();
+    assert.equal(await page.locator("#repository-application").isChecked(), true);
+    assert.equal(await page.locator("#repository-documentation").isChecked(), true);
+    assert.equal(await page.locator("#repository-profile-git-write").isChecked(), true);
+  }
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Repository Agent");
 

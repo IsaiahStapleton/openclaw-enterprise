@@ -163,3 +163,5 @@ export const CreatePresetSecretsEmpty = {
 export const CreatePresetNavigation = story("createPresetNavigation");
 
 export const PresetVariableNavigation = story("presetVariableNavigation");
+
+export const RepositoryNavigationOutage = story("createRepositoryNavigationOutage");

@@ -1073,6 +1073,33 @@ export const scenarios = {
     description:
       "The endpoint-specific optional-unavailability response permits an ordinary Agent. The preview does not establish real authorization.",
   },
+  createRepositoryNavigationOutage: {
+    group: "Pages/Create Agent",
+    name: "Keep repository choices through an outage",
+    path: create,
+    actions: [
+      ...form,
+      { selector: "#agent-name", value: "Repository assistant" },
+      { selector: "#repository-application", click: true },
+      { selector: "#repository-profile-git-full", click: true },
+    ],
+    rules: [
+      {
+        path: repositoryOptionsPath,
+        skip: 1,
+        once: true,
+        status: 503,
+        code: "REPOSITORY_OPTIONS_UNAVAILABLE",
+      },
+    ],
+    description:
+      "A failed refresh retains repository selections while blocking Create until current choices can be checked.",
+    steps: [
+      "Open Agents, then Create Agent. Discovery fails and reports that selections are retained.",
+      "Retry repository choices. The application repository and Contributor access return selected.",
+    ],
+    gap: "Simulated UI proof only; this walkthrough does not create an Agent or contact GitHub.",
+  },
   createRepositoriesDenied: {
     group: "Pages/Create Agent",
     name: "Repository discovery denied",
