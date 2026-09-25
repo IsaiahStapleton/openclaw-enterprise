@@ -19,6 +19,7 @@ import {
   verifyGhcr,
 } from "../../scripts/ci/container-release.mjs";
 import { writeBootstrapChart } from "../../scripts/ci/chart-package.mjs";
+import { stageReleaseChart, validateImageReceipt } from "../../scripts/ci/chart-release.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
@@ -32,6 +33,80 @@ const env = {
   SOURCE_SHA: sourceSha,
 };
 const repo = { full_name: repository, private: true, default_branch: "main" };
+
+const releaseImages = ["controller", "runtime"].map((image) => ({
+  image,
+  sourceSha,
+  workflowSha: sourceSha,
+  runId: "123",
+  attempt: "1",
+  ciRunId: "456",
+  ciAttempt: "1",
+  digest: `sha256:${(image === "controller" ? "c" : "d").repeat(64)}`,
+  destination: `ghcr.io/openclaw/openclaw-enterprise-${image}`,
+  tag: `sha-${sourceSha}`,
+}));
+
+test("chart release binds one exact image publication to the OCE version", () => {
+  const expected = {
+    sourceSha,
+    runId: "123",
+    attempt: "1",
+    ciRunId: "456",
+    ciAttempt: "1",
+    controllerImage: releaseImages[0].destination,
+    runtimeImage: releaseImages[1].destination,
+  };
+  assert.deepEqual(
+    validateImageReceipt(releaseImages, expected).map(({ image }) => image),
+    ["controller", "runtime"],
+  );
+  for (const changed of [
+    [releaseImages[0]],
+    [releaseImages[0], releaseImages[0]],
+    [{ ...releaseImages[0], sourceSha: "b".repeat(40) }, releaseImages[1]],
+    [releaseImages[0], { ...releaseImages[1], digest: "latest" }],
+    [releaseImages[0], { ...releaseImages[1], runId: "999" }],
+  ]) {
+    assert.throws(() => validateImageReceipt(changed, expected));
+  }
+});
+
+test("staged release chart records both verified digests and defaults to the controller digest", async (t) => {
+  const helm = process.env.OCC_HELM_BIN ?? "helm";
+  try {
+    execFileSync(helm, ["version", "--short"], { stdio: "ignore" });
+  } catch {
+    t.skip("Helm is required for the staged chart proof.");
+    return;
+  }
+  const directory = await mkdtemp(join(tmpdir(), "oce-release-chart-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const staged = await stageReleaseChart(directory, {
+    sourceSha,
+    version: "0.1.0",
+    images: releaseImages,
+  });
+  execFileSync(helm, ["package", staged, "--destination", directory]);
+  const archive = join(directory, "openclaw-enterprise-0.1.0.tgz");
+  const metadata = execFileSync(helm, ["show", "chart", archive], { encoding: "utf8" });
+  assert.match(
+    metadata,
+    /openclaw\.dev\/controller-image: ghcr\.io\/openclaw\/openclaw-enterprise-controller@sha256:c{64}/,
+  );
+  assert.match(
+    metadata,
+    /openclaw\.dev\/runtime-image: ghcr\.io\/openclaw\/openclaw-enterprise-runtime@sha256:d{64}/,
+  );
+  assert.match(metadata, /openclaw\.dev\/source-revision: a{40}/);
+  const example = await readFile("deploy/examples/production/values.yaml", "utf8");
+  const values = join(directory, "values.yaml");
+  await writeFile(values, example.replace(/^images:\n[ ]{2}controller: .+\n/mu, ""));
+  const rendered = execFileSync(helm, ["template", "oce", archive, "--values", values], {
+    encoding: "utf8",
+  });
+  assert.match(rendered, /ghcr\.io\/openclaw\/openclaw-enterprise-controller@sha256:c{64}/);
+});
 
 test("chart bootstrap package is valid OCI chart content but cannot be installed", async (t) => {
   const helm = process.env.OCC_HELM_BIN ?? "helm";
