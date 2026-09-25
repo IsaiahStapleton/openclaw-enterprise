@@ -52,6 +52,10 @@ Driver extensions, and admission-to-runtime enforcement. Draft implementation
 exists; enforcement delivery awaits alignment. Catalog discovery proceeds in the
 separate Create Agent workstream.
 
+[Independent production image upgrades](36-coordinated-image-upgrade.md) — Proposed;
+release the controller without replacing Agents, or update the runtime image and
+redeploy the running fleet concurrently through OCC.
+
 [Native OpenClaw plugin tool policies](35-native-plugin-tool-policy.md) — Proposed;
 enforce Agent plugin policies through a managed native policy plugin and existing
 approval transport.
