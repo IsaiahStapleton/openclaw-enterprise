@@ -58,10 +58,7 @@ instead, set both `OCC_DEVELOPMENT_OPENSHELL_HELM_CHART` and
 `OCC_DEVELOPMENT_OPENSHELL_WORKSPACE_HELM_CHART`, plus
 `OCC_DEVELOPMENT_OPENSHELL_AGENT_SANDBOX_MANIFEST` to absolute paths.
 
-The default state directory is `/tmp/openclaw-development` after resolving any
-system temporary-directory alias. Select another private absolute path with
-`OCC_DEVELOPMENT_STATE_DIRECTORY`, and use the same value for cleanup. To choose
-the host engine explicitly:
+To choose the host engine explicitly:
 
 ```bash
 export OCC_DEVELOPMENT_CONTAINER_ENGINE=podman
@@ -91,10 +88,10 @@ unless Compose explicitly supplies one. Generated runtime workloads have a
 Keep each stack's resources under the helper's lifecycle until cleanup;
 do not reuse its names for unrelated resources.
 
-Podman delegates Compose to `podman-compose`. On rootless Linux, its
-Docker-compatible API socket must be running so k3d can create the cluster.
-Startup resolves the reported socket and supplies it to k3d; it must be
-reachable from the host.
+For the ordinary profile, Podman delegates Compose to `podman-compose`. On
+rootless Linux, its Docker-compatible API socket must be running so k3d can
+create the cluster. Startup resolves the reported socket and supplies it to
+k3d; it must be reachable from the host.
 
 ## Verify the local boundary
 
