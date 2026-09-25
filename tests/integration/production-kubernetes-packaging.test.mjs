@@ -467,6 +467,44 @@ test("production settings coexist in fresh and upgrade chart renders", tooling, 
   }
 });
 
+test("packaged production chart keeps the OCE version and rendered resources", tooling, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "oce-chart-package-"));
+  try {
+    const release = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+    const archive = join(directory, `openclaw-enterprise-${release.version}.tgz`);
+    await execute(helm, ["package", "deploy/helm/openclaw-enterprise", "--destination", directory], {
+      cwd: repository,
+    });
+    const { stdout: metadata } = await execute(helm, ["show", "chart", archive], {
+      cwd: repository,
+    });
+    const chart = loadYaml(metadata);
+    assert.equal(chart.name, "openclaw-enterprise");
+    assert.equal(chart.version, release.version);
+    assert.equal(chart.appVersion, release.version);
+
+    // A registry consumer receives the archive, so it must render the same resources as source.
+    const args = [
+      "--namespace",
+      "openclaw-system",
+      "--values",
+      "deploy/examples/production/values.yaml",
+    ];
+    const source = await execute(
+      helm,
+      ["template", "oce", "deploy/helm/openclaw-enterprise", ...args],
+      { cwd: repository, maxBuffer: 2_000_000 },
+    );
+    const packaged = await execute(helm, ["template", "oce", archive, ...args], {
+      cwd: repository,
+      maxBuffer: 2_000_000,
+    });
+    assert.equal(packaged.stdout, source.stdout);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("control-plane node selectors are optional unless configured", tooling, async () => {
   const { stdout } = await render();
   const objects = await resources(stdout);
