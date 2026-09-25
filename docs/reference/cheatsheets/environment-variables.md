@@ -82,8 +82,9 @@ These settings belong to the checkout's development stack. See
 for supported engines, images, and security restrictions.
 
 - `OCC_DEVELOPMENT_COMPUTE_DRIVER` — `docker` (default) or `kubernetes`; only the Kubernetes quickstart can deploy Agents.
-- `OCC_DEVELOPMENT_SANDBOX_DRIVER` — `none` (default) or `openshell`; OpenShell requires Kubernetes Compute and selects the Kubernetes-only local profile.
-- `OCC_DEVELOPMENT_CONTAINER_ENGINE` — `auto` (default), `docker`, or `podman`; the OpenShell profile uses it only for k3d and image operations.
+- `OCC_DEVELOPMENT_SANDBOX_DRIVER` — `none` (default) or `openshell`; OpenShell requires Kubernetes Compute.
+- `OCC_DEVELOPMENT_CONTROL_PLANE` — `compose` or `kubernetes`; defaults to `kubernetes` with OpenShell and `compose` otherwise. Compose mode keeps PostgreSQL and OCC in Compose while Kubernetes Compute and OpenShell run in k3d.
+- `OCC_DEVELOPMENT_CONTAINER_ENGINE` — `auto` (default), `docker`, or `podman`; Kubernetes-only OpenShell uses it for k3d and image operations, while Compose mode also requires its Compose provider.
 - `OPENCLAW_DEV_PORT` — Published API port on host loopback; default: `3000`.
 - `OCC_DEVELOPMENT_TRUSTED_BRIDGE_CIDR` — Compose bridge allowed to reach the development API.
 - `OCC_DEVELOPMENT_TRUSTED_FORWARDER_CIDR` — Single private forwarding IP; supplied automatically for rootful macOS Podman.
@@ -96,7 +97,7 @@ for supported engines, images, and security restrictions.
 - `OCC_DEVELOPMENT_POSTGRES_IMAGE` — Existing local PostgreSQL image for the Kubernetes-only OpenShell profile; defaults to the pinned PostgreSQL 18.6 image.
 - `OCC_DEVELOPMENT_NODE_BASE_IMAGE` — Immutable Node 24 base used only when building the OpenShell profile's OCE controller image.
 - `OCC_DEVELOPMENT_STATE_DIRECTORY` — Private Kubernetes profile state; default: `/tmp/openclaw-development`. Use the same value for cleanup.
-- `OCC_DEVELOPMENT_COMPOSE_PROJECT` — Ordinary Kubernetes profile's Compose project; default: `openclaw-enterprise-development-kubernetes`. The OpenShell profile does not use Compose.
+- `OCC_DEVELOPMENT_COMPOSE_PROJECT` — Compose control-plane project's name; default: `openclaw-enterprise-development-kubernetes`. Kubernetes-only OpenShell does not use Compose.
 - `OCC_DEVELOPMENT_KUBERNETES_NAMESPACE` — OpenShell profile's platform Namespace; default: `oce-system`.
 - `OCC_DEVELOPMENT_KUBERNETES_CLUSTER` — Disposable k3d cluster; default: a generated name beginning with `occ-dev-`.
 - `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` — Kubernetes profile startup timeout; default: `300` seconds per wait, or `600` for OpenShell.

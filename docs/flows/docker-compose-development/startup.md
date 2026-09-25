@@ -1,6 +1,49 @@
+---
+created: 2026-09-09
+updated: 2026-09-25
+last_updated_session: authoring-run/a81f3e71-1c8e-4692-8e2e-d462ddacc10b
+---
+
 # Compose development startup
 
 Trace host preflight, database initialization, and API/worker startup. See the [parent flow](../docker-compose-development.md) for its context and overall sequence.
+
+## Overview
+
+`scripts/dev-up` selects Docker or Kubernetes Compute and starts the requested
+development topology from a checkout. Docker Compute and Compose-backed
+Kubernetes profiles run PostgreSQL, migration, bootstrap, the API, and the
+worker in Compose. The Kubernetes-only OpenShell profile delegates those
+services to the owned k3d cluster. This flow ends after authenticated
+Installation access and, for OpenShell, bootstrap Workspace readiness.
+
+## Entry Points
+
+- Trigger: `./scripts/dev-up [--key-output PATH] [-- COMPOSE_GLOBAL_OPTIONS...]`.
+- Source: `scripts/dev-up:require_command`
+- Source: `internal/occdev/up.go:Up`
+- Source: `internal/occdev/openshell_k3d.go:upOpenShellK3d`
+- Assumptions: the checkout-local OCC CLI is built; the selected container
+  engine is running; Kubernetes profiles also have k3d and kubectl, while
+  OpenShell requires Helm and its pinned or explicitly selected assets.
+
+## Flow
+
+```mermaid
+graph TD
+  A["<b>Start development</b><br/>scripts/dev-up"] --> B{"<b>Compute Driver</b><br/>Docker or Kubernetes"}
+  B -- "Docker" --> C["<b>Render Compose</b><br/>Validate publications"]
+  B -- "Kubernetes" --> D{"<b>Control plane</b><br/>Compose or Kubernetes"}
+  D -- "Kubernetes" --> E["<b>Owned k3d stack</b><br/>PostgreSQL, OCE, OpenShell"]
+  D -- "Compose" --> F["<b>Hybrid stack</b><br/>Compose OCC and k3d Compute"]
+  C --> G["<b>Prove Installation</b><br/>Authenticated service key"]
+  F --> G
+  E --> G
+  F --> H["<b>Own Workspace</b><br/>OpenShell operator mode"]
+  E --> H
+  G --> I["<b>Record cleanup</b><br/>Exact engine and resources"]
+  H --> I
+```
 
 ## Execution trace
 
@@ -19,7 +62,9 @@ their normal precedence. This trace covers the default
 to the [local Kubernetes development profile](../../guides/deploy/local-kubernetes-development.md),
 which keeps OCC in Compose and uses k3d for Compute. That profile accepts
 `OCC_DEVELOPMENT_SANDBOX_DRIVER=none` or `openshell`; OpenShell is rejected
-with Docker Compute.
+with Docker Compute. OpenShell defaults to a Kubernetes control plane;
+`OCC_DEVELOPMENT_CONTROL_PLANE=compose` retains the Compose-backed path traced
+below.
 
 The Docker Compute path first probes a running Docker Engine and the JSON
 configuration capability required from Docker Compose. If that probe fails, it
@@ -178,11 +223,15 @@ operator overrides the subnet. Startup and
 cleanup both use that snapshot, so later `.env` edits cannot change the saved
 project configuration.
 
-Selecting `OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell` branches before Compose
-rendering into `internal/occdev/openshell_k3d.go:upOpenShellK3d`. That profile
-uses the engine only for k3d and image operations; the
-[OpenShell provisioning flow](../openshell-sandbox-provisioning.md#0-create-the-kubernetes-only-development-control-plane)
-owns its Kubernetes-only control-plane sequence.
+Selecting `OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell` defaults to branching
+before Compose rendering into
+`internal/occdev/openshell_k3d.go:upOpenShellK3d`. That profile uses the engine
+only for k3d and image operations. Selecting
+`OCC_DEVELOPMENT_CONTROL_PLANE=compose` continues through the Compose snapshot
+and startup sequence. Any other control-plane value fails before resource
+creation. The
+[OpenShell provisioning flow](../openshell-sandbox-provisioning.md#0-create-the-development-control-plane)
+owns both OpenShell control-plane sequences.
 
 ### 13. Bootstrap OCC, create k3d, and prepare runtime configuration
 
@@ -211,6 +260,13 @@ The container configuration and kubeconfig are individually readable by
 non-root containers, behind the private host directory, and mounted read-only
 into the API and Kubernetes worker. Neither service receives the engine socket.
 
+When Compose mode also selects OpenShell, startup installs the pinned Agent
+Sandbox controller and OpenShell Gateway in k3d before starting the API and
+worker. The Gateway uses `openshell-system` and a fixed NodePort reachable from
+the private Compose network. The generated Sandbox Driver configuration selects
+operator workspace mode and includes the rendered workspace-chart resources
+that `ensureNamespace` applies for each OCC Namespace.
+
 ### 14. Prove readiness and clean up the owned Kubernetes profile
 
 `internal/occdev/up.go:waitReady`, `internal/occdev/up.go:copyAndVerifyKey`,
@@ -220,7 +276,10 @@ into the API and Kubernetes worker. Neither service receives the engine socket.
 The lifecycle starts the API and Kubernetes worker, waits for API health and
 worker readiness, copies bootstrap output to a private temporary file, and
 uses `occclient` to read the Installation. Its ID must match the bootstrap
-response before the final key file is written exclusively.
+response before the final key file is written exclusively. With OpenShell,
+startup also waits for the bootstrap Kubernetes Namespace and then for OCC to
+report that Namespace ready, which establishes that the Sandbox Driver created
+or adopted its operator-mode Workspace.
 
 On failure, startup attempts resource cleanup. Explicit Kubernetes shutdown
 validates the marker, state, and Compose snapshot before using the recorded
@@ -231,7 +290,28 @@ the state directory and its helper-owned key. A successfully returned external
 `--key-output` file remains operator-owned; startup removes a newly written
 external key if a later OpenShell readiness step fails.
 
-## Related
+## Debugging and Verification
+
+- `node --test tests/integration/dev-up.test.mjs` exercises profile selection,
+  generated configuration, authenticated readiness, rollback, and cleanup with
+  inert external engine and cluster commands.
+- `OCC_TEST_DEV_UP_OPENSHELL_REAL=1 node --test tests/integration/dev-up-openshell-k3d-real.test.mjs`
+  selects the Kubernetes-only real-cluster proof.
+- `OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL=1 node --test tests/integration/dev-up-openshell-k3d-real.test.mjs`
+  selects the Compose-backed real-cluster proof.
+- A successful startup does not prove Agent creation, model credentials, or a
+  model turn. Follow the owning runtime integration procedure for those claims.
+
+## Related docs
 
 - [Return to the parent flow](../docker-compose-development.md).
 - [OpenShell Sandbox provisioning](../openshell-sandbox-provisioning.md).
+- [Local Kubernetes development](../../guides/deploy/local-kubernetes-development.md).
+
+## Manual Notes
+
+[keep this for the user to add notes. do not change between edits]
+
+## Changelog
+
+- 2026-09-25 12:23: Added the selectable Compose-backed OpenShell topology and brought the existing startup trace into the current flow-document structure. (authoring-run/a81f3e71-1c8e-4692-8e2e-d462ddacc10b - 64ab72aed5c4926e4a2080ade91d785e531801a2)

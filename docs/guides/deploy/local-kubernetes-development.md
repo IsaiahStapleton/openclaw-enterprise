@@ -2,14 +2,16 @@
 
 Run OpenClaw Enterprise (OCE) against a disposable, loopback-only k3d cluster.
 The ordinary Kubernetes profile keeps the OpenClaw Control Plane (OCC) in
-Compose. The OpenShell profile is Kubernetes-only: PostgreSQL, the OCE API and
-worker, OpenShell Gateway, and Agent workloads all run in the owned cluster.
+Compose. OpenShell defaults to a Kubernetes-only profile, but it can instead
+keep PostgreSQL, the OCE API, and the worker in Compose while running the
+OpenShell Gateway and Agent workloads in the owned cluster.
 
 ## Start the profile
 
 Install Node.js 24 or newer, the repository-pinned pnpm, the Go version from
-`go.mod`, k3d, kubectl, Helm, and either Docker or Podman. The container engine
-hosts k3d and builds or imports images; it does not run application services.
+`go.mod`, k3d, kubectl, Helm, and either Docker or Podman. In Kubernetes-only
+mode, the container engine hosts k3d and builds or imports images without
+running OCE application services.
 
 For the ordinary Compose-backed Kubernetes Compute profile, build the CLI and
 select Kubernetes explicitly:
@@ -49,6 +51,23 @@ The checkout-local CLI creates one k3d cluster and then:
 6. writes the kubeconfig and initial administrator service-key file beneath a
    private state directory.
 
+To keep the OCC control plane in Compose, select the alternate control-plane
+mode before starting the same OpenShell profile:
+
+```bash
+export OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes
+export OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell
+export OCC_DEVELOPMENT_CONTROL_PLANE=compose
+./scripts/dev-up
+```
+
+This mode starts PostgreSQL, migration, bootstrap, the OCE API, and the worker
+in Compose. It creates k3d on the private Compose network, installs the pinned
+OpenShell infrastructure and Gateway in `openshell-system`, and mounts the
+generated kubeconfig and Installation configuration into the Compose API and
+worker. The Gateway uses a fixed NodePort reachable from that private network;
+the k3d API and OCE API remain published only on host loopback.
+
 OpenShell's Agent Sandbox controller remains in its upstream
 `agent-sandbox-system` Namespace. Tenant Workspaces, Sandbox resources, and
 Agent Pods live in the OCC-owned `oce-*` Namespaces.
@@ -65,8 +84,11 @@ export OCC_DEVELOPMENT_CONTAINER_ENGINE=podman
 ./scripts/dev-up
 ```
 
-Use `docker` instead for Docker Engine. The OpenShell profile does not require
-Docker Compose or `podman-compose`, and it rejects Compose arguments.
+Use `docker` instead for Docker Engine. The Kubernetes-only OpenShell mode does
+not require Docker Compose or `podman-compose`, and it rejects Compose
+arguments. The Compose control-plane mode requires the selected engine's
+Compose provider and accepts the same Compose overrides as the ordinary
+Kubernetes profile.
 
 State and credentials are written to the private
 `/tmp/openclaw-development` directory by default. Set the absolute
@@ -108,22 +130,28 @@ export OCC_SERVICE_KEY_FILE="<Service key file printed by scripts/dev-up>"
 ./bin/occ installation get
 ```
 
-The API is reachable only through the loopback k3d publication. The published
-Service selects a dedicated in-cluster proxy whose exact Namespace and Pod
-labels are admitted by the OCE Helm NetworkPolicy. The OCE API itself remains a
-ClusterIP Service. OCE's worker authenticates to Kubernetes in-cluster and
-reaches OpenShell Gateway through a narrow development NetworkPolicy in
-`oce-system`. The Gateway uses OpenShell's unauthenticated development mode, so
-an ingress policy admits only the OCE worker and OpenShell supervisor Pods from
-OCE-owned tenant Namespaces. A matching tenant policy grants Gateway egress only
-to supervisor Pods; ordinary Agent and tenant Pods cannot call the Gateway.
+In Kubernetes-only mode, the API is reachable only through the loopback k3d
+publication. The published Service selects a dedicated in-cluster proxy whose
+exact Namespace and Pod labels are admitted by the OCE Helm NetworkPolicy. The
+OCE API itself remains a ClusterIP Service. OCE's worker authenticates to
+Kubernetes in-cluster and reaches OpenShell Gateway through a narrow development
+NetworkPolicy in `oce-system`.
+
+In Compose control-plane mode, the API uses its existing loopback Compose
+publication and the worker authenticates with the generated kubeconfig. The
+OpenShell Gateway NodePort is not published by k3d to a host port; the Compose
+worker reaches it through the owned private container network. In both modes,
+the Gateway uses OpenShell's unauthenticated development setting. Tenant egress
+selects only OpenShell supervisor Pods for Gateway callbacks; do not use either
+profile on a shared cluster or container network.
 
 Because this cluster is disposable and owned by one development profile, the
-helper binds the chart's tenant worker, configuration, and Secret ClusterRoles
-to the OCE service accounts cluster-wide. It also lets the worker manage tenant
-Roles and RoleBindings while limiting `bind` and `escalate` to the pinned
-OpenShell workspace Role. Production and shared clusters must instead create
-tenant-local RoleBindings as each Namespace is admitted.
+Kubernetes-only helper binds the chart's tenant worker, configuration, and
+Secret ClusterRoles to the OCE service accounts cluster-wide. The Compose mode
+instead gives its worker the profile-owned k3d administrator kubeconfig. These
+development permissions let either worker prepare tenant resources, including
+the pinned OpenShell workspace Role. Production and shared clusters must use
+the tenant-local RoleBindings described by the production deployment guide.
 
 To prove the entire setup and cleanup path in a separate fresh cluster, first
 stop the reusable environment and run:
@@ -133,10 +161,19 @@ OCC_TEST_DEV_UP_OPENSHELL_REAL=1 \
   node --test tests/integration/dev-up-openshell-k3d-real.test.mjs
 ```
 
-The selected real test must pass without a skip. It verifies the Helm-installed
-OCE control plane and PostgreSQL Pods, central OpenShell Gateway, bootstrap and
-new Namespace Workspace reconciliation, immutable image registration, and
-owned-cluster cleanup. It does not create an Agent or perform a model turn.
+Select the Compose control-plane proof separately:
+
+```bash
+OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL=1 \
+  node --test tests/integration/dev-up-openshell-k3d-real.test.mjs
+```
+
+The selected real test must pass without a skip. The default case verifies the
+Helm-installed OCE control plane and PostgreSQL Pods, bootstrap and new
+Namespace Workspace reconciliation, immutable image registration, and
+owned-cluster cleanup. The Compose case verifies the Compose-backed OCC API and
+worker, the Gateway NodePort, bootstrap Workspace reconciliation, and combined
+Compose and cluster cleanup. Neither creates an Agent or performs a model turn.
 Follow the [Kubernetes model-turn procedure](../../testing/kubernetes.md#kubernetes-model-turns-and-secrets)
 for that separate credentialed proof.
 
@@ -169,10 +206,10 @@ to its node; adding another node does not replicate existing workspace data.
 Use a portable StorageClass if workloads must move between nodes.
 
 The `local-path` StorageClass uses reclaim policy `Delete`, so deleting a claim
-also permits deletion of its backing directory. The ordinary profile stores
-PostgreSQL in a Compose volume; the OpenShell profile stores it in the owned
-cluster. Neither location backs up Agent workspaces. Use a durable private state
-directory instead of `/tmp` for a long-lived demo.
+also permits deletion of its backing directory. Compose control-plane profiles
+store PostgreSQL in a Compose volume; Kubernetes-only OpenShell stores it in the
+owned cluster. Neither location backs up Agent workspaces. Use a durable private
+state directory instead of `/tmp` for a long-lived demo.
 
 ## Rebuild after a source edit
 
@@ -224,14 +261,15 @@ data-plane pools. See [production Namespace preparation](production-agents.md#pr
 for both scoped RoleBindings.
 
 - This is a development environment, not a production deployment recipe.
-- The OpenShell profile installs one control plane and central Gateway per
-  cluster. OCC creates tenant resources in separate `oce-*` Namespaces.
+- The OpenShell profile installs one central Gateway per cluster. OCC runs in
+  the cluster by default or in Compose when explicitly selected, and creates
+  tenant resources in separate `oce-*` Namespaces.
 - Stock OpenShell `v0.1.0-pre.7` remains fail-closed for unsupported Secret and
   workload-identity projections. Workspace readiness does not prove that an
   Agent Sandbox can start or complete a model turn.
 - OpenShell Gateway permits unauthenticated users only inside this disposable,
-  loopback-owned cluster profile. Do not carry that setting into a shared
-  cluster.
+  loopback-owned cluster or private Compose-network profile. Do not carry that
+  setting into a shared cluster or container network.
 - The development-only cluster-wide tenant bindings are not a production RBAC
   pattern. Production admission must supply the tenant-local RoleBindings
   described by the deployment guide.

@@ -28,7 +28,18 @@ func Up(ctx context.Context, opts Options) (result error) {
 	if sandboxDriver != "none" && sandboxDriver != "openshell" {
 		return fmt.Errorf("OCC_DEVELOPMENT_SANDBOX_DRIVER must be none or openshell")
 	}
+	defaultControlPlane := "compose"
 	if sandboxDriver == "openshell" {
+		defaultControlPlane = "kubernetes"
+	}
+	controlPlane := r.setting("OCC_DEVELOPMENT_CONTROL_PLANE", defaultControlPlane)
+	if controlPlane != "compose" && controlPlane != "kubernetes" {
+		return fmt.Errorf("OCC_DEVELOPMENT_CONTROL_PLANE must be compose or kubernetes")
+	}
+	if controlPlane == "kubernetes" && sandboxDriver != "openshell" {
+		return fmt.Errorf("OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes requires OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell")
+	}
+	if controlPlane == "kubernetes" {
 		return upOpenShellK3d(ctx, opts)
 	}
 	timeout, err := positiveSetting(r, "OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS", 300, 86400)
@@ -237,7 +248,7 @@ func Up(ctx context.Context, opts Options) (result error) {
 	if sandboxDriver == "openshell" {
 		cleanupSandbox = " OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell"
 	}
-	fmt.Fprintf(r.opts.Out, "OpenClaw Enterprise development stack is ready.\nContainer engine: %s\nCompute Driver: Kubernetes\nSandbox Driver: %s\nAPI URL: %s\nInstallation ID: %s\nService key file: %s\nKubeconfig: %s\nKubernetes context: k3d-%s\n\nCleanup:\n  env OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes%s OCC_DEVELOPMENT_STATE_DIRECTORY=%s %s dev down\n", r.engine, sandboxDriver, apiURL, installation, state.KeyPath, filepath.Join(directory, "kubeconfig"), state.Cluster, cleanupSandbox, shellQuote(directory), shellQuote(filepath.Join(opts.Repository, "bin", "occ")))
+	fmt.Fprintf(r.opts.Out, "OpenClaw Enterprise development stack is ready.\nContainer engine: %s\nControl plane: Compose\nCompute Driver: Kubernetes\nSandbox Driver: %s\nAPI URL: %s\nInstallation ID: %s\nService key file: %s\nKubeconfig: %s\nKubernetes context: k3d-%s\n\nCleanup:\n  env OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes%s OCC_DEVELOPMENT_STATE_DIRECTORY=%s %s dev down\n", r.engine, sandboxDriver, apiURL, installation, state.KeyPath, filepath.Join(directory, "kubeconfig"), state.Cluster, cleanupSandbox, shellQuote(directory), shellQuote(filepath.Join(opts.Repository, "bin", "occ")))
 	return nil
 }
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
