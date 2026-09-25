@@ -41,6 +41,18 @@ it does not use the compatibility bridge or perform a model turn. The reusable
 environment's startup output prints its API URL, kubeconfig, context, and
 service-key file without printing credential contents.
 
+Select the alternate proof when PostgreSQL, the OCE API, and the worker must
+remain in Compose:
+
+```sh
+OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL=1 \
+  node --test tests/integration/dev-up-openshell-k3d-real.test.mjs
+```
+
+This case verifies the real Compose-backed control plane, Gateway NodePort,
+operator Workspace, and combined Compose and cluster cleanup. It uses the same
+disposable-cluster and no-model-turn boundary as the Kubernetes-only case.
+
 The OpenShell CI lane runs this lifecycle through `scripts/dev-up` and
 `scripts/dev-down` before its credentialed Sandbox case.
 

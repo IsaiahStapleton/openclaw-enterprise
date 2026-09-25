@@ -17,6 +17,7 @@ const occ = join(repository, "bin", "occ");
 const devUp = join(repository, "scripts", "dev-up");
 const devDown = join(repository, "scripts", "dev-down");
 const selected = process.env.OCC_TEST_DEV_UP_OPENSHELL_REAL === "1";
+const composeSelected = process.env.OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL === "1";
 
 async function unusedPort() {
   const server = net.createServer();
@@ -544,5 +545,156 @@ test(
       ),
       "the regular OCC workflow must observe the bootstrap Namespace as ready",
     );
+  },
+);
+
+test(
+  "dev-up runs OCC in Compose with OpenShell and Kubernetes Compute in k3d",
+  {
+    skip: composeSelected
+      ? false
+      : "Set OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL=1 to run the Compose-backed OpenShell profile.",
+    timeout: 1_200_000,
+  },
+  async (t) => {
+    await access(occ);
+    const root = await mkdtemp(join(tmpdir(), "oce-dev-up-openshell-compose-real-"));
+    const stateDirectory = join(root, "state");
+    const suffix = randomUUID().slice(0, 8);
+    const cluster = `occ-dev-os-compose-${suffix}`;
+    const apiPort = await unusedPort();
+    const kubernetesPort = await unusedPort();
+    const environment = {
+      ...process.env,
+      OPENCLAW_DEV_PORT: String(apiPort),
+      OCC_DEVELOPMENT_COMPUTE_DRIVER: "kubernetes",
+      OCC_DEVELOPMENT_SANDBOX_DRIVER: "openshell",
+      OCC_DEVELOPMENT_CONTROL_PLANE: "compose",
+      OCC_DEVELOPMENT_CONTAINER_ENGINE: process.env.OCC_TEST_DEV_UP_CONTAINER_ENGINE ?? "docker",
+      OCC_DEVELOPMENT_STATE_DIRECTORY: stateDirectory,
+      OCC_DEVELOPMENT_KUBERNETES_CLUSTER: cluster,
+      OCC_DEVELOPMENT_KUBERNETES_API_PORT: String(kubernetesPort),
+      OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT:
+        process.env.OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT ?? "1",
+      OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS: "600",
+    };
+    delete environment.OCC_DEVELOPMENT_OPENSHELL_HELM_CHART;
+    delete environment.OCC_DEVELOPMENT_OPENSHELL_WORKSPACE_HELM_CHART;
+    delete environment.OCC_DEVELOPMENT_OPENSHELL_AGENT_SANDBOX_MANIFEST;
+    t.after(async () => {
+      if (await exists(stateDirectory)) {
+        try {
+          await execute(devDown, [], {
+            cwd: repository,
+            env: environment,
+            timeout: 300_000,
+            maxBuffer: 8 * 1024 * 1024,
+          });
+        } catch (error) {
+          throw new Error(
+            `Compose-backed OpenShell cleanup failed; recovery state preserved at ${stateDirectory}.`,
+            { cause: error },
+          );
+        }
+      }
+      await rm(root, { recursive: true, force: true });
+    });
+
+    const result = await execute(devUp, [], {
+      cwd: repository,
+      env: environment,
+      timeout: 1_100_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    assert.match(result.stdout, /Control plane: Compose/);
+    assert.match(result.stdout, /Sandbox Driver: openshell/);
+
+    // The authenticated OCC API is served by Compose while its worker creates
+    // the operator-mode OpenShell Workspace through the real k3d cluster.
+    const state = JSON.parse(await readFile(join(stateDirectory, "state.json"), "utf8"));
+    assert.equal(state.cluster, cluster);
+    assert.equal(state.sandboxDriver, "openshell");
+    assert.equal(state.deploymentMode, undefined);
+    assert.equal(await exists(join(stateDirectory, "compose.yaml")), true);
+    const kubectl = [
+      "--kubeconfig",
+      join(stateDirectory, "kubeconfig"),
+      "--context",
+      `k3d-${cluster}`,
+    ];
+    const service = JSON.parse(
+      (
+        await execute(
+          "kubectl",
+          [
+            ...kubectl,
+            "get",
+            "service",
+            "openshell-gateway",
+            "--namespace",
+            "openshell-system",
+            "-o",
+            "json",
+          ],
+          { cwd: repository, env: environment, maxBuffer: 4 * 1024 * 1024 },
+        )
+      ).stdout,
+    );
+    assert.equal(service.spec.type, "NodePort");
+    assert.equal(service.spec.ports[0].nodePort, 30051);
+    const namespaceList = JSON.parse(
+      (
+        await execute(
+          "kubectl",
+          [...kubectl, "get", "namespaces", "--selector", "openclaw.dev/namespace", "-o", "json"],
+          { cwd: repository, env: environment, maxBuffer: 4 * 1024 * 1024 },
+        )
+      ).stdout,
+    );
+    assert.equal(namespaceList.items.length, 1);
+    const namespace = namespaceList.items[0].metadata.name;
+    assert.equal(namespaceList.items[0].metadata.labels["openshell.ai/openclaw-workspace"], "true");
+    await execute(
+      "kubectl",
+      [...kubectl, "get", "serviceaccount", "openshell-sandbox", "--namespace", namespace],
+      { cwd: repository, env: environment },
+    );
+
+    const gatewayPort = await unusedPort();
+    const forward = spawn(
+      "kubectl",
+      [
+        ...kubectl,
+        "port-forward",
+        "--namespace",
+        "openshell-system",
+        "service/openshell-gateway",
+        `${gatewayPort}:8080`,
+      ],
+      { cwd: repository, env: environment, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let forwardError = "";
+    forward.stderr.on("data", (chunk) => {
+      forwardError = `${forwardError}${chunk.toString()}`.slice(-4096);
+    });
+    t.after(() => stopPortForward(forward));
+    await waitForPort(forward, gatewayPort, () => forwardError);
+    const gateway = new GrpcOpenShellGatewayClient({
+      endpoint: `http://127.0.0.1:${gatewayPort}`,
+      auth: { mode: "unauthenticated" },
+    });
+    t.after(() => gateway.close());
+    const workspace = await gateway.getWorkspace(namespace, AbortSignal.timeout(10_000));
+    assert.equal(workspace?.name, namespace);
+    assert.equal(workspace?.labels["app.kubernetes.io/managed-by"], "openclaw-enterprise");
+
+    await stopPortForward(forward);
+    await execute(devDown, [], {
+      cwd: repository,
+      env: environment,
+      timeout: 300_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    assert.equal(await exists(stateDirectory), false);
   },
 );

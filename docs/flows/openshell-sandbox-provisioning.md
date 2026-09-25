@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
-updated: "2026-09-24"
-last_updated_session: "authoring-run/285e1867-ba73-4a0f-ae7a-e6f6bf79d5d4"
+updated: "2026-09-25"
+last_updated_session: "authoring-run/a81f3e71-1c8e-4692-8e2e-d462ddacc10b"
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -22,12 +22,14 @@ environment or projected workload identity. The verification-only compatibility
 path stages those inputs without changing the production fail-closed contract
 and completes a real model turn inside the Sandbox.
 
-The local Kubernetes development profile installs PostgreSQL, the OCE Helm
-release, and the pinned Gateway chart in `oce-system`. It renders the pinned
-workspace chart into the Installation configuration and lets the Driver
-reconcile those resources in every Compute-created namespace. It proves the
-real Workspace through the Gateway API and the same supported fail-closed Agent
-path; it does not use the verification-only compatibility projection.
+The local Kubernetes development profile installs the pinned Gateway and
+renders the workspace chart into the Installation configuration. By default,
+PostgreSQL, the OCE Helm release, and the Gateway share `oce-system`. The
+optional Compose control-plane mode keeps PostgreSQL, the API, and the worker in
+Compose and installs the Gateway in `openshell-system`. Both modes let the
+Driver reconcile workspace resources in every Compute-created namespace and
+prove the real Workspace through the Gateway API. Neither uses the
+verification-only compatibility projection.
 
 ## Entry Points
 
@@ -35,7 +37,7 @@ path; it does not use the verification-only compatibility projection.
   Sandbox Driver and Kubernetes Compute Driver.
 - Source: `apps/controller/src/drivers/sandbox/openshell.ts:ensureNamespace`
 - Source: `apps/controller/src/drivers/sandbox/openshell.ts:provisionHarness`
-- Source: `apps/controller/src/drivers/sandbox/openshell-gateway-client.ts:createSandbox`
+- Source: `internal/occdev/up.go:Up`
 - Assumptions: the Installation selected both Drivers, the tenant Namespace and
   baseline isolation exist, and the deployment OpenShell Gateway is ready in
   operator workspace mode.
@@ -76,7 +78,7 @@ graph TD
 
 ## Execution Trace
 
-### 0. Create the Kubernetes-only development control plane
+### 0. Create the development control plane
 
 `scripts/dev-up`, `internal/occdev/openshell_k3d.go:upOpenShellK3d`,
 `internal/occdev/openshell.go:prepareOpenShell`,
@@ -84,9 +86,11 @@ graph TD
 
 The environment selects Kubernetes Compute and OpenShell. `scripts/dev-up`
 validates that combination and delegates lifecycle ownership to `occ dev up`.
-The default profile verifies the `v0.1.0-pre.7` source archive before packaging
-its Gateway and Workspace charts, and imports the matching digest-pinned
-Gateway, Sandbox, and supervisor images.
+OpenShell defaults to the Kubernetes-only control plane;
+`OCC_DEVELOPMENT_CONTROL_PLANE=compose` selects the hybrid profile. Both verify
+the `v0.1.0-pre.7` source archive before packaging its Gateway and Workspace
+charts, and import the matching digest-pinned Gateway, Sandbox, and supervisor
+images.
 The CLI records the exact engine endpoint, cluster,
 platform Namespace, API port, and key destination before creating resources.
 It creates k3d without a Compose network, imports the OCE controller, Agent
@@ -118,6 +122,14 @@ and removes the reader.
 Cleanup validates the private state and recorded engine endpoint before deleting
 the named cluster. The Kubernetes-only state contains no Compose snapshot, and
 the cleanup path never calls a Compose provider.
+
+In Compose mode, `internal/occdev/up.go:Up` starts PostgreSQL, migration, and
+bootstrap before creating k3d on the private Compose network. It installs the
+Gateway in `openshell-system` with a fixed NodePort, writes kubeconfig-based
+Driver configuration, and starts the API and Kubernetes worker in Compose. The
+worker reaches the Gateway through the owned container network. Cleanup stops
+the reconcilers, deletes the cluster, removes the recorded Compose project and
+volumes, and retains recovery state if any step fails.
 
 ### 1. Prepare the Namespace and OpenShell Workspace
 
@@ -221,6 +233,9 @@ Kubernetes Compute delete the Kubernetes namespace.
   Helm-installed OCE control plane, and the central Gateway share `oce-system`;
   tenant resources remain in OCC-owned Namespaces. `scripts/dev-down` removes
   only the recorded cluster and private state.
+- Add `OCC_DEVELOPMENT_CONTROL_PLANE=compose` to keep PostgreSQL and OCC in
+  Compose while retaining the same k3d Compute, operator Workspace, and
+  fail-closed Agent boundaries.
 - `node --test tests/integration/ci-openshell.test.mjs` checks bootstrap safety
   and immutable Helm image value rendering without selecting a real cluster.
 - `node --test tests/integration/sandbox-driver-startup.test.mjs` checks Driver
@@ -229,6 +244,10 @@ Kubernetes Compute delete the Kubernetes namespace.
   installs the deployment Gateway, renders the workspace chart, lets the Driver
   apply its resources to bootstrap and post-start Namespaces in a disposable k3d
   cluster, and reads both real OCC-owned Workspaces through the Gateway API.
+- `OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL=1 node --test tests/integration/dev-up-openshell-k3d-real.test.mjs`
+  runs the Compose control-plane profile against a disposable real k3d cluster,
+  reads its operator-mode Workspace through the Gateway API, and exercises
+  recorded Compose and cluster cleanup.
 - `OCC_TEST_OPENSHELL_K3D_REAL=1 node --env-file="$TEST_ENV_FILE" --test tests/integration/sandbox-driver-openshell-k3d-real.test.mjs`
   exercises the selected real gateway and cluster prerequisites. Set
   `OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` for stock `v0.1.0-pre.7`; the expected
@@ -260,6 +279,8 @@ Kubernetes Compute delete the Kubernetes namespace.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-25 12:23: Documented the selectable Compose control plane while preserving the operator Workspace lifecycle and Kubernetes-only default. (authoring-run/a81f3e71-1c8e-4692-8e2e-d462ddacc10b - 64ab72aed5c4926e4a2080ade91d785e531801a2)
 
 - 2026-09-24 16:34: Restricted the unauthenticated development Gateway to the OCE worker and OpenShell supervisor callback path, with tenant egress limited to supervisor Pods. (authoring-run/285e1867-ba73-4a0f-ae7a-e6f6bf79d5d4 - 7019738b86395a211e5b999a433f0ffaef101cdd)
 - 2026-09-24 15:58: Aligned the development profile's verified charts and runtime images with OpenShell v0.1.0-pre.7 and documented its release pin. (authoring-run/12db753e-0ea9-497a-b9bf-e2fdbe9b7fad - 1364f08511f0771f9221f92bfc5a3cd28c57175f)
