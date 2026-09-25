@@ -60,6 +60,13 @@ automatic rollback, or distributed upgrade lock. In return, controller releases
 do not interrupt existing gateways, and each path has one clear configuration
 owner and recovery boundary.
 
+**Upgrade checks:** Helm runs the candidate controller's database migration Job
+before rolling the OCC API and worker. Agent runtimes use immutable image
+replacement rather than `openclaw update`, so they do not inherit that command's
+Doctor step. Gateway startup performs its startup-safe migrations before
+readiness; after readiness, the upgrade command runs read-only Doctor lint in
+each replacement gateway. It never runs `doctor --fix` automatically.
+
 ## Outcome
 
 Add one operator command that can upgrade the OpenClaw Control Plane (OCC), all
@@ -168,8 +175,10 @@ a server-side Helm dry run.
    retaining the selected controller image.
 3. Replace the Installation Secret only for a runtime release, preserving its
    Installation ID marker.
-4. Run `helm upgrade --install --wait`. Helm owns initialization, database
-   migration, and the API and worker rollout.
+4. Run `helm upgrade --install --wait`. The pre-upgrade initialization Job runs
+   the selected controller image's database migrator with the migration role,
+   then bootstrap. Helm does not roll the API and worker unless those hooks
+   succeed.
 5. Verify both OCC Deployments use the selected controller digest and wait for
    authenticated OCC access to recover. A controller-only release ends here.
 6. For a runtime release, submit one ordinary deployment request for every
@@ -178,10 +187,14 @@ a server-side Helm dry run.
    the returned revision and that its revision Pods are `Running`, `Ready`, and
    use the candidate runtime digest. Embedded Agents require one gateway
    workload; dedicated Agents require both gateway and Agent workloads.
+8. Run `openclaw doctor --lint --json --severity-min error` in each replacement
+   gateway. This is a read-only post-start check against the mounted Agent state.
+   A Doctor error fails the release; repair remains an explicit recovery action.
 
-The command succeeds only after the complete recorded fleet converges. It does
-not claim that a model, channel, provider, or external integration works; the
-operator verifies those behaviors afterward.
+The command succeeds only after the complete recorded fleet converges and each
+replacement gateway passes Doctor lint. It does not claim that a model, channel,
+provider, or external integration works; the operator verifies those behaviors
+afterward.
 
 ## Failure and recovery
 
