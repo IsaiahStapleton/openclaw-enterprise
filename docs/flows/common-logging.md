@@ -1,7 +1,7 @@
 ---
 created: 2026-09-02
-updated: 2026-09-04
-last_updated_session: cody/01a06dd0-9fff-7e90-aae3-4e7099a6d154
+updated: 2026-09-25
+last_updated_session: codex/01a0d57b-51eb-7551-874e-38c5b633af76
 ---
 
 # Common Operational Logging Flow
@@ -156,7 +156,9 @@ The shared Collector policy keeps transport-derived identity before parsing
 untrusted JSON. It promotes fixed OCC event names, gateway records from the
 `gateway` subsystem, and Codex stderr records from `codex_app_server`; malformed,
 oversized, unclassified, content-bearing, and protocol stdout records are
-dropped before remote export. Exporter credentials and TLS settings live in
+dropped before remote export. OCC `compute.preflight-warning` records retain
+WARN severity and their bounded `occ.code`; the remote body is the event name,
+not the local diagnostic message. Exporter credentials and TLS settings live in
 Collector-only configuration. Finite queues and retry limits make operational
 logs best-effort, but outage or overflow cannot block API service, worker
 reconciliation, or PostgreSQL audit persistence.
@@ -191,6 +193,8 @@ reconciliation, or PostgreSQL audit persistence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-25 09:53: Documented preflight warning export and message exclusion with the accompanying Collector allowlist repair. (codex/01a0d57b-51eb-7551-874e-38c5b633af76 - 939ae63ac2be06d424cdbd5c626cfa675561d127)
 
 - 2026-09-04 21:04: Documented that native logging admission drops the retired redaction key while preserving JSON levels, disabled OTLP logs, runtime redaction ownership and read-only Kubernetes config mounting. (cody/01a06dd0-9fff-7e90-aae3-4e7099a6d154 - 87234e1766e5802b45424523246a52a4b2d45590)
 
