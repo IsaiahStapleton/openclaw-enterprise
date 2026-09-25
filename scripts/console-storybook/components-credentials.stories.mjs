@@ -29,4 +29,17 @@ export const AuthMissing = { ...story("authMissing"), name: "No authentication s
 export const AuthRuntime = { ...story("authRuntime"), name: "Operator-managed authentication" };
 export const AuthService = { ...story("authService"), name: "ChatGPT service account" };
 
+export const AuthSecretReplacement = {
+  ...story("authSecretReplacement"),
+  name: "Replace model Secret",
+};
+export const AuthSecretGrantDenied = {
+  ...story("authSecretGrantDenied"),
+  name: "Authentication saved, grant denied",
+};
+export const AuthSecretGrantLoading = {
+  ...story("authSecretGrantLoading"),
+  name: "Checking model Secret access",
+};
+export const AuthSaveUnknown = { ...story("authSaveUnknown"), name: "Authentication save unknown" };
 export const AuthenticationNavigation = story("authenticationNavigation");

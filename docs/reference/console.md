@@ -109,24 +109,29 @@ keep their original save baseline; concurrent changes require the editor's reloa
 Unsaved Configuration edits still block deployment. Pending or uncertain saves
 retain their recovery guard until readback; navigation never retries a mutation.
 
-An Agent detail page has a **New revision** view and immutable AgentRevisions. The new revision view
-reads the current Configuration and supports native JSON editing through **Edit Configuration**,
-plus the channel editor and harness authentication controls. Choose **Operator-managed
-credentials** for SSH embedded OpenClaw: “Configured on the runtime host; not
-validated by OCC.” This saves `{ "method": "runtime" }` without a Secret ID or
-account. Its deployment action does not wait for OCC-managed credential metadata;
-the API still enforces permissions and driver/topology support. Gateway readiness
-does not establish model access. **Selected revision** displays `activeRevisionId`; neither the
-newest admitted revision nor the viewed snapshot must match it.
+**New revision** edits the current Configuration through native JSON, channels,
+and authentication controls. **Operator-managed credentials** saves
+`{ "method": "runtime" }` for SSH embedded OpenClaw, without a Secret or account.
+Deployment skips OCC-managed credential metadata; API permissions and
+Driver/topology checks still apply. OCC does not validate host credentials.
+**Selected revision** displays `activeRevisionId`, which may differ from the
+newest admitted revision or viewed snapshot.
 
-Read-only AgentRevision snapshots cannot be edited, rolled back, redeployed, or
-used as a live-health check. **Edit current Configuration** opens the current
-draft; saving it leaves the viewed snapshot unchanged. Activation means the revision was admitted and
-selected by OCC. The console displays persisted deployment and startup evidence,
-not live gateway health. Follow the
-[deployment guide](../guides/deploy/production-agents.md#configure-the-agent-runtime) and
-[Agent deployment reference](agents/deployment.md#revisions-and-deployment) for the
-installed runtime.
+**Save authentication source** saves the binding, then confirms exact
+`secret:operate` access for the Agent service principal on the selected API-key
+or Service Accounts Secret. Grant changes require the signed-in actor's Namespace
+IAM authority. Issued ChatGPT accounts and operator-managed authentication skip
+this grant. A failed grant reports partial success and offers **Retry credential
+access** without repeating the Agent update. Partial saves survive navigation.
+Deployment errors remain visible; confirmed grants do not establish runtime or
+provider readiness.
+
+AgentRevision snapshots are read-only: they cannot be edited, rolled back, or
+redeployed. **Edit current Configuration** opens the draft without changing the
+snapshot. Activation means OCC admitted and selected a revision. Persisted
+deployment and startup evidence does not establish live gateway health; see the
+[deployment guide](../guides/deploy/production-agents.md#configure-the-agent-runtime)
+and [deployment reference](agents/deployment.md#revisions-and-deployment).
 
 The Channels tab edits Slack settings on the saved Configuration draft.
 Microsoft Teams has no console editor: its credentials and Bot Framework ingress
@@ -174,10 +179,9 @@ An unconfirmed creation blocks another submission in that modal. Refresh and
 inspect Secret metadata before creating another Secret; the first may exist.
 
 Menu choices stay in the drawer until **Save configuration**. Cancel discards
-those choices. Saving grants the Agent's service principal access to selected
-Secrets through Namespace IAM, then patches the Configuration; the caller needs
-permission for both operations. These are separate writes, so a grant may remain
-if the Configuration save fails. Neither saving nor creating a Secret deploys it.
+those choices. Saving patches the Configuration, then grants the Agent access to selected
+Secrets through Namespace IAM; both require caller permission. A failed grant
+leaves the Configuration saved and requires access recovery. Neither saving nor creating a Secret deploys it.
 
 Bound Secret metadata and **Open Agent Credentials** links open in new tabs,
 preserving unsaved channel inputs. Save channel edits before changing credentials
