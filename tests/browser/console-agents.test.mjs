@@ -7296,7 +7296,7 @@ test("Secret summaries retain revision bindings and distinguish unreadable metad
     secretBindings,
   });
   // Real admission requires exact Agent access to each projected credential.
-  for (const secret of [app, bot]) {
+  for (const secret of [app, bot, replacement]) {
     fixture.policy.bindings.push({
       id: `grant-${secret.id}`,
       namespaceId: namespace.id,
@@ -7375,14 +7375,17 @@ test("Secret summaries retain revision bindings and distinguish unreadable metad
   for (const value of ["hidden-app-value", "hidden-bot-value", "hidden-model-value"]) {
     assert.equal((await page.locator("body").textContent()).includes(value), false);
   }
-  // A metadata 404 is transport-level UI proof; a referenced active Secret cannot be deleted.
-  await page.route(`**/namespaces/${namespace.id}/secrets/${app.id}`, (route) =>
-    route.fulfill({
-      status: 404,
-      contentType: "application/json",
-      body: JSON.stringify({ error: { code: "NOT_FOUND", message: "Metadata unavailable" } }),
-    }),
-  );
+  // Active snapshots protect their Secrets even after the draft drops the bindings.
+  const secretPath = `/namespaces/${namespace.id}/secrets/${app.id}`;
+  assert.equal((await fixture.request("DELETE", secretPath)).status, 409);
+  // Admit and select the replacement draft, leaving the viewed revision historical.
+  // With no live references, a real deletion makes its bound metadata unavailable.
+  await fixture.seedActiveAgentRevision(namespace.id, agent.id, active.revision.id);
+  const deleted = await fixture.rawRequest("DELETE", secretPath, {
+    headers: authenticatedHeaders(await fixture.signIn()),
+  });
+  assert.equal(deleted.response.status, 204);
+  assert.equal((await fixture.request("GET", secretPath)).status, 404);
   await page.reload();
   await page
     .getByText(`Bound Secret · ${app.id} · Metadata unavailable`, { exact: true })
