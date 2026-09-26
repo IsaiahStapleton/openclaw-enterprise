@@ -19,7 +19,11 @@ import {
   verifyGhcr,
 } from "../../scripts/ci/container-release.mjs";
 import { writeBootstrapChart } from "../../scripts/ci/chart-package.mjs";
-import { stageReleaseChart, validateImageReceipt } from "../../scripts/ci/chart-release.mjs";
+import {
+  chartArchiveContent,
+  stageReleaseChart,
+  validateImageReceipt,
+} from "../../scripts/ci/chart-release.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
@@ -106,6 +110,51 @@ test("staged release chart records both verified digests and defaults to the con
     encoding: "utf8",
   });
   assert.match(rendered, /ghcr\.io\/openclaw\/openclaw-enterprise-controller@sha256:c{64}/);
+});
+
+test("a chart retry accepts matching files across Helm package timestamps and rejects changed templates", async (t) => {
+  const helm = process.env.OCC_HELM_BIN ?? "helm";
+  let helmVersion;
+  try {
+    helmVersion = execFileSync(helm, ["version", "--short"], { encoding: "utf8" });
+  } catch {
+    t.skip("Helm is required for the chart retry proof.");
+    return;
+  }
+  const directory = await mkdtemp(join(tmpdir(), "oce-chart-retry-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const staged = await stageReleaseChart(directory, {
+    sourceSha,
+    version: "0.1.0",
+    images: releaseImages,
+  });
+  const first = join(directory, "first");
+  const second = join(directory, "second");
+  const changed = join(directory, "changed");
+  await Promise.all([mkdir(first), mkdir(second), mkdir(changed)]);
+  for (const destination of [first, second]) {
+    execFileSync(helm, ["package", staged, "--destination", destination]);
+    if (destination === first) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+  }
+  const archiveName = "openclaw-enterprise-0.1.0.tgz";
+  const firstArchive = join(first, archiveName);
+  const secondArchive = join(second, archiveName);
+  if (helmVersion.startsWith("v3.19.2")) {
+    assert.notDeepEqual(await readFile(firstArchive), await readFile(secondArchive));
+  }
+  assert.deepEqual(
+    await chartArchiveContent(firstArchive),
+    await chartArchiveContent(secondArchive),
+  );
+  const template = join(staged, "templates/service.yaml");
+  await writeFile(template, `${await readFile(template, "utf8")}\n# changed chart content\n`);
+  execFileSync(helm, ["package", staged, "--destination", changed]);
+  assert.notDeepEqual(
+    await chartArchiveContent(firstArchive),
+    await chartArchiveContent(join(changed, archiveName)),
+  );
 });
 
 test("chart bootstrap package is valid OCI chart content but cannot be installed", async (t) => {

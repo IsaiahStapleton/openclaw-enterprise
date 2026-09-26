@@ -26,7 +26,7 @@ Containers** on `main` with its full `source_sha`, matching `ci_run_id`, and
 
 The job publishes verified images first, checks their version tags against their
 digests, then packages and pushes the chart. It rejects a chart version whose
-existing archive differs. Its `chart-publication-<run-id>-<attempt>` artifact
+packaged files differ. Its `chart-publication-<run-id>-<attempt>` artifact
 records the chart manifest digest, source SHA, and both image digests. The older
 `container-publication` receipt retains its image-only format. If a step fails,
 inspect registry digests before rerunning the same source; existing tags with

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { gunzipSync } from "node:zlib";
 import { chartPackage, chartPushParent } from "./chart-package.mjs";
 import {
   ghcrPackageName,
@@ -88,6 +90,76 @@ export async function stageReleaseChart(directory, { sourceSha, version, images 
   return destination;
 }
 
+// Helm 3 stamps tar headers when it packages a chart, so retries must compare
+// every packaged file rather than the compressed archive's incidental bytes.
+export async function chartArchiveContent(archive) {
+  const compressed = await readFile(archive);
+  assert.ok(compressed.length <= 16 * 1024 * 1024, "Chart archive is too large.");
+  const tar = gunzipSync(compressed, { maxOutputLength: 64 * 1024 * 1024 });
+  const files = new Map();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  function field(bytes) {
+    const end = bytes.indexOf(0);
+    return decoder.decode(end < 0 ? bytes : bytes.subarray(0, end));
+  }
+  function octal(bytes) {
+    const value = field(bytes).trim();
+    assert.match(value, /^[0-7]+$/u, "Invalid chart tar field.");
+    return Number.parseInt(value, 8);
+  }
+  let offset = 0;
+  let terminated = false;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) {
+      terminated = true;
+      assert.ok(
+        tar.subarray(offset).every((byte) => byte === 0),
+        "Invalid chart tar trailer.",
+      );
+      break;
+    }
+    const checksum = header.reduce(
+      (total, byte, index) => total + (index >= 148 && index < 156 ? 32 : byte),
+      0,
+    );
+    assert.equal(octal(header.subarray(148, 156)), checksum, "Invalid chart tar checksum.");
+    const name = field(header.subarray(0, 100));
+    const prefix = field(header.subarray(345, 500));
+    const path = prefix ? `${prefix}/${name}` : name;
+    assert.match(
+      path,
+      /^openclaw-enterprise\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/u,
+      "Unexpected chart archive path.",
+    );
+    assert.ok(
+      path.split("/").every((part) => part !== "." && part !== ".."),
+      "Chart archive path must stay inside its chart directory.",
+    );
+    assert.ok(!files.has(path), "Duplicate chart archive path.");
+    assert.ok(header[156] === 0 || header[156] === 48, "Chart archive contains a non-file entry.");
+    const size = octal(header.subarray(124, 136));
+    assert.ok(size <= 16 * 1024 * 1024, "Chart file is too large.");
+    const start = offset + 512;
+    assert.ok(start + size <= tar.length, "Truncated chart archive file.");
+    files.set(
+      path,
+      createHash("sha256")
+        .update(tar.subarray(start, start + size))
+        .digest("hex"),
+    );
+    offset = start + Math.ceil(size / 512) * 512;
+  }
+  assert.ok(terminated, "Chart archive lacks a tar trailer.");
+  assert.ok(files.has("openclaw-enterprise/Chart.yaml"), "Chart metadata is missing.");
+  assert.ok(files.has("openclaw-enterprise/values.yaml"), "Chart defaults are missing.");
+  assert.ok(
+    [...files.keys()].some((path) => path.startsWith("openclaw-enterprise/templates/")),
+    "Chart templates are missing.",
+  );
+  return [...files].sort(([left], [right]) => left.localeCompare(right));
+}
+
 function remoteTagDigest(image, tag, authfile, listed) {
   try {
     return inspectDigest(`docker://${image}:${tag}`, authfile);
@@ -156,6 +228,7 @@ async function publish(directory, env) {
     helmCommand(["package", staged, "--destination", temporary]);
     const archive = join(temporary, `openclaw-enterprise-${version}.tgz`);
     const expectedBytes = await readFile(archive);
+    const expectedContent = await chartArchiveContent(archive);
     const metadata = helmCommand(["show", "chart", archive]);
     assert.match(metadata, new RegExp(`^version: ${version.replaceAll(".", "\\.")}$`, "mu"));
     assert.match(metadata, new RegExp(`^appVersion: ${version.replaceAll(".", "\\.")}$`, "mu"));
@@ -208,9 +281,9 @@ async function publish(directory, env) {
       await mkdir(pulled);
       helmCommand(["pull", `oci://${chartPackage}`, "--version", version, "--destination", pulled]);
       assert.deepEqual(
-        await readFile(join(pulled, `openclaw-enterprise-${version}.tgz`)),
-        expectedBytes,
-        "Existing chart version has different bytes.",
+        await chartArchiveContent(join(pulled, `openclaw-enterprise-${version}.tgz`)),
+        expectedContent,
+        "Existing chart version has different packaged content.",
       );
     }
     for (const image of imageTags) {
@@ -264,14 +337,25 @@ async function publish(directory, env) {
     const pulled = join(temporary, "verified");
     await mkdir(pulled);
     helmCommand(["pull", `oci://${chartPackage}`, "--version", version, "--destination", pulled]);
+    const pulledArchive = join(pulled, `openclaw-enterprise-${version}.tgz`);
     assert.deepEqual(
-      await readFile(join(pulled, `openclaw-enterprise-${version}.tgz`)),
-      expectedBytes,
-      "Published chart bytes differ from the staged archive.",
+      await chartArchiveContent(pulledArchive),
+      expectedContent,
+      "Published chart content differs from the staged archive.",
     );
+    if (!existingChartDigest) {
+      assert.deepEqual(
+        await readFile(pulledArchive),
+        expectedBytes,
+        "Newly published chart bytes differ from the staged archive.",
+      );
+    }
     await verifyReleaseContext(env, packagePath);
     const chartDigest = inspectDigest(`docker://${chartPackage}:${version}`, authfile);
     assert.match(chartDigest, digestPattern);
+    if (existingChartDigest) {
+      assert.equal(chartDigest, existingChartDigest, "Chart version changed during the retry.");
+    }
     const receipt = {
       version,
       sourceSha: env.SOURCE_SHA,

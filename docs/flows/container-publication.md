@@ -189,11 +189,11 @@ the verified controller digest. Operator values can override that default.
 
 The chart publisher checks both image version tags and any existing chart
 version before writing. Existing tags must resolve to the receipt's digests;
-an existing chart archive must have identical bytes. It rechecks the trusted
+an existing chart version must have identical packaged files. It rechecks the trusted
 source, CI, environment, and private chart package before each write. After
-`helm push`, it pulls the chart, compares the archive bytes, inspects the remote
+`helm push`, it pulls the chart, compares its packaged files and new-push archive bytes, inspects the remote
 manifest digest, and writes a separate `chart-publication.json`. A partial
-failure can be retried against identical bytes. Registry conflict, ambiguous
+failure can be retried against identical packaged files. Registry conflict, ambiguous
 lookup, or permission failure stops publication without a success receipt.
 
 ## Debugging and Verification
