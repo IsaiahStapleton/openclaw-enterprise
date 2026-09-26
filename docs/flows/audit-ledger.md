@@ -1,7 +1,7 @@
 ---
 created: "2026-09-26"
 updated: "2026-09-26"
-last_updated_session: "authoring-run/b9f3fb59-fdac-4727-9071-61a19b7d940a"
+last_updated_session: "authoring-run/48c2199e-221b-4f32-9f69-2d21e68712ba"
 ---
 
 # Audit ledger flow
@@ -164,4 +164,5 @@ copies and array are immutable.
 
 ## Changelog
 
+- 2026-09-26 02:55: Clarify that the initial flow inspection included the uncommitted audit decoder fix from 7966519007124bdf77be78324b3c705cf6980199. (authoring-run/48c2199e-221b-4f32-9f69-2d21e68712ba - a501f64abbd1a5821b6c8f0da7f9466195f7dc6d)
 - 2026-09-26 02:38: Prepare the public audit ledger flow from the reviewed source and local draft. (authoring-run/b9f3fb59-fdac-4727-9071-61a19b7d940a - 3b58323f762f5742e8b44be3e269af0696ed7cde)
