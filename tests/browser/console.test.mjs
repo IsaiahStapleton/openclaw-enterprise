@@ -144,7 +144,7 @@ async function waitForRoutePhase(promise, description, release, signal) {
   }
 }
 
-async function holdRoute(t, page, pattern, continueRoute) {
+async function holdRoute(t, page, pattern, continueRoute, { fetchBeforeHold = true } = {}) {
   const releaseGate = deferred();
   const captured = deferred();
   const completed = deferred();
@@ -163,10 +163,12 @@ async function holdRoute(t, page, pattern, continueRoute) {
   t.signal?.addEventListener("abort", release, { once: true });
   await page.route(pattern, async (route) => {
     let response;
-    try {
-      response = await route.fetch();
-    } catch {
-      response = undefined;
+    if (fetchBeforeHold) {
+      try {
+        response = await route.fetch();
+      } catch {
+        response = undefined;
+      }
     }
     captured.resolve();
     if (!released && releaseWatchdog === undefined) {
@@ -495,9 +497,9 @@ test("Refresh and focus restoration retain rows until fresh data arrives", async
   await login(page, fixture, `/console/agents?namespace=${namespace.id}`);
   await page.getByText("Existing background Agent").waitFor();
   for (const trigger of ["Refresh", "focus", "visibilitychange"]) {
-    const pending = await holdRoute(t, page, "**/api/auth/session", (route, response) =>
-      response ? route.fulfill({ response }) : route.continue(),
-    );
+    const pending = await holdRoute(t, page, "**/api/auth/session", (route) => route.continue(), {
+      fetchBeforeHold: false,
+    });
     t.after(() => pending.release());
     await fixture.createAgent(namespace.id, `Added during ${trigger}`);
     if (trigger === "Refresh") {
