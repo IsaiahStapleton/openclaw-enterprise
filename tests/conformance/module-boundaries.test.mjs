@@ -483,19 +483,25 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
       assignment,
     );
   }
-  await write(
-    esm,
-    `import url from "node:url";
-     const U = url["URL"];
-     Object.defineProperty(U.prototype, "href", {get() { return import.meta.url.replace("public/mutable-url.mjs", "private/chosen.mjs"); }});
-     console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);`,
-  );
-  assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PRIVATE");
-  assert.ok(
-    (await check()).violations.some(
-      (item) => item.from === esm && item.rule === "unresolved-dynamic-import",
-    ),
-  );
+  for (const declaration of [
+    'import url from "node:url"; const U = url["URL"];',
+    'import url from "node:url"; const { URL: U } = url;',
+    'import { URL as U } from "node:url";',
+  ]) {
+    await write(
+      esm,
+      `${declaration}
+       Object.defineProperty(U.prototype, "href", {get() { return import.meta.url.replace("public/mutable-url.mjs", "private/chosen.mjs"); }});
+       console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);`,
+    );
+    assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PRIVATE");
+    assert.ok(
+      (await check()).violations.some(
+        (item) => item.from === esm && item.rule === "unresolved-dynamic-import",
+      ),
+      declaration,
+    );
+  }
   await write(
     esm,
     'console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);',
