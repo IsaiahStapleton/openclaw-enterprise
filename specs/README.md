@@ -48,6 +48,9 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Agent access](36-agent-access.md) — Proposed; existing-person sharing for trusted
+full native administration, followed by atomic enrollment and granular permissions.
+
 [Dedicated Harness RWO workspace](38-harness-rwo-workspace-plan.md) — Implementing;
 exclusive revision preparation, durable RWO workspaces, and retained existing claims.
 
