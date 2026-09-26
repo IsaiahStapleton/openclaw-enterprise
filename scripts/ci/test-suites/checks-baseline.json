@@ -199,6 +199,9 @@
       "path": "tests/browser/console-agents.test.mjs"
     },
     {
+      "path": "tests/browser/console-agent-details.test.mjs"
+    },
+    {
       "path": "tests/browser/console-repository-dedicated.test.mjs"
     },
     {
