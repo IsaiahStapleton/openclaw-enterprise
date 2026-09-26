@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript-compiler-api";
-import { createLoaderAnalysis, implicitWrapperSymbol, unwrap } from "./loader-provenance.mjs";
+import {
+  createLoaderAnalysis,
+  implicitWrapperSymbol,
+  outerExpression,
+  unwrap,
+} from "./loader-provenance.mjs";
 import { freezeRecord, slash, sourceExtension } from "./workspace.mjs";
 
 function normalizedSpecifier(root, value) {
@@ -123,8 +128,7 @@ function assignedSymbols(source, checker) {
     );
   }
   function directProcessRead(node) {
-    let value = node;
-    while (value.parent && unwrap(value.parent) === value) value = value.parent;
+    const value = outerExpression(node);
     const parent = value.parent;
     if (
       !(ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) ||
@@ -133,6 +137,8 @@ function assignedSymbols(source, checker) {
       return false;
     }
     if (ts.isIdentifier(node)) return true;
+    const member = outerExpression(parent);
+    if (ts.isCallExpression(member.parent) && member.parent.expression === member) return false;
     const property = ts.isPropertyAccessExpression(node)
       ? node.name.text
       : ts.isStringLiteralLike(node.argumentExpression)
@@ -146,8 +152,13 @@ function assignedSymbols(source, checker) {
     return property === "env" && key !== null && !["__proto__", "constructor"].includes(key);
   }
   function visit(node) {
+    const propertyName =
+      node.parent &&
+      ((ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
+        (ts.isPropertyAssignment(node.parent) && node.parent.name === node));
     if (
       ts.isIdentifier(node) &&
+      !propertyName &&
       ["globalThis", "global"].includes(node.text) &&
       implicitWrapperSymbol(checker.getSymbolAtLocation(node))
     ) {
@@ -157,9 +168,13 @@ function assignedSymbols(source, checker) {
     }
     if (
       ts.isIdentifier(node) &&
+      !propertyName &&
       node.text === "URL" &&
       implicitWrapperSymbol(checker.getSymbolAtLocation(node)) &&
-      !(ts.isNewExpression(node.parent) && node.parent.expression === node)
+      !(
+        ts.isNewExpression(outerExpression(node).parent) &&
+        outerExpression(node).parent.expression === outerExpression(node)
+      )
     ) {
       // Aliases and other uses can expose the mutable global constructor.
       globalURLMutable = true;
@@ -168,8 +183,7 @@ function assignedSymbols(source, checker) {
       (ts.isIdentifier(node) ||
         ts.isPropertyAccessExpression(node) ||
         ts.isElementAccessExpression(node)) &&
-      !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
-      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node) &&
+      !propertyName &&
       processObject(node) &&
       !directProcessRead(node)
     ) {
@@ -329,8 +343,8 @@ export function collectSourceImports(snapshot) {
             ) &&
             !(
               node.text === "URL" &&
-              ts.isNewExpression(node.parent) &&
-              node.parent.expression === node &&
+              ts.isNewExpression(outerExpression(node).parent) &&
+              outerExpression(node).parent.expression === outerExpression(node) &&
               !assigned.globalURLMutable &&
               !assigned.unbound.has("URL")
             )

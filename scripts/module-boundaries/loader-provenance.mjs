@@ -18,6 +18,11 @@ export function unwrap(node) {
   return node;
 }
 
+export function outerExpression(node) {
+  while (node.parent && unwrap(node.parent) === node) node = node.parent;
+  return node;
+}
+
 // TypeScript may synthesize an Identifier declaration for CommonJS property writes.
 export function implicitWrapperSymbol(symbol) {
   return (
@@ -33,11 +38,15 @@ export function implicitWrapperSymbol(symbol) {
 
 /** Bounded lexical provenance, not JavaScript evaluation. No filesystem or policy access. */
 export function createLoaderAnalysis({ checker, path, commonjs, assigned, source }) {
-  const symbol = (node) => checker.getSymbolAtLocation(node);
+  const symbol = (node) =>
+    ts.isShorthandPropertyAssignment(node.parent)
+      ? checker.getShorthandAssignmentValueSymbol(node.parent)
+      : checker.getSymbolAtLocation(node);
   const declaration = (node) => symbol(node)?.declarations?.[0];
   const mutableModules = new Set();
   let mutableRequireResolve = assigned.unbound.has("require.resolve");
   let mutableGlobalURL = false;
+  let mutableCommonjsModule = false;
   function markMutable(module) {
     mutableModules.add(module);
     // The node:url module exposes the same constructor as the global URL.
@@ -77,7 +86,9 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
         : { ...base, kind: "require-resolve" };
     }
     if (base?.kind === "commonjs-module" && name === "require") {
-      return { kind: "require", anchor: path };
+      return mutableCommonjsModule
+        ? { kind: "unknown-loader", reason: "The implicit module loader may have changed." }
+        : { kind: "require", anchor: path };
     }
     if (base?.kind === "unknown-loader" && ["resolve", "require"].includes(name)) {
       return base;
@@ -203,13 +214,21 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
   // code whose effects are not modeled.
   function exposedOrWritten(node) {
     let current = node;
-    while (
-      current.parent &&
-      (ts.isPropertyAccessExpression(current.parent) ||
-        ts.isElementAccessExpression(current.parent)) &&
-      current.parent.expression === current
-    ) {
+    let member = false;
+    for (;;) {
+      current = outerExpression(current);
+      if (
+        !current.parent ||
+        !(
+          ts.isPropertyAccessExpression(current.parent) ||
+          ts.isElementAccessExpression(current.parent)
+        ) ||
+        current.parent.expression !== current
+      ) {
+        break;
+      }
       current = current.parent;
+      member = true;
     }
     const parent = current.parent;
     if (
@@ -224,20 +243,21 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
     ) {
       return true;
     }
-    if (current !== node) {
+    if (member) {
       return false;
     }
     if (
       parent &&
       ((ts.isVariableDeclaration(parent) &&
-        (parent.initializer === node || parent.name === node)) ||
+        (parent.initializer === current || parent.name === current)) ||
         ((ts.isNamespaceImport(parent) ||
           ts.isImportClause(parent) ||
           ts.isImportEqualsDeclaration(parent)) &&
           parent.name === node) ||
         ((ts.isImportSpecifier(parent) || ts.isBindingElement(parent)) &&
           (parent.name === node || parent.propertyName === node)) ||
-        ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === node))
+        ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+          parent.expression === current))
     ) {
       return false;
     }
@@ -245,17 +265,40 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
   }
   function inspectExposure(node) {
     if (
-      ts.isIdentifier(node) ||
-      ts.isCallExpression(node) ||
-      ts.isPropertyAccessExpression(node) ||
-      ts.isElementAccessExpression(node)
+      (ts.isIdentifier(node) ||
+        ts.isCallExpression(node) ||
+        ts.isPropertyAccessExpression(node) ||
+        ts.isElementAccessExpression(node)) &&
+      !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node)
     ) {
       const origin = reference(node);
+      const outer = outerExpression(node);
       const written =
         assigned.objectWriteNodes.has(node) ||
         (ts.isIdentifier(node) && assigned.objectWrites.has(symbol(node) ?? node.text));
       if (origin?.kind === "foreign-path") {
         markMutable(origin.module);
+      }
+      if (origin?.kind === "commonjs-module") {
+        const parent = outer.parent;
+        let first;
+        if (
+          (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+          parent.expression === outer
+        ) {
+          first = ts.isPropertyAccessExpression(parent)
+            ? parent.name.text
+            : ts.isStringLiteralLike(parent.argumentExpression)
+              ? parent.argumentExpression.text
+              : null;
+        }
+        if (
+          first !== "exports" &&
+          (exposedOrWritten(node) || (first !== undefined && first !== "require"))
+        ) {
+          mutableCommonjsModule = true;
+        }
       }
       if (origin?.kind === "module" && (written || exposedOrWritten(node))) {
         markMutable(origin.module);
@@ -264,9 +307,9 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
         origin?.kind === "builtin" &&
         (written ||
           exposedOrWritten(node) ||
-          ((ts.isPropertyAccessExpression(node.parent) ||
-            ts.isElementAccessExpression(node.parent)) &&
-            node.parent.expression === node))
+          ((ts.isPropertyAccessExpression(outer.parent) ||
+            ts.isElementAccessExpression(outer.parent)) &&
+            outer.parent.expression === outer))
       ) {
         markMutable(origin.module);
       }

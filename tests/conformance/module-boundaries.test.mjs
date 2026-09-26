@@ -524,12 +524,51 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
       declaration,
     );
   }
+  for (const [declaration, constructor] of [
+    ['import {URL as U} from "node:url";', "(U)"],
+    ['import * as url from "node:url";', "(url.URL)"],
+    ["", "(URL)"],
+  ]) {
+    await write(
+      esm,
+      `${declaration} console.log((await import(new ${constructor}("./chosen.mjs", import.meta.url).href)).default);`,
+    );
+    assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PUBLIC");
+    assert.ok(
+      from(await check(), esm).some((item) => item.to.endsWith("/public/chosen.mjs")),
+      constructor,
+    );
+  }
+  await write(
+    esm,
+    `import {URL as U} from "node:url";
+     Object.defineProperty((U).prototype, "href", {get() { return import.meta.url.replace("public/mutable-url.mjs", "private/chosen.mjs"); }});
+     console.log((await import(new (U)("./chosen.mjs", import.meta.url).href)).default);`,
+  );
+  assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PRIVATE");
+  assert.ok(
+    (await check()).violations.some(
+      (item) => item.from === esm && item.rule === "unresolved-dynamic-import",
+    ),
+  );
   await write(
     esm,
     'const global = {}; global.URL = class {}; console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);',
   );
   assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PUBLIC");
   assert.ok(from(await check(), esm).some((item) => item.to.endsWith("/public/chosen.mjs")));
+  for (const property of ["global", "globalThis", "URL"]) {
+    await write(
+      esm,
+      `const settings = JSON.parse('{"${property}":false}'); void settings.${property};
+       console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);`,
+    );
+    assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PUBLIC");
+    assert.ok(
+      from(await check(), esm).some((item) => item.to.endsWith("/public/chosen.mjs")),
+      property,
+    );
+  }
   await rm(join(root, esm));
   await write(
     source,
@@ -537,6 +576,34 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
   );
   assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
   assert.ok(from(await check(), source).some((item) => item.to.endsWith("/public/chosen.cjs")));
+  for (const setup of [
+    'const path = require("node:path"); const load = (path.join);',
+    'const {join} = require("node:path"); const load = (join);',
+  ]) {
+    await write(source, `${setup} console.log(require(load(__dirname, "chosen.cjs")));`);
+    assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
+    assert.ok(from(await check(), source).some((item) => item.to.endsWith("/public/chosen.cjs")));
+  }
+  for (const [setup, callee] of [
+    ['const path = require("node:path");', "(path.join)"],
+    ['const {join} = require("node:path");', "(join)"],
+  ]) {
+    await write(source, `${setup} console.log(require(${callee}(__dirname, "chosen.cjs")));`);
+    assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
+    assert.ok(from(await check(), source).some((item) => item.to.endsWith("/public/chosen.cjs")));
+  }
+  await write(
+    source,
+    `const path = require("node:path");
+     path.join = () => __dirname + "/../private/chosen.cjs";
+     console.log(require((path.join)(__dirname, "chosen.cjs")));`,
+  );
+  assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PRIVATE");
+  assert.ok(
+    (await check()).violations.some(
+      (item) => item.from === source && item.rule === "unresolved-dynamic-import",
+    ),
+  );
 });
 
 test("fails closed for a non-native Node path flavor", async (t) => {
@@ -785,6 +852,12 @@ test("fails closed when the implicit CommonJS module loader is reassigned", asyn
     `module.require = ${loader};`,
     `module["require"] = ${loader};`,
     `const key = "require"; module[key] = ${loader};`,
+    `const alias = module; alias.require = ${loader};`,
+    `const first = module; const alias = first; alias["require"] = ${loader};`,
+    `function change(alias) { alias.require = ${loader}; } change(module);`,
+    `const box = {module}; box.module.require = ${loader};`,
+    `const original = module.require.bind(module); const proto = module.__proto__; proto.require = () => original("../private/secret.cjs");`,
+    `const alias = module; Object.assign(alias, {require: ${loader}});`,
   ]) {
     await write(source, `${setup} ${assignment} console.log(module.require("./secret.cjs"));`);
     assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PRIVATE");
@@ -804,6 +877,11 @@ test("fails closed when the implicit CommonJS module loader is reassigned", asyn
     source,
     'function local(module) { module = {}; } module.exports = 1; console.log(module.require("./secret.cjs"));',
   );
+  assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
+  assert.ok(
+    from(await check(), source).some((item) => item.to === "apps/app/src/public/secret.cjs"),
+  );
+  await write(source, 'const alias = module; console.log(alias.require("./secret.cjs"));');
   assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
   assert.ok(
     from(await check(), source).some((item) => item.to === "apps/app/src/public/secret.cjs"),
@@ -2427,6 +2505,10 @@ test("invalidates unknown-load exceptions when destructured sources change", asy
       `const box = {...{env: process.env}}; box.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     environmentComputedAlias: (path) =>
       `const key = "env"; const box = { env: process[key] }; box.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentMethodAlias: (path) =>
+      `const box = process.env.valueOf(); box.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentWrappedMethodAlias: (path) =>
+      `const box = (process.env["valueOf"])(); box.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     processShorthandAlias: (path) =>
       `const box = { process }; box.process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     environmentReturnAlias: (path) =>
