@@ -1542,7 +1542,8 @@ ${AUTH_PROBE_FAILURE_HELPER}
 function probeOpenClawAuthenticationFailureCode() {
   const fs = require("node:fs");
   const { spawnSync } = require("node:child_process");
-  const directory = fs.mkdtempSync("/tmp/openclaw-auth-probe-");
+  const temporary = (process.env.TMPDIR || "/tmp").replace(/\/+$/, "");
+  const directory = fs.mkdtempSync(temporary + "/openclaw-auth-probe-");
   try {
     const model = process.env.OPENCLAW_HARNESS_MODEL;
     const provider = process.env.OPENCLAW_HARNESS_PROVIDER;
@@ -1565,6 +1566,7 @@ function probeOpenClawAuthenticationFailureCode() {
       env: {
         PATH: process.env.PATH,
         HOME: directory,
+        TMPDIR: directory,
         OPENCLAW_STATE_DIR: directory + "/state",
         OPENCLAW_CONFIG_PATH: configPath,
         NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE,
@@ -2230,17 +2232,18 @@ if (process.env.OPENCLAW_NODE_CA_PEM) {
   writeFileSync(caPath, process.env.OPENCLAW_NODE_CA_PEM, { mode: 0o600 });
   nodeEnv.NODE_EXTRA_CA_CERTS = caPath;
 }
+const connectTargetPath = join(state, "connect-target");
+writeFileSync(connectTargetPath, setupCode, { mode: 0o600 });
 const child = spawn(
   process.execPath,
   [
     "/app/openclaw.mjs",
-    "node",
-    "run",
-    "--pair-if-needed",
-    setupCode,
+    "connect",
+    "--target-file",
+    connectTargetPath,
+    "--ephemeral",
     "--display-name",
     "OpenClaw Enterprise native worker",
-    "--session-host",
   ],
   { stdio: "inherit", env: nodeEnv },
 );

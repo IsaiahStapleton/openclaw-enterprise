@@ -171,6 +171,12 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
   await helpers.applyManifest(gatewayRoutingManifests);
   await waitForGatewayCertificate(platformNamespace, helpers);
   await waitForGatewayProgrammed(platformNamespace, helpers);
+  const routing = {
+    gatewayName,
+    gatewayNamespace: platformNamespace,
+    envoyNamespace,
+    hostname: gatewayHostname(platformNamespace),
+  };
 
   return {
     get apiKey() {
@@ -183,12 +189,7 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
       "app.kubernetes.io/component": "api",
     },
     caSecretName,
-    routing: {
-      gatewayName,
-      gatewayNamespace: platformNamespace,
-      envoyNamespace,
-      hostname: gatewayHostname(platformNamespace),
-    },
+    routing,
     nativeOptions: {
       gatewayAuth: {
         auth: {
@@ -204,7 +205,11 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
       await waitForComputeGatewayRoute(topology, helpers);
       const envoyService = await waitForEnvoyService(platformNamespace, helpers);
       await waitForGatewayProgrammed(platformNamespace, helpers);
-      const gatewayUrl = `wss://${gatewayHostname(platformNamespace)}/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`;
+      const authority =
+        routing.endpointPort === undefined || routing.endpointPort === 443
+          ? routing.hostname
+          : `${routing.hostname}:${routing.endpointPort}`;
+      const gatewayUrl = `wss://${authority}/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}`;
       const probe = (input) => runControllerProbe(topology, input);
       return {
         url: gatewayUrl,

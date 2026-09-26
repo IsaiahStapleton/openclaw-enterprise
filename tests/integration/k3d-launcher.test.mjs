@@ -299,9 +299,18 @@ node_args="$*"
     }
     assert.equal(recorded.demoState, "");
   } else {
-    assert.equal(recorded.args, "scripts/k3d-demo.mjs");
+    assert.match(
+      recorded.args,
+      selectedHarness === "openclaw"
+        ? /--test tests\/integration\/sandbox-driver-openshell-k3d-real\.test\.mjs/
+        : /^scripts\/k3d-demo\.mjs$/,
+    );
     assert.equal(recorded.demoState, join(state, "demo.json"));
     assert.equal(recorded.harness, selectedHarness);
+    if (selectedHarness === "openclaw") {
+      assert.equal(recorded.openShellProjection, "1");
+      assert.equal(recorded.openShellHarness, "openclaw");
+    }
   }
   assert.equal(recorded.dockerHost, expectedDockerHost);
   assert.equal(recorded.containerBin, join(bin, engine));
@@ -323,12 +332,8 @@ node_args="$*"
 test("k3d defaults to the foreground OpenClaw and OCC console demo", (context) =>
   runLauncher(context, "docker"));
 
-test("k3d demo rejects native OpenClaw until the OpenShell browser path exists", async (context) => {
-  await assert.rejects(
-    runLauncher(context, "docker", ["demo", "--harness", "openclaw"]),
-    /OpenShell-native browser demo is not implemented yet/,
-  );
-});
+test("k3d demo selects native OpenClaw through OpenShell", (context) =>
+  runLauncher(context, "docker", ["demo", "--harness", "openclaw"]));
 
 test("k3d fails immediately without a model credential in non-interactive use", async (context) => {
   await assert.rejects(

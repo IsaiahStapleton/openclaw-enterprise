@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
-updated: 2026-09-25
-last_updated_session: authoring-run/c2a20d39-27b7-49c6-b32e-59afd0b83403
+updated: 2026-09-26
+last_updated_session: authoring-run/6df27106-e085-44ed-97e7-9405ce9351ed
 ---
 
 # Harness Execution Topology Flow
@@ -138,9 +138,11 @@ Dedicated Codex and dedicated OpenClaw keep separate Agent-owned Gateway and
 Harness ServiceAccounts. Compute owns the Gateway Pod; the selected SandboxDriver
 owns the dedicated native Harness Pod. The OpenClaw Harness enrolls as a paired node,
 owns its persistent identity and workspace, and is the only workload that
-receives the model key. The Gateway receives neither provider authentication nor
-node state. Compute writes the enrolled device into a generated `dedicated-native`
-worker-inference profile and makes that profile mandatory, so every session uses
+receives the model key. Its provider-managed process uses OpenClaw's ephemeral
+connection mode, reading the one-use enrollment target from a private file; later
+starts reuse the device token from the persistent node state. The Gateway receives
+neither provider authentication nor node state. Compute writes the enrolled device into a generated `dedicated-native`
+profile with `inference: "worker"` and makes that profile mandatory, so every session uses
 the Harness without a user placement choice. A missing or disconnected Harness
 fails the turn instead of falling back to Gateway inference. Their exact callback
 route and session-bound worker admission keep the transport scoped to the owning
@@ -230,10 +232,14 @@ The dedicated OpenClaw node host installs Gateway-issued worker bundles into its
 own state and creates managed workspaces below `/home/node/workspace`. Private
 gateway state, claim roots, `CODEX_HOME`, and gateway credentials remain outside
 the dedicated Harness. A container restart republishes image-owned runtime assets
-into its Pod-local state, then reuses the paired identity and Harness workspace.
+into its Pod-local state, then reconnects the ephemeral provider process with the
+paired identity and Harness workspace.
 Readiness gives the bounded identity check enough time to finish before the
 Gateway dispatches another worker session. Its Node compile cache stays under
 the bounded writable node-state mount instead of the small Pod-local `/tmp`.
+The startup model probe creates its temporary state beneath the selected
+`TMPDIR`, so a Sandbox Driver can grant that one bounded writable path before
+the native entrypoint runs.
 
 For a selected Sandbox Driver, stopping or retiring a revision always runs its
 required cleanup after stopping a Compute-owned ordinary Harness, or delegates
@@ -293,6 +299,12 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-26 19:50: Align the Compute-owned mandatory native profile with OpenClaw's worker-inference admission contract. (authoring-run/6df27106-e085-44ed-97e7-9405ce9351ed - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
+
+- 2026-09-26 18:15: Use OpenClaw's environment-managed ephemeral connection for the provider-owned native worker and deliver its one-use enrollment target through a private file. (authoring-run/6df27106-e085-44ed-97e7-9405ce9351ed - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
+
+- 2026-09-26 12:45: Create native model-probe state beneath the selected temporary directory so Sandbox filesystem policy can grant its bounded writable path. (authoring-run/6df27106-e085-44ed-97e7-9405ce9351ed - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
 
 - 2026-09-25 21:51: Make the generated dedicated native worker profile mandatory for automatic, fail-closed session placement. (authoring-run/c2a20d39-27b7-49c6-b32e-59afd0b83403 - 3312dc69ffdcb12ccc9d928085db0f24a3a42263)
 

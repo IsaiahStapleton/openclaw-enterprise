@@ -191,7 +191,9 @@ Helm's `gatewayRouting` settings configure shared infrastructure:
 
 The Installation's `drivers.compute.configuration.gatewayRouting` separately
 requires `gatewayName`, `gatewayNamespace`, and `envoyNamespace`; `hostname` is
-optional. `envoyHttpsTargetPort` defaults to `10443` and must match Helm's value,
+optional. `endpointPort` defaults to `443`. Set it only when the external load
+balancer exposes the Gateway listener on another port; Helm does not configure
+that external mapping. `envoyHttpsTargetPort` defaults to `10443` and must match Helm's value,
 so the Harness egress rule permits the listener's actual Pod port.
 Match the Helm values and use the release namespace for
 `gatewayNamespace`. Helm does not rewrite the Installation Secret. Remove

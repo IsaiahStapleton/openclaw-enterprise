@@ -216,9 +216,11 @@ revision's UUID as `request_id`. Codex includes an unnamed `service_exposures`
 entry for the literal `APP_SERVER_PORT`; OpenShell registers that endpoint
 during Create and returns its URL in `service_urls`. Native OpenClaw supplies no
 service exposure because its enrolled worker connects outbound to the Gateway,
-and the Driver rejects an unexpected returned URL. Replaying the same Create
-request returns the same result. A Sandbox that predates the replayable Codex
-request fails explicitly rather than receiving a separate post-create mutation.
+so the client accepts OpenShell omitting `service_urls`; the Driver still rejects
+an unexpected returned URL. When an exposure was requested, an omitted URL map
+fails closed. Replaying the same Create request returns the same result. A
+Sandbox that predates the replayable Codex request fails explicitly rather than
+receiving a separate post-create mutation.
 Stock `v0.1.0` still lacks the exact projected identity and volume support
 required by the request, including the immutable plugin-runtime ConfigMap
 mounted by Kubernetes Compute. Any request that reaches
@@ -292,7 +294,8 @@ Kubernetes Compute delete the Kubernetes namespace.
   enforcement, exposed-route reachability, and lifecycle behavior. It does not
   prove native workload projection or an authenticated model turn through the
   exposed route. The tested runtime uses the OpenClaw source commit pinned by
-  `deploy/runtime/Dockerfile`; that source provides the workspace-node
+  `deploy/runtime/Dockerfile`; that source provides the native worker's
+  environment-managed `connect --ephemeral` path and the Codex workspace-node's
   `--pair-if-needed` and `--commands` options required by the test.
 - `OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
   identifies the current fail-closed boundary.
@@ -317,6 +320,10 @@ Kubernetes Compute delete the Kubernetes namespace.
 - 2026-09-28 00:34: Restored Compose defaults and explicit Kubernetes-only startup. (01a0e441-02f9-70b2-ad45-0a1a5049954a - 201f31d511464133f06e0526bb5545ed1cb27e25)
 
 - 2026-09-26 14:29: Documented the shared `openshell` Backend, credential-source attachments in Sandbox creation, attachment readiness before activation, and the app-server token as the first remaining stock blocker. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 849b2b24111fe237b12da5be1d4b411d3146cefb)
+- 2026-09-26 18:15: Switched the provider-owned native worker to the environment-managed ephemeral enrollment path and kept its one-use target out of process arguments. (authoring-run/571231c7-098f-4930-ae0f-69d988366d28 - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
+
+- 2026-09-26 11:50: Accepted an omitted OpenShell service URL map only for outbound-only native Harness creation while preserving the required-map failure for exposed services. (authoring-run/571231c7-098f-4930-ae0f-69d988366d28 - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
+
 - 2026-09-25 20:28: Added full-facet native OpenClaw provisioning, its outbound-only Harness connection, and the selectable real model-turn proof. (authoring-run/aeb3824d-50c3-4438-8684-4f7d993c09d6 - a940efa1cf7deff44f14407851827c8049926ec9)
 - 2026-09-25 12:23: Documented the selectable Compose control plane while preserving the operator Workspace lifecycle and Kubernetes-only default. (authoring-run/a81f3e71-1c8e-4692-8e2e-d462ddacc10b - 64ab72aed5c4926e4a2080ade91d785e531801a2)
 - 2026-09-25 09:50: Updated the verified source, images, wire fixture, and Helm value mapping for OpenShell v0.1.0, preserved stock Secret-projection rejection, and kept Envoy on the disposable cluster's one-node fixture selector. (authoring-run/acf300be-0710-4283-ae22-5f088cac0b54 - 64ab72aed5c4926e4a2080ade91d785e531801a2)

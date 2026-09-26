@@ -735,10 +735,10 @@ async function buildRuntimeImages(
       process.env.OCC_DOCKER_BIN ?? "docker",
       openclawSource === undefined
         ? [
-             "build",
-             ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
-               ? ["--builder", "default", "--load"]
-               : []),
+            "build",
+            ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
+              ? ["--builder", "default", "--load"]
+              : []),
             "--pull=false",
             "-f",
             runtimeDockerfile,
@@ -747,10 +747,10 @@ async function buildRuntimeImages(
             repositoryRoot,
           ]
         : [
-             "build",
-             ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
-               ? ["--builder", "default", "--load"]
-               : []),
+            "build",
+            ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
+              ? ["--builder", "default", "--load"]
+              : []),
             "--build-arg",
             "OPENCLAW_DOCKER_BUILD_SKIP_DTS=1",
             "-t",
@@ -2052,6 +2052,7 @@ async function prepareLane({ lane, statePath }) {
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await ensurePostgresServer(resolvedStatePath, state);
       const cluster = await prepareK3dModelLane(resolvedStatePath, state, env, {
+        buildController: true,
         buildRuntime: true,
       });
       const routing = await prepareGatewayRouting({ cluster, execFile });

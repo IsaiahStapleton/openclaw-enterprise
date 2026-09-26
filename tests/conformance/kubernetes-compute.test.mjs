@@ -1514,6 +1514,19 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
     driver.getGatewayEndpoint(revision),
     `wss://${gatewayRouting.hostname}/namespaces/${tenant.id}/agents/${revision.agentId}`,
   );
+  const alternateEndpointDriver = createKubernetesComputeDriver(
+    routedOptions({ gatewayRouting: { ...gatewayRouting, endpointPort: 18443 } }),
+  );
+  const alternateEndpointRevision = routedRevision(alternateEndpointDriver);
+  assert.equal(
+    alternateEndpointDriver.getGatewayEndpoint(alternateEndpointRevision),
+    `wss://${gatewayRouting.hostname}:18443/namespaces/${tenant.id}/agents/${alternateEndpointRevision.agentId}`,
+  );
+  assert.deepEqual(
+    alternateEndpointDriver.gatewayRoute(alternateEndpointRevision, ownership, namespace, service)
+      .spec.hostnames,
+    [gatewayRouting.hostname],
+  );
 
   const route = driver.gatewayRoute(revision, ownership, namespace, service);
   assert.equal(route.apiVersion, "gateway.networking.k8s.io/v1");
@@ -2202,6 +2215,17 @@ test("agent provisioning validation reuses native trusted-proxy admission before
 });
 
 test("gateway routing startup validation and namespace membership fail closed", async () => {
+  for (const endpointPort of [0, -1, 65536, 443.5, "443"]) {
+    assert.throws(
+      () =>
+        createKubernetesComputeDriver(
+          routedOptions({
+            gatewayRouting: { ...gatewayRouting, endpointPort },
+          }),
+        ),
+      /Gateway routing endpoint port/,
+    );
+  }
   for (const envoyHttpsTargetPort of [0, -1, 65536, 443.5, "10443"]) {
     assert.throws(
       () =>
@@ -2952,9 +2976,15 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
     true,
   );
   assert.equal(worker.args[0].includes('"runtime-server"'), false);
-  assert.equal(worker.args[0].includes('"node"'), true);
-  assert.equal(worker.args[0].includes('"--session-host"'), true);
-  assert.equal(worker.args[0].includes('"--pair-if-needed"'), true);
+  assert.equal(worker.args[0].includes('"connect"'), true);
+  assert.equal(worker.args[0].includes('"--ephemeral"'), true);
+  assert.equal(worker.args[0].includes('"--target-file"'), true);
+  assert.equal(worker.args[0].includes('"--pair-if-needed"'), false);
+  assert.equal(worker.args[0].includes('"--session-host"'), false);
+  assert.equal(
+    worker.args[0].includes("writeFileSync(connectTargetPath, setupCode, { mode: 0o600 })"),
+    true,
+  );
   assert.equal(
     worker.env.find(({ name }) => name === "TMPDIR")?.value,
     "/tmp/openclaw-native-worker",
@@ -4360,6 +4390,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         const childSignals = [];
         const exits = [];
         const timers = [];
+        let probeTemplate;
         let started = false;
         let held = false;
         // Stub native process I/O only: execute the complete generated startup
@@ -4370,9 +4401,13 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
           URL,
           console: { error: (value) => errors.push(value) },
           process: {
-            env: Object.fromEntries(
-              prepared.environment.map((entry) => [entry.name, entry.value ?? "fixture-model-key"]),
-            ),
+            env: Object.fromEntries([
+              ...prepared.environment.map((entry) => [
+                entry.name,
+                entry.value ?? "fixture-model-key",
+              ]),
+              ["TMPDIR", "/approved-temporary"],
+            ]),
             on(signal, callback) {
               signals.set(signal, callback);
             },
@@ -4391,7 +4426,8 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
             if (specifier === "node:fs") {
               return {
                 mkdirSync() {},
-                mkdtempSync() {
+                mkdtempSync(template) {
+                  probeTemplate = template;
                   return "/isolated-probe";
                 },
                 writeFileSync(path, value) {
@@ -4440,6 +4476,8 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         });
         await Promise.resolve();
         assert.equal(calls.length, 1);
+        assert.equal(probeTemplate, "/approved-temporary/openclaw-auth-probe-");
+        assert.equal(calls[0].environment.TMPDIR, "/isolated-probe");
         assert.equal(calls[0].args[calls[0].args.indexOf("--probe-provider") + 1], provider);
         assert.equal(calls[0].environment[credentialName], "fixture-model-key");
         assert.equal(

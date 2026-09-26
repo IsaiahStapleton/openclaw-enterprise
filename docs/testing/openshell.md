@@ -146,15 +146,32 @@ selector. Missing prerequisites fail rather than skip.
 `OCC_TEST_OPENSHELL_HARNESS` defaults to `codex`. Select `openclaw` to verify
 that the native Harness requests no inbound OpenShell service exposure and
 completes a real model turn through its outbound enrolled-worker connection.
-`./scripts/k3d test --harness openclaw` selects this case. The browser demo is
-not available for this verification-only topology.
+The selected network policy permits provider egress from the Codex executable
+for Codex or from the Node executable for native OpenClaw. Native enrollment
+egress uses the Workspace Gateway's configured endpoint port, including the
+high loopback port allocated by the Podman verification relay. The real fixture
+also gives the delegated Sandbox the same 2 GiB Harness memory limit as
+Kubernetes Compute; the cluster's 1 GiB container default is insufficient while
+the native worker installs its Gateway bundle.
+`./scripts/k3d test --harness openclaw` selects this case. To keep the proven
+topology running after its real turn and expose the OpenClaw Control UI and OCC
+console on loopback, run:
+
+```sh
+./scripts/k3d demo --harness openclaw
+```
+
+The demo uses the same verification-only compatibility bridge; it does not
+promote that bridge into a supported production path.
 
 Use an OCE runtime image built from the OpenClaw source commit pinned by
-`deploy/runtime/Dockerfile`. The test requires the workspace-node
-`--pair-if-needed` and `--commands` CLI options. The test configures
-the private Gateway with its fully qualified `.svc.cluster.local` hostname so
-OpenShell policy DNS, the listener certificate, the HTTPRoute, and node pairing
-use the same name.
+`deploy/runtime/Dockerfile`. The native proof requires the environment-managed
+`connect --ephemeral` path; OCE supplies its one-use enrollment target through a
+private file instead of a process argument. The Codex workspace-node proof still
+requires the `node run --pair-if-needed` and `--commands` CLI options. The test
+configures the private Gateway with its fully qualified `.svc.cluster.local`
+hostname so OpenShell policy DNS, the listener certificate, the HTTPRoute, and
+node pairing use the same name.
 
 ### Test bridge and upstream prerequisite
 
@@ -169,7 +186,12 @@ mounts the app-server token Secret reference, immutable `runtime.json` and
 `config.toml` ConfigMap entries, and an audience-bound ServiceAccount token. It
 copies them into private PVC subpaths. The compatibility request mounts the
 credentials, plugin runtime, and workload token read-only; revision-owned node
-state, runtime assets, and the Harness workspace remain writable. Helm permits
+state, runtime assets, and the Harness workspace remain writable. For native
+OpenClaw, the bridge mounts node state at a root-level path because stock
+OpenShell runs the Agent as UID 10001 while the runtime image owns `/home/node`
+as UID 1000; this keeps secure workspace-transfer ancestry owned only by root or
+the effective Agent user. The bridge moves the native inference workspace grant
+to the same root so authorization remains exact. Helm permits
 the OpenShell supervisor Pod to reach Envoy only from the Gateway-attached
 tenant namespace because the supervisor owns the policy-enforced outbound
 socket. The verification-only Gateway enables caller driver configuration and

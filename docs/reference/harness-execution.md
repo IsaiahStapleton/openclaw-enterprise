@@ -127,7 +127,8 @@ the shared gateway's `Recreate` strategy: cutover can stop the working gateway
 before the replacement validates its credentials. Invalid credentials or a
 provider failure leave the replacement unready and the Agent unavailable until
 repair and restart or a new deployment. There is no automatic rollback.
-Readiness polling does not repeat model calls.
+Readiness polling does not repeat model calls. The probe stores its temporary
+state beneath the runtime's selected `TMPDIR`.
 
 Both startup checks call the configured primary model. OpenClaw disables tools
 and model fallback. Codex ignores user configuration and rules, disables execution
@@ -184,7 +185,9 @@ Each deployed Agent owns its gateway. Embedded execution keeps the Harness in
 that gateway. Dedicated Codex uses a separate Harness Pod. Dedicated OpenClaw
 uses a SandboxDriver-provisioned Harness Pod. The OpenClaw Harness enrolls as a paired node through the routed Gateway, supervises the worker,
 and executes inference plus `exec`, `process`, `read`, `write`, `edit`, and
-`apply_patch` in its own environment. The Gateway retains session admission,
+`apply_patch` in its own environment. The provider-managed node process uses
+OpenClaw's ephemeral connection mode and consumes its one-use enrollment target
+from a private file. The Gateway retains session admission,
 effective tool policy, authoritative transcripts, and streamed event collection.
 The Gateway container cannot read the model credential or mount the node state;
 the worker receives no gateway service-principal token. Compute makes the

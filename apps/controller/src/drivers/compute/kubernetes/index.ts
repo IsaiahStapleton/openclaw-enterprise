@@ -155,6 +155,7 @@ export interface KubernetesWorkloadPeer {
 
 export interface KubernetesGatewayRoutingOptions {
   readonly hostname?: string;
+  readonly endpointPort?: number;
   readonly gatewayName: string;
   readonly gatewayNamespace: string;
   readonly envoyNamespace: string;
@@ -1309,6 +1310,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         additionalProperties: false,
         properties: {
           hostname: { type: "string" },
+          endpointPort: { type: "integer", minimum: 1, maximum: 65535 },
           gatewayName: { type: "string" },
           gatewayNamespace: { type: "string" },
           envoyNamespace: { type: "string" },
@@ -1514,6 +1516,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           validateDnsHostname(routing.hostname, "Gateway routing hostname");
         }
       }
+      validatePort(routing.endpointPort ?? 443, "Gateway routing endpoint port");
       validateKubernetesResourceName(
         required(routing.gatewayName, "Gateway routing Gateway name"),
         "Gateway routing Gateway name",
@@ -1804,7 +1807,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (routing === undefined) {
       return undefined;
     }
-    return `wss://${this.gatewayRoutingHostname(routing)}${this.gatewayRoutePath(revision)}`;
+    const hostname = this.gatewayRoutingHostname(routing);
+    const authority =
+      routing.endpointPort === undefined || routing.endpointPort === 443
+        ? hostname
+        : `${hostname}:${routing.endpointPort}`;
+    return `wss://${authority}${this.gatewayRoutePath(revision)}`;
   }
 
   async getAgentRuntimeCredentialStatus(

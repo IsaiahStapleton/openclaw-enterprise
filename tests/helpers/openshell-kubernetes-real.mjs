@@ -98,6 +98,8 @@ export function createOpenShellInstallationConfiguration({
   });
   configuration.drivers.configuration.id = "configuration-kubernetes-production";
   configuration.drivers.compute.id = "compute-kubernetes-production";
+  // The real Gateway loads its plugins during the first model request.
+  configuration.drivers.compute.configuration.resources.gateway.limits.memory = "2Gi";
   configuration.drivers.compute.configuration.resources.namespace.quota = {
     pods: "14",
     "requests.cpu": "3",
@@ -161,6 +163,11 @@ export function createOpenShellInstallationConfiguration({
       },
       kubernetes: {
         runtimeClassName: openShellRuntimeClass,
+        // Match the Compute-owned Harness budget. The cluster's 1 GiB default
+        // can OOM-kill a real worker while it installs the Gateway bundle.
+        agentResources: structuredClone(
+          configuration.drivers.compute.configuration.resources.agent,
+        ),
         // TODO(OpenShell per-Sandbox ServiceAccount support): replace the shared gateway setting
         // with Compute's exact Agent ServiceAccount on each Sandbox request.
         serviceAccount: { mode: "gatewayConfigured" },

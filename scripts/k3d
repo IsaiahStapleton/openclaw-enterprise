@@ -36,7 +36,7 @@ Commands:
 The helper detects a running Podman API socket or Docker daemon. Set
 OCC_K3D_CONTAINER_ENGINE=podman or docker to select one explicitly.
 --harness defaults to codex. Select openclaw for the dedicated native worker
-test through OpenShell; the browser demo currently supports codex only.
+test or browser demo through OpenShell.
 The openclaw choice prepares the OpenShell lane and builds ../openclaw by
 default; override it with the absolute OCC_K3D_OPENCLAW_SOURCE path.
 demo prompts for OPENAI_API_KEY when it is not already set. test requires the
@@ -212,10 +212,6 @@ case "${1:-demo}" in
     exit 2
     ;;
 esac
-
-if [ "$action" = "demo" ] && [ "$harness" = "openclaw" ]; then
-  fail "the OpenShell-native browser demo is not implemented yet; run './scripts/k3d test --harness openclaw' for the isolated real model-turn proof"
-fi
 
 [ "$action" != demo ] || prompt_openai_api_key
 
@@ -714,7 +710,22 @@ if [ "$action" = "demo" ]; then
   printf '{"processId":"%s"}\n' "$$" > "$demo_file"
   export OCC_K3D_DEMO_STATE="$demo_file"
   export OCC_K3D_HARNESS="$harness"
-  node scripts/k3d-demo.mjs
+  if [ "$harness" = "openclaw" ]; then
+    info "Starting the dedicated native OpenClaw Control UI demo through OpenShell."
+    export OCC_TEST_OPENSHELL_SECRET_PROJECTION=1
+    export OCC_TEST_OPENSHELL_HARNESS=openclaw
+    if ! node \
+      --test \
+      tests/integration/sandbox-driver-openshell-k3d-real.test.mjs; then
+      rm -f "$demo_file"
+      exit 1
+    fi
+    echo "k3d demo stopped; demo resources and port-forwards were removed."
+    echo "Cluster, images, and PostgreSQL remain available."
+    echo "Restart the demo and port-forwards with: ./scripts/k3d demo --harness openclaw"
+  else
+    node scripts/k3d-demo.mjs
+  fi
   exit 0
 fi
 

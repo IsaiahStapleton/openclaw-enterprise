@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
-updated: 2026-09-24
-last_updated_session: 01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-09-26
+last_updated_session: authoring-run/a4d4256b-3bac-4c88-84aa-cd3501b80aa8
 ---
 
 # Agent Workspace Files Flow
@@ -171,8 +171,10 @@ admission and native access.
 
 `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
 uses `ComputeDriver.getGatewayEndpoint(revision)` to resolve
-`wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>`. The default hostname
-matches Helm's Service DNS. Resolution does not prove readiness.
+`wss://<hostname>[:<endpointPort>]/namespaces/<namespaceId>/agents/<agentId>`.
+The default hostname matches Helm's Service DNS, and the default port is `443`.
+An explicit endpoint port changes the URL authority without changing the TLS
+hostname or HTTPRoute hostname. Resolution does not prove readiness.
 
 `kubernetes/index.ts:reconcileGatewayRoute` provisions operator routing and a
 separate exact `/node` HTTPRoute and SecurityPolicy for dedicated runtimes.
@@ -318,6 +320,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-26 10:10: Document optional non-default Gateway endpoint ports for generated WSS URLs. (authoring-run/a4d4256b-3bac-4c88-84aa-cd3501b80aa8 - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
 
 - 2026-09-24 11:28: Document exclusive dedicated preparation and durable RWO workspaces in the accompanying change. (01a0cf72-6985-7712-ba92-d8cc32470f24 - 14a4508baad876d3eea4e6fe6388f8d8a91559b7)
 

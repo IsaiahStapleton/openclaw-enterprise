@@ -145,24 +145,44 @@ Reset deletes only known test Namespace shapes, including `oce-production-*`,
 `openclaw-ci-seccomp-*`, from the helper-owned cluster. It drops and recreates
 only the database recorded in the helper's private state.
 
-The default command starts the OCC API in Kubernetes, creates a dedicated Codex
-Agent, and completes a model turn. It serves the OpenClaw Control UI at
-`http://127.0.0.1:18888` and the OCC console at `http://127.0.0.1:18889`.
-The command prints the temporary OCC username and a command to copy its password
-from the mode-`0600` `demo.json` file, without printing passwords.
+The default command starts the OCC API inside Kubernetes, creates one dedicated
+Codex Agent, and performs a real model turn before serving the OpenClaw Control UI on
+`http://127.0.0.1:18888` and the OCC console on
+`http://127.0.0.1:18889`. Select the verification-only native OpenClaw path with:
 
-The development login is `admin@openclaw.local` with
-`openclaw-development-password`. Override it with `OPENCLAW_DEV_EMAIL` or
-`OPENCLAW_DEV_PASSWORD`; the database retains the account, so reset before
-restarting the demo after changing its password. Use `./scripts/k3d get
-openclaw-control-ui` for the Control UI URL and `./scripts/k3d copy
-openclaw-password` for its **Gateway secret**. This separate password preserves
-direct loopback access while OCC workspace files use trusted-proxy authentication.
+```sh
+./scripts/k3d demo --harness openclaw
+```
 
-Keep the command running while using either interface. Ctrl-C stops the local
-controller and worker, closes port-forwards, and removes the private state file
-and demo Namespaces. The prepared cluster, images, routing controllers, and
-PostgreSQL remain; rerun `./scripts/k3d` to recreate demo resources.
+That command provisions the native Harness through the same OpenShell
+compatibility bridge as the focused integration and opens the Control UI's
+new-session flow on the same loopback port. The demo leaves the dedicated worker
+slot available so the first browser session can use the mandatory dedicated-native
+profile without receiving the Harness's model credential in the Gateway. Run the
+focused integration command below for an automated real-model-turn proof. The
+bridge remains test-only and does not make the pre.7 compatibility path a
+supported production deployment. Both demos print the temporary OCC username and
+commands to copy passwords from the mode-`0600` `demo.json` state file; neither
+prints a password.
+The default Codex demo uses the same development login as `scripts/dev-up`:
+`admin@openclaw.local` with
+`openclaw-development-password`. Set `OPENCLAW_DEV_EMAIL` or
+`OPENCLAW_DEV_PASSWORD` to override those defaults for both workflows. The
+native OpenShell demo instead prints its isolated integration username and uses
+the same password-copy command shown below. Each prepared database retains its
+account between demo runs. If you change a configured Codex password, run
+`./scripts/k3d reset` before starting that demo again.
+Print the Control UI URL with `./scripts/k3d get openclaw-control-ui`. Copy the
+password with `./scripts/k3d copy openclaw-password` and paste it into the Control UI's
+**Gateway secret** field. The separate password preserves direct loopback access
+while the gateway uses trusted-proxy authentication for OCC workspace files.
+Keep the command running while using either interface. Press Ctrl-C to stop the
+local controller and worker, close the port-forwards, remove the private state
+file, and remove the demo's Kubernetes Namespaces. The prepared cluster, images,
+routing controllers, and PostgreSQL service remain available. Run
+`./scripts/k3d` again to create fresh demo resources and restore the
+port-forwards; there are no surviving demo services for a separate forwarding
+command to reconnect.
 
 Inspect the current demo and cluster details without parsing the private state
 files directly:
