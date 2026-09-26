@@ -11,9 +11,9 @@ import type {
   DriverImplementation,
   IAMDriver,
   Identity,
-  ProviderDefinition,
+  BackendDefinition,
   Preset,
-  ProviderSummary,
+  BackendSummary,
   RepoDriver,
   PluginDriver,
   SandboxDriver,
@@ -21,7 +21,7 @@ import type {
 } from "@openclaw-enterprise/contracts";
 import { NativeIAMDriver, type NativeIAMStateStore } from "@openclaw-enterprise/iam";
 import {
-  validateProviderDefinitions,
+  validateBackendDefinitions,
   type OpenClawController,
   type PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
@@ -52,6 +52,7 @@ type ConfigurationRecord = Readonly<Record<string, unknown>>;
 
 export interface StartupConfigurationSnapshot {
   readonly configuration?: ConfigurationRecord;
+  readonly configurationPath?: string;
   readonly logging: LoggingConfiguration;
 }
 
@@ -65,8 +66,8 @@ export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
 export interface InstallationStartupConfiguration {
   readonly occ: { readonly cluster: string };
   readonly logging: LoggingConfiguration;
-  readonly presets?: { readonly includeDefaults: boolean };
-  readonly provider: readonly ProviderDefinition[];
+  readonly presets?: { readonly includeDefaults: boolean; readonly files?: readonly string[] };
+  readonly backend: readonly BackendDefinition[];
   readonly drivers: {
     readonly configuration: SelectedDriverConfiguration;
     readonly iam: SelectedDriverConfiguration<ConfigurationRecord>;
@@ -125,18 +126,23 @@ export async function initializeInstallationPresets(
   );
 }
 
+interface LoadedStartupConfiguration {
+  readonly configuration?: ConfigurationRecord;
+  readonly path?: string;
+}
+
 async function startupConfiguration(
   options: {
     readonly mode: "development" | "production";
     readonly environment?: Readonly<Record<string, string | undefined>>;
   },
   required: boolean,
-): Promise<ConfigurationRecord | undefined> {
+): Promise<LoadedStartupConfiguration> {
   const environment = options.environment ?? process.env;
   const path = environment.OCC_CONFIG_PATH;
   if (path === undefined) {
     if (!required) {
-      return undefined;
+      return {};
     }
     throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
   }
@@ -164,25 +170,27 @@ async function startupConfiguration(
   safe(configuration, "Installation startup configuration");
   if (Object.hasOwn(configuration, "integrations")) {
     throw new Error(
-      "integrations is retired; configure ChatGPT with provider[].configuration.apiKeyPath.",
+      "integrations is retired; configure ChatGPT with backend[].configuration.apiKeyPath.",
     );
   }
   closed(
     configuration,
-    ["occ", "drivers", "provider", "logging", "presets"],
+    ["occ", "drivers", "backend", "logging", "presets"],
     "Installation startup configuration",
   );
-  return configuration;
+  return { configuration, path };
 }
 
 export async function loadStartupConfigurationSnapshot(options: {
   readonly mode: "development" | "production";
   readonly environment?: Readonly<Record<string, string | undefined>>;
 }): Promise<StartupConfigurationSnapshot> {
-  const configuration = await startupConfiguration(options, options.mode === "production");
+  const startup = await startupConfiguration(options, options.mode === "production");
+  const { configuration } = startup;
   const logging = operationalLoggingConfiguration(configuration?.logging);
   return Object.freeze({
     ...(configuration === undefined ? {} : { configuration }),
+    ...(startup.path === undefined ? {} : { configurationPath: startup.path }),
     logging,
   });
 }
@@ -270,52 +278,91 @@ function safe(value: unknown, path: string): void {
   }
 }
 
-function providerConfiguration(
+function backendConfiguration(
   value: unknown,
   serviceAccount: InstallationStartupConfiguration["drivers"]["service_account"],
   repoSelection: InstallationStartupConfiguration["drivers"]["repo"],
-): readonly ProviderDefinition[] {
-  const providers = validateProviderDefinitions(value ?? []);
-  if (serviceAccount !== undefined && !providers.some((provider) => provider.type === "chatgpt")) {
-    throw new Error("drivers.service_account requires an owning provider entry with type chatgpt.");
+): readonly BackendDefinition[] {
+  const backends = validateBackendDefinitions(value ?? []);
+  if (serviceAccount !== undefined && !backends.some((backend) => backend.type === "chatgpt")) {
+    throw new Error("drivers.service_account requires an owning backend entry with type chatgpt.");
   }
-  if (repoSelection !== undefined && !providers.some((provider) => provider.type === "github")) {
-    throw new Error("drivers.repo requires an owning provider entry with type github.");
+  if (repoSelection !== undefined && !backends.some((backend) => backend.type === "github")) {
+    throw new Error("drivers.repo requires an owning backend entry with type github.");
   }
-  for (const provider of providers) {
-    if (provider.type === "github") {
+  for (const backend of backends) {
+    if (backend.type === "github") {
       if (repoSelection === undefined) {
-        throw new Error(`provider[${provider.id}].drivers.repo requires drivers.repo.`);
+        throw new Error(`backend[${backend.id}].drivers.repo requires drivers.repo.`);
       }
-      if (provider.drivers.repo !== repoSelection.id) {
+      if (backend.drivers.repo !== repoSelection.id) {
         throw new Error(
-          `provider[${provider.id}].drivers.repo must match the selected drivers.repo.id.`,
+          `backend[${backend.id}].drivers.repo must match the selected drivers.repo.id.`,
         );
       }
       continue;
     }
     if (serviceAccount === undefined) {
       throw new Error(
-        `provider[${provider.id}].drivers.service_account requires drivers.service_account.`,
+        `backend[${backend.id}].drivers.service_account requires drivers.service_account.`,
       );
     }
-    if (provider.drivers.service_account !== serviceAccount.id) {
+    if (backend.drivers.service_account !== serviceAccount.id) {
       throw new Error(
-        `provider[${provider.id}].drivers.service_account must match the selected drivers.service_account.id.`,
+        `backend[${backend.id}].drivers.service_account must match the selected drivers.service_account.id.`,
       );
     }
   }
-  return providers;
+  return backends;
 }
 
-export function providerSummariesFromDefinitions(
-  providers: readonly ProviderDefinition[],
-): readonly ProviderSummary[] {
+function presetDefinition(value: unknown, path: string): Pick<Preset, "name" | "template"> {
+  const preset = object(value, path);
+  closed(preset, ["name", "template"], path);
+  return Object.freeze({
+    name: nonempty(preset.name, `${path}.name`),
+    template: validatePresetTemplate(preset.template),
+  });
+}
+
+async function loadPresetDefinition(
+  path: string | URL,
+): Promise<Pick<Preset, "name" | "template">> {
+  let contents: string;
+  try {
+    contents = await readFile(path, "utf8");
+  } catch {
+    throw new Error(`Preset file ${path} is unavailable.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    throw new Error(`Preset file ${path} must contain valid JSON.`);
+  }
+  return presetDefinition(parsed, `Preset file ${path}`);
+}
+
+function appendDefaultPreset(
+  presets: Pick<Preset, "name" | "template">[],
+  names: Set<string>,
+  preset: Pick<Preset, "name" | "template">,
+): void {
+  if (names.has(preset.name)) {
+    throw new Error(`Default Preset ${preset.name} is configured more than once.`);
+  }
+  names.add(preset.name);
+  presets.push(preset);
+}
+
+export function backendSummariesFromDefinitions(
+  backends: readonly BackendDefinition[],
+): readonly BackendSummary[] {
   return Object.freeze(
-    providers.map((provider) =>
+    backends.map((backend) =>
       Object.freeze({
-        id: provider.id,
-        type: provider.type,
+        id: backend.id,
+        type: backend.type,
       }),
     ),
   );
@@ -509,7 +556,7 @@ export async function loadInstallationConfiguration(options: {
     }
   }
   const startup = options.startupConfiguration ?? (await loadStartupConfigurationSnapshot(options));
-  const { configuration, logging } = startup;
+  const { configuration, configurationPath, logging } = startup;
   if (configuration === undefined && options.mode === "production") {
     throw new Error("OCC_CONFIG_PATH must identify the Installation startup YAML.");
   }
@@ -520,7 +567,7 @@ export async function loadInstallationConfiguration(options: {
     options.mode === "development" &&
     configuration.occ === undefined &&
     configuration.drivers === undefined &&
-    configuration.provider === undefined &&
+    configuration.backend === undefined &&
     configuration.presets === undefined
   ) {
     return undefined;
@@ -529,27 +576,47 @@ export async function loadInstallationConfiguration(options: {
     configuration.presets === undefined ? {} : configuration.presets,
     "presets",
   );
-  closed(presets, ["includeDefaults"], "presets");
+  closed(presets, ["includeDefaults", "files"], "presets");
   if (presets.includeDefaults !== undefined && typeof presets.includeDefaults !== "boolean") {
     throw new Error("presets.includeDefaults must be a boolean.");
   }
+  if (
+    presets.files !== undefined &&
+    (!Array.isArray(presets.files) || presets.files.some((entry) => typeof entry !== "string"))
+  ) {
+    throw new Error("presets.files must be an array of Preset JSON file paths.");
+  }
   const includeDefaults = presets.includeDefaults === true;
   const defaultPresets: Pick<Preset, "name" | "template">[] = [];
+  const defaultPresetNames = new Set<string>();
   if (includeDefaults) {
-    const preset = object(
-      JSON.parse(
-        await readFile(
-          new URL("../../../../deploy/presets/standard-codex.json", import.meta.url),
-          "utf8",
-        ),
+    for (const preset of [
+      "../../../../deploy/presets/standard-codex.json",
+      "../../../../deploy/presets/standard-openclaw.json",
+    ]) {
+      appendDefaultPreset(
+        defaultPresets,
+        defaultPresetNames,
+        await loadPresetDefinition(new URL(preset, import.meta.url)),
+      );
+    }
+  }
+  const presetFiles = (presets.files ?? []) as readonly string[];
+  for (const entry of presetFiles) {
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) {
+      throw new Error("presets.files entries must be nonempty file paths.");
+    }
+    if (!isAbsolute(trimmed) && configurationPath === undefined) {
+      throw new Error("Relative presets.files entries require an Installation startup YAML path.");
+    }
+    appendDefaultPreset(
+      defaultPresets,
+      defaultPresetNames,
+      await loadPresetDefinition(
+        isAbsolute(trimmed) ? trimmed : resolve(dirname(configurationPath!), trimmed),
       ),
-      "Bundled default Preset",
     );
-    closed(preset, ["name", "template"], "Bundled default Preset");
-    defaultPresets.push({
-      name: nonempty(preset.name, "Bundled default Preset name"),
-      template: validatePresetTemplate(preset.template),
-    });
   }
   const occ = object(configuration.occ, "occ");
   closed(occ, ["cluster"], "occ");
@@ -578,7 +645,7 @@ export async function loadInstallationConfiguration(options: {
     closed(selection, ["id", "configuration"], "drivers.repo");
     repoSelection = selected(selection, "repo", "github", GitHubRepoDriver);
   }
-  const providers = providerConfiguration(configuration.provider, serviceAccount, repoSelection);
+  const backends = backendConfiguration(configuration.backend, serviceAccount, repoSelection);
 
   const configurationSelection = object(drivers.configuration, "drivers.configuration");
   const iamSelection = object(drivers.iam, "drivers.iam");
@@ -735,7 +802,7 @@ export async function loadInstallationConfiguration(options: {
     occ: Object.freeze({ cluster }),
     presets: Object.freeze({ includeDefaults }),
     logging,
-    provider: providers,
+    backend: backends,
     drivers: Object.freeze({
       configuration: configured,
       iam,
@@ -829,12 +896,12 @@ export async function loadInstallationConfiguration(options: {
       ? new NativeIAMDriver(state, { id: iam.id, implementation: iam.implementation })
       : (createExternalDriver(iamPackage.module, iam, "iam", state) as IAMDriver);
   };
-  const repositoryProvider = providers.find((provider) => provider.type === "github");
+  const repositoryBackend = backends.find((backend) => backend.type === "github");
   const repositoryRuntime =
-    repoSelection === undefined || repositoryProvider === undefined
+    repoSelection === undefined || repositoryBackend === undefined
       ? undefined
       : await composeRepoDriver({
-          provider: repositoryProvider,
+          backend: repositoryBackend,
           selection: repoSelection,
         });
   if (
@@ -864,7 +931,7 @@ export async function loadOperationalLoggingConfiguration(options: {
   readonly mode: "development" | "production";
   readonly environment?: Readonly<Record<string, string | undefined>>;
 }): Promise<LoggingConfiguration> {
-  const configuration = await startupConfiguration(options, false);
+  const { configuration } = await startupConfiguration(options, false);
   return operationalLoggingConfiguration(configuration?.logging);
 }
 
