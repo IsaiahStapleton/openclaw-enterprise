@@ -485,6 +485,7 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
   }
   for (const declaration of [
     'import url from "node:url"; const U = url["URL"];',
+    'import url from "node:url"; url.fileURLToPath = () => ""; const U = url["URL"];',
     'import url from "node:url"; const { URL: U } = url;',
     'import { URL as U } from "node:url";',
   ]) {

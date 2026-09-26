@@ -38,6 +38,11 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
   const mutableModules = new Set();
   let mutableRequireResolve = assigned.unbound.has("require.resolve");
   let mutableGlobalURL = false;
+  function markMutable(module) {
+    mutableModules.add(module);
+    // The node:url module exposes the same constructor as the global URL.
+    if (module === "node:url") mutableGlobalURL = true;
+  }
   const moduleValue = (name) =>
     ["module", "url", "path"].includes(name?.replace(/^node:/, ""))
       ? { kind: "module", module: `node:${name.replace(/^node:/, "")}` }
@@ -246,7 +251,7 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
         assigned.objectWriteNodes.has(node) ||
         (ts.isIdentifier(node) && assigned.objectWrites.has(symbol(node) ?? node.text));
       if (origin?.kind === "module" && (written || exposedOrWritten(node))) {
-        mutableModules.add(origin.module);
+        markMutable(origin.module);
       }
       if (
         origin?.kind === "builtin" &&
@@ -256,10 +261,7 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
             ts.isElementAccessExpression(node.parent)) &&
             node.parent.expression === node))
       ) {
-        mutableModules.add(origin.module);
-        if (origin.module === "node:url" && origin.name === "URL") {
-          mutableGlobalURL = true;
-        }
+        markMutable(origin.module);
       }
       if (origin?.kind === "require" && (written || exposedOrWritten(node))) {
         mutableRequireResolve = true;
