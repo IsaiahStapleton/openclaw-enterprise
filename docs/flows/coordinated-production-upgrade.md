@@ -1,7 +1,7 @@
 ---
 created: 2026-09-23
-updated: "2026-09-25"
-last_updated_session: "authoring-run/d35fd05b-5bbd-4f21-a747-820c2df23b2c"
+updated: "2026-09-26"
+last_updated_session: "authoring-run/1495f489-e298-44e9-b75d-6a49445d35e3"
 ---
 
 # Production image upgrade flow
@@ -51,6 +51,16 @@ graph TD
 ```
 
 ## Execution Trace
+
+For repository-enabled releases, `scripts/upgrade-production-images` reads the
+worker's broker origin after checking protected/live values and Installation
+identity. It validates the origin against the release namespace, Service name,
+and cluster domain, then writes the exact hostname and Service name into the
+candidate values. Explicit conflicting settings stop the upgrade.
+`deploy/helm/openclaw-enterprise/templates/_helpers.tpl` restricts that hostname
+to the selected Service's namespace-qualified or cluster-qualified DNS name.
+The sidecar uses it for certificate validation and new repository sessions.
+See the [repository installation guide](../guides/repository-credentials/installation.md).
 
 ### 1. Validate the target and selected ownership
 
@@ -202,6 +212,8 @@ delivery, workspace continuity, native access, and required restore behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-26 22:28: Preserve the selected repository broker hostname before image upgrades. (authoring-run/1495f489-e298-44e9-b75d-6a49445d35e3 - 7caf53332219db12fed62180c3c6d270baa8ea63)
 
 - 2026-09-25 13:40: Document Helm migration ordering and add post-readiness OpenClaw Doctor lint for replacement gateways. (authoring-run/d35fd05b-5bbd-4f21-a747-820c2df23b2c - 077e26ba0c0babe033569105e3a7e89abf06f40d)
 - 2026-09-25 12:29: Split controller and runtime releases while retaining an optional combined path. (authoring-run/ab700e2e-1baf-400c-ab18-0aa9a351f351 - 5e747ac1722f757d7949746e9ff9982142c8536b)
