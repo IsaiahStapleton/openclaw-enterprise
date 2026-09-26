@@ -9,7 +9,7 @@ import { renderWorkspaceFiles } from "./workspace.mjs";
 import { displayDate, shortId, namespacePath, link, message } from "./list.mjs";
 import {
   createRuntimeCredentialsPanel,
-  hasRequiredRuntimeCredentials,
+  missingRuntimeCredentialGroups,
   runtimeCredentialBlockReason,
 } from "./credentials.mjs";
 import { ensureSecretOperateBinding } from "./secret-access.mjs";
@@ -430,11 +430,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             },
           })
         : null;
-    function updateDeployControls() {
-      if (!deploy || !deployStatus) {
-        return;
-      }
-      deploy.disabled =
+    function deployIsDisabled() {
+      return (
         deployPending ||
         authenticationPending ||
         draftEditorState.dirty ||
@@ -443,7 +440,14 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         draftEditorState.reloadRequired ||
         !agent.harnessAuth ||
         revisionResult.status !== "fulfilled" ||
-        (!runtimeAuth && !credentials?.canDeploy());
+        (draft && !runtimeAuth && !credentials?.canDeploy())
+      );
+    }
+    function updateDeployControls() {
+      if (!deploy || !deployStatus) {
+        return;
+      }
+      deploy.disabled = deployIsDisabled();
       if (!deployPending) {
         if (authenticationPending) {
           deployStatus.textContent =
@@ -460,102 +464,114 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         } else if (revisionResult.status !== "fulfilled") {
           deployStatus.textContent =
             "Revision history is required before deploying this new revision.";
+        } else if (!agent.harnessAuth) {
+          deployStatus.textContent =
+            "Select a harness authentication source in Credentials before deployment.";
         } else if (runtimeAuth) {
           deployStatus.textContent =
             "Configured on the runtime host; not validated by OCC. Gateway readiness does not confirm model access.";
         } else {
-          deployStatus.textContent = agent.harnessAuth
+          deployStatus.textContent = draft
             ? credentials.deployGateMessage()
-            : "Select a harness authentication source in Credentials before deployment.";
+            : "Deployment checks the current saved Configuration and credential metadata before admission.";
         }
       }
     }
-    if (draft) {
-      deployStatus = element("p", { className: "muted", role: "status" });
-      deployFeedback = element("p", { className: "error", role: "alert" });
-      deploy = button("Deploy new revision", async () => {
-        deployFeedback.textContent = "";
-        deploy.disabled = true;
-        deployPending = true;
-        deployStatus.textContent = "Checking Configuration…";
-        let submitted = false;
-        try {
-          const [freshAgent, freshConfig, freshCredentials] = await Promise.all([
-            request(path),
-            request(
-              `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(snapshot.id)}`,
-            ),
-            runtimeAuth ? Promise.resolve(null) : request(`${path}/runtime-credentials`),
-          ]);
-          if (!context.isCurrent()) {
-            return;
-          }
-          if (
-            freshAgent.configurationId !== snapshot.id ||
-            JSON.stringify(freshAgent.harnessAuth) !== JSON.stringify(agent.harnessAuth) ||
-            freshConfig.generation !== snapshot.generation
-          ) {
-            deployFeedback.textContent = "The Configuration changed. Refresh before deploying.";
-            return;
-          }
-          const credentialBlockReason = runtimeCredentialBlockReason(freshConfig.values);
-          if (credentialBlockReason !== null) {
-            deployFeedback.textContent = credentialBlockReason;
-            return;
-          }
-          if (
-            !runtimeAuth &&
-            !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values, freshConfig)
-          ) {
-            deployFeedback.textContent =
-              "Runtime credential metadata changed. Refresh status before deploying.";
-            return;
-          }
-          submitted = true;
-          deployStatus.textContent = "Requesting deployment…";
-          const revision = await request(`${path}/deploy`, { method: "POST" });
-          if (context.isCurrent()) {
-            change(revision.id, "workspace");
-          }
-        } catch (error) {
-          if (!context.isCurrent()) {
-            return;
-          }
-          if (error.status === 401) {
-            context.onExpired();
-            return;
-          }
+    deployStatus = element("p", { className: "muted", role: "status" });
+    deployFeedback = element("p", { className: "error", role: "alert" });
+    deploy = button("Deploy new revision", async () => {
+      deployFeedback.textContent = "";
+      deploy.disabled = true;
+      deployPending = true;
+      deployStatus.textContent = "Checking Configuration…";
+      let submitted = false;
+      try {
+        const freshAgent = await request(path);
+        if (!context.isCurrent()) {
+          return;
+        }
+        if (!freshAgent.harnessAuth) {
           deployFeedback.textContent =
-            error.status === 403
-              ? "Deployment denied. Check your Agent deployment permission and this Agent’s access to the selected credential Secret in Credentials. Ask a Namespace administrator to confirm the required grants."
-              : message(error, submitted);
-          if (!submitted || [400, 403, 404, 409, 429].includes(error.status)) {
+            "Select a harness authentication source in Credentials before deployment.";
+          return;
+        }
+        const freshRuntimeAuth = freshAgent.harnessAuth.method === "runtime";
+        const [freshConfig, freshCredentials] = await Promise.all([
+          request(
+            `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(freshAgent.configurationId)}`,
+          ),
+          freshRuntimeAuth ? Promise.resolve(null) : request(`${path}/runtime-credentials`),
+        ]);
+        if (!context.isCurrent()) {
+          return;
+        }
+        if (
+          draft &&
+          (freshAgent.configurationId !== snapshot.id ||
+            JSON.stringify(freshAgent.harnessAuth) !== JSON.stringify(agent.harnessAuth) ||
+            freshConfig.generation !== snapshot.generation)
+        ) {
+          deployFeedback.textContent = "The Configuration changed. Refresh before deploying.";
+          return;
+        }
+        const credentialBlockReason = runtimeCredentialBlockReason(freshConfig.values);
+        if (credentialBlockReason !== null) {
+          deployFeedback.textContent = credentialBlockReason;
+          return;
+        }
+        const missingCredentials = freshRuntimeAuth
+          ? []
+          : missingRuntimeCredentialGroups(freshCredentials, freshConfig.values, freshConfig);
+        if (missingCredentials.length) {
+          deployFeedback.textContent = `Deploy requires stored runtime credential metadata: ${missingCredentials.join(", ")}.`;
+          return;
+        }
+        submitted = true;
+        deployStatus.textContent = "Requesting deployment…";
+        const revision = await request(`${path}/deploy`, { method: "POST" });
+        if (context.isCurrent()) {
+          change(revision.id, "workspace");
+        }
+      } catch (error) {
+        if (!context.isCurrent()) {
+          return;
+        }
+        if (error.status === 401) {
+          context.onExpired();
+          return;
+        }
+        deployFeedback.textContent =
+          error.status === 403
+            ? "Deployment denied. Check your Agent deployment permission and this Agent’s access to the selected credential Secret in Credentials. Ask a Namespace administrator to confirm the required grants."
+            : message(error, submitted);
+        if (!submitted || [400, 403, 404, 409, 429].includes(error.status)) {
+          deployPending = false;
+        }
+      } finally {
+        if (context.isCurrent()) {
+          if (!submitted) {
             deployPending = false;
           }
-        } finally {
-          if (context.isCurrent()) {
-            if (!submitted) {
-              deployPending = false;
-            }
-            updateDeployControls();
-          }
+          updateDeployControls();
         }
-      });
-      updateDeployControls();
-      if (credentials) {
-        void credentials.loadStatus();
       }
-      selector.append(
-        element(
-          "p",
-          { className: "muted" },
-          "Deploy the saved Configuration to create an immutable revision. Workspace files become available when its gateway is ready.",
-        ),
-        deploy,
-        deployStatus,
-        deployFeedback,
-      );
+    });
+    updateDeployControls();
+    if (credentials) {
+      void credentials.loadStatus();
     }
+    selector.append(
+      element(
+        "p",
+        { className: "muted" },
+        draft
+          ? "Deploy the saved Configuration to create an immutable revision. Workspace files become available when its gateway is ready."
+          : "Deploy the current saved Configuration as a new immutable revision. This does not redeploy the viewed snapshot or perform a rollback.",
+      ),
+      deploy,
+      deployStatus,
+      deployFeedback,
+    );
     if (!draft) {
       selector.append(element("p", { className: "resource-id" }, snapshot.id));
     }

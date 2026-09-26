@@ -11,7 +11,7 @@ runtime checks belong to the [deployment guide](../guides/deploy.md).
 
 ## Start and sign in
 
-Open `/console/` at the address your administrator gave you. **Username** is
+Open `/console/` at your administrator-provided address. **Username** is
 your provisioned account email. Enter its password and select **Login**. Ask your
 administrator for access if you do not have an account or have forgotten your
 password; public signup, single sign-on, and self-service password recovery are
@@ -19,8 +19,8 @@ unavailable. If you are setting up your own Installation, start with the
 [quickstart](../guides/quickstart.md#open-the-platform-console) or
 [deployment guide](../guides/deploy.md#open-the-platform-console).
 
-The console uses the existing [email/password session contract](authentication.md)
-with same-origin cookies. It does not store tokens or accept service keys. A
+The console uses the [email/password session contract](authentication.md) with
+same-origin cookies. It does not store tokens or accept service keys. A
 missing or expired session clears private content and asks you to sign in again.
 
 ## Identify the control-plane build
@@ -42,8 +42,8 @@ read. Model provider and API-key setup are part of Agent creation; the separate
 | Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |
 | Namespaces | Installation-wide collection filtered by exact Namespace `read`.         |
 
-The console uses a light appearance. Its fonts are served by OCC;
-no external font service is required.
+The console uses a light appearance and OCC-served fonts; no external font
+service is required.
 
 Returning pages retain content during session, Namespace, and resource checks.
 Navigation remains available; resource controls await authorization. First visits
@@ -135,8 +135,9 @@ bound** means no binding exists. Summaries never read values or establish runtim
 credential validity.
 
 AgentRevision snapshots are read-only: they cannot be edited, rolled back, or
-redeployed. **Edit current Configuration** opens the draft without changing the
-snapshot. Activation means OCC admitted and selected a revision. Persisted
+redeployed. **Deploy new revision** admits the current saved Configuration without
+changing the viewed snapshot. **Edit current Configuration** opens the draft
+without changing the snapshot. Activation means OCC admitted and selected a revision. Persisted
 deployment and startup evidence does not establish live gateway health; see the
 [deployment guide](../guides/deploy/production-agents.md#configure-the-agent-runtime)
 and [deployment reference](agents/deployment.md#revisions-and-deployment).
@@ -241,8 +242,8 @@ discovery shows configured IDs and types only; see
 [Backends](backends.md#read-configured-backends) for its limits.
 
 Logout immediately hides private content and stops pending reads. The console
-returns to login after sign-out succeeds or a session check confirms that the
-session is absent. If it cannot confirm logout, it stays on a blocking error with
+returns to login after sign-out succeeds or a session check confirms the session
+is absent. If it cannot confirm logout, it stays on a blocking error with
 Retry. Do not treat that error as confirmation that the server session was revoked.
 
 ## Set initial workspace contents

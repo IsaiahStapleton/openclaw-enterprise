@@ -272,19 +272,24 @@ provider acceptance, runtime readiness, or a channel connection.
 
 ## Deploy a new revision
 
-Open the Agent's new revision and select **Deploy new revision** after generated transport credentials are stored, required channel Secret bindings are saved, and a harness source is selected. The console rereads the Agent and Configuration
-and requests deployment through the existing exact-Agent endpoint. A changed draft
-requires a refresh. These checks are separate reads, not an atomic compare-and-set.
+Select **Deploy new revision** from a draft or admitted revision after storing
+generated credentials, saving required channel Secret bindings, and selecting
+harness authentication. The action deploys the current saved Configuration;
+it never copies the viewed snapshot or rolls back. Every accepted request
+creates an immutable revision, even at the same Configuration generation.
+
+Before admission, the console rereads the Agent, Configuration and managed
+credential metadata. Changed draft generations, associations or authentication
+bindings require refresh when viewing the draft. These reads are not atomic
+with admission.
 Teams-enabled drafts cannot deploy through this console path because Teams credential
 readiness is not exposed; use the operator deployment workflow for those Agents.
 
 If a deployment response is lost, inspect the Agent's revision history before
 trying again; the console does not automatically repeat an uncertain request.
 To follow the deployment worker, use the [deployment status API](../agents.md#deployment-status).
-The revision view displays the stored deployment failure and, when available,
-its startup component, check, code, and observation timestamp. Missing evidence
-leaves the cause unspecified; it does not mean the runtime is healthy.
-The console does not display live runtime health. Give your operator the
+The revision view displays stored deployment failures and available startup evidence.
+Missing evidence leaves the cause unspecified. The console does not display live runtime health. Give your operator the
 Namespace ID, the Agent ID shown on its detail page, and the full revision ID
 in the `revision` query parameter of the page URL after deployment. Ask them to
 [verify that exact workload and get a real model response](../../guides/deploy/production-agents.md#verify-production-workloads).
