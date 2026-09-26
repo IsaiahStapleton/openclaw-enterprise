@@ -110,13 +110,40 @@ function assignedSymbols(source, checker) {
       depth++;
       value = unwrap(value.expression);
     }
+    const symbol =
+      value && ts.isShorthandPropertyAssignment(value.parent)
+        ? checker.getShorthandAssignmentValueSymbol(value.parent)
+        : value && checker.getSymbolAtLocation(value);
     return (
       value &&
       ts.isIdentifier(value) &&
       value.text === "process" &&
       depth <= 1 &&
-      implicitWrapperSymbol(checker.getSymbolAtLocation(value))
+      implicitWrapperSymbol(symbol)
     );
+  }
+  function directProcessRead(node) {
+    let value = node;
+    while (value.parent && unwrap(value.parent) === value) value = value.parent;
+    const parent = value.parent;
+    if (
+      !(ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) ||
+      parent.expression !== value
+    ) {
+      return false;
+    }
+    if (ts.isIdentifier(node)) return true;
+    const property = ts.isPropertyAccessExpression(node)
+      ? node.name.text
+      : ts.isStringLiteralLike(node.argumentExpression)
+        ? node.argumentExpression.text
+        : null;
+    const key = ts.isPropertyAccessExpression(parent)
+      ? parent.name.text
+      : ts.isStringLiteralLike(parent.argumentExpression)
+        ? parent.argumentExpression.text
+        : null;
+    return property === "env" && key !== null && !["__proto__", "constructor"].includes(key);
   }
   function visit(node) {
     if (
@@ -138,9 +165,16 @@ function assignedSymbols(source, checker) {
       globalURLMutable = true;
     }
     if (
-      (ts.isCallExpression(node) && node.arguments.some(processObject)) ||
-      (ts.isVariableDeclaration(node) && node.initializer && processObject(node.initializer))
+      (ts.isIdentifier(node) ||
+        ts.isPropertyAccessExpression(node) ||
+        ts.isElementAccessExpression(node)) &&
+      !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node) &&
+      processObject(node) &&
+      !directProcessRead(node)
     ) {
+      // An exposed process object can mutate env through an alias. Keep the
+      // stable shortcut only for direct reads of individual env values.
       unbound.add("process");
     }
     if (

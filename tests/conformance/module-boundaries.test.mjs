@@ -2417,6 +2417,22 @@ test("invalidates unknown-load exceptions when destructured sources change", asy
       `globalThis.config = {target: "${path}"}; console.log((await import(config.target)).default);`,
     environmentWrite: (path) =>
       `process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentObjectAlias: (path) =>
+      `const box = { env: process.env }; box.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentArrayAlias: (path) =>
+      `const box = [(process.env)]; box[0].MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentNestedAlias: (path) =>
+      `const box = { nested: [{env: process["env"]}] }; box.nested[0].env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentSpreadAlias: (path) =>
+      `const box = {...{env: process.env}}; box.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentComputedAlias: (path) =>
+      `const key = "env"; const box = { env: process[key] }; box.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    processShorthandAlias: (path) =>
+      `const box = { process }; box.process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentReturnAlias: (path) =>
+      `const get = () => process.env; const box = get(); box.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    environmentConditionalAlias: (path) =>
+      `const box = true ? process.env : {}; box.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     globalEnvironmentWrite: (path) =>
       `global.process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     globalThisEnvironmentWrite: (path) =>
@@ -2457,6 +2473,32 @@ test("invalidates unknown-load exceptions when destructured sources change", asy
       assert.equal(JSON.stringify(changed).includes("../private/secret.mjs"), false);
     });
   }
+});
+
+test("keeps direct environment reads and lexical shadows independent of unrelated source", async (t) => {
+  const source = "apps/app/src/public/env-read.mjs";
+  const { root, write, check } = await workspace(t);
+  await write("apps/app/src/public/secret.mjs", 'export default "PUBLIC";');
+  const env = { ...process.env, MODULE_TARGET: "./secret.mjs" };
+  const makeSource = (value) =>
+    `function example(process) { return { env: process.env, value: "${value}" }; }
+     const holder = { process: "${value}" }; holder.process;
+     console.log((await import(process.env.MODULE_TARGET)).default);`;
+  await write(source, makeSource("one"));
+  assert.equal(
+    (await run(process.execPath, [join(root, source)], { env })).stdout.trim(),
+    "PUBLIC",
+  );
+  const item = (await check()).violations.find(
+    (value) => value.from === source && value.rule === "unresolved-dynamic-import",
+  );
+  assert.ok(item);
+  const exceptions = {
+    version: 1,
+    exceptions: [{ ...item, owner: "fixture", reason: "one load", removeWhen: "fixed" }],
+  };
+  await write(source, makeSource("two"));
+  assert.equal((await check({ exceptions })).ok, true);
 });
 
 test("invalidates unknown-load exceptions after deleting an environment property", async (t) => {
