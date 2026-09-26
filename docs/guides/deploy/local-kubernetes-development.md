@@ -26,6 +26,13 @@ export OCC_DEVELOPMENT_SANDBOX_DRIVER=none
 That profile remains useful when changing Kubernetes Compute independently of
 OpenShell. It accepts the Compose overrides documented by `occ dev up --help`.
 
+If k3d cannot reach `https://update.k3s.io/v1-release/channels`, set
+`OCC_DEVELOPMENT_K3S_IMAGE` to an explicit compatible node image, such as
+`rancher/k3s:v1.35.8-k3s1`, after pulling it into the selected engine. Run the
+recorded cleanup command if the failed attempt retained state, then retry.
+OpenShell profiles use their pinned K3s image instead. The node image is separate
+from `OCC_KUBERNETES_RUNTIME_IMAGE`, which selects the Agent runtime image.
+
 ### Start the OpenShell fail-closed profile
 
 For an OpenShell environment, use the owned launcher:

@@ -209,6 +209,8 @@ OCC Namespace becomes ready. See the
 
 - 2026-09-25 12:23: Added the selectable Compose control-plane path for Kubernetes Compute with OpenShell while retaining the Kubernetes-only default. (authoring-run/a81f3e71-1c8e-4692-8e2e-d462ddacc10b - 64ab72aed5c4926e4a2080ade91d785e531801a2)
 
+- 2026-09-23 20:46: Allow an explicit K3s node image for local startup when channel discovery is unavailable; retain the default 1.35 channel. (pr-337 - 8adfd86e96a10a9d06761bc78e385eafd6bf2760)
+
 - 2026-09-23 01:52: Moved workspace-chart reconciliation from a bootstrap-only Helm release into the operator-mode Sandbox Driver Namespace lifecycle. (authoring-run/dc7a0b75-945c-4091-8600-eb919ad138dd - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
 
 - 2026-09-23 01:11: Documented the deployment Gateway, operator Workspace creation, and bootstrap workspace chart in the OpenShell development profile. (authoring-run/955359e5-5631-48e4-acc1-a5e32b9ade00 - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)

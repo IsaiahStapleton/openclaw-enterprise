@@ -748,9 +748,28 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   assert.match(repeated.stderr, /no such file or directory/);
 });
 
+test("Kubernetes dev-up forwards an explicit K3s image to k3d", async (t) => {
+  const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
+  const result = fixture.start();
+  assert.equal(result.status, 0, result.stderr);
+  const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  const clusterCreate = commands.find(
+    (entry) => entry.command === "k3d" && entry.args[0] === "cluster" && entry.args[1] === "create",
+  );
+  assert.ok(clusterCreate);
+  assert.equal(
+    clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
+    "rancher/k3s:v1.35.8-k3s1",
+  );
+  const cleaned = runDevDown(fixture.env);
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
 test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before reporting readiness", async (t) => {
   const fixture = await kubernetesFixture(t);
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
+  fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
   fixture.env.DEV_UP_EXISTING_CONTROLLER_IMAGE = "1";
   fixture.env.DEV_UP_EXISTING_RUNTIME_IMAGE = "1";
 
@@ -959,6 +978,7 @@ test("Kubernetes dev-up can keep the OCC control plane in Compose with OpenShell
   const fixture = await kubernetesFixture(t);
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
   fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "compose";
+  fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
 
   // This profile keeps OCC and PostgreSQL in Compose while the regular worker
   // reconciles Kubernetes Compute and operator-mode OpenShell Workspaces in k3d.
@@ -983,6 +1003,13 @@ test("Kubernetes dev-up can keep the OCC control plane in Compose with OpenShell
   assert.equal(configuration.drivers.sandbox.configuration.gateway.workspaceMode, "operator");
 
   const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  const clusterCreate = commands.find(
+    ({ command, args }) => command === "k3d" && args[0] === "cluster" && args[1] === "create",
+  );
+  assert.match(
+    clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
+    /rancher\/k3s:v1\.36\.4-k3s1@sha256:/,
+  );
   assert.ok(
     commands.some(
       ({ command, args }) =>
