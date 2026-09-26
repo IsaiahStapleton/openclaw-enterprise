@@ -2652,6 +2652,16 @@ test("Repository descriptions arrive without interrupting a selection", async (t
   assert.equal(await search.inputValue(), "application");
   const result = page.locator(".repository-result-row").filter({ hasText: "example/application" });
   assert.equal(await result.locator("img").count(), 0);
+  // Clearing the filter starts optional metadata lookups for the full page. Let
+  // those lookups and their credential revocations finish before fixture teardown.
+  const metadataSettled = page.waitForResponse(async (response) => {
+    const url = new URL(response.url());
+    const refs = url.searchParams.get("descriptionRefs")?.split(",") ?? [];
+    if (response.status() !== 200 || refs.length !== 6 || !refs.includes("documentation")) {
+      return false;
+    }
+    return (await response.json()).meta?.descriptionsPending === false;
+  });
   await search.fill("");
   assert.equal(
     await page
@@ -2660,6 +2670,15 @@ test("Repository descriptions arrive without interrupting a selection", async (t
       .locator(".repository-description")
       .count(),
     0,
+  );
+  await metadataSettled;
+  await waitForCondition(
+    () =>
+      credentials.repositories.every((entry) =>
+        entry.github.tokenState().every((token) => token.revoked),
+      ),
+    "metadata credentials were not revoked",
+    10_000,
   );
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Repository metadata Agent");
