@@ -6,12 +6,12 @@
 
 Agents need model and tool access without exposing credentials or unrestricted
 networking to untrusted commands. For 0.x, **use OpenShell's network and
-credential proxy for workloads in OpenShell** and defer the custom Enterprise
-egress proxy. Integrate and verify these protections before release.
+credential proxy for sandboxed workloads** and defer the custom Enterprise
+egress proxy. Verify these protections before release.
 
 OpenShell gives the Agent a placeholder; its network proxy substitutes the real
 credential for an allowed HTTP request to a bound destination. The trusted proxy
-may hold the credential. This is an integration goal, not a deployed OCE capability. [OpenShell credential injection](https://github.com/NVIDIA/OpenShell/blob/d1155aa70042d3e2ee49dbfa15346b108b7c1d92/docs/sandboxes/manage-providers.mdx#how-credential-injection-works)
+may hold the credential. This is an integration goal, not deployed OCE capability. [OpenShell credential injection](https://github.com/NVIDIA/OpenShell/blob/d1155aa70042d3e2ee49dbfa15346b108b7c1d92/docs/sandboxes/manage-providers.mdx#how-credential-injection-works)
 describes the upstream behavior.
 
 ```mermaid
@@ -19,26 +19,58 @@ describes the upstream behavior.
 config:
   theme: base
   htmlLabels: true
+  themeVariables:
+    fontSize: 16px
+    primaryTextColor: "#25364A"
+    lineColor: "#56697E"
+    edgeLabelBackground: "#F7F9FC"
+    clusterBkg: "#F7F9FC"
+    clusterBorder: "#B9C5D2"
   flowchart:
     curve: linear
+    nodeSpacing: 26
+    rankSpacing: 30
+    padding: 12
+    subGraphTitleMargin:
+      top: 10
+      bottom: 14
 ---
-flowchart LR
-  Agent["Sandboxed Agent"] -. placeholder request .-> Proxy["OpenShell network proxy"]
-  Provider["OpenShell provider"] -. credential .-> Proxy
-  Proxy -. allowed request .-> Service["Approved service"]
-  Host["Gateway-hosted command"] -. placeholder request .-> HostProxy["OpenClaw secret proxy"]
-  HostProxy -. allowed request .-> Service
+flowchart TB
+  subgraph ShellPath["<b>OpenShell path</b> · sandboxed execution"]
+    direction LR
+    Agent["<b>Agent</b><br/>Uses a placeholder"] -. request .-> ShellProxy["<b>Network proxy</b><br/>Checks policy and injects"]
+    Provider["<b>Provider</b><br/>Supplies the credential"] -. credential .-> ShellProxy
+    ShellProxy -. allowed request .-> ShellService["<b>Approved service</b><br/>Receives the credential"]
+  end
+
+  subgraph HostPath["<b>OpenClaw path</b> · Gateway-hosted commands"]
+    direction LR
+    Command["<b>Command</b><br/>Uses a placeholder"] -. request .-> HostProxy["<b>Secret proxy</b><br/>Checks host and injects"]
+    HostProxy -. allowed HTTPS .-> HostService["<b>Approved service</b><br/>Receives the credential"]
+  end
+
+  ShellPath ~~~ HostPath
+
+  classDef caller fill:#E9EFF7,stroke:#859AB1,color:#25364A,stroke-width:1px
+  classDef proxy fill:#E8F2EF,stroke:#7F9D93,color:#253C36,stroke-width:1px
+  classDef external fill:#F0ECF5,stroke:#A093B2,color:#453653,stroke-width:1px
+  class Agent,Command caller
+  class ShellProxy,HostProxy proxy
+  class Provider,ShellService,HostService external
+  style ShellPath fill:#F7F9FC,stroke:#B9C5D2,color:#344054
+  style HostPath fill:#F7F9FC,stroke:#B9C5D2,color:#344054
+  linkStyle default stroke:#56697E,stroke-width:1.5px
 ```
 
-Dashed arrows show the intended integration, not installed behavior.
+Dashed arrows show intended integration, not installed behavior.
 
 <a id="scope"></a><a id="contract"></a><a id="three-execution-boundaries"></a>
 
 ## Scope and boundaries
 
-- **OpenShell:** Apply its network policy and credential injection to traffic
-  inside the sandbox. Credential binding does not grant network access. Injection
-  requires an inspectable request; opaque TLS needs a separately qualified path.
+- **OpenShell:** Apply network policy and credential injection inside the
+  sandbox. Credential binding does not grant network access. Opaque TLS cannot
+  support injection and needs a separately qualified path.
 - **OpenClaw Gateway:** For commands hosted on the Gateway, use OpenClaw's
   [secret proxy](https://docs.openclaw.ai/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
   Direct sockets can bypass its traffic allowlist. Sandboxed and remote tools do
@@ -47,41 +79,39 @@ Dashed arrows show the intended integration, not installed behavior.
   [sandbox and network controls](https://learn.chatgpt.com/docs/agent-approvals-security#network-access).
   Codex model and authentication traffic is outside its command-network policy.
 
-OCE retains Agent, credential and operation authority. Network permission does
-not authorize an operation or prevent data disclosure to an allowed destination.
+OCE retains Agent, credential and operation authority. Network permission
+neither authorizes operations nor prevents disclosure to allowed destinations.
 
 <a id="deploy-and-observe"></a><a id="failure-recovery-and-limits"></a>
 
 ## Implementation
 
-**TODO:** Integrate OpenShell's provider and credential proxy with the Enterprise
-Agent lifecycle and the OpenClaw tool sandbox. The current
+**TODO:** Integrate OpenShell credential mediation with the Enterprise Agent
+lifecycle and OpenClaw tool sandbox. The
 [Enterprise adapter](https://github.com/openclaw/openclaw-enterprise/blob/3b58323f762f5742e8b44be3e269af0696ed7cde/docs/reference/drivers/openshell-sandbox.md)
-supports dedicated Codex only. It rejects embedded OpenClaw and cannot deploy
-production Agents with stock OpenShell because required Secret references and
-projected workload identity are unsupported. It disables the inner Codex
-sandbox, so the outer policy and complete Kubernetes network-policy union must
-be qualified. Privileged OpenShell components also require the documented
-fail-closed admission restrictions.
+supports dedicated Codex only and rejects embedded OpenClaw. Production Agents
+cannot deploy because stock OpenShell lacks required Secret references and
+projected workload identity. It disables the inner Codex sandbox, so qualify the outer
+policy and complete Kubernetes network-policy union. Privileged OpenShell
+components require the documented fail-closed admission restrictions.
 
-Deployments are admitted as immutable revisions; a `202` is not readiness. Check
-[deployment status](https://github.com/openclaw/openclaw-enterprise/blob/e387b38cc259ee4a55936ecb848bbce8210bcd68/docs/reference/agents/deployment.md#revisions-and-deployment)
-and workload separately. Stop records intent; verify routing and execution
-termination. A failed replacement can require repair or redeployment. The [runtime reference](https://github.com/openclaw/openclaw-enterprise/blob/e387b38cc259ee4a55936ecb848bbce8210bcd68/docs/reference/harness-execution.md#harness-authentication)
-owns recovery.
+A deploy `202` admits an immutable revision, not readiness; check
+[status](https://github.com/openclaw/openclaw-enterprise/blob/e387b38cc259ee4a55936ecb848bbce8210bcd68/docs/reference/agents/deployment.md#revisions-and-deployment)
+and the workload. Stop records intent; verify routing and execution termination.
+Failed replacement can require [repair or redeployment](https://github.com/openclaw/openclaw-enterprise/blob/e387b38cc259ee4a55936ecb848bbce8210bcd68/docs/reference/harness-execution.md#harness-authentication).
 
 ## Verification
 
 For each path, prove useful allowed requests and real-child denials, including
 direct sockets where confinement is claimed. Verify credential placement and
-stop or replacement separately. Pin the runtime, configuration and network
-policy. Documentation is not installed-runtime or release evidence.
+stop or replacement separately. Pin runtime, configuration and network policy.
+Documentation is not installed-runtime or release evidence.
 
 ## Open questions
 
 - Which provider, endpoint bindings and credential sources will OCE configure?
-- How will OpenClaw tools join OpenShell, and which runtime images will be supported?
-- Which unmet 0.x requirements block release? Record owners and evidence before
+- How will OpenClaw tools join OpenShell, and which images are supported?
+- Which 0.x requirements block release? Record owners and evidence before
   proposing a new proxy service.
 
 <a id="historical-implementation-status"></a><a id="references"></a>
@@ -91,11 +121,10 @@ policy. Documentation is not installed-runtime or release evidence.
 
 ## Historical status
 
-The earlier custom-proxy proposal was **accepted for implementation** against
+The custom proxy was **accepted for implementation** against
 [`046e12b`](https://github.com/openclaw/openclaw-enterprise/commit/046e12b007bb1b4928bd3f7497a2353714be11a8),
-but is deferred for 0.x. Its [architecture](31-basic-egress-proxy/architecture.md),
+then deferred for 0.x. Its [architecture](31-basic-egress-proxy/architecture.md),
 [interfaces](31-basic-egress-proxy/interfaces.md),
 [protocol](31-basic-egress-proxy/protocol-and-routing.md),
 [security](31-basic-egress-proxy/security.md), and
-[delivery](31-basic-egress-proxy/delivery.md) retain the original contracts and
-C0–C3 milestones for reference, not current release approval.
+[delivery](31-basic-egress-proxy/delivery.md) retain C0–C3 contracts for reference, not release approval.
