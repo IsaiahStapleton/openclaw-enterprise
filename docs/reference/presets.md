@@ -19,9 +19,10 @@ presets:
   includeDefaults: true
   files:
     - presets/devday.json
+    - presets/devday-partners.json
 ```
 
-`includeDefaults: true` seeds `default-codex`, `standard-codex`, and `standard-openclaw`.
+`includeDefaults: true` seeds `default-codex`, **Standard Codex**, and **Standard OpenClaw**.
 Omitting it or setting it to `false` disables bundled seeding; explicit
 `files` still load. Each JSON file contains one
 `{ "name": "...", "template": { ... } }` object. Relative file paths resolve beside
@@ -49,20 +50,21 @@ values; seeding does not create workloads or credentials.
 
 ## Configuration inventory
 
-These are the six shipped JSON definitions in `deploy/presets/`. Installed
+These are the seven shipped JSON definitions in `deploy/presets/`. Installed
 same-name copies can differ; read the Namespace Preset and the Agent's saved
 Configuration to inspect actual settings. Presets contain OpenClaw configuration,
 including the Codex plugin's app-server options; none supplies a standalone
 Codex `config.toml` or a reasoning-effort override.
 
-| Preset / file                                                                    | Agent and credential                                                            | OpenClaw gateway and tools                                                                                          | Codex app-server policy                                                                          |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [`default-codex`](../../deploy/presets/default-codex.json)                       | Dedicated; choose name, model, and API key or service account token in the form | Local/LAN; Control UI enabled for loopback origins; Chat Completions enabled; browser/web/elevated settings omitted | Guardian WebSocket; `on-request`; `read-only`; reviewer and network proxy omitted                |
-| [`standard-codex`](../../deploy/presets/standard-codex.json)                     | Dedicated; name/model variables and masked API key                              | Standard gateway/tool policy below; cached Codex search                                                             | Guardian WebSocket; `never`; `workspace-write`; reviewer `user`; limited workspace network proxy |
-| [`standard-openclaw`](../../deploy/presets/standard-openclaw.json)               | Embedded; name/model variables and masked API key                               | Standard gateway/tool policy; web search enabled without the Codex override                                         | None: native OpenClaw, no Codex plugin                                                           |
-| [`SWE Agent` / `devday.json`](../../deploy/presets/devday.json)                  | Dedicated; name/token variables; model defaults to `gpt-6-astra`; `codex_pat`   | Standard Codex settings plus Slack and workspace instructions                                                       | Same as `standard-codex`                                                                         |
-| [`Q&A Agent` / `devday-qa.json`](../../deploy/presets/devday-qa.json)            | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as `standard-codex`                                                                         |
-| [`Oncall Agent` / `devday-oncall.json`](../../deploy/presets/devday-oncall.json) | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as `standard-codex`                                                                         |
+| Preset / file                                                                           | Agent and credential                                                            | OpenClaw gateway and tools                                                                                          | Codex app-server policy                                                                               |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [`default-codex`](../../deploy/presets/default-codex.json)                              | Dedicated; choose name, model, and API key or service account token in the form | Local/LAN; Control UI enabled for loopback origins; Chat Completions enabled; browser/web/elevated settings omitted | Guardian WebSocket; `on-request`; `read-only`; reviewer and network proxy omitted                     |
+| [**Standard Codex**](../../deploy/presets/standard-codex.json)                          | Dedicated; name/model variables and masked API key                              | Standard gateway/tool policy below; cached Codex search                                                             | Guardian WebSocket; `on-request`; `workspace-write`; reviewer `user`; limited workspace network proxy |
+| [**Standard OpenClaw**](../../deploy/presets/standard-openclaw.json)                    | Embedded; name/model variables and masked API key                               | Standard gateway/tool policy; web search enabled without the Codex override                                         | None: native OpenClaw, no Codex plugin                                                                |
+| [`SWE Agent` / `devday.json`](../../deploy/presets/devday.json)                         | Dedicated; name/model variables; model defaults to `gpt-6-astra`; `codex_pat`   | Standard Codex settings plus Slack and workspace instructions                                                       | Same as Standard Codex                                                                                |
+| [`Q&A Agent` / `devday-qa.json`](../../deploy/presets/devday-qa.json)                   | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex                                                                                |
+| [`Oncall Agent` / `devday-oncall.json`](../../deploy/presets/devday-oncall.json)        | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex                                                                                |
+| [`Community Agent` / `devday-partners.json`](../../deploy/presets/devday-partners.json) | Same model/auth defaults as SWE Agent                                           | Standard Codex and Slack settings; community instructions; DMs disabled                                             | Same as Standard Codex                                                                                |
 
 ### Plain console default
 
@@ -109,22 +111,42 @@ limits. A saved template does not prove live Codex policy enforcement.
 
 ## DevDay custom presets
 
-The three DevDay files are opt-in via `presets.files`; `includeDefaults` does not
-load them. Their only current difference is the Preset name, not specialized
-Q&A or oncall behavior. Each uses service account token authentication
-(`codex_pat`), with an existing Namespace Secret or a new masked `modelSecret`.
+[`SWE Agent`](../../deploy/presets/devday.json) copies
+**Standard Codex** and adds Slack Socket Mode with four prefilled channels.
+It uses the Codex harness with **Service Accounts** authentication (`codex_pat`).
+All four DevDay presets expose only `name` and `model` variables; `model` defaults
+to `gpt-6-astra` and remains editable. After **Use Preset**, choose an existing service account Secret or
+**Create new Secret...** before creating the Agent.
+DevDay files are opt-in through `presets.files`; `includeDefaults` does not load them.
 
-They enable the Slack plugin and Socket Mode, paired DMs, allowlisted groups,
-channel-thread replies, and channel `C0C43A2QA11` with mentions required and
-`users: ["*"]`. **Edit Slack** lets you revise senders and bind app/bot Secrets.
-`SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` are environment references; shipped
-`secretBindings` are empty. No preset contains credentials.
+[`Community Agent`](../../deploy/presets/devday-partners.json) copies the SWE
+Agent runtime and prefilled Slack channels, with community-focused workspace
+instructions for answering questions and discussing the roadmap. Direct messages
+are disabled. It checks Linear
+for relevant updates when available and continues with other sources if access fails.
 
-Each includes the same supplied draft instructions in
-`agent.initialWorkspaceFiles.AGENTS.md`, with unresolved owner decisions.
-`{{vars.name}}` expands once when applied; later form name edits do not rewrite
-the file. Review those decisions and channel bindings before use. Restarting
-with changed files preserves existing Namespace copies; edit them through the API.
+[`Q&A Agent`](../../deploy/presets/devday-qa.json) and
+[`Oncall Agent`](../../deploy/presets/devday-oncall.json) copy the entire SWE Agent
+template, including its Slack and workspace instructions. Uncomment the desired files in the example Installation YAML to install them.
+
+All four DevDay presets prefill these channels:
+
+| Channel           | ID            |
+| ----------------- | ------------- |
+| oce-feedback      | `C0C49E7CS4A` |
+| oce-team          | `C0C43A2QA11` |
+| oce-feedback-test | `C0C569NN9ME` |
+| oce-team-test     | `C0C4A0JH2BG` |
+
+In the Console, choose **SWE Agent**, fill its variables, then use **Edit Slack** to
+choose allowed senders and bind Slack app/bot Secrets. The presets allow all channel members (`users: ["*"]`)
+and do not require mentions in any of the four channels. Narrow the sender list in the drawer if
+needed. No credentials are stored in the file.
+Workspace instructions in `template.agent.initialWorkspaceFiles.AGENTS.md` include
+draft decisions. `{{vars.name}}` expands when applying the Preset; later name edits
+do not re-render the copied file.
+To revise them, update that content and the existing Namespace Preset through the API. Restarting with a changed
+JSON file preserves already-installed same-name copies.
 
 ## Contents
 
@@ -132,17 +154,17 @@ A Preset has `id`, `namespaceId`, a Namespace-unique `name`, `template`, and
 `createdAt`. OCC assigns the ID, Namespace, and creation time. An empty template
 is valid. Its optional fields are:
 
-| Field                          | Purpose                                                                                              |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `variables`                    | Named scalar inputs, their types, descriptions, and optional defaults.                               |
-| `agent.name`                   | Suggested Agent name; the saved Agent still needs a unique name.                                     |
-| `agent.executionMode`          | Embedded or dedicated execution.                                                                     |
-| `agent.backendId`              | Installation-configured Backend ID, or null.                                                         |
-| `agent.harnessAuth`            | Credential binding or password variable token, or null; never stored credential bytes.               |
-| `agent.initialWorkspaceFiles`  | Optional creation-time workspace contents keyed by supported filename.                               |
-| `agent.plugins`                | Desired plugin selections and policies.                                                              |
-| `configuration.values`         | Native Agent Configuration JSON, including models, Harness settings, channels, and sandbox settings. |
-| `configuration.secretBindings` | Bindings to Secrets in this Namespace.                                                               |
+| Field                          | Purpose                                                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `variables`                    | Named scalar inputs, their types, descriptions, and optional defaults.                                    |
+| `agent.name`                   | Suggested Agent name; the saved Agent still needs a unique name.                                          |
+| `agent.executionMode`          | Embedded or dedicated execution.                                                                          |
+| `agent.backendId`              | Installation-configured Backend ID, or null.                                                              |
+| `agent.harnessAuth`            | Auth method default, credential binding, password variable token, or null; never stored credential bytes. |
+| `agent.initialWorkspaceFiles`  | Optional creation-time workspace contents keyed by supported filename.                                    |
+| `agent.plugins`                | Desired plugin selections and policies.                                                                   |
+| `configuration.values`         | Native Agent Configuration JSON, including models, Harness settings, channels, and sandbox settings.      |
+| `configuration.secretBindings` | Bindings to Secrets in this Namespace.                                                                    |
 
 These use the existing [Agent](agents.md) and [Configuration](configuration.md)
 contracts. Installation-owned Driver selection, generated identities, runtime
@@ -224,6 +246,10 @@ appear only as a whole token in `agent.harnessAuth.secret`, with method
   }
 }
 ```
+
+A method-only `agent.harnessAuth`, such as `{ "method": "codex_pat" }`,
+preselects authentication without supplying credentials. The creation form still
+requires a Secret selection; a concrete Agent requires a complete credential binding.
 
 For the password variable bound to authentication, the Console offers **Create new Secret**
 or **Use existing Secret**. Existing mode lists readable Secret metadata from the
