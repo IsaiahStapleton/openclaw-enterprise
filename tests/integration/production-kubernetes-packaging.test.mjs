@@ -79,6 +79,9 @@ async function render(overrides = {}, options = {}) {
     "--namespace",
     options.namespace ?? "openclaw-system",
   ];
+  if (options.isUpgrade) {
+    args.push("--is-upgrade");
+  }
   for (const [key, value] of Object.entries({ ...values, ...overrides })) {
     args.push("--set", `${key}=${value}`);
   }
@@ -159,7 +162,39 @@ test(
   "metrics chart requires exact scraper selectors and isolates the extra Pod ports",
   tooling,
   async () => {
-    await assert.rejects(render({ "metrics.enabled": "true" }), /scraperNamespaceLabels/);
+    const defaults = await resources((await render()).stdout);
+    for (const component of ["api", "worker"]) {
+      const container = defaults.find(
+        (item) =>
+          item.kind === "Deployment" && item.metadata.name === `openclaw-enterprise-${component}`,
+      ).spec.template.spec.containers[0];
+      assert.equal(container.env.find(({ name }) => name === "OCC_METRICS_ENABLED")?.value, "true");
+      assert.ok(
+        container.ports.some(
+          ({ name, containerPort }) => name === "metrics" && containerPort === 9464,
+        ),
+      );
+    }
+    assert.ok(
+      !defaults.some(
+        (item) => item.kind === "NetworkPolicy" && item.metadata.name.endsWith("-metrics"),
+      ),
+    );
+    const disabled = await resources((await render({ "metrics.enabled": "false" })).stdout);
+    for (const item of disabled.filter((item) => item.kind === "Deployment")) {
+      assert.ok(
+        !item.spec.template.spec.containers[0].ports?.some(({ name }) => name === "metrics"),
+      );
+    }
+    for (const override of [
+      { "metrics.scraperNamespaceLabels.team": "monitoring" },
+      { "metrics.scraperPodLabels.app": "prometheus" },
+    ]) {
+      await assert.rejects(render(override), /scraperNamespaceLabels/);
+    }
+    for (const port of ["0", "65536", "8080", "9.5"]) {
+      await assert.rejects(render({ "metrics.port": port }), /metrics.port/);
+    }
     const selected = {
       "metrics.enabled": "true",
       "metrics.scraperNamespaceLabels.kubernetes\\.io/metadata\\.name": "monitoring",
@@ -546,7 +581,7 @@ test(
     ]);
     assert.deepEqual(service.args, [
       "--public-origin",
-      "https://openclaw-enterprise-repository-credentials.openclaw-system.svc",
+      "https://git.openclaw-system.svc.cluster.local",
       "--backend-id",
       "github-primary",
     ]);
@@ -556,7 +591,7 @@ test(
     ]);
 
     // Service and CNI policy use different ports: authorization traffic reaches endpoint TCP 8443.
-    const endpoint = named("Service", "openclaw-enterprise-repository-credentials");
+    const endpoint = named("Service", "git");
     assert.equal(endpoint.spec.type, "ClusterIP");
     assert.deepEqual(endpoint.spec.selector, worker.spec.selector.matchLabels);
     assert.deepEqual(endpoint.spec.ports, [
@@ -585,6 +620,59 @@ test(
           roleRef.name === tenantWorker.metadata.name,
       ),
     );
+  },
+);
+
+test(
+  "repository credential Helm packaging derives the broker origin from Service settings",
+  tooling,
+  async () => {
+    for (const [namespace, serviceName, clusterDomain, expectedOrigin] of [
+      ["tenant-control", undefined, undefined, "https://git.tenant-control.svc.cluster.local"],
+      ["tenant-control", "git", undefined, "https://git.tenant-control.svc.cluster.local"],
+      [
+        "tenant-control",
+        "git",
+        "cluster.internal",
+        "https://git.tenant-control.svc.cluster.internal",
+      ],
+      [
+        "openclaw-system",
+        "openclaw-enterprise-repository-credentials",
+        undefined,
+        "https://openclaw-enterprise-repository-credentials.openclaw-system.svc.cluster.local",
+      ],
+    ]) {
+      const overrides = {
+        ...repositoryCredentialValues,
+        ...(serviceName === undefined ? {} : { "repositoryCredentials.serviceName": serviceName }),
+        ...(clusterDomain === undefined
+          ? {}
+          : { "repositoryCredentials.clusterDomain": clusterDomain }),
+      };
+      const objects = await resources(
+        (await render(overrides, { namespace, isUpgrade: serviceName !== undefined })).stdout,
+      );
+      const endpointName = serviceName ?? "git";
+      assert.ok(
+        objects.some(
+          (object) => object.kind === "Service" && object.metadata.name === endpointName,
+        ),
+      );
+      const worker = objects.find(
+        ({ kind, metadata }) =>
+          kind === "Deployment" && metadata.name === "openclaw-enterprise-worker",
+      );
+      const broker = worker.spec.template.spec.containers.find(
+        ({ name }) => name === "repository-credentials",
+      );
+      assert.deepEqual(broker.args, [
+        "--public-origin",
+        expectedOrigin,
+        "--backend-id",
+        "github-primary",
+      ]);
+    }
   },
 );
 
@@ -669,9 +757,27 @@ test(
       [{ "repositoryCredentials.tlsSecretName": "repository-config" }, /dedicated Secret/],
       [{ "repositoryCredentials.upstreamCidrs[0]": "0.0.0.0/0" }, /explicit IPv4 CIDRs/],
       [{ "repositoryCredentials.upstreamCidrs[0]": "999.1.1.1/32" }, /invalid IPv4 address/],
+      [{ "repositoryCredentials.serviceName": "1git" }, /DNS-1035/],
+      [{ "repositoryCredentials.serviceName": "git.openclaw-system.svc" }, /DNS-1035/],
+      [{ "repositoryCredentials.serviceName": "a".repeat(64) }, /DNS-1035/],
+      [{ "repositoryCredentials.clusterDomain": "cluster.local." }, /cluster DNS domain/],
+      [{ "repositoryCredentials.clusterDomain": "Cluster.local" }, /cluster DNS domain/],
+      [{ "repositoryCredentials.clusterDomain": `${"a".repeat(64)}.local` }, /cluster DNS domain/],
+      [{ "repositoryCredentials.clusterDomain": "a".repeat(254) }, /cluster DNS domain/],
+      [{ "repositoryCredentials.clusterDomain[0]": "cluster" }, /cluster DNS domain/],
+      [
+        {
+          "repositoryCredentials.clusterDomain": `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(38)}`,
+        },
+        /broker hostname/,
+      ],
     ]) {
       await assert.rejects(render({ ...repositoryCredentialValues, ...overrides }), message);
     }
+    await assert.rejects(
+      render(repositoryCredentialValues, { isUpgrade: true }),
+      /repositoryCredentials.serviceName must be explicit during upgrades/,
+    );
   },
 );
 

@@ -748,9 +748,28 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   assert.match(repeated.stderr, /no such file or directory/);
 });
 
+test("Kubernetes dev-up forwards an explicit K3s image to k3d", async (t) => {
+  const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
+  const result = fixture.start();
+  assert.equal(result.status, 0, result.stderr);
+  const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  const clusterCreate = commands.find(
+    (entry) => entry.command === "k3d" && entry.args[0] === "cluster" && entry.args[1] === "create",
+  );
+  assert.ok(clusterCreate);
+  assert.equal(
+    clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
+    "rancher/k3s:v1.35.8-k3s1",
+  );
+  const cleaned = runDevDown(fixture.env);
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
 test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before reporting readiness", async (t) => {
   const fixture = await kubernetesFixture(t);
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
+  fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
   fixture.env.DEV_UP_EXISTING_CONTROLLER_IMAGE = "1";
   fixture.env.DEV_UP_EXISTING_RUNTIME_IMAGE = "1";
 
@@ -884,6 +903,17 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
     6,
     "OpenShell startup imports its three images plus the OCE runtime, controller, and PostgreSQL images",
   );
+  assert.equal(
+    commands.filter(
+      ({ command, args }) =>
+        command === "docker" &&
+        args[0] === "exec" &&
+        args.includes("tag") &&
+        args.some((arg) => arg.startsWith("docker.io/openclaw-development/openshell-")),
+    ).length,
+    3,
+    "OpenShell startup registers each imported platform digest inside k3s",
+  );
   const helmInstalls = commands.filter(
     ({ command, args }) => command === "helm" && args[0] === "upgrade",
   );
@@ -891,10 +921,29 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
   const gatewayInstall = helmInstalls.find(({ args }) => args[2] === "openshell-gateway");
   assert.ok(gatewayInstall.args.includes("--namespace"));
   assert.ok(gatewayInstall.args.includes("oce-system"));
-  assert.ok(gatewayInstall.args.includes("--set=image.pullPolicy=Never"));
+  assert.ok(gatewayInstall.args.includes("--set=gateway.image.pullPolicy=Never"));
   assert.ok(gatewayInstall.args.includes("--set=sandboxRuntime.image.pullPolicy=Never"));
   assert.ok(gatewayInstall.args.includes("--set=supervisor.image.pullPolicy=Never"));
+  assert.ok(gatewayInstall.args.includes("--set-string=gateway.image.registry=docker.io"));
+  assert.ok(
+    gatewayInstall.args.includes(
+      "--set-string=gateway.image.repository=openclaw-development/openshell-gateway",
+    ),
+  );
+  assert.ok(
+    gatewayInstall.args.includes(
+      "--set-string=gateway.image.digest=sha256:9be15b267390fb73353b8862dade4dc13476f13175cf709e174d74bdf5f08e39",
+    ),
+  );
+  assert.equal(
+    gatewayInstall.args.includes("--set=supervisor.sandboxRuntime.networkPolicyEnforced=true"),
+    false,
+  );
   assert.ok(gatewayInstall.args.includes("--set=workspaceResources.enabled=false"));
+  assert.ok(gatewayInstall.args.includes("--set=server.drivers.kubernetes.allowDriverConfig=true"));
+  assert.ok(
+    gatewayInstall.args.includes("--set=server.drivers.kubernetes.resourceAdmission.enabled=false"),
+  );
   assert.ok(
     gatewayInstall.args.includes("--set-string=server.drivers.kubernetes.workspaceMode=operator"),
   );
@@ -918,6 +967,7 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
   assert.ok(
     workspaceTemplate.args.includes("--set-string=gateway.serviceAccount.namespace=oce-system"),
   );
+  assert.ok(workspaceTemplate.args.includes("--set=gateway.allowDriverConfig=true"));
 
   const cleaned = runDevDown(fixture.env);
   assert.equal(cleaned.status, 0, cleaned.stderr);
@@ -928,6 +978,7 @@ test("Kubernetes dev-up can keep the OCC control plane in Compose with OpenShell
   const fixture = await kubernetesFixture(t);
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
   fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "compose";
+  fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
 
   // This profile keeps OCC and PostgreSQL in Compose while the regular worker
   // reconciles Kubernetes Compute and operator-mode OpenShell Workspaces in k3d.
@@ -952,6 +1003,13 @@ test("Kubernetes dev-up can keep the OCC control plane in Compose with OpenShell
   assert.equal(configuration.drivers.sandbox.configuration.gateway.workspaceMode, "operator");
 
   const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  const clusterCreate = commands.find(
+    ({ command, args }) => command === "k3d" && args[0] === "cluster" && args[1] === "create",
+  );
+  assert.match(
+    clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
+    /rancher\/k3s:v1\.36\.4-k3s1@sha256:/,
+  );
   assert.ok(
     commands.some(
       ({ command, args }) =>

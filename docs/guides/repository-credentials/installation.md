@@ -32,10 +32,13 @@ Place these operator inputs in a private directory such as `/secure/occ/reposito
 | `tls.crt`, `tls.key` | Gateway certificate chain and matching private key               |
 | `ca.crt`             | Public PEM CA trust for that certificate, without private keys   |
 
-Provision the certificate through your issuer. Its DNS SAN must cover
-`openclaw-enterprise-repository-credentials.openclaw-system.svc`; change the
-namespace consistently if installing elsewhere. The internal Service exposes
-HTTPS 443 and forwards to sidecar port 8443. Do not disable certificate
+Provision the certificate through your issuer. Its exact DNS SAN must cover the
+internal Service host derived from Helm's `repositoryCredentials.serviceName`,
+release namespace, and `repositoryCredentials.clusterDomain`, which defaults to
+`git.openclaw-system.svc.cluster.local`; wildcard or Common Name fallback does
+not satisfy the Kubernetes projection check. Change the namespace, Service name,
+and cluster domain consistently if installing elsewhere. The internal Service
+exposes HTTPS 443 and forwards to sidecar port 8443. Do not disable certificate
 verification or use the TLS private-key Secret as the public trust input.
 
 Write `config.json` with the same Backend ID and duration policy as the registry:
@@ -43,7 +46,6 @@ Write `config.json` with the same Backend ID and duration policy as the registry
 ```json
 {
   "gateway": {
-    "publicOrigin": "https://openclaw-enterprise-repository-credentials.openclaw-system.svc",
     "listen": "0.0.0.0:8443",
     "controlSocket": "/run/openclaw/repository-control/private/control.sock"
   },
@@ -59,9 +61,12 @@ Write `config.json` with the same Backend ID and duration policy as the registry
 }
 ```
 
-This is the Kubernetes projection input. The sidecar supplies protected registry,
-App-key and TLS file paths after copying its selected projection into private
-owned files. For direct standalone startup, use the
+This is the Kubernetes projection input. The sidecar supplies the broker origin
+from Helm's repository credential hostname helper, then supplies protected
+registry, App-key and TLS file paths after copying its selected projection into
+private owned files. It rejects an explicit `gateway.publicOrigin` that differs
+from the Helm-derived origin and rejects a serving certificate that does not
+cover that host. For direct standalone startup, use the
 [standalone configuration](../../reference/repository-credentials.md#standalone-service-inputs)
 with explicit file paths instead.
 
@@ -115,6 +120,13 @@ repositoryCredentials:
   port: 8443
 ```
 
+The broker origin comes from admitted repository session material; fresh Helm
+installs mint sessions for `git.<release-namespace>.svc.<clusterDomain>`, using
+the configured repository credential cluster domain. Use the runtime image with
+the OpenClaw bridge that forwards stock Codex network settings. No custom Codex
+binary or Installation capability declaration is required. Compute derives the
+bound Agent's broker hostname and policy from admitted session material.
+
 Use the actual Helm release name for `app.kubernetes.io/instance`. Grant the
 chart's tenant-worker RoleBinding in each tenant namespace as described in the
 [Agent preparation guide](../deploy/production-agents.md#grant-tenant-rolebindings).
@@ -131,6 +143,7 @@ placeholders before rendering:
 repositoryCredentials:
   enabled: true
   image: "<credential-service-image>@sha256:<digest>"
+  serviceName: git
   backendId: repository-backend
   registryConfigMapName: occ-repository-registry-v1
   serviceConfigSecretName: occ-repository-service
@@ -146,8 +159,24 @@ adds worker-Pod egress on port 443 and ingress from tenant embedded gateways and
 dedicated Agent Pods on port 8443. Compute grants corresponding egress only to
 the repository consumer; see the
 [network selectors](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking). Existing model/network
-rules still apply. Because worker and sidecar share a Pod network namespace,
-these rules are not a per-container isolation boundary.
+rules still apply. For repository-bound dedicated Codex or embedded OpenClaw
+using `occ/codex-plugin`, Compute allows the exact broker hostname and sets stock Codex `allow_local_binding = true` and
+`mode = "full"`. This permits local binding, disables Codex's additional
+private-address guard, and permits all HTTP methods at otherwise allowed
+destinations. Explicit denies, TLS verification, and broker authorization remain
+in effect. Unbound Agents receive no generated policy change. Because worker and
+sidecar share a Pod network namespace, these rules do not isolate containers
+within that Pod.
+
+For an existing installation with active repository sessions, keep
+`repositoryCredentials.serviceName` set to the old Service name until those
+sessions drain, then issue a certificate for
+`git.<namespace>.svc.<clusterDomain>`, switch the value to `git`, and deploy new
+Agent revisions. Restarting the broker process can lose in-memory sessions, and
+an old mounted session also pins the broker origin and public trust material it
+received at admission. The chart cannot detect whether sessions have drained;
+upgrades fail unless `serviceName` is explicit so operators choose the current
+name or the deliberate cutover name.
 
 ## Install and verify
 

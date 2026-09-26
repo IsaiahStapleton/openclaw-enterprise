@@ -33,6 +33,11 @@ export type PluginRuntimeResolvedArtifacts =
 
 type PluginRuntimeFailureInput = readonly { readonly pluginId: string }[];
 
+export interface CodexRepositoryBrokerNetworkPolicy {
+  readonly host: string;
+  readonly domains: Readonly<Record<string, "allow" | "deny">>;
+}
+
 export type CodexPluginCatalogReader = {
   listCatalog(signal?: AbortSignal): Promise<readonly PluginCatalogEntry[]>;
 };
@@ -64,6 +69,11 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
   const OCC_DRIVER_ID = "occ-plugin";
   const CODEX_DRIVER_ID = "codex-plugin";
   const CODEX_MARKETPLACE = "openai-curated-remote";
+  const CODEX_REPOSITORY_BROKER_READ_ONLY_PATHS = [
+    "/app/node_modules/openclaw",
+    "/opt/oce/repository-credentials",
+    "/run/oce/repository-credentials",
+  ];
 
   // Native policy names are global: aliases/families can target core tools,
   // and another plugin's ID targets its entire tool inventory.
@@ -611,13 +621,39 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
     };
   }
 
+  function codexBrokerOpenClawConfiguration(policy: unknown): Record<string, unknown> | undefined {
+    if (!isRecord(policy)) {
+      return undefined;
+    }
+    const host = requiredString(policy.host, "Repository credential broker host");
+    const domains = isRecord(policy.domains) ? policy.domains : {};
+    for (const decision of Object.values(domains)) {
+      if (decision !== "allow" && decision !== "deny") {
+        throw new Error("Repository credential broker domains are invalid.");
+      }
+    }
+    return {
+      appServer: {
+        networkProxy: {
+          enabled: true,
+          mode: "full",
+          allowLocalBinding: true,
+          readOnlyPaths: CODEX_REPOSITORY_BROKER_READ_ONLY_PATHS,
+          domains: { ...domains, [host]: "allow" },
+        },
+      },
+    };
+  }
+
   function codexOpenClawConfiguration(
     selections: unknown,
     failures: unknown = [],
+    repositoryBrokerNetworkPolicy: unknown = undefined,
   ): Record<string, unknown> | undefined {
     validatePolicies("codex", selections);
     const selected = selectionEntries(selections);
-    if (selected.length === 0) {
+    const brokerConfiguration = codexBrokerOpenClawConfiguration(repositoryBrokerNetworkPolicy);
+    if (selected.length === 0 && brokerConfiguration === undefined) {
       return undefined;
     }
     const failedPluginIds = failedPluginIdSet(failures);
@@ -627,19 +663,24 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
           codex: {
             enabled: true,
             config: {
-              codexPlugins: {
-                enabled: true,
-                allow_all_plugins: false,
-                plugins: Object.fromEntries(
-                  selected.map(([pluginId, selection]) => {
-                    const slug = codexSlugFromNativeId(codexNativeIdFromPluginId(pluginId));
-                    return [
-                      slug,
-                      codexOpenClawPluginEntry(pluginId, selection, slug, failedPluginIds),
-                    ];
+              ...brokerConfiguration,
+              ...(selected.length === 0
+                ? {}
+                : {
+                    codexPlugins: {
+                      enabled: true,
+                      allow_all_plugins: false,
+                      plugins: Object.fromEntries(
+                        selected.map(([pluginId, selection]) => {
+                          const slug = codexSlugFromNativeId(codexNativeIdFromPluginId(pluginId));
+                          return [
+                            slug,
+                            codexOpenClawPluginEntry(pluginId, selection, slug, failedPluginIds),
+                          ];
+                        }),
+                      ),
+                    },
                   }),
-                ),
-              },
             },
           },
         },
@@ -831,9 +872,13 @@ export function codexRuntimeArtifact(
 export function codexOpenClawConfiguration(
   selections: PluginDesiredState,
   failures: PluginRuntimeFailureInput = [],
+  repositoryBrokerNetworkPolicy?: CodexRepositoryBrokerNetworkPolicy,
 ): OpenClawConfigurationDocument | undefined {
-  return pluginRuntimeTranslator.codexOpenClawConfiguration(selections, failures) as
-    OpenClawConfigurationDocument | undefined;
+  return pluginRuntimeTranslator.codexOpenClawConfiguration(
+    selections,
+    failures,
+    repositoryBrokerNetworkPolicy,
+  ) as OpenClawConfigurationDocument | undefined;
 }
 
 export function openClawRuntimeArtifact(

@@ -184,7 +184,7 @@ func Up(ctx context.Context, opts Options) (result error) {
 	}
 	fmt.Fprintf(r.opts.Out, "Creating k3d cluster %s...\n", state.Cluster)
 	clusterAttempted = true
-	clusterImage := "+v1.35"
+	clusterImage := r.setting("OCC_DEVELOPMENT_K3S_IMAGE", "+v1.35")
 	clusterArgs := []string{"cluster", "create", state.Cluster}
 	if sandboxDriver == "openshell" {
 		clusterImage = openShellK3sImage

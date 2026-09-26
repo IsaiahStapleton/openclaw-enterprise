@@ -37,7 +37,8 @@ Presets and edited Configuration JSON retain their settings.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
    Service Accounts, open [OpenAI admin](https://admin.openai.com/), choose your
    workspace, open **Service accounts**, and create a token with Codex scope.
-   The fields show `sk-…` and `at-…` hints; prefixes do not select the method.
+   Choose an existing model credential Secret or **Create new Secret...**.
+   Creating saves it immediately, even if you cancel Agent creation.
    Choose a model from the starter list or select **Enter model ID manually**.
    The hardcoded list has no preselected model and appears before credential entry;
    confirm credential and runtime support. The form updates native model
@@ -83,15 +84,15 @@ discard. Reload, page exit, and sign-out clear local drafts. Once saving begins,
 navigation does not retain partial-save or uncertain-outcome form state; follow
 save recovery below.
 
-For Codex plugins, enter a **Service Accounts** token with **Codex** and open
-**Configure plugins**. **Previous page** and **Next page** fetch
+For Codex plugins, select **Service Accounts** with **Codex**, expand
+**Plugin discovery token (optional)**, enter a token, and open **Configure plugins**. **Previous page** and **Next page** fetch
 upstream pages; **Filter this page** filters locally. PAT catalog search is unavailable.
 Select a plugin to load tools, then **Add**. Use toggles for enablement and
 **Tool policy** for overrides. **Configured plugins** includes other pages'
 selections. **Done** closes the modal; **Create Agent** saves changes.
 
 [Discovery](../../flows/agent-plugins.md#credential-scoped-discovery) uses the entered
-token transiently, excluding saved Preset credentials. Credential/provider/Harness
+token transiently; saved Secret values are never read back. Credential/provider/Harness
 changes clear results; **Plugin selections JSON** preserves selections separately
 from Configuration. Check permissions for rejection or outbound access for service
 failure, then retry. Editing follows installation capabilities and the
@@ -101,7 +102,9 @@ Credentials are masked Namespace Secrets, excluded from Configuration JSON, Agen
 responses, and browser storage. Provisioning creates exact grants; ordinary drafts
 require IAM administration permission.
 
-Presets retain their authentication binding. API-key and Service Accounts Presets
+Presets with only an authentication method preselect that method and require a
+model credential Secret selection. Presets with saved authentication bindings
+retain them. Bound API-key and Service Accounts Presets
 fix the provider, including JSON edits; saved service account tokens also fix Codex.
 Operator-managed credentials fix OpenClaw across provider changes. Start without a
 Preset to change these choices, or edit authentication later in **Credentials**.
@@ -272,19 +275,24 @@ provider acceptance, runtime readiness, or a channel connection.
 
 ## Deploy a new revision
 
-Open the Agent's new revision and select **Deploy new revision** after generated transport credentials are stored, required channel Secret bindings are saved, and a harness source is selected. The console rereads the Agent and Configuration
-and requests deployment through the existing exact-Agent endpoint. A changed draft
-requires a refresh. These checks are separate reads, not an atomic compare-and-set.
+Select **Deploy new revision** from a draft or admitted revision after storing
+generated credentials, saving required channel Secret bindings, and selecting
+harness authentication. The action deploys the current saved Configuration;
+it never copies the viewed snapshot or rolls back. Every accepted request
+creates an immutable revision, even at the same Configuration generation.
+
+Before admission, the console rereads the Agent, Configuration and managed
+credential metadata. Changed draft generations, associations or authentication
+bindings require refresh when viewing the draft. These reads are not atomic
+with admission.
 Teams-enabled drafts cannot deploy through this console path because Teams credential
 readiness is not exposed; use the operator deployment workflow for those Agents.
 
 If a deployment response is lost, inspect the Agent's revision history before
 trying again; the console does not automatically repeat an uncertain request.
 To follow the deployment worker, use the [deployment status API](../agents.md#deployment-status).
-The revision view displays the stored deployment failure and, when available,
-its startup component, check, code, and observation timestamp. Missing evidence
-leaves the cause unspecified; it does not mean the runtime is healthy.
-The console does not display live runtime health. Give your operator the
+The revision view displays stored deployment failures and available startup evidence.
+Missing evidence leaves the cause unspecified. The console does not display live runtime health. Give your operator the
 Namespace ID, the Agent ID shown on its detail page, and the full revision ID
 in the `revision` query parameter of the page URL after deployment. Ask them to
 [verify that exact workload and get a real model response](../../guides/deploy/production-agents.md#verify-production-workloads).

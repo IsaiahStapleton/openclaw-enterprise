@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer, isIPv4 } from "node:net";
@@ -233,13 +234,50 @@ async function readState(path) {
   }
 }
 
+const stateWrites = new Map();
+
 async function writeState(path, state) {
+  // Concurrent preparation must never publish an older cleanup inventory after
+  // a newer one. A failed write still lets subsequent cleanup record its state.
+  const pending = (stateWrites.get(path) ?? Promise.resolve())
+    .catch(() => {})
+    .then(() => persistState(path, state));
+  stateWrites.set(path, pending);
+  try {
+    await pending;
+  } finally {
+    if (stateWrites.get(path) === pending) {
+      stateWrites.delete(path);
+    }
+  }
+}
+
+async function persistState(path, state) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomSuffix()}.tmp`);
   await writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   await chmod(temp, 0o600);
   await rename(temp, path);
   await chmod(path, 0o600);
+}
+
+async function prepareTogether(operations, concurrency = operations.length) {
+  const remaining = operations.entries();
+  const results = [];
+  const workers = await Promise.allSettled(
+    Array.from({ length: Math.min(concurrency, operations.length) }, async () => {
+      for (const [index, operation] of remaining) {
+        results[index] = await operation();
+      }
+    }),
+  );
+  // Wait for every in-flight command before cleanup can remove its resources.
+  for (const worker of workers) {
+    if (worker.status === "rejected") {
+      throw worker.reason;
+    }
+  }
+  return results;
 }
 
 async function appendGithubEnv(path, env) {
@@ -330,7 +368,8 @@ function execFile(command, args, options = {}) {
         reject(error);
       }),
     );
-    child.on("exit", (code, signal) => {
+    // Exit can precede pipe drain; callers need complete diagnostics to classify failures.
+    child.on("close", (code, signal) => {
       finish(() => {
         if (timedOut) {
           reject(
@@ -639,7 +678,9 @@ async function buildRuntimeImages(
     await writeState(statePath, state);
     await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
       "build",
-      ...(localStore ? ["--builder", "default", "--load"] : []),
+      ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
+        ? ["--builder", "default", "--load"]
+        : []),
       "--pull=false",
       "--target",
       "runtime",
@@ -660,7 +701,9 @@ async function buildRuntimeImages(
     await writeState(statePath, state);
     await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
       "build",
-      ...(localStore ? ["--builder", "default", "--load"] : []),
+      ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
+        ? ["--builder", "default", "--load"]
+        : []),
       "--pull=false",
       "-f",
       runtimeDockerfile,
@@ -1241,7 +1284,7 @@ async function ensureDockerSourceImage(state, image, envName) {
   } catch (error) {
     // A locally built immutable image may have no reachable registry. Reuse
     // only its verified repository digest; other Docker failures stay visible.
-    if (!/No such (?:image|object)/i.test(error.stderr ?? "")) {
+    if (!/No such (?:image|object)|image not known/i.test(error.stderr ?? "")) {
       throw error;
     }
   }
@@ -1274,6 +1317,32 @@ async function assertK3dImageReference(cluster, reference, envName) {
       "inspecti",
       reference,
     ]);
+  }
+}
+
+async function importImageArchiveInK3dNodes(cluster, archive) {
+  for (const node of cluster.nodes) {
+    const nodeArchive = `/tmp/openclaw-ci-image-import-${randomSuffix()}.tar`;
+    try {
+      await execFile(
+        process.env.OCC_DOCKER_BIN ?? "docker",
+        ["cp", archive, `${node}:${nodeArchive}`],
+        { timeoutMs: 600_000 },
+      );
+      await execFile(
+        process.env.OCC_DOCKER_BIN ?? "docker",
+        ["exec", node, "ctr", "-n", "k8s.io", "images", "import", "--all-platforms", nodeArchive],
+        { timeoutMs: 600_000 },
+      );
+    } finally {
+      await execFile(
+        process.env.OCC_DOCKER_BIN ?? "docker",
+        ["exec", node, "rm", "-f", nodeArchive],
+        {
+          timeoutMs: 60_000,
+        },
+      ).catch(() => {});
+    }
   }
 }
 
@@ -1340,15 +1409,10 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
       ]),
     );
     await timedPreparation(state.lane, "image-archive-import", () =>
-      execFile(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", [
-        "image",
-        "import",
-        "--mode",
-        "direct",
-        archive,
-        "-c",
-        cluster.name,
-      ]),
+      // k3d tools-node mode can exit successfully after a per-node import
+      // failure, so import the prepared archive into each owned node directly
+      // and propagate node-local containerd errors.
+      importImageArchiveInK3dNodes(cluster, archive),
     );
   } finally {
     await rm(archive, { force: true });
@@ -1466,6 +1530,73 @@ async function prepareK3dRuntimeImages(
     cluster.codexSeccompProfile = seccomp.profileName;
     cluster.codexSeccompProfiles = seccomp.nodes;
     await writeState(statePath, state);
+  }
+}
+
+async function prepareImagesPackagingCodexSeccompProfile(statePath, state, env) {
+  const cluster = await timedPreparation(state.lane, "k3d-create", () =>
+    ensureK3dCluster(statePath, state),
+  );
+  const runtimeImage = await timedPreparation(state.lane, "runtime-image-import", () =>
+    registerImageInK3d(
+      statePath,
+      state,
+      cluster,
+      env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
+      "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+    ),
+  );
+  progress(
+    state.lane,
+    "Deriving the reviewed Codex seccomp profile for native runtime image smoke tests.",
+  );
+  const seccomp = await timedPreparation(state.lane, "codex-seccomp-profile", () =>
+    prepareCodexSeccompProfile({
+      cluster,
+      image: runtimeImage.reference,
+      execFile,
+      kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
+      codexVersion:
+        env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
+        process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
+        "0.156.0",
+    }),
+  );
+  if (!seccomp.dockerProfilePath || !isAbsolute(seccomp.dockerProfilePath)) {
+    throw new Error("Codex seccomp preparation did not publish an absolute Docker profile path.");
+  }
+  env.OCC_TEST_CODEX_SECCOMP_PROFILE = seccomp.dockerProfilePath;
+  env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
+  cluster.codexSeccompProfile = seccomp.profileName;
+  cluster.codexSeccompProfiles = seccomp.nodes;
+  cluster.codexDockerSeccompProfile = {
+    path: seccomp.dockerProfilePath,
+    sha256: seccomp.profileSha256,
+  };
+  await writeState(statePath, state);
+}
+
+export async function prepareRuntimeImageSmoke({ image, statePath }) {
+  assertDockerImageId(image, "Runtime smoke image");
+  const path = normalizeStatePath(statePath);
+  if (await readState(path)) {
+    throw new Error(`CI state already exists at ${path}; run cleanup before runtime smoke.`);
+  }
+  const state = baseState("images-packaging", path);
+  const tag = `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}/runtime-smoke:local`;
+  const env = { ...baseEnv(path, state), OCC_TEST_KUBERNETES_RUNTIME_IMAGE: tag };
+  const resource = addResource(state, "image-tag", { name: tag });
+  await writeState(path, state);
+  try {
+    // Import the caller's exact loaded config ID without rebuilding or pulling.
+    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["tag", image, tag]);
+    await markResourceReady(path, state, resource);
+    await prepareImagesPackagingCodexSeccompProfile(path, state, env);
+    await saveLaneEnv(path, state, env);
+    return { env, cleanup: () => cleanupResourceIds(path) };
+  } catch (error) {
+    await cleanupResourceIds(path);
+    throw error;
   }
 }
 
@@ -1592,6 +1723,9 @@ async function prepareLane({ lane, statePath }) {
           )
         ).env,
       );
+      if (lanePrepare(name).codexSeccomp) {
+        await prepareImagesPackagingCodexSeccompProfile(resolvedStatePath, state, env);
+      }
       break;
     case "repository-credentials-container":
       Object.assign(
@@ -1652,6 +1786,122 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
       env.OCC_TEST_KUBERNETES_IMAGE = fixture.image;
       env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS = cluster.pluginStatusProxyCidrs;
+      break;
+    }
+    case "k3d-observability": {
+      await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
+      const inputs = effectiveLaneEnv(name, env);
+      const require = createRequire(new URL("../../apps/controller/package.json", import.meta.url));
+      const { loadYaml } = require("@kubernetes/client-node");
+      const production = loadYaml(
+        await readFile(join(repositoryRoot, "deploy/helm/openclaw-enterprise/values.yaml"), "utf8"),
+      );
+      const externalImages = {
+        OCC_TEST_PRODUCTION_NODE_IMAGE: inputs.NODE_BASE_IMAGE,
+        OCC_TEST_PRODUCTION_POSTGRES_IMAGE: inputs.OCC_TEST_PRODUCTION_POSTGRES_IMAGE,
+        OCC_TEST_OBSERVABILITY_COLLECTOR_IMAGE: production.logging.collector.image,
+      };
+      const [cluster, built] = await timedPreparation(name, "cluster-build-pull", () =>
+        prepareTogether([
+          () => ensureK3dCluster(resolvedStatePath, state),
+          async () => {
+            await ensureDockerSourceImage(state, inputs.NODE_BASE_IMAGE, "NODE_BASE_IMAGE");
+            return buildRuntimeImages(resolvedStatePath, state, {
+              controller: true,
+              nodeBaseImage: inputs.NODE_BASE_IMAGE,
+              localStore: true,
+            });
+          },
+          () =>
+            prepareTogether(
+              Object.entries(externalImages)
+                .filter(([, image]) => image !== inputs.NODE_BASE_IMAGE)
+                .map(
+                  ([variable, image]) =>
+                    () =>
+                      ensureDockerSourceImage(state, image, variable),
+                ),
+              2,
+            ),
+        ]),
+      );
+      env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
+      env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
+      // k3d tools-mode imports use a shared per-cluster helper container.
+      // Serialize imports for this cluster while the pulls and builds above
+      // continue to overlap. Each import still verifies the immutable reference
+      // through CRI on every node.
+      await timedPreparation(name, "workload-image-imports", () =>
+        prepareTogether(
+          [
+            async () => {
+              env.OCC_TEST_KUBERNETES_IMAGE = (
+                await prepareFixtureImage(resolvedStatePath, state, cluster)
+              ).image;
+              await pinFixtureImageInK3d(cluster, env.OCC_TEST_KUBERNETES_IMAGE);
+            },
+            ...Object.entries({
+              OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: built.env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE,
+              ...externalImages,
+            }).map(([variable, image]) => async () => {
+              progress(name, `Importing ${variable}.`);
+              env[variable] = (
+                await registerImageInK3d(resolvedStatePath, state, cluster, image, variable)
+              ).reference;
+            }),
+          ],
+          1,
+        ),
+      );
+      break;
+    }
+    case "k3d-observability-demo": {
+      await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
+      const inputs = effectiveLaneEnv(name, env);
+      const require = createRequire(new URL("../../apps/controller/package.json", import.meta.url));
+      const { loadYaml } = require("@kubernetes/client-node");
+      const demo = loadYaml(
+        await readFile(
+          join(repositoryRoot, "deploy/helm/openclaw-observability-demo/values.yaml"),
+          "utf8",
+        ),
+      );
+      const images = {
+        // Start the larger service first; pulls still overlap before imports run serially.
+        OCC_TEST_OBSERVABILITY_GRAFANA_IMAGE: demo.images.grafana,
+        OCC_TEST_OBSERVABILITY_PROMETHEUS_IMAGE: demo.images.prometheus,
+        OCC_TEST_OBSERVABILITY_LOKI_IMAGE: demo.images.loki,
+        OCC_TEST_PRODUCTION_NODE_IMAGE: inputs.NODE_BASE_IMAGE,
+      };
+      const [cluster] = await timedPreparation(name, "cluster-and-pulls", () =>
+        prepareTogether([
+          () => ensureK3dCluster(resolvedStatePath, state),
+          () =>
+            prepareTogether(
+              Object.entries(images).map(
+                ([variable, image]) =>
+                  () =>
+                    ensureDockerSourceImage(state, image, variable),
+              ),
+              2,
+            ),
+        ]),
+      );
+      env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
+      env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
+      // k3d tools-mode imports share one helper container per cluster, so keep
+      // this phase serial even though source-image pulls above can overlap.
+      await timedPreparation(name, "demo-image-imports", () =>
+        prepareTogether(
+          Object.entries(images).map(([variable, image]) => async () => {
+            progress(name, `Importing ${variable}.`);
+            env[variable] = (
+              await registerImageInK3d(resolvedStatePath, state, cluster, image, variable)
+            ).reference;
+          }),
+          1,
+        ),
+      );
       break;
     }
     case "repository-credentials-platform": {

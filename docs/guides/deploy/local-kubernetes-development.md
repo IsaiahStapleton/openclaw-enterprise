@@ -26,6 +26,13 @@ export OCC_DEVELOPMENT_SANDBOX_DRIVER=none
 That profile remains useful when changing Kubernetes Compute independently of
 OpenShell. It accepts the Compose overrides documented by `occ dev up --help`.
 
+If k3d cannot reach `https://update.k3s.io/v1-release/channels`, set
+`OCC_DEVELOPMENT_K3S_IMAGE` to an explicit compatible node image, such as
+`rancher/k3s:v1.35.8-k3s1`, after pulling it into the selected engine. Run the
+recorded cleanup command if the failed attempt retained state, then retry.
+OpenShell profiles use their pinned K3s image instead. The node image is separate
+from `OCC_KUBERNETES_RUNTIME_IMAGE`, which selects the Agent runtime image.
+
 ### Start the OpenShell fail-closed profile
 
 For an OpenShell environment, use the owned launcher:
@@ -40,7 +47,7 @@ export OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell
 The checkout-local CLI creates one k3d cluster and then:
 
 1. installs the pinned Agent Sandbox controller and OpenShell
-   `v0.1.0-pre.7` assets;
+   `v0.1.0` assets;
 2. imports digest-resolved OpenShell, OCE controller, Agent runtime, and
    PostgreSQL images;
 3. creates `oce-system` and installs PostgreSQL, OpenShell Gateway, and the OCE
@@ -264,7 +271,7 @@ for both scoped RoleBindings.
 - The OpenShell profile installs one central Gateway per cluster. OCC runs in
   the cluster by default or in Compose when explicitly selected, and creates
   tenant resources in separate `oce-*` Namespaces.
-- Stock OpenShell `v0.1.0-pre.7` remains fail-closed for unsupported Secret and
+- Stock OpenShell `v0.1.0` remains fail-closed for unsupported Secret and
   workload-identity projections. Workspace readiness does not prove that an
   Agent Sandbox can start or complete a model turn.
 - OpenShell Gateway permits unauthenticated users only inside this disposable,
