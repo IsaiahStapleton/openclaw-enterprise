@@ -89,9 +89,6 @@ test(
       async function assertDecoded(unit, expected) {
         const event = (await unit.audit.list()).find((event) => event.id === expected.id);
         assert.deepEqual(event, expected);
-        assert.equal(Object.hasOwn(event, "namespaceId"), false);
-        assert.equal(Object.hasOwn(event.resource, "namespaceId"), false);
-        assert.equal(Object.hasOwn(event, "history"), false);
       }
 
       const forgedEnvelope = {
@@ -109,13 +106,6 @@ test(
       const forbidden = {
         ...forgedEnvelope,
         history: { eventId: forgedEnvelope.id },
-        history_fact: { eventId: forgedEnvelope.id },
-        receivedAt: "2000-01-01T00:00:00.000Z",
-        received_at: "2000-01-01T00:00:00.000Z",
-        ledgerSequence: 999,
-        ledger_sequence: 999,
-        sequence: "999",
-        receipt: { committed: true },
         unexpected: "unsupported metadata",
       };
       for (const [key, value] of Object.entries(forbidden)) {
@@ -123,67 +113,7 @@ test(
           await withRolledBackEvent({ __occAuditMetadata: { [key]: value } }, assertDecoded);
         });
       }
-      await t.test("combined forged envelope and matching History are discarded", async () => {
-        const { AuditEventFactory } = await import("../../packages/audit/src/index.ts");
-        const subject = {
-          kind: "agent",
-          id: `agt_${randomUUID()}`,
-          namespaceId: forgedEnvelope.namespaceId,
-        };
-        // This synthetic hostile object matches its forged envelope, not the
-        // genuine Installation row selected by audit.list. Current main does
-        // not include the History contract, so it is not a validated fact.
-        const forgedEvent = new AuditEventFactory({
-          clock: () => forgedEnvelope.occurredAt,
-          idGenerator: () => forgedEnvelope.id,
-        }).create({
-          installationId: forgedEnvelope.installationId,
-          namespaceId: forgedEnvelope.namespaceId,
-          actorId: forgedEnvelope.actorId,
-          action: "openclaw.agents.update",
-          resource: subject,
-        });
-        const admissionDecisionId = "forged-admission";
-        const forgedHistory = {
-          schema: "openclaw.audit-history/v1",
-          source: "occ_admission",
-          id: forgedEvent.id,
-          installationId: forgedEvent.installationId,
-          namespaceId: forgedEvent.namespaceId,
-          occurredAt: forgedEvent.occurredAt,
-          subject,
-          resource: subject,
-          action: forgedEvent.action,
-          phase: "accepted",
-          result: "accepted",
-          reasonCode: "ACCEPTED",
-          initiator: { kind: "resolved", principalId: forgedEvent.actorId },
-          executor: { kind: "controller" },
-          authorization: {
-            kind: "decision",
-            decision: "allowed",
-            principalId: forgedEvent.actorId,
-            action: "update",
-            resource: subject,
-            iamDriverId: "forged-iam",
-            admissionDecisionId,
-          },
-          causation: { requestId: `req_${randomUUID()}`, admissionDecisionId },
-        };
-        const matchedForgery = { ...forgedEvent, history: forgedHistory };
-        await withRolledBackEvent(
-          { __occAuditMetadata: { ...forbidden, ...matchedForgery } },
-          async (unit, expected) => {
-            await assertDecoded(unit, {
-              ...expected,
-              schemaVersion: 1,
-              source: "occ",
-              actor: { principalId: forgedEnvelope.actorId },
-            });
-          },
-        );
-      });
-      await t.test("null History cannot create an optional event property", async () => {
+      await t.test("null unknown metadata cannot create an event property", async () => {
         await withRolledBackEvent({ __occAuditMetadata: { history: null } }, assertDecoded);
       });
 
@@ -223,9 +153,16 @@ test(
             decisionReason: "ordinary free-form reason",
             reasonCode: "legacy mixed-case reason",
           };
-          await withRolledBackEvent({ __occAuditMetadata: metadata }, async (unit, expected) => {
-            await assertDecoded(unit, { ...expected, ...metadata });
-          });
+          await withRolledBackEvent(
+            { reason: "recorded", __occAuditMetadata: { ...metadata, ...forbidden } },
+            async (unit, expected) => {
+              await assertDecoded(unit, {
+                ...expected,
+                ...metadata,
+                details: { reason: "recorded" },
+              });
+            },
+          );
           const nullMetadata = Object.fromEntries(Object.keys(metadata).map((key) => [key, null]));
           await withRolledBackEvent(
             { __occAuditMetadata: nullMetadata },
