@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
 updated: 2026-09-25
-last_updated_session: authoring-run/aeb3824d-50c3-4438-8684-4f7d993c09d6
+last_updated_session: authoring-run/c2a20d39-27b7-49c6-b32e-59afd0b83403
 ---
 
 # Harness Execution Topology Flow
@@ -139,9 +139,13 @@ Harness ServiceAccounts. Compute owns the Gateway Pod; the selected SandboxDrive
 owns the dedicated native Harness Pod. The OpenClaw Harness enrolls as a paired node,
 owns its persistent identity and workspace, and is the only workload that
 receives the model key. The Gateway receives neither provider authentication nor
-node state. Their exact callback route and session-bound worker admission keep
-the transport scoped to the owning Agent. Embedded OpenClaw uses
-one combined workload with its exact Agent identity and model key. The worker
+node state. Compute writes the enrolled device into a generated `dedicated-native`
+worker-inference profile and makes that profile mandatory, so every session uses
+the Harness without a user placement choice. A missing or disconnected Harness
+fails the turn instead of falling back to Gateway inference. Their exact callback
+route and session-bound worker admission keep the transport scoped to the owning
+Agent. Embedded OpenClaw uses one combined workload with its exact Agent identity
+and model key. The worker
 has scoped Secret permissions for admitted delivery and node enrollment. Its
 trusted workload-writing authority also projects tenant Secrets. Gateway Pods
 receive no controller or Harness Kubernetes credentials.
@@ -289,6 +293,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-25 21:51: Make the generated dedicated native worker profile mandatory for automatic, fail-closed session placement. (authoring-run/c2a20d39-27b7-49c6-b32e-59afd0b83403 - 3312dc69ffdcb12ccc9d928085db0f24a3a42263)
 
 - 2026-09-25 20:28: Require full-facet Sandbox provisioning for dedicated native OpenClaw and trace the OpenShell-owned Harness path. (authoring-run/aeb3824d-50c3-4438-8684-4f7d993c09d6 - a940efa1cf7deff44f14407851827c8049926ec9)
 

@@ -212,8 +212,10 @@ The Agent's Harness configuration determines its execution topology:
   credential through the Gateway and stores the resulting device identity on the
   Harness workspace claim. The node host supervises the remote worker, which owns
   the agent loop, model inference, and coding tools. Only the Harness receives the
-  model API key; the Gateway selects the generated `dedicated-native`
-  runtime-local profile. Explicit `openai/` models require complete API,
+  model API key. Compute makes its generated `dedicated-native` worker-inference
+  profile mandatory, so sessions use the enrolled Harness without a Cloud Worker
+  selection. A missing or disconnected Harness fails the turn without Gateway
+  inference fallback. Explicit `openai/` models require complete API,
   token-limit, input, reasoning, and cost metadata at the approved
   `https://api.openai.com/v1` endpoint.
 

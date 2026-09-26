@@ -187,10 +187,11 @@ and executes inference plus `exec`, `process`, `read`, `write`, `edit`, and
 `apply_patch` in its own environment. The Gateway retains session admission,
 effective tool policy, authoritative transcripts, and streamed event collection.
 The Gateway container cannot read the model credential or mount the node state;
-the worker receives no gateway service-principal token. Provider failure and a
-missing or disconnected worker fail the runtime-local turn without Gateway
-inference fallback. Credentials, workload identity, storage, and permitted
-transport depend on the selected Driver and admitted topology.
+the worker receives no gateway service-principal token. Compute makes the
+generated worker-inference profile mandatory, so the user does not select a
+Cloud Worker. Provider failure and a missing or disconnected worker fail the
+turn without Gateway inference fallback. Credentials, workload identity, storage,
+and permitted transport depend on the selected Driver and admitted topology.
 The [Kubernetes security reference](security.md) defines its concrete credential
 exceptions and enforcement limitations; Docker has its own narrower boundaries.
 

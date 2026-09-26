@@ -57,6 +57,7 @@ async function runLauncher(
     resourceOwner = "openclaw-ci-test",
     preparedHarness,
     ambiguousDemo = false,
+    missingBaseImages = false,
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), `oce-k3d-${engine}-launcher-`));
@@ -69,6 +70,7 @@ async function runLauncher(
   const state = join(root, "state", "openclaw-enterprise", `k3d-${engine}-${stateHarness}`);
   const invocation = join(root, "node-invocation.json");
   const prepareCount = join(root, "prepare-count");
+  const imagePulls = join(root, "image-pulls");
   const clipboard = join(root, "clipboard");
   await mkdir(bin);
 
@@ -96,7 +98,8 @@ async function runLauncher(
       `#!/bin/sh
 if [ "$1" = machine ] && [ "$2" = inspect ]; then printf '%s\\n' '${socket}'; exit 0; fi
 if [ "$1" = info ] && [ "$2" = --format ]; then printf '%s\\n' '${socket}'; exit 0; fi
-if [ "$1" = image ] && [ "$2" = inspect ]; then exit 0; fi
+if [ "$1" = image ] && [ "$2" = inspect ]; then [ '${missingBaseImages}' = true ] && exit 1; exit 0; fi
+if [ "$1" = pull ]; then printf '%s\n' "$2" >> '${imagePulls}'; exit 0; fi
 if [ "$1" = ps ]; then
   case "$*" in
     *openclaw_ci_pg_test*) printf '%s\\n' 'openclaw_ci_pg_test_postgres_1 (Up 1 minute (healthy))' ;;
@@ -114,7 +117,8 @@ exit 90
       `#!/bin/sh
 if [ "$1" = info ]; then exit 0; fi
 if [ "$1" = compose ] && [ "$2" = version ]; then exit 0; fi
-if [ "$1" = image ] && [ "$2" = inspect ]; then exit 0; fi
+if [ "$1" = image ] && [ "$2" = inspect ]; then [ '${missingBaseImages}' = true ] && exit 1; exit 0; fi
+if [ "$1" = pull ]; then printf '%s\n' "$2" >> '${imagePulls}'; exit 0; fi
 if [ "$1" = ps ]; then
   case "$*" in
     *openclaw_ci_pg_test*) printf '%s\\n' 'openclaw_ci_pg_test-postgres-1 (Up 1 minute (healthy))' ;;
@@ -311,6 +315,9 @@ node_args="$*"
         : /Dedicated Codex gateway-routing integration passed\./,
     );
   }
+  if (missingBaseImages) {
+    return (await readFile(imagePulls, "utf8")).trim().split("\n");
+  }
 }
 
 test("k3d defaults to the foreground OpenClaw and OCC console demo", (context) =>
@@ -477,6 +484,16 @@ for (const engine of ["podman", "docker"]) {
 
 test("k3d test selects the dedicated native OpenClaw integration", (context) =>
   runLauncher(context, "podman", ["test", "--harness", "openclaw"]));
+
+test("k3d pulls every pinned Node build base before offline image preparation", async (context) => {
+  const runtimeRecipe = await readFile(join(repositoryRoot, "deploy/runtime/Dockerfile"), "utf8");
+  const expected = Array.from(
+    runtimeRecipe.matchAll(/^ARG NODE(?:_RUNTIME)?_BASE_IMAGE=(.+)$/gmu),
+    ([, image]) => image,
+  );
+  const pulled = await runLauncher(context, "docker", ["test"], { missingBaseImages: true });
+  assert.deepEqual(pulled, expected);
+});
 
 test("k3d rejects an unsupported Harness option", async (context) => {
   await assert.rejects(

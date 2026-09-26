@@ -2817,7 +2817,7 @@ test("credential-source authentication renders no model Secret and requires the 
   );
 });
 
-test("dedicated OpenClaw renders an enrolled Harness without exposing model credentials to its gateway", () => {
+test("dedicated OpenClaw renders an enrolled Harness without exposing model credentials to its gateway", async () => {
   const driverOptions = options({
     runtime: {
       transportSecretPrefix: "transport",
@@ -2865,6 +2865,14 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   );
   assert.doesNotThrow(() =>
     driver.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration),
+  );
+  assert.throws(
+    () =>
+      driver.validateHarnessAuth(revision.harness, revision.harnessAuth, {
+        ...revision.configuration,
+        cloudWorkers: { requiredProfile: "user-selected" },
+      }),
+    /required profile.*owned by the selected Compute Driver/i,
   );
   const ownership = { namespaceId: tenant.id, agentId };
   const nativeInference = {
@@ -2991,6 +2999,84 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
     nativeInference,
   );
   assert.equal(worker.readinessProbe.timeoutSeconds, 3);
+
+  const nodeRequire = createRequire(import.meta.url);
+  const files = new Map([["/etc/openclaw/openclaw.json", JSON.stringify(configuration)]]);
+  let started = false;
+  // Execute the generated Gateway startup program: every session must use the
+  // enrolled worker without requiring a user-selected Cloud Worker destination.
+  runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, {
+    Buffer,
+    JSON,
+    URL,
+    console,
+    process: {
+      env: {
+        HOME: "/home/node",
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "8080",
+        OPENCLAW_NATIVE_WORKER_PROFILE: "dedicated-native",
+        OPENCLAW_STATE_DIR: "/home/node/.openclaw",
+        OPENCLAW_WORKSPACE_NODE_ID: deviceId,
+      },
+      on() {},
+      exit() {},
+    },
+    setTimeout() {
+      return { unref() {} };
+    },
+    setInterval() {
+      return { unref() {} };
+    },
+    require(specifier) {
+      if (specifier === "node:fs") {
+        return {
+          cpSync() {},
+          existsSync() {
+            return false;
+          },
+          lstatSync() {
+            throw new Error("Unexpected lstat");
+          },
+          mkdirSync() {},
+          readFileSync(path) {
+            const value = files.get(path);
+            if (value === undefined) {
+              throw new Error(`Unexpected read: ${path}`);
+            }
+            return value;
+          },
+          readdirSync() {
+            return [];
+          },
+          rmSync() {},
+          writeFileSync(path, value) {
+            files.set(path, value);
+          },
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawn() {
+            started = true;
+            return { kill() {}, on() {} };
+          },
+          spawnSync() {
+            throw new Error("Unexpected child process");
+          },
+        };
+      }
+      return nodeRequire(specifier);
+    },
+  });
+  await Promise.resolve();
+  assert.equal(started, true);
+  const effectiveConfiguration = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+  assert.equal(effectiveConfiguration.cloudWorkers.requiredProfile, "dedicated-native");
+  assert.deepEqual(effectiveConfiguration.cloudWorkers.profiles["dedicated-native"], {
+    provider: "device",
+    settings: { device: deviceId, inference: "worker" },
+  });
 });
 
 test("account-token authentication grants only the exact Codex revision outbound HTTPS", () => {

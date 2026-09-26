@@ -1677,11 +1677,12 @@ function configureNativeWorkerProfile() {
     ...config,
     cloudWorkers: {
       ...cloudWorkers,
+      requiredProfile: profileId,
       profiles: {
         ...profiles,
         [profileId]: {
           provider: "device",
-          settings: { device: deviceId, inference: "runtime-local" },
+          settings: { device: deviceId, inference: "worker" },
         },
       },
     },

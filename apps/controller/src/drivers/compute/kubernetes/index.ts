@@ -1658,6 +1658,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const dedicated = harness.mode === "dedicated";
     const codex = dedicated && harness.id === "codex";
     const native = dedicated && openclaw;
+    if (native && asRecord(configuration.cloudWorkers)?.requiredProfile !== undefined) {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw required profile ${NATIVE_WORKER_PROFILE} is owned by the selected Compute Driver.`,
+      );
+    }
     if (
       (!embedded && !codex && !native) ||
       !auth ||

@@ -105,8 +105,17 @@ if (command === "docker" || command === "podman") {
       });
       process.exit(1);
     }
-    if (scenario === "inspect-failed" || (["image-absent", "podman-image-absent"].includes(scenario) && !state.pulled)) {
-      process.stderr.write(scenario === "inspect-failed" ? "Cannot connect to the Docker daemon\n" : scenario === "podman-image-absent" ? "Error: image not known\n" : "Error response from daemon: No such image\n");
+    if (
+      scenario === "inspect-failed" ||
+      (["image-absent", "podman-image-absent"].includes(scenario) && !state.pulled)
+    ) {
+      process.stderr.write(
+        scenario === "inspect-failed"
+           ? "Cannot connect to the Docker daemon\n"
+           : scenario === "podman-image-absent"
+             ? "failed to find image: image not known\n"
+             : "Error response from daemon: No such image\n",
+      );
       process.exit(1);
     }
     const matching = scenario === "local-digest" || (state.pulled && scenario !== "pull-mismatch");
@@ -394,7 +403,10 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
     RUNNER_TEMP: root,
     CI_FIXTURE_ROOT: root,
     CI_FIXTURE_SCENARIO: scenario,
-    OCC_DOCKER_BIN: join(bin, scenario === "podman-success" ? "podman" : "docker.mjs"),
+    OCC_DOCKER_BIN: join(
+      bin,
+      ["podman-success", "podman-image-absent"].includes(scenario) ? "podman" : "docker.mjs",
+    ),
     OPENCLAW_CI_K3D_BIN: join(bin, "k3d.mjs"),
     OCC_KUBECTL_BIN: join(bin, "kubectl.mjs"),
     ...extraEnv,
@@ -675,7 +687,9 @@ test("k3d preparation reuses only matching local immutable images and verifies f
     const result = commands.prepare();
     assert.equal(result.status, 1);
     const calls = await commands.commands();
-    const pulls = calls.filter(({ command, args }) => command === "docker" && args[0] === "pull");
+    const pulls = calls.filter(
+      ({ command, args }) => ["docker", "podman"].includes(command) && args[0] === "pull",
+    );
     assert.equal(
       pulls.length,
       ["local-digest", "inspect-failed"].includes(scenario) ? 0 : 1,
