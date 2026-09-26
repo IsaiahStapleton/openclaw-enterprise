@@ -3334,11 +3334,12 @@ test("Agent detail preserves admitted revision history while draft edits change 
   const current = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
   assert.equal(current.data.harnessAuth, null);
   await page.getByLabel("AgentRevision").selectOption(first.revision.id);
-  await page.getByText("API key · Secret configured", { exact: true }).waitFor();
-  assert.equal(
-    (await page.locator("body").textContent()).includes(agent.harnessAuth.source.id),
-    false,
-  );
+  await page
+    .getByRole("link", {
+      name: `Auth Revisioned Agent · ${agent.harnessAuth.source.id}`,
+      exact: true,
+    })
+    .waitFor();
   // Cancel discards the retained baseline too: reopening uses the freshly read saved document.
   await page.getByRole("button", { name: "Edit current Configuration" }).click();
   await page.getByRole("button", { name: "Edit Configuration" }).click();
@@ -7274,4 +7275,118 @@ test("authentication drafts retain Secret references and their original save bas
     await page.getByLabel("API key Secret", { exact: true }).evaluate((node) => node.value),
     "",
   );
+});
+
+test("Secret summaries retain revision bindings and distinguish unreadable metadata from absent bindings", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Bound Secret summaries", { ready: true });
+  const app = await fixture.createSecret(namespace.id, "Revision Slack app", "hidden-app-value");
+  const bot = await fixture.createSecret(namespace.id, "Revision Slack bot", "hidden-bot-value");
+  const replacement = await fixture.createSecret(namespace.id, "Draft model", "hidden-model-value");
+  const secretBindings = {
+    SLACK_APP_TOKEN: { source: app.ref, delivery: { type: "env" } },
+    SLACK_BOT_TOKEN: { source: bot.ref, delivery: { type: "env" } },
+  };
+  const agent = await fixture.createAgent(namespace.id, "Bound Secrets", nativeValues("bound"), {
+    secretBindings,
+  });
+  // Real admission requires exact Agent access to each projected credential.
+  for (const secret of [app, bot]) {
+    fixture.policy.bindings.push({
+      id: `grant-${secret.id}`,
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: `service-agent-${agent.id}`,
+      roleId: `auth-${agent.id}`,
+      resourceKind: "secret",
+      resourceId: secret.id,
+    });
+  }
+  const active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  // Mutate both current owners after admission; the read-only view must keep the old references.
+  await fixture.updateAgent(namespace.id, agent.id, {
+    configurationId: agent.configurationId,
+    harnessAuth: { method: "api_key", source: replacement.ref },
+  });
+  await fixture.updateConfiguration(namespace.id, agent.configurationId, nativeValues("changed"), {
+    secretBindings: {},
+  });
+  const limited = await fixture.createAccountWithPolicy("secret-summary-reader", (principal) => {
+    fixture.policy.roles.push(
+      {
+        id: "summary-reader",
+        namespaceId: namespace.id,
+        permissions: ["namespace", "agent", "configuration", "agent_revision"].map(
+          (resourceKind) => ({ action: "read", resourceKind }),
+        ),
+      },
+      {
+        id: "exact-secret-reader",
+        namespaceId: namespace.id,
+        permissions: [{ action: "read", resourceKind: "secret" }],
+      },
+    );
+    fixture.policy.bindings.push({
+      id: "summary-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "summary-reader",
+    });
+    // Only these exact Secrets are readable. No Secret collection grant is present.
+    for (const id of [agent.harnessAuth.source.id, app.id, replacement.id]) {
+      fixture.policy.bindings.push({
+        id: `read-${id}`,
+        namespaceId: namespace.id,
+        subjectKind: "identity",
+        subjectId: principal.id,
+        roleId: "exact-secret-reader",
+        resourceKind: "secret",
+        resourceId: id,
+      });
+    }
+  });
+  const { page, artifacts } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search, limited.credentials);
+  await page
+    .getByRole("link", { name: `Auth Bound Secrets · ${agent.harnessAuth.source.id}`, exact: true })
+    .waitFor();
+  assert.equal(await page.getByText(`Draft model · ${replacement.id}`, { exact: true }).count(), 0);
+  await page.screenshot({ path: join(artifacts, "bound-harness-revision.png"), fullPage: true });
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await page.getByRole("link", { name: `Revision Slack app · ${app.id}`, exact: true }).waitFor();
+  await page
+    .getByText(`Bound Secret · ${bot.id} · Metadata unavailable (access denied)`, { exact: true })
+    .waitFor();
+  assert.equal(await page.getByRole("button", { name: /Configure Slack|Edit Slack/ }).count(), 0);
+  await page.screenshot({ path: join(artifacts, "bound-channels-restricted.png"), fullPage: true });
+  assert.equal(
+    requests.some((request) => request.path === `/namespaces/${namespace.id}/secrets`),
+    false,
+  );
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  for (const value of ["hidden-app-value", "hidden-bot-value", "hidden-model-value"]) {
+    assert.equal((await page.locator("body").textContent()).includes(value), false);
+  }
+  // A metadata 404 is transport-level UI proof; a referenced active Secret cannot be deleted.
+  await page.route(`**/namespaces/${namespace.id}/secrets/${app.id}`, (route) =>
+    route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "NOT_FOUND", message: "Metadata unavailable" } }),
+    }),
+  );
+  await page.reload();
+  await page
+    .getByText(`Bound Secret · ${app.id} · Metadata unavailable`, { exact: true })
+    .waitFor();
+  await page.getByRole("button", { name: "New revision", exact: true }).click();
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await page.getByText("No Secret bound", { exact: true }).first().waitFor();
+  assert.equal(await page.getByText("No Secret bound", { exact: true }).count(), 2);
+  await page.getByRole("button", { name: "Configuration", exact: true }).click();
+  await page.getByRole("link", { name: `Draft model · ${replacement.id}`, exact: true }).waitFor();
 });

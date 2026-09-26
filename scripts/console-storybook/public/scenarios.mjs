@@ -1845,7 +1845,44 @@ export const scenarios = {
     path: `${revision}&tab=channels`,
     deployed: true,
     slack: true,
-    description: "Admitted channel settings are immutable. Switch to the new revision to edit.",
+    description:
+      "Inspect the app and bot token Secret names and IDs, then switch to Configuration to inspect the Harness Secret. This read-only snapshot retains its own bindings.",
+  },
+  revisionSecretsDenied: {
+    group: "Components/Channels",
+    name: "Revision Secret metadata denied",
+    path: `${revision}&tab=channels`,
+    deployed: true,
+    slack: true,
+    rules: [{ prefix: `${presetSecretsPath}/`, status: 403 }],
+    description:
+      "Bound IDs remain visible when exact Secret metadata reads are denied. Switch to Configuration to inspect the same state for Harness authentication.",
+  },
+  revisionSecretsMissing: {
+    group: "Components/Channels",
+    name: "Revision Secret metadata missing",
+    path: `${revision}&tab=channels`,
+    deployed: true,
+    slack: true,
+    rules: [{ prefix: `${presetSecretsPath}/`, status: 404 }],
+    description:
+      "Unavailable metadata does not erase the revision's bindings or claim credentials are unconfigured.",
+  },
+  revisionSecretsLoading: {
+    group: "Components/Channels",
+    name: "Revision Secret metadata loading",
+    path: `${revision}&tab=channels`,
+    deployed: true,
+    slack: true,
+    rules: [{ prefix: `${presetSecretsPath}/`, hold: true }],
+    description: "The bound IDs stay visible while metadata loads. Other tabs remain usable.",
+  },
+  revisionSecretsAbsent: {
+    group: "Components/Channels",
+    name: "Revision without Slack bindings",
+    path: `${revision}&tab=channels`,
+    deployed: true,
+    description: "A revision without Slack bindings shows No Secret bound for both token slots.",
   },
   channelConflict: {
     group: "Components/Channels",

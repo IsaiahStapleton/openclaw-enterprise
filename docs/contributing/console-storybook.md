@@ -188,6 +188,19 @@ Review the [bound model Secret](../assets/revision-secret-picker/harness-bound.p
 Storybook data and prove UI behavior only, not live authorization, credential
 validity, or deployment.
 
+### Inspect bound Secrets in revisions
+
+Open **Components/Channels → Revision read only**. Verify the Slack app and bot
+Secret names and IDs, then switch to **Configuration** to inspect Harness
+authentication. Bindings belong to the selected revision; names come from current
+metadata. Values never appear.
+
+**Revision Secret metadata denied**, **Revision Secret metadata missing**, and
+**Revision Secret metadata loading** retain IDs during failed or pending reads.
+**Revision without Slack bindings** shows **No Secret bound**.
+Fixtures prove presentation; browser integration checks exercise real API/IAM
+with in-memory state.
+
 ### Discover and configure plugins
 
 **Create Agent / Discover plugins with a service account token** uses a dummy
