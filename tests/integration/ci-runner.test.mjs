@@ -53,7 +53,7 @@ async function writePrepare(root) {
       "export async function prepareFile({ file, statePath }) {",
       "  if (file.path.endsWith('first.test.mjs')) {",
       "    return {",
-      "      env: { CI_RUNNER_SCOPED_VALUE: 'one' },",
+      "      env: { CI_RUNNER_SCOPED_VALUE: 'one', OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: 'private.example/controller@sha256:' + 'a'.repeat(64), OCC_TEST_PRODUCTION_NODE_IMAGE: 'untrusted-image-value' },",
       "      cleanup: async () => appendFile(statePath, `${file.path}\\n`),",
       "    };",
       "  }",
@@ -141,6 +141,11 @@ test("run resolves lane documents relative to the manifest and preserves ordered
       (file) => Number.isInteger(file.wallDurationMs) && file.wallDurationMs >= 0,
     ),
   );
+  // Evidence must retain immutable identity without exporting private registry names
+  // or arbitrary prepared environment values alongside the public CI artifact.
+  assert.deepEqual(summary.files[0].imageDigests, { controller: `sha256:${"a".repeat(64)}` });
+  assert.deepEqual(summary.files[1].imageDigests, {});
+  assert.doesNotMatch(JSON.stringify(summary), /private\.example|untrusted-image-value/);
   assert.match(await readFile(statePath, "utf8"), /first\.test\.mjs/);
 });
 
@@ -849,6 +854,19 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
           diagnostic: { kind: "network-policy", stage: secret },
         },
         {
+          name: "allowlisted runtime stock broker diagnostic",
+          diagnostic: {
+            kind: "runtime-image-stock-broker",
+            stage: "broker-denial",
+            command: [secret],
+            stderr: `${secret}-stderr`,
+          },
+        },
+        {
+          name: "rejects unsafe runtime stock broker stage",
+          diagnostic: { kind: "runtime-image-stock-broker", stage: `${secret}-stage` },
+        },
+        {
           name: "allowlisted repository platform setup diagnostic",
           diagnostic: {
             kind: "repository-platform-setup",
@@ -992,6 +1010,17 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     (entry) => entry.name === "rejects unsafe denied traffic diagnostic",
   );
   assert.equal(unsafeTraffic.error.diagnostic, undefined);
+  const stockBrokerFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "allowlisted runtime stock broker diagnostic",
+  );
+  assert.deepEqual(stockBrokerFailure.error.diagnostic, {
+    kind: "runtime-image-stock-broker",
+    stage: "broker-denial",
+  });
+  const unsafeStockBroker = summary.files[0].tests.find(
+    (entry) => entry.name === "rejects unsafe runtime stock broker stage",
+  );
+  assert.equal(unsafeStockBroker.error.diagnostic, undefined);
   const setupFailure = summary.files[0].tests.find(
     (entry) => entry.name === "allowlisted repository platform setup diagnostic",
   );

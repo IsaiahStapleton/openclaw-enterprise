@@ -1,5 +1,9 @@
 import { PLUGIN_RUNTIME_TRANSLATOR_SOURCE } from "../../plugin/runtime-translator.ts";
 
+// Match the pinned OpenClaw service stop budget: 315s drain, 10s cleanup,
+// and 5s supervisor margin. Idle Gateways exit as soon as their work settles.
+export const GATEWAY_STOP_TIMEOUT_MS = 330_000;
+
 export const PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN = "openclaw-plugin-runtime/app-server-token/v1";
 
 const PLUGIN_APP_SERVER_TOKEN_DERIVATION_HELPER = String.raw`
@@ -46,6 +50,7 @@ const CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS = Number(process.env.OPENCLAW_PLUG
 const CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS ?? "60000");
 const PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/status";
 const RUNTIME_STATUS_PATH = "/openclaw/runtime/status";
+const RUNTIME_IMAGE_PATH = "/openclaw/runtime/image";
 const PLUGIN_DIAGNOSTIC_CODES = new Set(["PLUGIN_INSTALL_FAILED", "PLUGIN_AUTH_REQUIRED"]);
 const RUNTIME_FAILURE_CODES = new Set([
   "LOGIN_FAILED",
@@ -96,7 +101,11 @@ function readGatewayPluginRuntime() {
   const runtime = readRuntimePayload();
   if (runtime === undefined) return undefined;
   if (runtime.manifest?.kind === "openclaw") return runtime;
-  if (runtime.manifest?.kind === "codex" && Object.keys(runtime.manifest.selections ?? {}).length > 0) {
+  if (
+    runtime.manifest?.kind === "codex" &&
+    (Object.keys(runtime.manifest.selections ?? {}).length > 0 ||
+      runtime.manifest.repositoryBrokerNetworkPolicy !== undefined)
+  ) {
     return runtime;
   }
   if (runtime.manifest?.kind === "codex") return undefined;
@@ -227,9 +236,27 @@ function startPluginRuntimeStatusServer() {
   if (port === undefined) return;
   const server = pluginCreateServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    if (request.method !== "GET" || (pathname !== RUNTIME_STATUS_PATH && pathname !== PLUGIN_STATUS_PATH)) {
+    if (request.method !== "GET" || ![RUNTIME_STATUS_PATH, PLUGIN_STATUS_PATH, RUNTIME_IMAGE_PATH].includes(pathname)) {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "not_found" }));
+      return;
+    }
+    if (pathname === RUNTIME_IMAGE_PATH) {
+      let commit = null;
+      try {
+        const metadata = JSON.parse(pluginReadFileSync("/opt/oce/runtime/build.json", "utf8"));
+        if (typeof metadata.commit === "string" && /^[a-f0-9]{40}$/.test(metadata.commit)) commit = metadata.commit;
+      } catch {}
+      response.writeHead(200, { "content-type": "application/json" });
+      let openclawCommit = null;
+      try {
+        const provenance = JSON.parse(pluginReadFileSync("/opt/oce/runtime/provenance.json", "utf8"));
+        if (provenance.source === "https://github.com/openclaw/openclaw" &&
+            typeof provenance.commit === "string" && /^[a-f0-9]{40}$/.test(provenance.commit)) {
+          openclawCommit = provenance.commit;
+        }
+      } catch {}
+      response.end(JSON.stringify({ commit, openclawCommit }));
       return;
     }
     if (pathname === RUNTIME_STATUS_PATH) {
@@ -392,7 +419,7 @@ function assertNoOpenClawPluginConfigConflict(base, overlay, options = {}) {
 function mergeOpenClawPluginConfiguration(base, overlay, options = {}) {
   assertNoOpenClawPluginConfigConflict(base, overlay, options);
   const next = mergeConfig(base, overlay);
-  for (const key of ["allow", "alsoAllow"]) {
+  for (const key of ["allow", "alsoAllow", "deny"]) {
     const baseAllow = Array.isArray(base?.tools?.[key]) ? base.tools[key] : [];
     const overlayAllow = Array.isArray(overlay?.tools?.[key]) ? overlay.tools[key] : [];
     if (overlayAllow.length === 0) continue;
@@ -498,7 +525,11 @@ function openClawPluginConfiguration(runtime, failures = []) {
     return pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures).configuration;
   }
   if (runtime.manifest?.kind === "codex") {
-    return pluginRuntimeTranslator.codexOpenClawConfiguration(runtime.manifest.selections ?? {}, failures);
+    return pluginRuntimeTranslator.codexOpenClawConfiguration(
+      runtime.manifest.selections ?? {},
+      failures,
+      runtime.manifest.repositoryBrokerNetworkPolicy,
+    );
   }
   return undefined;
 }
@@ -525,7 +556,7 @@ function assertConfigContainsOverlay(base, overlay, path) {
     }
     return;
   }
-  if (["tools.allow", "tools.alsoAllow"].includes(path) && Array.isArray(base) && Array.isArray(overlay)) {
+  if (["tools.allow", "tools.alsoAllow", "tools.deny"].includes(path) && Array.isArray(base) && Array.isArray(overlay)) {
     for (const tool of overlay) {
       if (!base.includes(tool)) {
         throw new Error("OpenClaw plugin effective config does not match admitted configuration.");
@@ -876,6 +907,76 @@ async function readCodexAppConfiguration() {
   return response?.config;
 }
 
+function verifyCodexNestedPolicy(configuration, effective) {
+  for (const [appId, app] of Object.entries(configuration.apps ?? {})) {
+    if (appId === "_default") continue;
+    const actual = effective?.apps?.[appId];
+    // Native tables merge across layers; replacing the user app table does not
+    // remove inherited tool exceptions. Null fields mean inheritance, not overrides.
+    for (const [toolName, tool] of Object.entries(actual?.tools ?? {})) {
+      for (const [field, defaultField] of [
+        ["enabled", "default_tools_enabled"],
+        ["approval_mode", "default_tools_approval_mode"],
+      ]) {
+        const expected = app.tools?.[toolName]?.[field] ?? app[defaultField];
+        if (tool[field] != null && tool[field] !== expected) {
+          throw new Error("Codex effective tool policy conflicts with the admitted " + field + "; remove the native tool override or update the Agent policy.");
+        }
+      }
+    }
+    for (const link of Object.values(actual?.links ?? {})) {
+      if (link.default_tools_approval_mode != null &&
+          link.default_tools_approval_mode !== app.default_tools_approval_mode) {
+        throw new Error("Codex effective account policy conflicts with the admitted approval default; remove the native account override or update the Agent policy.");
+      }
+    }
+  }
+}
+
+async function verifyCodexReviewerConfiguration(configuration, effective) {
+  const requestedApps = Object.entries(configuration.apps ?? {})
+    .filter(([, app]) => app.approvals_reviewer !== undefined);
+  if (requestedApps.length === 0) return;
+  const response = await codexAppServerRequest("configRequirements/read", {});
+  if (!isPlainObject(response) ||
+      (response.requirements !== null && !isPlainObject(response.requirements))) {
+    throw new Error("Codex reviewer requirements are unavailable; use a runtime supporting configRequirements/read.");
+  }
+  const requirements = response.requirements ?? {};
+  const allowed = requirements.allowedApprovalsReviewers;
+  const requiredModels = requirements.autoReview?.requiredOnModels ?? [];
+  if ((allowed != null && (!Array.isArray(allowed) || allowed.some((value) => !["user", "auto_review"].includes(value)))) ||
+      !Array.isArray(requiredModels) || requiredModels.some((value) => typeof value !== "string")) {
+    throw new Error("Codex reviewer requirements are invalid; verify the runtime's managed requirements.");
+  }
+  for (const [appId, app] of requestedApps) {
+    const reviewer = app.approvals_reviewer;
+    const actual = effective?.apps?.[appId];
+    if (actual?.approvals_reviewer !== reviewer ||
+        Object.values(actual?.links ?? {}).some((link) => link?.approvals_reviewer != null && link.approvals_reviewer !== reviewer)) {
+      throw new Error("Codex effective app or account reviewer conflicts with toolDefaults.reviewer; remove the conflicting override.");
+    }
+    if (allowed != null && !allowed.includes(reviewer)) {
+      throw new Error("Codex managed requirements forbid the requested reviewer; choose an allowed reviewer or omit the override.");
+    }
+    if (reviewer === "auto_review") {
+      const approval = effective?.approval_policy;
+      if (approval !== "on-request" && !(isPlainObject(approval) && isPlainObject(approval.granular))) {
+        throw new Error("Codex automatic reviewer requires session approval on-request or granular; verify a compatible effective policy before enabling it.");
+      }
+    } else if (requiredModels.length > 0) {
+      const model = effective?.model;
+      // Native required-model matching strips one valid provider prefix.
+      const slug = typeof model === "string" ? model.replace(/^[A-Za-z0-9_-]+\/([^/]*)$/, "$1") : undefined;
+      if (slug === undefined || requiredModels.includes(slug)) {
+        throw new Error("Codex managed model requirements prevent verifying the human reviewer; choose auto or a permitted model.");
+      }
+    }
+  }
+  // TODO: establish compatible start/resume and turn routing before claiming
+  // enforcement; these checks verify startup configuration, not future turns.
+}
+
 function codexPluginSlug(plugin) {
   const registry = requireNonEmptyString(plugin.registry, "Codex plugin registry");
   const nativeId = requireNonEmptyString(plugin.nativeId, "Codex plugin native ID");
@@ -909,6 +1010,34 @@ function enabledCodexSelectionIds(selections) {
   );
 }
 
+async function readCodexToolStatuses() {
+  const statuses = [];
+  const cursors = new Set();
+  let cursor;
+  // Bound startup discovery even if a server keeps returning fresh cursors.
+  for (let page = 0; page < 100; page += 1) {
+    const response = await codexAppServerRequest("mcpServerStatus/list", {
+      detail: "toolsAndAuthOnly",
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    if (
+      !isPlainObject(response) || !Array.isArray(response.data) ||
+      (response.nextCursor !== null &&
+        (typeof response.nextCursor !== "string" || response.nextCursor.trim().length === 0))
+    ) {
+      throw new Error("Codex tool discovery returned invalid pagination data.");
+    }
+    statuses.push(...response.data);
+    if (response.nextCursor === null) return statuses;
+    if (cursors.has(response.nextCursor)) {
+      throw new Error("Codex tool discovery returned a repeated cursor.");
+    }
+    cursors.add(response.nextCursor);
+    cursor = response.nextCursor;
+  }
+  throw new Error("Codex tool discovery exceeded its page limit.");
+}
+
 async function installCodexSelectionSet(selections, failures = []) {
   if (Object.keys(selections).length === 0) return { successfulPluginIds: [], failures: [] };
   const enabledPluginIds = enabledCodexSelectionIds(selections);
@@ -922,9 +1051,9 @@ async function installCodexSelectionSet(selections, failures = []) {
   const failed = [...failures];
   const failedIds = pluginFailureIds(failed);
   const successfulPluginIds = [];
-  const resolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails, failed);
+  const installs = pluginRuntimeTranslator.codexInstallPlan(selections, resolvedDetails);
   for (const readParams of readParamsList) {
-    const selectedPlugin = resolvedArtifact.installs.find(
+    const selectedPlugin = installs.find(
       (candidate) => candidate.remotePluginId === readParams.pluginName,
     );
     if (selectedPlugin !== undefined && !enabledPluginIds.has(selectedPlugin.pluginId)) continue;
@@ -981,11 +1110,17 @@ async function installCodexSelectionSet(selections, failures = []) {
     }
     if (selectedPlugin !== undefined) successfulPluginIds.push(selectedPlugin.pluginId);
   }
-  const effectiveResolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails, failed);
+  const enabledSelections = Object.fromEntries(
+    Object.entries(selections).filter(([pluginId]) => enabledPluginIds.has(pluginId) && !failedIds.has(pluginId)),
+  );
+  const toolStatuses = pluginRuntimeTranslator.codexNeedsToolInventory(enabledSelections)
+    ? await readCodexToolStatuses()
+    : [];
+  const effectiveResolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails, failed, toolStatuses);
   await writeCodexAppConfiguration(effectiveResolvedArtifact.configuration);
   const installedDetails = [];
   for (const readParams of readParamsList) {
-    const selectedPlugin = resolvedArtifact.installs.find(
+    const selectedPlugin = installs.find(
       (candidate) => candidate.remotePluginId === readParams.pluginName,
     );
     if (
@@ -997,7 +1132,7 @@ async function installCodexSelectionSet(selections, failures = []) {
       installedDetails.push(await codexAppServerRequest("plugin/read", readParams));
     }
   }
-  const installedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, installedDetails, failed);
+  const installedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, installedDetails, failed, toolStatuses);
   if (JSON.stringify(installedArtifact.installs) !== JSON.stringify(effectiveResolvedArtifact.installs)) {
     throw new Error("Codex plugin installed release metadata does not match startup resolution.");
   }
@@ -1013,7 +1148,10 @@ async function installCodexSelectionSet(selections, failures = []) {
     const detail = installedDetails[readParamsList.indexOf(readParams)];
     verifyCodexPluginDetail(plugin, readParams, detail);
   }
-  assertConfigContainsOverlay(await readCodexAppConfiguration(), effectiveResolvedArtifact.configuration);
+  const effectiveConfiguration = await readCodexAppConfiguration();
+  await verifyCodexReviewerConfiguration(effectiveResolvedArtifact.configuration, effectiveConfiguration);
+  assertConfigContainsOverlay(effectiveConfiguration, effectiveResolvedArtifact.configuration);
+  verifyCodexNestedPolicy(effectiveResolvedArtifact.configuration, effectiveConfiguration);
   return { successfulPluginIds, failures: failed };
 }
 
@@ -1144,6 +1282,9 @@ const { mkdirSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 const { spawn } = require("node:child_process");
 
+// OCE upgrades this runtime by rolling out a selected image.
+process.env.OPENCLAW_NO_AUTO_UPDATE = "1";
+
 ${PLUGIN_RUNTIME_HELPERS}
 ${WORKSPACE_ASSET_HELPERS}
 ${OPENCLAW_AUTH_PROBE_HELPERS}
@@ -1156,7 +1297,7 @@ function forwardTermination(child) {
     if (terminating) return;
     terminating = true;
     child.kill(signal);
-    setTimeout(() => child.kill("SIGKILL"), 8_000).unref();
+    setTimeout(() => child.kill("SIGKILL"), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
   };
   process.on("SIGTERM", () => forward("SIGTERM"));
   process.on("SIGINT", () => forward("SIGINT"));
@@ -1300,7 +1441,7 @@ if (pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(plug
     stoppingForChangedPeerStatus = true;
     publishPluginRuntimeStatus({ phase: "starting", ...pluginResult });
     child.kill("SIGTERM");
-    setTimeout(() => process.exit(1), 8_000).unref();
+    setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
   };
   setInterval(async () => {
     if (pollInFlight) return;
@@ -1548,6 +1689,7 @@ const nodeEnv = {
   PATH: harnessPath,
   OPENCLAW_STATE_DIR: state,
   OPENCLAW_CONFIG_PATH: configPath,
+  OPENCLAW_NO_AUTO_UPDATE: "1",
 };
 if (process.env.OPENCLAW_NODE_CA_PEM) {
   const caPath = join(state, "gateway-ca.pem");

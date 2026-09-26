@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readWorkspace, freezeRecord } from "./module-boundaries/workspace.mjs";
+import { readWorkspace, freezeRecord, parseJSON } from "./module-boundaries/workspace.mjs";
 import { collectSourceImports } from "./module-boundaries/source-imports.mjs";
 import { resolveImports } from "./module-boundaries/resolve-import.mjs";
 import { evaluatePolicy, validatePolicy } from "./module-boundaries/evaluate-policy.mjs";
@@ -27,7 +27,7 @@ export async function verifyModuleBoundaries({
   const resolutionDiagnostics = resolutions
     .filter((item) => item.status === "unresolved")
     .map((item) => {
-      const { from, specifier, kind, typeOnly, bindings, line } = item.reference;
+      const { from, specifier, kind, typeOnly, bindings, line, loaderIdentity } = item.reference;
       return {
         category: "resolution",
         rule: item.code,
@@ -39,6 +39,7 @@ export async function verifyModuleBoundaries({
         bindings,
         line,
         message: item.reason,
+        ...(loaderIdentity ? { loaderIdentity } : {}),
       };
     });
   const accepted = applyExceptions(
@@ -47,8 +48,20 @@ export async function verifyModuleBoundaries({
   );
   // Report public identities only: native anchors and source text remain internal.
   const reportedResolutions = resolutions.map(({ reference, ...resolution }) => {
-    const { from, specifier, kind, typeOnly, bindings, line, mode } = reference;
-    return { ...resolution, reference: { from, specifier, kind, typeOnly, bindings, line, mode } };
+    const { from, specifier, kind, typeOnly, bindings, line, mode, loaderIdentity } = reference;
+    return {
+      ...resolution,
+      reference: {
+        from,
+        specifier,
+        kind,
+        typeOnly,
+        bindings,
+        line,
+        mode,
+        ...(loaderIdentity ? { loaderIdentity } : {}),
+      },
+    };
   });
   return freezeRecord({
     ok: accepted.violations.length === 0,
@@ -90,9 +103,9 @@ async function main() {
     throw new Error(`An explicit --policy file is required. ${usage}`);
   }
   const root = resolve(options.root ?? defaultRoot);
-  const policy = JSON.parse(await readFile(resolve(root, options.policy), "utf8"));
+  const policy = parseJSON(await readFile(resolve(root, options.policy), "utf8"), "policy");
   const exceptions = options.exceptions
-    ? JSON.parse(await readFile(resolve(root, options.exceptions), "utf8"))
+    ? parseJSON(await readFile(resolve(root, options.exceptions), "utf8"), "exceptions")
     : undefined;
   const result = await verifyModuleBoundaries({ root, policy, exceptions });
   if (options.json) {
@@ -118,7 +131,15 @@ async function main() {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   await main().catch((error) => {
-    process.stderr.write(`Module boundary configuration failed: ${error.message}\n`);
+    const code =
+      typeof error.code === "string" && /^[A-Z][A-Z0-9_]{1,63}$/.test(error.code)
+        ? error.code
+        : null;
+    process.stderr.write(
+      code
+        ? `Module boundary configuration failed (${code}).\n`
+        : `Module boundary configuration failed: ${error.message}\n`,
+    );
     process.exitCode = 2;
   });
 }

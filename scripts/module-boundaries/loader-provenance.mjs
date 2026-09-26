@@ -18,25 +18,51 @@ export function unwrap(node) {
   return node;
 }
 
+// TypeScript may synthesize an Identifier declaration for CommonJS property writes.
+export function implicitWrapperSymbol(symbol) {
+  return (
+    !symbol?.declarations?.length ||
+    symbol.declarations.every(
+      (item) =>
+        ts.isIdentifier(item) &&
+        (ts.isPropertyAccessExpression(item.parent) || ts.isElementAccessExpression(item.parent)) &&
+        item.parent.expression === item,
+    )
+  );
+}
+
 /** Bounded lexical provenance, not JavaScript evaluation. No filesystem or policy access. */
-export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
+export function createLoaderAnalysis({ checker, path, commonjs, assigned, source }) {
   const symbol = (node) => checker.getSymbolAtLocation(node);
   const declaration = (node) => symbol(node)?.declarations?.[0];
+  const mutableModules = new Set();
+  let mutableRequireResolve = assigned.unbound.has("require.resolve");
   const moduleValue = (name) =>
     ["module", "url", "path"].includes(name?.replace(/^node:/, ""))
       ? { kind: "module", module: `node:${name.replace(/^node:/, "")}` }
       : undefined;
   function member(base, name) {
     if (base?.kind === "module") {
+      if (mutableModules.has(base.module)) {
+        return {
+          kind:
+            base.module === "node:module" && name === "createRequire"
+              ? "unknown-factory"
+              : "unknown-builtin",
+          reason: "A modeled Node helper may have been changed in this source.",
+        };
+      }
       return { kind: "builtin", module: base.module, name };
     }
     if (base?.kind === "require" && name === "resolve") {
-      return { ...base, kind: "require-resolve" };
+      return mutableRequireResolve
+        ? { kind: "unknown-builtin", reason: "The require.resolve helper may have changed." }
+        : { ...base, kind: "require-resolve" };
     }
     if (base?.kind === "commonjs-module" && name === "require") {
       return { kind: "require", anchor: path };
     }
-    if (base?.kind === "unknown-loader" && name === "resolve") {
+    if (base?.kind === "unknown-loader" && ["resolve", "require"].includes(name)) {
       return base;
     }
     return undefined;
@@ -55,12 +81,25 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
     seen = new Set([...seen, node]);
     if (ts.isIdentifier(node)) {
       const declared = declaration(node);
-      if (!declared) {
+      if (
+        !declared ||
+        (["require", "module"].includes(node.text) && implicitWrapperSymbol(symbol(node)))
+      ) {
         if (node.text === "require") {
-          return { kind: "require", anchor: path };
+          return assigned.unbound.has("require")
+            ? {
+                kind: "unknown-loader",
+                reason: "The implicit require binding is assigned in this source.",
+              }
+            : { kind: "require", anchor: path };
         }
         if (commonjs && node.text === "module") {
-          return { kind: "commonjs-module" };
+          return assigned.unbound.has("module") || assigned.unbound.has("module.require")
+            ? {
+                kind: "unknown-loader",
+                reason: "The implicit module loader is assigned in this source.",
+              }
+            : { kind: "commonjs-module" };
         }
         return undefined;
       }
@@ -97,7 +136,7 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
           property(declared.propertyName ?? declared.name, seen),
         );
       }
-      if (origin && assigned.has(symbol(node))) {
+      if (origin && assigned.symbols.has(symbol(node))) {
         return {
           kind: "unknown-loader",
           reason: "A recognized loader binding is assigned elsewhere in this source.",
@@ -115,6 +154,9 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
       const callee = reference(node.expression, seen);
       if (callee?.kind === "unknown-loader") {
         return callee;
+      }
+      if (callee?.kind === "unknown-factory") {
+        return { kind: "unknown-loader", reason: callee.reason };
       }
       if (callee?.module === "node:module" && callee.name === "createRequire") {
         const target = value(node.arguments[0], seen);
@@ -139,6 +181,65 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
     }
     return undefined;
   }
+  // These builtins are mutable objects in CommonJS. Follow local aliases and
+  // stop evaluating a helper if its module object is written or escapes to
+  // code whose effects are not modeled.
+  function exposedOrWritten(node) {
+    let current = node;
+    while (
+      current.parent &&
+      (ts.isPropertyAccessExpression(current.parent) ||
+        ts.isElementAccessExpression(current.parent)) &&
+      current.parent.expression === current
+    ) {
+      current = current.parent;
+    }
+    const parent = current.parent;
+    if (
+      parent &&
+      ((ts.isBinaryExpression(parent) &&
+        parent.left === current &&
+        parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+        ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+          [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(parent.operator)) ||
+        ts.isDeleteExpression(parent))
+    ) {
+      return true;
+    }
+    if (current !== node) {
+      return false;
+    }
+    if (
+      parent &&
+      ((ts.isVariableDeclaration(parent) &&
+        (parent.initializer === node || parent.name === node)) ||
+        ((ts.isNamespaceImport(parent) ||
+          ts.isImportClause(parent) ||
+          ts.isImportEqualsDeclaration(parent)) &&
+          parent.name === node) ||
+        (ts.isCallExpression(parent) && parent.expression === node))
+    ) {
+      return false;
+    }
+    return true;
+  }
+  function inspectExposure(node) {
+    if (ts.isIdentifier(node) || ts.isCallExpression(node)) {
+      const origin = reference(node);
+      const written =
+        assigned.objectWriteNodes.has(node) ||
+        (ts.isIdentifier(node) && assigned.objectWrites.has(symbol(node) ?? node.text));
+      if (origin?.kind === "module" && (written || exposedOrWritten(node))) {
+        mutableModules.add(origin.module);
+      }
+      if (origin?.kind === "require" && (written || exposedOrWritten(node))) {
+        mutableRequireResolve = true;
+      }
+    }
+    ts.forEachChild(node, inspectExposure);
+  }
+  inspectExposure(source);
   function builtin(node, module, seen) {
     const origin = reference(node, seen);
     return origin?.kind === "builtin" && origin.module === module ? origin.name : undefined;
@@ -147,7 +248,12 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
     const node = unwrap(input);
     return (
       builtin(node, "node:url", seen) === "URL" ||
-      (node && ts.isIdentifier(node) && node.text === "URL" && !symbol(node))
+      (node &&
+        ts.isIdentifier(node) &&
+        node.text === "URL" &&
+        !symbol(node) &&
+        !assigned.unbound.has("URL") &&
+        !assigned.globalURLMutable)
     );
   }
   function value(input, seen = new Set()) {
@@ -161,7 +267,10 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
     }
     if (ts.isIdentifier(node)) {
       const declared = declaration(node);
-      if (!declared && commonjs) {
+      if (commonjs && (!declared || implicitWrapperSymbol(symbol(node)))) {
+        if (["__dirname", "__filename"].includes(node.text) && assigned.unbound.has(node.text)) {
+          return unknown("The implicit CommonJS path binding is assigned in this source.");
+        }
         if (node.text === "__filename") {
           return known(path);
         }
@@ -173,7 +282,7 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
         declared &&
         ts.isVariableDeclaration(declared) &&
         declared.parent.flags & ts.NodeFlags.Const &&
-        !assigned.has(symbol(node))
+        !assigned.symbols.has(symbol(node))
       ) {
         return value(declared.initializer, seen);
       }
@@ -204,7 +313,9 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned }) {
         node.expression.name.text === "meta" &&
         node.name.text === "url"
       ) {
-        return known(pathToFileURL(path).href);
+        return assigned.importMetaMutable
+          ? unknown("The import.meta object may be changed in this source.")
+          : known(pathToFileURL(path).href);
       }
       const base = value(node.expression, seen);
       if (base.value?.startsWith("file:") && ["href", "pathname"].includes(node.name.text)) {

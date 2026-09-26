@@ -35,6 +35,20 @@ export function validatePolicy(policy) {
   if (!policy || policy.version !== 1) {
     throw new Error("Unsupported module-boundary policy version.");
   }
+  const policyFields = new Set([
+    "version",
+    "sourceRoots",
+    "packages",
+    "rootBarrels",
+    "workspaceNamespaces",
+    "diagnosticLimit",
+    "boundaries",
+    "packageImports",
+    "cycles",
+  ]);
+  if (Object.keys(policy).some((key) => !policyFields.has(key))) {
+    throw new Error("Unknown policy field.");
+  }
   for (const field of ["sourceRoots", "packages"]) {
     if (!Array.isArray(policy[field]) || policy[field].some((entry) => !pathValid(entry))) {
       throw new Error(`Invalid policy field: ${field}`);
@@ -73,6 +87,19 @@ export function validatePolicy(policy) {
       !boundary.message.trim()
     ) {
       throw new Error("Boundaries require a rule and message.");
+    }
+    const boundaryFields = new Set([
+      "rule",
+      "message",
+      "from",
+      "to",
+      "exceptFrom",
+      "exceptTo",
+      "specifiers",
+      "kinds",
+    ]);
+    if (Object.keys(boundary).some((key) => !boundaryFields.has(key))) {
+      throw new Error("Unknown boundary field.");
     }
     for (const field of ["from", "to", "exceptFrom", "exceptTo"]) {
       if (field !== "from" && boundary[field] === undefined) {
@@ -187,6 +214,7 @@ export function evaluatePolicy(snapshot, resolutions, policy) {
       typeOnly: reference.typeOnly,
       bindings: Object.freeze([...(reference.bindings ?? [])]),
       line: reference.line,
+      ...(reference.loaderIdentity ? { loaderIdentity: reference.loaderIdentity } : {}),
     });
     if (status === "local") {
       const identity = diagnosticIdentity(edge);
