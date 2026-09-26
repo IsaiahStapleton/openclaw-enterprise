@@ -121,11 +121,12 @@ function assignedSymbols(source, checker) {
   function visit(node) {
     if (
       ts.isIdentifier(node) &&
-      node.text === "globalThis" &&
+      ["globalThis", "global"].includes(node.text) &&
       implicitWrapperSymbol(checker.getSymbolAtLocation(node))
     ) {
-      // The global object can expose or replace the URL constructor.
+      // Either Node global object alias can expose or replace builtins and env.
       globalURLMutable = true;
+      unbound.add("process");
     }
     if (
       ts.isIdentifier(node) &&

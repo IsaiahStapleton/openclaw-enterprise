@@ -392,6 +392,9 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
     'path.join = () => __dirname + "/../private/chosen.cjs";',
     'path["join"] = () => __dirname + "/../private/chosen.cjs";',
     'const alias = path; alias.join = () => __dirname + "/../private/chosen.cjs";',
+    'const alias = path.posix; alias.join = () => __dirname + "/../private/chosen.cjs";',
+    'const {posix: alias} = path; alias["join"] = () => __dirname + "/../private/chosen.cjs";',
+    'Object.assign(path.posix, {join: () => __dirname + "/../private/chosen.cjs"});',
     'Object.assign(path, {join: () => __dirname + "/../private/chosen.cjs"});',
     '({ join: path.join } = {join: () => __dirname + "/../private/chosen.cjs"});',
     'Object.defineProperty(path, "join", {value: () => __dirname + "/../private/chosen.cjs"});',
@@ -444,10 +447,26 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
       (item) => item.from === source && item.rule === "unresolved-dynamic-import",
     ),
   );
+  await write(
+    source,
+    `const mod = require("node:module");
+     const alias = mod.Module;
+     alias.createRequire = () => (name) => process.mainModule.require(name.replace("chosen.cjs", "../private/chosen.cjs"));
+     const load = mod.createRequire(__filename);
+     console.log(load("./chosen.cjs"));`,
+  );
+  assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PRIVATE");
+  assert.ok(
+    (await check()).violations.some(
+      (item) => item.from === source && item.rule === "unresolved-dynamic-import",
+    ),
+  );
   await rm(join(root, source));
   for (const assignment of [
     'URL = class { constructor(x, y) { return {href: new NativeURL("../private/chosen.mjs", y).href}; } };',
     'globalThis.URL = class { constructor(x, y) { return {href: new NativeURL("../private/chosen.mjs", y).href}; } };',
+    'global.URL = class { constructor(x, y) { return {href: new NativeURL("../private/chosen.mjs", y).href}; } };',
+    'global["URL"] = class { constructor(x, y) { return {href: new NativeURL("../private/chosen.mjs", y).href}; } };',
     'Object.assign(globalThis, {URL: class { constructor(x, y) { return {href: new NativeURL("../private/chosen.mjs", y).href}; } }});',
   ]) {
     await write(
@@ -466,10 +485,36 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
   }
   await write(
     esm,
+    `import url from "node:url";
+     const U = url["URL"];
+     Object.defineProperty(U.prototype, "href", {get() { return import.meta.url.replace("public/mutable-url.mjs", "private/chosen.mjs"); }});
+     console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);`,
+  );
+  assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PRIVATE");
+  assert.ok(
+    (await check()).violations.some(
+      (item) => item.from === esm && item.rule === "unresolved-dynamic-import",
+    ),
+  );
+  await write(
+    esm,
     'console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);',
   );
   assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PUBLIC");
   assert.ok(from(await check(), esm).some((item) => item.to.endsWith("/public/chosen.mjs")));
+  await write(
+    esm,
+    'const global = {}; global.URL = class {}; console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);',
+  );
+  assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PUBLIC");
+  assert.ok(from(await check(), esm).some((item) => item.to.endsWith("/public/chosen.mjs")));
+  await rm(join(root, esm));
+  await write(
+    source,
+    'const path = require("node:path"); const alias = path.posix; console.log(require(alias.join(__dirname, "chosen.cjs")));',
+  );
+  assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
+  assert.ok(from(await check(), source).some((item) => item.to.endsWith("/public/chosen.cjs")));
 });
 
 test("fails closed when CommonJS wrapper paths are reassigned", async (t) => {
@@ -2302,6 +2347,10 @@ test("invalidates unknown-load exceptions when destructured sources change", asy
       `globalThis.config = {target: "${path}"}; console.log((await import(config.target)).default);`,
     environmentWrite: (path) =>
       `process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    globalEnvironmentWrite: (path) =>
+      `global.process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    globalThisEnvironmentWrite: (path) =>
+      `globalThis.process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     boundedChain: (path) =>
       `const origin = "${path}";\n` +
       Array.from(

@@ -37,6 +37,7 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
   const declaration = (node) => symbol(node)?.declarations?.[0];
   const mutableModules = new Set();
   let mutableRequireResolve = assigned.unbound.has("require.resolve");
+  let mutableGlobalURL = false;
   const moduleValue = (name) =>
     ["module", "url", "path"].includes(name?.replace(/^node:/, ""))
       ? { kind: "module", module: `node:${name.replace(/^node:/, "")}` }
@@ -51,6 +52,13 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
               : "unknown-builtin",
           reason: "A modeled Node helper may have been changed in this source.",
         };
+      }
+      // These object-valued members can alias the exported module object.
+      if (
+        (base.module === "node:path" && ["posix", "win32"].includes(name)) ||
+        (base.module === "node:module" && name === "Module")
+      ) {
+        return base;
       }
       return { kind: "builtin", module: base.module, name };
     }
@@ -225,13 +233,31 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
     return true;
   }
   function inspectExposure(node) {
-    if (ts.isIdentifier(node) || ts.isCallExpression(node)) {
+    if (
+      ts.isIdentifier(node) ||
+      ts.isCallExpression(node) ||
+      ts.isPropertyAccessExpression(node) ||
+      ts.isElementAccessExpression(node)
+    ) {
       const origin = reference(node);
       const written =
         assigned.objectWriteNodes.has(node) ||
         (ts.isIdentifier(node) && assigned.objectWrites.has(symbol(node) ?? node.text));
       if (origin?.kind === "module" && (written || exposedOrWritten(node))) {
         mutableModules.add(origin.module);
+      }
+      if (
+        origin?.kind === "builtin" &&
+        (written ||
+          exposedOrWritten(node) ||
+          ((ts.isPropertyAccessExpression(node.parent) ||
+            ts.isElementAccessExpression(node.parent)) &&
+            node.parent.expression === node))
+      ) {
+        mutableModules.add(origin.module);
+        if (origin.module === "node:url" && origin.name === "URL") {
+          mutableGlobalURL = true;
+        }
       }
       if (origin?.kind === "require" && (written || exposedOrWritten(node))) {
         mutableRequireResolve = true;
@@ -253,7 +279,8 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
         node.text === "URL" &&
         !symbol(node) &&
         !assigned.unbound.has("URL") &&
-        !assigned.globalURLMutable)
+        !assigned.globalURLMutable &&
+        !mutableGlobalURL)
     );
   }
   function value(input, seen = new Set()) {
