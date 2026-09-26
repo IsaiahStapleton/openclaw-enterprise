@@ -52,43 +52,46 @@ export const DRIVER_CAPABILITIES = Object.freeze([
 
 export type DriverCapability = (typeof DRIVER_CAPABILITIES)[number];
 
-export type ProviderType = ProviderDefinition["type"];
+/** Experimental Installation backend composition; separate from native model providers. */
+export type BackendType = BackendDefinition["type"];
 
-export type ProviderRef = string | null;
+export type BackendRef = string | null;
 
-export interface ProviderConfiguration {
+export interface BackendConfiguration {
   readonly workspaceId: string;
   readonly apiKeyPath: string;
   readonly credentialTtlSeconds?: number;
 }
 
-export interface ChatGPTProviderDefinition {
+export interface ChatGPTBackendDefinition {
   readonly id: string;
   readonly type: "chatgpt";
-  readonly configuration: ProviderConfiguration;
+  readonly configuration: BackendConfiguration;
   readonly drivers: Readonly<Record<"service_account", string>>;
 }
 
-export interface GitHubRepositoryCredentialProviderDefinition {
+export interface GitHubRepositoryCredentialBackendDefinition {
   readonly id: string;
   readonly type: "github";
   readonly configuration: { readonly registryPath: string };
   readonly drivers: { readonly repo: string };
 }
 
-export type ProviderDefinition =
-  ChatGPTProviderDefinition | GitHubRepositoryCredentialProviderDefinition;
+export type BackendDefinition =
+  ChatGPTBackendDefinition | GitHubRepositoryCredentialBackendDefinition;
 
-export interface ProviderSummary {
+export interface BackendSummary {
   readonly id: string;
-  readonly type: ProviderType;
+  readonly type: BackendType;
 }
 
 export interface InstallationCapabilities {
   readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
+  readonly pluginPolicies?: PluginPolicyCapabilities & { readonly driver: PluginDriverIdentity };
 }
 
-export interface Provider<Client = unknown> {
+/** Experimental authenticated client shared by related Installation Drivers. */
+export interface Backend<Client = unknown> {
   readonly id: string;
   readonly client: Client;
   readonly drivers: Readonly<Partial<Record<DriverCapability, string>>>;
@@ -240,8 +243,8 @@ export type HarnessAuthSnapshot =
       readonly method: "chatgpt_service_account";
       readonly serviceAccountId: string;
       readonly credential: ServiceAccountCredential & { readonly kind: "access_token" };
-      readonly providerBinding: {
-        readonly providerId: string;
+      readonly backendBinding: {
+        readonly backendId: string;
         readonly driverId: string;
         readonly workspaceId: string;
         readonly credentialIssued: boolean;
@@ -262,9 +265,9 @@ export interface ComputeRevisionContext {
   readonly repositoryCredentials?: readonly RepositoryCredentialRuntimeBinding[];
 }
 
-export type PluginApprovalMode = "always" | "never" | "prompt" | "auto";
+export type PluginReviewer = "human" | "auto";
 
-export type PluginApprovalsReviewer = "user" | "auto_review";
+export type PluginApprovalMode = "native" | "prompt" | "approve";
 
 export interface PluginDriverIdentity {
   readonly id: string;
@@ -273,15 +276,15 @@ export interface PluginDriverIdentity {
 
 export interface PluginToolPolicy {
   readonly enabled?: boolean;
-  readonly approvalMode?: PluginApprovalMode;
+  readonly approval?: PluginApprovalMode;
+  readonly reviewer?: PluginReviewer;
 }
 
 export interface PluginDesiredSelection {
   readonly enabled: boolean;
-  readonly approvalMode: PluginApprovalMode;
-  readonly approvalsReviewer?: PluginApprovalsReviewer;
-  readonly destructiveActions?: PluginApprovalMode;
-  readonly writes?: PluginApprovalMode;
+  readonly toolDefaults?: PluginToolPolicy;
+  /** Validated by the selected Plugin Driver, never interpreted by the control plane. */
+  readonly driverPolicy?: Readonly<Record<string, unknown>>;
   readonly tools?: Readonly<Record<string, PluginToolPolicy>>;
 }
 
@@ -289,15 +292,54 @@ export type PluginDesiredState = Readonly<Record<string, PluginDesiredSelection>
 
 export interface PluginToolCatalogEntry {
   readonly id: string;
+  readonly ownerId: string;
   readonly name: string;
-  readonly destructive: boolean;
-  readonly writes: boolean;
+  readonly description?: string;
+  readonly available?: boolean;
+  readonly unavailableReason?: string;
+  readonly destructive?: boolean;
+  readonly writes?: boolean;
+}
+
+export interface PluginPolicyCapabilities {
+  readonly toolDefaults: {
+    readonly enabled: boolean;
+    readonly approval: readonly PluginApprovalMode[];
+    readonly reviewer: readonly PluginReviewer[];
+  };
+  readonly tools: {
+    readonly enabled: boolean;
+    readonly approval: readonly PluginApprovalMode[];
+    readonly reviewer: readonly PluginReviewer[];
+  };
+  readonly driverPolicySchema: JSONSchema;
+}
+
+export interface PluginCatalogLink {
+  readonly label: string;
+  readonly url: string;
 }
 
 export interface PluginCatalogEntry {
   readonly id: string;
   readonly name: string;
+  readonly remoteId?: string;
+  readonly description?: string;
+  /** Public HTTPS presentation image; may expire and is never selection state. */
+  readonly logoUrl?: string;
+  readonly websiteUrl?: string;
+  readonly privacyPolicyUrl?: string;
+  readonly termsOfServiceUrl?: string;
+  readonly available?: boolean;
+  readonly unavailableReason?: string;
+  readonly unavailableHelp?: PluginCatalogLink;
   readonly tools: readonly PluginToolCatalogEntry[] | null;
+}
+
+export interface PluginCatalogPage {
+  readonly plugins: readonly PluginCatalogEntry[];
+  readonly nextCursor: string | null;
+  readonly setup?: { readonly message: string; readonly links: readonly PluginCatalogLink[] };
 }
 
 export interface PluginRevisionState {
@@ -403,7 +445,7 @@ export interface Agent extends Scope {
   readonly desiredRuntimeState: AgentDesiredRuntimeState;
   readonly status: AgentStatus;
   readonly configurationId: string;
-  readonly providerId: ProviderRef;
+  readonly backendId: BackendRef;
   readonly harnessAuth: HarnessAuthBinding | null;
   readonly executionMode: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
@@ -411,6 +453,26 @@ export interface Agent extends Scope {
   readonly servicePrincipalId: string;
   readonly activeRevisionId?: string;
   readonly createdAt: string;
+}
+
+export interface InstallationDeploymentInventoryAgent {
+  readonly id: string;
+  readonly status: AgentStatus;
+  readonly desiredRuntimeState: AgentDesiredRuntimeState;
+  readonly executionMode: HarnessExecutionMode;
+  readonly activeRevisionId?: string;
+  readonly deploymentInProgress: boolean;
+}
+
+export interface InstallationDeploymentInventoryNamespace {
+  readonly id: string;
+  readonly status: NamespaceStatus;
+  readonly agents: readonly InstallationDeploymentInventoryAgent[];
+}
+
+export interface InstallationDeploymentInventory {
+  readonly installationId: string;
+  readonly namespaces: readonly InstallationDeploymentInventoryNamespace[];
 }
 
 export interface HarnessDescriptor {
@@ -427,7 +489,7 @@ export interface AgentRevision extends Scope {
   readonly namespaceId: string;
   readonly agentId: string;
   readonly revision: number;
-  readonly providerId: ProviderRef;
+  readonly backendId: BackendRef;
   readonly configurationId: string;
   readonly configurationKind: ConfigurationKind;
   readonly configurationGeneration: number;
@@ -803,7 +865,19 @@ export interface PluginDriverContext {
 
 export interface PluginDriver extends Driver {
   readonly capability: "plugin";
+  readonly policyCapabilities: PluginPolicyCapabilities;
+  /** Checks policy support without installing plugins or performing authenticated discovery. */
+  validatePolicies(selections: PluginDesiredState): void;
   listCatalog(context: PluginDriverContext): Promise<readonly PluginCatalogEntry[]>;
+  /** Pre-Agent discovery uses a transient credential; neither it nor results are persisted. */
+  discoverCatalog?(
+    input: { readonly accessToken: string; readonly cursor?: string },
+    signal?: AbortSignal,
+  ): Promise<PluginCatalogPage>;
+  getCatalogPlugin?(
+    input: { readonly accessToken: string; readonly pluginId: string },
+    signal?: AbortSignal,
+  ): Promise<PluginCatalogEntry>;
 }
 
 export type NamespaceLifecycleFailure = "retryable" | "permanent";
@@ -863,6 +937,16 @@ export interface AgentRuntimeCredentialStatus {
   readonly transportConfigured: boolean;
 }
 
+/** Observed workload image identity; missing provenance must never be inferred from a tag. */
+export interface RuntimeImage {
+  readonly workload: string;
+  readonly container: string;
+  readonly image: string;
+  readonly imageId: string | null;
+  readonly commit: string | null;
+  readonly openclawCommit: string | null;
+}
+
 export interface ComputePreflightWarning {
   readonly code: string;
   readonly message: string;
@@ -880,6 +964,14 @@ export interface ComputeDriver extends Driver {
   readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
   readonly activationOrder?: "beforeCommit" | "afterCommit";
   readonly maintenanceIntervalMs?: number;
+  /**
+   * Opt into exclusive replacement: the worker stops all earlier revisions before
+   * preparation and supersedes their reconciliation once a newer exclusive
+   * revision is admitted. Recovery uses a new revision, never an older snapshot.
+   * Stop must wait for resource release; repeated calls must preserve durable data.
+   */
+  requiresStoppedPredecessors?(revision: AgentRevision): boolean;
+  getRuntimeImages?(revision: AgentRevision): Promise<readonly RuntimeImage[]>;
   /** Read-only native model discovery; supplied credentials must never be persisted. */
   discoverHarnessModels?(input: {
     readonly authMethod: "api_key" | "codex_pat";
