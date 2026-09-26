@@ -170,8 +170,9 @@ function assignedSymbols(source, checker) {
       if (containsImportMeta(node.operand)) importMetaMutable = true;
       assign(node.operand, node);
     }
-    if (ts.isDeleteExpression(node) && containsImportMeta(node.expression)) {
-      importMetaMutable = true;
+    if (ts.isDeleteExpression(node)) {
+      if (containsImportMeta(node.expression)) importMetaMutable = true;
+      assign(node.expression, node);
     }
     if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&

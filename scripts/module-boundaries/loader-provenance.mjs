@@ -58,11 +58,15 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
           reason: "A modeled Node helper may have been changed in this source.",
         };
       }
-      // These object-valued members can alias the exported module object.
-      if (
-        (base.module === "node:path" && ["posix", "win32"].includes(name)) ||
-        (base.module === "node:module" && name === "Module")
-      ) {
+      if (base.module === "node:path" && ["posix", "win32"].includes(name)) {
+        // The other flavor has different path semantics and can also expose
+        // the native path object through its own properties.
+        return name === (process.platform === "win32" ? "win32" : "posix")
+          ? base
+          : { kind: "foreign-path", module: base.module };
+      }
+      // Module is an object-valued alias of the exported module.
+      if (base.module === "node:module" && name === "Module") {
         return base;
       }
       return { kind: "builtin", module: base.module, name };
@@ -250,6 +254,9 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
       const written =
         assigned.objectWriteNodes.has(node) ||
         (ts.isIdentifier(node) && assigned.objectWrites.has(symbol(node) ?? node.text));
+      if (origin?.kind === "foreign-path") {
+        markMutable(origin.module);
+      }
       if (origin?.kind === "module" && (written || exposedOrWritten(node))) {
         markMutable(origin.module);
       }

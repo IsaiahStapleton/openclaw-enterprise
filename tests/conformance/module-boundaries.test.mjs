@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -522,6 +522,54 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
   );
   assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
   assert.ok(from(await check(), source).some((item) => item.to.endsWith("/public/chosen.cjs")));
+});
+
+test("fails closed for a non-native Node path flavor", async (t) => {
+  const source = "apps/app/src/public/path-flavor.cjs";
+  const { root, write, check } = await workspace(t, {
+    boundaries: [
+      {
+        rule: "no-private",
+        from: ["apps/app/src/public/**"],
+        to: ["apps/app/src/private/**"],
+        message: "No private imports.",
+      },
+    ],
+  });
+  await write("apps/app/src/public/chosen.cjs", 'module.exports = "PUBLIC";');
+  await write("apps/app/src/private/chosen.cjs", 'module.exports = "PRIVATE";');
+  const directory = dirname(join(root, source));
+  const foreign = process.platform === "win32" ? "posix" : "win32";
+  if (process.platform !== "win32") {
+    // POSIX permits backslashes in a module name; Node can load this link.
+    await mkdir(join(directory, "node_modules"), { recursive: true });
+    await symlink(
+      join(root, "apps/app/src/private/chosen.cjs"),
+      join(directory, "node_modules", win32.join(directory, "chosen.cjs")),
+    );
+  }
+  for (const setup of [`const alias = path.${foreign};`, `const {${foreign}: alias} = path;`]) {
+    await write(
+      source,
+      `const path = require("node:path"); ${setup}
+       console.log(require(alias.join(__dirname, "chosen.cjs")));`,
+    );
+    assert.equal(
+      (await run(process.execPath, [join(root, source)])).stdout.trim(),
+      process.platform === "win32" ? "PUBLIC" : "PRIVATE",
+    );
+    const report = await check();
+    assert.ok(
+      report.violations.some(
+        (item) => item.from === source && item.rule === "unresolved-dynamic-import",
+      ),
+      setup,
+    );
+    assert.equal(
+      from(report, source).some((item) => item.to.endsWith("/public/chosen.cjs")),
+      false,
+    );
+  }
 });
 
 test("fails closed when CommonJS wrapper paths are reassigned", async (t) => {
@@ -2393,6 +2441,44 @@ test("invalidates unknown-load exceptions when destructured sources change", asy
       assert.notEqual(unresolved.loaderIdentity, item.loaderIdentity);
       assert.equal(JSON.stringify(changed).includes("../private/secret.mjs"), false);
     });
+  }
+});
+
+test("invalidates unknown-load exceptions after deleting an environment property", async (t) => {
+  const source = "apps/app/src/public/delete-env.mjs";
+  const { root, write, check } = await workspace(t);
+  await write("apps/app/src/public/secret.mjs", 'export default "PUBLIC";');
+  await write("apps/app/src/private/secret.mjs", 'export default "PRIVATE";');
+  const env = { ...process.env, BOUNDARY_SELECTED: "./secret.mjs" };
+  for (const computed of [false, true]) {
+    const makeSource = (property) =>
+      `delete process.env${computed ? `["${property}"]` : `.${property}`};
+       console.log((await import(process.env.BOUNDARY_SELECTED ?? "../private/secret.mjs")).default);`;
+    const publicSource = makeSource("BOUNDARY_UNRELATED");
+    await write(source, publicSource);
+    assert.equal(
+      (await run(process.execPath, [join(root, source)], { env })).stdout.trim(),
+      "PUBLIC",
+    );
+    const before = (await check()).violations.find(
+      (item) => item.from === source && item.rule === "unresolved-dynamic-import",
+    );
+    assert.ok(before);
+    const exceptions = {
+      version: 1,
+      exceptions: [{ ...before, owner: "fixture", reason: "one load", removeWhen: "fixed" }],
+    };
+    assert.equal((await check({ exceptions })).ok, true);
+    await write(source, "\n\n" + publicSource);
+    assert.equal((await check({ exceptions })).ok, true);
+    await write(source, makeSource("BOUNDARY_SELECTED"));
+    assert.equal(
+      (await run(process.execPath, [join(root, source)], { env })).stdout.trim(),
+      "PRIVATE",
+    );
+    const changed = await check({ exceptions });
+    assert.ok(changed.violations.some((item) => item.rule === "stale-exception"));
+    assert.ok(changed.violations.some((item) => item.rule === "unresolved-dynamic-import"));
   }
 });
 
