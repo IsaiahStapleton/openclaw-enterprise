@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
 updated: 2026-09-26
-last_updated_session: authoring-run/27646efe-b5bb-44a4-8d76-0506bd266237
+last_updated_session: codex/01a0df07-06ad-7ef3-8cb9-3e4cbf7beac6
 ---
 
 # Agent Presets flow
@@ -17,7 +17,7 @@ continues through [revision admission](configuration-driver/persistence-and-revi
 
 - [Installation loader](../../apps/controller/src/composition/installation-config.ts):
   `loadInstallationConfiguration` reads `presets.includeDefaults` and `presets.files`.
-  Bundled defaults are `standard-codex` and `standard-openclaw`; custom DevDay
+  Bundled defaults are `default-codex`, `standard-codex`, and `standard-openclaw`; custom DevDay
   files are loaded only when explicitly listed. Production and PostgreSQL development composition pass generic
   name/template definitions to OCC and call `initializeDefaultPresets`.
 
@@ -42,6 +42,7 @@ graph TD
   B --> C["Store Namespace-owned Preset"]
   C --> D["Console reads selected Preset once"]
   D --> E["User supplies variables and selects Use Preset"]
+  D -->|Default quick-start without variables| F
   E --> F["Renderer copies launch settings"]
   F --> G["Chooser closes; user edits and saves ordinary draft"]
   G --> S["Password input: create Secret in current Namespace"]
@@ -124,7 +125,21 @@ path records mutations and denials without template or variable contents.
 `apps/controller/src/console/agents/presets.mjs:createPresetFields`
 
 [`createPresetFields`](../../apps/controller/src/console/agents/presets.mjs)
-lists only readable Presets, then reads the selected resource once. The user
+lists only readable Presets, then reads the selected resource once. The
+**Start with default Preset** button uses the listed `default-codex` ID through
+that same exact-resource read. It applies variable-free templates immediately;
+customized variable definitions retain the ordinary chooser. Missing defaults or
+failed list/read requests cannot open a hidden hardcoded starter. Other readable
+Presets remain selectable.
+
+The shipped `deploy/presets/default-codex.json` also supplies the public
+`/console/default-codex-preset.mjs` module through
+`apps/controller/src/console-assets.ts:readConsoleAsset`. The form's
+`configurationTemplate` reads that base for empty templates, explicit reset, and
+Harness transitions, then adds model routing. The module contains only the public
+bundled definition; it does not expose installed Namespace templates.
+
+The user
 reviews prefilled scalar defaults and fills typed inputs. The bound password
 variable offers a new masked token or an existing same-Namespace Secret. The
 chooser fetches only Secret metadata, validates the original template, and replaces
@@ -232,6 +247,8 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-26 18:52: Load the plain console starter from the installed default-codex Preset and share its shipped configuration base (codex/01a0df07-06ad-7ef3-8cb9-3e4cbf7beac6 - e4a807e785e1a242e27200c8e8396f58136cbbc6)
 
 - 2026-09-26 00:31: Grant ordinary drafts access to model Secrets already bound in Presets. (authoring-run/27646efe-b5bb-44a4-8d76-0506bd266237 - e387b38cc259ee4a55936ecb848bbce8210bcd68)
 

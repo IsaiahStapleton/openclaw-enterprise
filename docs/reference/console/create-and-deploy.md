@@ -26,7 +26,7 @@ Presets and edited Configuration JSON retain their settings.
 2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
    **Use Preset**. Review defaults and choose an existing or new model Secret.
    The form opens with editable settings.
-   Select **Start without Preset** to use standard defaults.
+   Select **Start with default Preset** to load the installed `default-codex` copy.
 3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
    **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
    **Codex** and also offers **OpenClaw**; Anthropic currently offers only
@@ -103,8 +103,7 @@ require IAM administration permission.
 
 Presets retain their authentication binding. API-key and Service Accounts Presets
 fix the provider, including JSON edits; saved service account tokens also fix Codex.
-Operator-managed credentials fix OpenClaw across provider changes. Start without a
-Preset to change these choices, or edit authentication later in **Credentials**.
+Operator-managed credentials fix OpenClaw across provider changes. Start with `default-codex` to change these choices, or edit authentication later in **Credentials**.
 
 Provider changes reset Harness, credential, and model; authentication-method changes
 reset credential/model. Switching an unsaved PAT to OpenClaw selects API-key auth

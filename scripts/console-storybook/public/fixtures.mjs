@@ -1,3 +1,4 @@
+import defaultCodexPreset from "/console/default-codex-preset.mjs";
 import standardCodexPreset from "/console/standard-codex-preset.mjs";
 import standardOpenclawPreset from "/console/standard-openclaw-preset.mjs";
 import devdayPreset from "/console/devday-preset.mjs";
@@ -263,7 +264,14 @@ export function installFixture(scenario, evidence) {
   if (scenario.presetWorkspaceFiles) {
     preset.template.agent.initialWorkspaceFiles = structuredClone(scenario.presetWorkspaceFiles);
   }
-  const presets = [preset];
+  const presets = [
+    preset,
+    {
+      ...structuredClone(defaultCodexPreset),
+      id: "pre_default_codex",
+      namespaceId,
+    },
+  ];
   if (scenario.devdayPreset) {
     for (const [name, definition] of [
       ["standard-codex", standardCodexPreset],

@@ -55,7 +55,7 @@ To reuse more settings, add fields from the [Preset contract](../../reference/pr
    [Namespace IAM](../../reference/authorization.md#manage-namespace-policy).
 2. Choose **embedded-agent** in **Preset template**, enter the `name` variable,
    and select **Use Preset**. The chooser closes and the Agent form opens with
-   the rendered copy. To use standard defaults, select **Start without Preset**.
+   the rendered copy. To load the installed `default-codex` copy, select **Start with default Preset**.
 3. Review the model, execution mode, native Configuration JSON, authentication,
    plugin selections, and workspace files under Advanced settings. Configure Slack
    Secrets in its channel drawer. Edit any copied setting and fill

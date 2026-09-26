@@ -165,3 +165,6 @@ export const CreatePresetNavigation = story("createPresetNavigation");
 export const PresetVariableNavigation = story("presetVariableNavigation");
 
 export const RepositoryNavigationOutage = story("createRepositoryNavigationOutage");
+
+export const DefaultPresetLoading = story("createDefaultPresetLoading");
+export const DefaultPresetDenied = story("createDefaultPresetDenied");

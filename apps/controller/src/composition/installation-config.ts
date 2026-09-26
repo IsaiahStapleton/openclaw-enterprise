@@ -591,6 +591,7 @@ export async function loadInstallationConfiguration(options: {
   const defaultPresetNames = new Set<string>();
   if (includeDefaults) {
     for (const preset of [
+      "../../../../deploy/presets/default-codex.json",
       "../../../../deploy/presets/standard-codex.json",
       "../../../../deploy/presets/standard-openclaw.json",
     ]) {

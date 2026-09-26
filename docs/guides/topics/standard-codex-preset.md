@@ -26,7 +26,7 @@ Read the enforcement boundary below before deploying.
 
 ## Install and select
 
-To include both bundled Presets (`standard-codex` and `standard-openclaw`) automatically, add this to the Installation YAML
+To include the three [bundled Presets](../../reference/presets.md#configuration-inventory) automatically, add this to the Installation YAML
 selected by `OCC_CONFIG_PATH`, then restart the API:
 
 ```yaml

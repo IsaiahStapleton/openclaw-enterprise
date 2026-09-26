@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 
+import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
 import { backendSummariesFromDefinitions } from "../../apps/controller/src/composition/installation-config.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
@@ -134,6 +135,13 @@ export async function createConsoleAppFixture(t, options = {}) {
   const secretDriver = Object.hasOwn(options, "secretDriver")
     ? options.secretDriver
     : createTestSecretDriver({ id: "console-secret" });
+  let configurationDriver = options.configurationDriver;
+  if (configurationDriver === undefined && options.defaultPresets?.length) {
+    // Preset seeding requires native value validation, so use the real storage Driver.
+    const root = await mkdtemp(join(tmpdir(), "occ-console-presets-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    configurationDriver = new FilesystemConfigurationDriver(root);
+  }
   let controller;
   const appOptions = {
     metrics: options.metrics,
@@ -149,7 +157,7 @@ export async function createConsoleAppFixture(t, options = {}) {
         discoverHarnessModels: options.discoverHarnessModels,
       }),
     configurationDriver:
-      options.configurationDriver ?? createTestConfigurationDriver({ id: "console-configuration" }),
+      configurationDriver ?? createTestConfigurationDriver({ id: "console-configuration" }),
     ...(secretDriver === undefined || secretDriver === null ? {} : { secretDriver }),
     ...(publicOrigin === undefined ? {} : { publicOrigin }),
     ...(options.nativeAdmin === undefined ? {} : { nativeAdmin: options.nativeAdmin }),

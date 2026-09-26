@@ -18,6 +18,7 @@ await copyFile(
 
 // Preview shipped Presets so screenshots follow their current contracts.
 for (const name of [
+  "default-codex",
   "standard-codex",
   "standard-openclaw",
   "devday",

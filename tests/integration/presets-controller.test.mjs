@@ -747,9 +747,18 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
   const namespace = await fixture.createNamespace("Default catalog", { ready: true });
   const list = await fixture.request("GET", collection(namespace.id));
   assert.equal(list.status, 200);
-  const defaultNames = [customPreset.name, "standard-codex", "standard-openclaw"].sort();
+  const defaultNames = [
+    customPreset.name,
+    "default-codex",
+    "standard-codex",
+    "standard-openclaw",
+  ].sort();
   assert.deepEqual(list.data.map((preset) => preset.name).sort(), defaultNames);
-  assert.equal(list.data[0].template.variables.modelSecret.type, "password");
+  assert.equal(
+    list.data.find((preset) => preset.name === "standard-codex").template.variables.modelSecret
+      .type,
+    "password",
+  );
   const customDefault = list.data.find((preset) => preset.name === customPreset.name);
   assert.ok(customDefault, `missing ${customPreset.name}`);
   assert.equal(customDefault.template.variables.model.default, "gpt-6-astra");

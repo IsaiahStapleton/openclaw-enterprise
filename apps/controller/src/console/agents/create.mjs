@@ -1,3 +1,4 @@
+import defaultCodexPreset from "../default-codex-preset.mjs";
 import { element, button } from "../dom.mjs";
 import { WORKSPACE_DEFAULTS, WORKSPACE_DEFAULTS_ID } from "../workspace-defaults.mjs";
 import { harnessAuthDescription } from "./harness-auth.mjs";
@@ -67,15 +68,7 @@ function configurationTemplate(harnessId, nativeProvider, providerModel) {
   };
 
   return {
-    gateway: {
-      mode: "local",
-      bind: "lan",
-      controlUi: {
-        enabled: true,
-        allowedOrigins: ["http://127.0.0.1:18789", "http://localhost:18789"],
-      },
-      http: { endpoints: { chatCompletions: { enabled: true } } },
-    },
+    ...structuredClone(defaultCodexPreset.template.configuration.values),
     ...(providerModel
       ? {
           agents: {
@@ -87,29 +80,10 @@ function configurationTemplate(harnessId, nativeProvider, providerModel) {
           models: { providers: provider },
         }
       : {}),
-    ...(harnessId === "codex"
-      ? {
-          // Codex model transport must use its authenticated app server, never direct HTTP.
-          plugins: {
-            allow: ["codex"],
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    mode: "guardian",
-                    approvalPolicy: "on-request",
-                    sandbox: "read-only",
-                    transport: "websocket",
-                    url: "${APP_SERVER_URL}",
-                    authToken: "${APP_SERVER_TOKEN}",
-                  },
-                },
-              },
-            },
-          },
-        }
-      : {}),
+    plugins:
+      harnessId === "codex"
+        ? structuredClone(defaultCodexPreset.template.configuration.values.plugins)
+        : undefined,
   };
 }
 
@@ -223,6 +197,9 @@ export function renderCreateAgent(context, draft) {
     return;
   }
   context.setDraftCapture(null);
+  const presets = createPresetFields(context, (rendered, options) =>
+    renderAgentForm(context, rendered, options),
+  );
   context.view.replaceChildren(
     link("← Agents", "agents", context),
     element(
@@ -234,7 +211,7 @@ export function renderCreateAgent(context, draft) {
         { className: "muted" },
         "Choose a model, connect repositories, and give your Agent a place to work.",
       ),
-      button("Start without Preset", () => renderAgentForm(context, {}), { className: "primary" }),
+      presets.startDefault,
     ),
     element(
       "section",
@@ -245,9 +222,7 @@ export function renderCreateAgent(context, draft) {
         { className: "muted" },
         "Start from a Preset to reuse your team's configuration.",
       ),
-      createPresetFields(context, (rendered, options) =>
-        renderAgentForm(context, rendered, options),
-      ),
+      presets.section,
     ),
   );
 }
@@ -456,7 +431,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
           "p",
           { className: "hint" },
           hasBoundModelCredential
-            ? "This Preset's saved credential and provider are fixed. Start without a Preset to use a different provider."
+            ? "This Preset's saved credential and provider are fixed. Start with default-codex to use a different provider."
             : "This Preset's saved authentication source is preserved.",
         )
       : element(
@@ -1240,7 +1215,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     codexOption.disabled = nativeProvider.value === "anthropic";
     harnessHint.textContent =
       harness.disabled && usesPat
-        ? "This saved service account token requires Codex. Create a new draft without a Preset to use OpenClaw with an API key."
+        ? "This saved service account token requires Codex. Start with default-codex to use OpenClaw with an API key."
         : "OpenClaw is available for both providers. OpenAI defaults to Codex; Anthropic uses OpenClaw.";
     if (binding?.method === "runtime") {
       harnessHint.textContent =

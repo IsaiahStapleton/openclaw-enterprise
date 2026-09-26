@@ -4,7 +4,7 @@ const revision =
   "/console/agents/agt_00000000-0000-4000-8000-000000000001?namespace=ns_00000000-0000-4000-8000-000000000001&revision=rev_00000000-0000-4000-8000-000000000001";
 const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-000000000001";
 const click = (text) => ({ click: text });
-const form = [click("Start without Preset")];
+const form = [click("Start with default Preset")];
 const readyForm = [
   ...form,
   { selector: "#agent-name", value: "Research assistant" },
@@ -1354,12 +1354,27 @@ export const scenarios = {
     description:
       "Missing Secret create permission leaves the draft available with its password masked. No Agent is created.",
   },
+  createDefaultPresetLoading: {
+    group: "Pages/Create Agent",
+    name: "Loading default Preset",
+    path: create,
+    rules: [{ path: presetSecretsPath.replace(/secrets$/, "presets"), hold: true }],
+    description: "Quick-start waits for the authorized Namespace Preset list.",
+  },
+  createDefaultPresetDenied: {
+    group: "Pages/Create Agent",
+    name: "Default Preset access denied",
+    path: create,
+    rules: [{ path: presetSecretsPath.replace(/secrets$/, "presets"), status: 403 }],
+    description: "Denied Preset access leaves quick-start disabled and reports the error.",
+  },
   createNoPresets: {
     group: "Pages/Create Agent",
     name: "No Presets",
     path: create,
     emptyPresets: true,
-    description: "Creation remains available without a Preset.",
+    description:
+      "The default starter is unavailable until an administrator installs a readable Preset.",
   },
   createBoundCredentialPreset: {
     group: "Pages/Create Agent",
@@ -1423,7 +1438,7 @@ export const scenarios = {
       click("Use Preset"),
     ],
     description:
-      "A Preset with a saved service account token keeps its OpenAI provider and Codex harness fixed because the credential requires Codex. Start without a Preset to choose OpenClaw with an API key.",
+      "A Preset with a saved service account token keeps its OpenAI provider and Codex harness fixed because the credential requires Codex. Start with default-codex to choose OpenClaw with an API key.",
   },
   createModels: {
     group: "Pages/Create Agent",
@@ -2405,7 +2420,7 @@ export const scenarios = {
     description:
       "Create a Dedicated Agent from the no-Preset form after editing IDENTITY.md and clearing USER.md, then inspect the seeded workspace after simulated provisioning.",
     steps: [
-      "Start without Preset, enter a demo Agent name, keep OpenAI with the Codex harness, enter a dummy API key or service account token, and choose a listed model or enter a model ID manually.",
+      "Start with default Preset, enter a demo Agent name, keep OpenAI with the Codex harness, enter a dummy API key or service account token, and choose a listed model or enter a model ID manually.",
       "Review AGENTS.md, SOUL.md, IDENTITY.md, and USER.md. Edit IDENTITY.md, leave USER.md empty, and create the Agent.",
       "Wait for automatic provisioning and deployment activation; the Console then opens Workspace files for the returned revision.",
       "Open Workspace files and inspect IDENTITY.md or USER.md to confirm the fixture carried the creation-time file contents into the deployed workspace.",
@@ -2432,7 +2447,7 @@ export const scenarios = {
     description:
       "Guided create-form state with one existing simulated Slack Secret and one newly created simulated Secret staged into the Agent Configuration.",
     steps: [
-      "Start without Preset and enter the Agent name.",
+      "Start with default Preset and enter the Agent name.",
       "Open Configure Slack, choose the existing Slack app Secret, create a new Slack bot Secret from the modal, and allow everyone in the selected channel.",
       'Apply channel settings. The form receives channel JSON with users: ["*"] and Secret binding JSON while token values stay hidden.',
       "Create the Agent to persist the Configuration and let the controller grant the Agent access to the staged Slack Secrets.",

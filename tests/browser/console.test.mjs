@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { chromium } from "playwright";
 
-import { createConsoleAppFixture } from "../helpers/console-app.mjs";
+import { createConsoleAppFixture as createBaseConsoleAppFixture } from "../helpers/console-app.mjs";
+
+const defaultCodexPreset = JSON.parse(
+  await readFile(new URL("../../deploy/presets/default-codex.json", import.meta.url), "utf8"),
+);
+const createConsoleAppFixture = (t, options = {}) =>
+  createBaseConsoleAppFixture(t, { defaultPresets: [defaultCodexPreset], ...options });
 
 const routeHoldTimeoutMs = 30_000;
 
@@ -466,7 +472,7 @@ test("console keeps loaded route families visible while return reads refresh", a
   await page.getByRole("link", { name: "← Agents", exact: true }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
   await page.getByRole("heading", { name: "Create Agent", exact: true }).waitFor();
-  await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).fill("Retained draft Agent");
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
@@ -612,7 +618,7 @@ test("a replacement session for the same user discards retained creation drafts"
   const namespace = await fixture.createNamespace("Session replacement", { ready: true });
   const { page } = await newPage(t, fixture);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
-  await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).fill("Old session draft");
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
@@ -633,7 +639,7 @@ test("a replacement session for the same user discards retained creation drafts"
   assert.equal(await page.locator("#agent-name").count(), 0);
   assert.equal(await page.locator(".content [inert]").count(), 0);
   await releaseHeldRoute(page, "**/namespaces", pending);
-  await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
 });
 

@@ -846,6 +846,7 @@ test("Installation default Presets are opt-in and reject ambiguous YAML settings
     environment: { OCC_CONFIG_PATH: await fixture(t, enabled) },
   });
   assert.deepEqual(enabledRuntime.defaultPresets.map((preset) => preset.name).sort(), [
+    "default-codex",
     "standard-codex",
     "standard-openclaw",
   ]);
