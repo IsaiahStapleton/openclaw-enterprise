@@ -1154,6 +1154,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         request,
         agentName: () => name.value,
         secretBindings: configurationSecretBindings,
+        isCurrent: context.isCurrent,
+        onExpired: context.onExpired,
       },
       copy: {
         editableDescription:
