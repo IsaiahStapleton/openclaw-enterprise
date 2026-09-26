@@ -1933,6 +1933,14 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     revisionId: dedicated.id,
     ready: true,
   });
+  const runtimeGatewayPolicyIndex = dedicatedReconciled.findIndex(
+    ({ kind, metadata }) =>
+      kind === "NetworkPolicy" && metadata.name.startsWith("allow-gateway-agent-"),
+  );
+  const runtimeAgentPolicyIndex = dedicatedReconciled.findIndex(
+    ({ kind, metadata }) =>
+      kind === "NetworkPolicy" && metadata.name.startsWith("allow-agent-runtime-"),
+  );
   const statusGatewayPolicyIndex = dedicatedReconciled.findIndex(
     ({ kind, metadata }) =>
       kind === "NetworkPolicy" && metadata.name.startsWith("allow-plugin-status-gateway-"),
@@ -1950,13 +1958,41 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   const dedicatedGatewayDeploymentIndex = dedicatedReconciled.findIndex(
     ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("gateway-"),
   );
+  assert.ok(runtimeGatewayPolicyIndex >= 0);
+  assert.ok(runtimeAgentPolicyIndex >= 0);
   assert.ok(statusGatewayPolicyIndex >= 0);
   assert.ok(statusAgentPolicyIndex >= 0);
   assert.ok(dedicatedAgentServiceIndex >= 0);
   assert.ok(dedicatedGatewayDeploymentIndex >= 0);
+  assert.ok(runtimeGatewayPolicyIndex < dedicatedGatewayDeploymentIndex);
+  assert.ok(runtimeAgentPolicyIndex < dedicatedGatewayDeploymentIndex);
   assert.ok(statusGatewayPolicyIndex < dedicatedGatewayDeploymentIndex);
   assert.ok(statusAgentPolicyIndex < dedicatedGatewayDeploymentIndex);
   assert.ok(dedicatedAgentServiceIndex < dedicatedGatewayDeploymentIndex);
+  assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].metadata.namespace, cp);
+  assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].spec.podSelector.matchLabels, {
+    "openclaw.dev/namespace": dedicated.namespaceId,
+    "openclaw.dev/workload-role": "gateway",
+    "openclaw.dev/agent": dedicated.agentId,
+  });
+  assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].spec.egress[0].ports, [
+    { protocol: "TCP", port: 18790 },
+    { protocol: "TCP", port: 18791 },
+  ]);
+  assert.deepEqual(
+    dedicatedReconciled[runtimeAgentPolicyIndex].metadata.namespace,
+    dedicatedNamespace,
+  );
+  assert.deepEqual(dedicatedReconciled[runtimeAgentPolicyIndex].spec.podSelector.matchLabels, {
+    "openclaw.dev/namespace": dedicated.namespaceId,
+    "openclaw.dev/workload-role": "agent",
+    "openclaw.dev/agent": dedicated.agentId,
+    "openclaw.dev/revision": dedicated.id,
+  });
+  assert.deepEqual(dedicatedReconciled[runtimeAgentPolicyIndex].spec.ingress[0].ports, [
+    { protocol: "TCP", port: 18790 },
+    { protocol: "TCP", port: 18791 },
+  ]);
 });
 
 test("Kubernetes plugin runtime status requires the exact ready Pod report", async (t) => {
@@ -2547,13 +2583,7 @@ test("Codex gateway supervisor applies broker-only bridge runtime without select
   const revisionId = "revision-plugin-compute-1";
   const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() }), {
     host: "git.oce.svc",
-    port: 443,
-    allowMethods: ["POST"],
-    domains: { "github.com": "allow" },
-    privateEndpoints: [
-      { host: "metrics.internal", port: 9443, allowMethods: ["GET"] },
-      { host: "git.oce.svc", port: 443, allowMethods: ["POST"] },
-    ],
+    domains: { "github.com": "allow", "*.oce.svc": "deny" },
   });
   const files = new Map([
     [
@@ -2649,13 +2679,14 @@ test("Codex gateway supervisor applies broker-only bridge runtime without select
   assert.equal(effective.plugins.entries.codex.config.codexPlugins, undefined);
   assert.deepEqual(effective.plugins.entries.codex.config.appServer.networkProxy, {
     enabled: true,
-    mode: "limited",
-    allowLocalBinding: false,
-    domains: { "github.com": "allow", "git.oce.svc": "allow" },
-    privateEndpoints: [
-      { host: "metrics.internal", port: 9443, allowMethods: ["GET"] },
-      { host: "git.oce.svc", port: 443, allowMethods: ["POST"] },
+    mode: "full",
+    allowLocalBinding: true,
+    readOnlyPaths: [
+      "/app/node_modules/openclaw",
+      "/opt/oce/repository-credentials",
+      "/run/oce/repository-credentials",
     ],
+    domains: { "github.com": "allow", "*.oce.svc": "deny", "git.oce.svc": "allow" },
   });
   const status = readStatusFromHandler(statusHandler);
   assert.deepEqual(status, {
@@ -2748,10 +2779,7 @@ test("Kubernetes dedicated Codex gateway mounts broker-only runtime without plug
   const driver = createKubernetesComputeDriver(kubernetesOptions());
   const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() }), {
     host: "git.oce.svc",
-    port: 443,
-    allowMethods: ["POST"],
     domains: {},
-    privateEndpoints: [{ host: "git.oce.svc", port: 443, allowMethods: ["POST"] }],
   });
   const deployment = driver.deployment(
     "gateway-plugin-compute-rev",
@@ -2797,6 +2825,74 @@ test("Kubernetes dedicated Codex gateway mounts broker-only runtime without plug
   );
   assert.equal(
     container.env.some((variable) => variable.name === "OPENCLAW_PLUGIN_STATUS_CONTAINER"),
+    false,
+  );
+});
+
+test("Kubernetes embedded OpenClaw gateway mounts broker-only Codex bridge runtime", async () => {
+  const driver = createKubernetesComputeDriver(kubernetesOptions());
+  const candidate = revision({
+    harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    plugins: codexNoPluginState(),
+  });
+  const runtime = pluginRuntimeSpecForRevision(candidate, {
+    host: "git.oce.svc",
+    domains: {},
+  });
+  const deployment = driver.deployment(
+    "gateway-plugin-compute-rev",
+    {
+      namespaceId: tenant.id,
+      agentId: agent.id,
+      revisionId: "revision-plugin-compute-1",
+    },
+    "oce-plugin-compute",
+    "openclaw-enterprise/gateway-fixture:local",
+    "gateway-plugin-compute",
+    "gateway",
+    {},
+    "info",
+    driver.gatewayConfiguration(candidate, undefined, "oce-plugin-compute"),
+    true,
+    candidate.servicePrincipalId,
+    driver.harnessAuthForRevision(
+      candidate,
+      {
+        harnessAuth: {
+          ...candidate.harnessAuth,
+          backendRef: {
+            namespaceName: "oce-plugin-compute",
+            name: "plugin-model-key",
+            key: "value",
+            uid: "plugin-model-key-uid",
+          },
+        },
+      },
+      "oce-plugin-compute",
+    ),
+    [],
+    [],
+    { name: "plugin-runtime-gateway-plugin-compute", runtime },
+  );
+
+  const pod = deployment.spec.template.spec;
+  assert.equal(
+    pod.volumes.some(
+      (volume) => volume.configMap?.name === "plugin-runtime-gateway-plugin-compute",
+    ),
+    true,
+  );
+  const container = pod.containers[0];
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_MANIFEST_ENVIRONMENT),
+    true,
+  );
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_CODEX_CONFIG_ENVIRONMENT),
+    false,
+  );
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT),
     false,
   );
 });

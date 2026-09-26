@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-25
-last_updated_session: authoring-run/79b51ae7-5ded-47f2-bb2f-ebcb115445d0
+updated: 2026-09-26
+last_updated_session: authoring-run/c29b3860-d1f0-4a14-a264-49090586cb20
 ---
 
 # Container publication flow
@@ -81,7 +81,9 @@ source commit. BuildKit rewrites image and filesystem timestamps to that epoch,
 so wall-clock time does not change the image manifests on a cold-cache rebuild.
 
 `deploy/runtime/Dockerfile:openclaw-source` verifies the pinned source archive and
-applies the reviewed Codex 0.156.0 dependency/lockfile patch. Both installs use
+applies the reviewed Codex 0.156.0 dependency/lockfile patch, selecting stock
+packages without modifying their binary. The OpenClaw bridge forwards the bound
+Agent's stock network settings. Both installs use
 frozen lockfiles and upstream's selected-plugin manifests, retaining required
 bundled plugins plus Codex and Slack. The standalone Codex command links to the
 plugin's installation. Build tools remain in full Bookworm stages; final images
@@ -90,11 +92,15 @@ use a separately pinned Node 24 Bookworm slim base.
 `scripts/build-runtime-assets.mjs` removes development/QA source, extension tests,
 and documentation media, while retaining runtime templates, skills, and help.
 It follows importer-relative runtime dependencies to remove unreachable pnpm
-store entries without collapsing distinct package versions. It writes a content
-inventory and provenance containing source, patch, lockfile,
-and inventory hashes. The runtime copies the assembled directory directly;
-there is no gzip archive or second Codex installation. Upstream import-closure
-and native-addon checks remain. See the [runtime recipe](../../deploy/runtime/README.md).
+store entries without collapsing distinct package versions. It writes initial
+provenance containing source, patch, lockfile, and inventory hashes. The runtime
+copies the assembled directory directly; there is no gzip archive or second
+Codex installation. After final-stage permission normalization, the inventory
+helper rewrites `contents.json` from `/app/node_modules/openclaw` and updates
+`runtimeContentsSha256` and the stock `codex` package/binary identity. Provenance
+therefore describes the final runtime tree. Upstream
+import-closure and native-addon checks remain. See the
+[runtime recipe](../../deploy/runtime/README.md).
 
 ### 2. Verify and assemble both platform variants
 
@@ -171,6 +177,11 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-26 09:07: Retain final runtime provenance while selecting stock Codex packages and forwarding stock broker network settings. (authoring-run/c29b3860-d1f0-4a14-a264-49090586cb20 - 20123a3aa96021391616e918deee0ce60b009fa3)
+  Removed the custom Codex private-endpoint requirement. (NOT_IN_SPEC)
+
+- 2026-09-26 02:37: Recompute runtime contents after final-stage Codex replacement and permission normalization so provenance describes the final OpenClaw package tree. (authoring-run/5396927a-061a-4dda-b2d1-d3975a89c1e8 - 2ba56d35)
 
 - 2026-09-25 00:51: Pin build timestamps to the source commit and exclude exporter-only annotations from registry image identity so same-source publication is idempotent when resolved inputs are unchanged. (authoring-run/79b51ae7-5ded-47f2-bb2f-ebcb115445d0 - 0f3a4789)
 
