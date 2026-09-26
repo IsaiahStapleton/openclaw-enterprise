@@ -150,6 +150,18 @@ requires a current nonempty repository selection before retrying. GitHub App
 setup, Namespace approvals, runtime images, and credential-service networking
 remain operator prerequisites; the fixture does not verify them.
 
+### Return to loaded pages
+
+Use **Pages/Navigation → Return to loaded pages** to revisit collections,
+Create Agent, Agent detail, and Settings during delayed reads. Exercise breadcrumbs,
+sidebar links, Back/Forward, Refresh, and refocus. First visits may load; returning
+pages should preserve content while revalidating. Namespace switches clear old rows.
+
+**Return Backend access denied** checks Installation-wide denial. **Return access denied** and **Return session expired** must remove retained private
+content when the response arrives. These fixtures prove presentation; the
+[browser suite](../testing/local.md#console-browser-checks) owns authorization proof.
+Reset story clears retained state.
+
 ### Keep edits while navigating
 
 Use **Pages/Agent detail → Keep Configuration edits**, **Components/Workspace →
@@ -168,38 +180,31 @@ not backend persistence or live gateway proof.
 
 ### Choose and switch revision Secrets
 
-Open **Components / Credentials / Slack tokens stored** to inspect the current
-model, app-token, and bot-token Secret references. Select **Create new Secret...**,
-then **Cancel** to preserve the selection without writing a Secret. Choosing an
-existing Secret stages a binding; the relevant Save button applies it. Switching
-the app token leaves the bot token unchanged. The API-key switch story provides a
-second model Secret.
+In **Components / Credentials / Slack tokens stored**, inspect all three Secret
+references. Cancel **Create new Secret...** without writing; select an existing
+Secret, then Save. Switching app tokens preserves the bot binding. The API-key
+switch story supplies a second model Secret.
 
-**Secret list denied** preserves existing references when metadata cannot be
-listed. **Slack grant denied** shows the saved reference and explains that the
-Agent still needs access to that Secret; it does not report deployment readiness.
+**Secret list denied** retains bound IDs. **Slack grant denied** preserves the
+saved reference but requires Agent access recovery before deployment.
 
 Review the [bound model Secret](../assets/revision-secret-picker/harness-bound.png),
 [staged Slack switch](../assets/revision-secret-picker/slack-switch.png),
 [creation dialog](../assets/revision-secret-picker/create-secret.png),
 [denied list](../assets/revision-secret-picker/list-denied.png),
 [denied grant](../assets/revision-secret-picker/grant-denied.png), and
-[walkthrough](../assets/revision-secret-picker/walkthrough.mp4). These use dummy
-Storybook data and prove UI behavior only, not live authorization, credential
-validity, or deployment.
+[walkthrough](../assets/revision-secret-picker/walkthrough.mp4) using simulated data.
 
 ### Inspect bound Secrets in revisions
 
-Open **Components/Channels → Revision read only**. Verify the Slack app and bot
-Secret names and IDs, then switch to **Configuration** to inspect Harness
-authentication. Bindings belong to the selected revision; names come from current
-metadata. Values never appear.
+In **Components/Channels → Revision read only**, inspect Slack Secret identities;
+switch to **Configuration** for Harness authentication. Bindings belong to the
+revision; names are current metadata. Values never appear.
 
 **Revision Secret metadata denied**, **Revision Secret metadata missing**, and
 **Revision Secret metadata loading** retain IDs during failed or pending reads.
 **Revision without Slack bindings** shows **No Secret bound**.
-Fixtures prove presentation; browser integration checks exercise real API/IAM
-with in-memory state.
+Browser integration checks separately exercise real API/IAM with in-memory state.
 
 ### Discover and configure plugins
 
