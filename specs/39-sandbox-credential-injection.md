@@ -1,447 +1,300 @@
-# RFC: Sandbox credential injection for Harness model credentials
+# RFC: Credential Gateway Driver for Sandbox-injected credentials
 
-**Date:** 2026-09-24
+**Date:** 2026-09-26
 **Status:** Proposed; not implemented or approved.
-**Owner:** Harness runtime integration and the OpenShell SandboxDriver.
-**Source baseline:** `codex/openshell-repeatable-environment-pr325` at `1364f085`;
-OpenShell [`v0.1.0-pre.7`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0-pre.7) (`f8002d19`).
+**Owner:** Driver contracts, Agent deployment, and the OpenShell integration.
+**Source baseline:** OCE `main` at `64ab72ae`; OpenShell
+[`v0.1.0-pre.7`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0-pre.7) (`f8002d19`).
+The OpenShell facts below must be rechecked against `v0.1.0-pre.12` before acceptance.
 
 ## Problem and decision
 
-Kubernetes Compute delivers an Agent's `api_key` harness credential as a
-`secretKeyRef` environment entry. The [OpenShell SandboxDriver](../docs/reference/drivers/openshell-sandbox.md)
-rejects that entry because stock OpenShell cannot receive it, so every
-OpenShell-selected deployment fails before Sandbox creation. Making OpenShell
-accept Secret-backed environment variables would still place the real key in the
-Harness process, which the [target design](../docs/design/safeguards.md#secret-access)
-treats as a temporary exception: the Harness should receive only scoped substitutes.
+Agents need credentials for model providers, source control, cloud APIs, and
+package registries. OCE delivers them today as Kubernetes `secretKeyRef`
+environment entries, which puts the real value in the Harness process. The
+[target design](../docs/design/safeguards.md#secret-access) calls this a temporary
+exception: the Harness should receive only scoped substitutes.
 
-OpenShell already provides that substitute. A gateway-stored _provider_ holds the
-credential, the Sandbox process receives a placeholder, and the supervisor's
-egress proxy replaces the placeholder only on requests to endpoints bound to
-that provider.
+OpenShell keeps credentials out of the workload for every provider type it
+supports. Its gateway stores a _provider_, and the Sandbox's supervisor Pod
+applies it to outbound requests. The workload Pod has no direct egress and
+never receives a real value.
 
-Add an optional `CredentialInjector` contract to `SandboxDriver`, and a
-`substitution` delivery mode to the frozen harness-auth snapshot. When the
-revision's selected Sandbox implements the contract, Compute hands it the
-verified credential source instead of projecting a Secret. The OpenShell
-SandboxDriver implements it with per-revision providers. No new Driver
-capability, resource, or public API field is introduced.
+Add a `credential_gateway` Driver capability. It manages credential sources and
+their attachment to Agent revisions. How a credential reaches a request
+(placeholder substitution, proxy-inserted headers, request signing, or
+gateway-minted tokens) belongs to the implementation. OCE's contract never names
+those mechanisms. The OpenShell module implements both `sandbox` and
+`credential_gateway` through one shared `openshell` Backend.
+
+This follows the separate-capability direction of
+[PR #386](https://github.com/openclaw/openclaw-enterprise/pull/386) and the
+deferred `CredentialGatewayDriver` in the
+[archived Sandbox provisioning spec](.archive/13-sandbox-driver-provisioning.md).
+It omits #386's per-request `mediate` operation, because OCE is not on the
+request path when the Sandbox injects credentials.
 
 ## Scope
 
 In scope:
 
-- `api_key` harness auth for dedicated Codex with an `openai/` or `codex/` model,
-  on bundled Kubernetes Compute with the OpenShell SandboxDriver.
-- Deploying that combination without the model key entering the Harness Pod,
-  its environment, or any Kubernetes object in the Harness namespace, with a
-  revision-scoped credential lifecycle in OpenShell.
+- The `credential_gateway` Driver contract, the `openshell` Backend, and their
+  composition with the OpenShell SandboxDriver.
+- A Namespace-scoped `CredentialSource` resource, Agent bindings to it, and
+  Harness model authentication through a bound source.
+- Every OpenShell source type (see [the next section](#openshell-source-types)).
+- Withdrawing one Agent's access without affecting other Agents.
 
 Out of scope:
 
-- `codex_pat` and `chatgpt_service_account` under OpenShell. The entrypoint and
-  Codex inspect those tokens locally (`runtime-entrypoints.ts:1340-1359`), so a
-  placeholder cannot satisfy them. Admission keeps rejecting them.
+- The app-server transport token, projected workload token, workspace mounts,
+  plugin-runtime files, and Authorization stripping on exposed OpenShell routes.
+  These remain separate OpenShell blockers.
 - Embedded OpenClaw, which OpenShell already rejects.
-- The other stock pre.7 blockers: the app-server token `secretKeyRef`, the
-  projected workload token, PVC subpath mounts, plugin-runtime ConfigMap entries,
-  and Authorization stripping on exposed routes. OpenShell deployments still
-  fail closed on the first of these.
-- Credential injection without a Sandbox, such as the per-Agent model egress
-  proxy named by `TODO(model-egress-proxy)` in Kubernetes Compute
-  (`index.ts:6653`). See [Alternatives](#alternatives-considered).
-- Automatic rotation, gateway-managed refresh, and OAuth token grants.
+- Credential Gateway implementations without a Sandbox, such as a proxy for plain
+  Kubernetes Compute. The contract permits them; none is delivered here.
 
-## Upstream capabilities this design relies on
+## OpenShell source types
 
-Read from the pre.7 source; OpenShell `main` (`6c864ec`) is unchanged here.
+Sources: `docs/sandboxes/manage-providers.mdx:204-302` and
+`docs/providers/profiles.mdx:490-512,542-580` at `v0.1.0-pre.7`.
 
-| Capability                                                                                                            | Source                                                                             |
-| --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `CreateProvider`/`DeleteProvider` store raw values in the gateway credential store, encrypted by default.             | `proto/openshell.proto:282-415`; `docs/reference/gateway-config.mdx:425-472`       |
-| `SandboxSpec.providers` attaches workspace providers at Sandbox creation.                                             | `proto/openshell.proto:1016-1048`                                                  |
-| The supervisor puts `openshell:resolve:env:…` placeholders in the child environment and keeps values in its resolver. | `crates/openshell-core/src/secrets.rs:252-290`                                     |
-| On Kubernetes, the supervisor runs in a separate Pod; the workload Pod has empty egress and no provider credentials.  | `docs/kubernetes/sandbox-runtime.mdx:10-106`                                       |
-| The proxy substitutes only for the host, port, and path bound by the provider profile, and returns 403 otherwise.     | `docs/providers/profiles.mdx:49-80`; `docs/sandboxes/manage-providers.mdx:371-420` |
-| Credentialed endpoints require L7 inspection with TLS termination; `tls: skip` is rejected.                           | `docs/sandboxes/policies.mdx:65,433,735`                                           |
+| Source type                                                                                        | How OpenShell applies it                                                             | Inputs OCE supplies                                                |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `static`                                                                                           | Placeholder in the workload environment; the proxy substitutes it at bound endpoints | Secret values                                                      |
+| `external`                                                                                         | Same as `static`; an external owner pushes new values                                | Secret values, updated later                                       |
+| Gateway refresh: `oauth2_refresh_token`, `oauth2_client_credentials`, `google_service_account_jwt` | Gateway mints access tokens; the placeholder stays stable across rotations           | Secret and non-secret refresh material                             |
+| `aws_sts_assume_role`                                                                              | Gateway mints three credentials; the proxy re-signs requests with SigV4              | Role ARN, optional session settings and long-lived source keys     |
+| Token grant: `client_credentials`, `token_exchange`                                                | Supervisor obtains a token with its SPIFFE JWT-SVID; the proxy inserts the header    | Profile configuration; a stored subject token for `token_exchange` |
 
-Limits that shape the design:
-
-- Static keys are substituted only where the client already sends the placeholder,
-  for example in its `Authorization` header. The proxy does not add headers for
-  static credentials (`profiles.mdx:199-205`).
-- Providers are workspace-scoped. Any principal with workspace `user` can attach
-  any provider in that workspace to its own Sandbox (`crates/openshell-server/src/grpc/sandbox.rs:1224-1278`).
-- A profile's `binaries` affect policy composition but not placeholder resolution.
-  Binary-scoped injection is an upstream roadmap item (`profiles.mdx:206`).
-- There is no reference form: the gateway must receive the value itself.
+Every type binds credentials to profile endpoints and returns 403
+(`credential_endpoint_mismatch`) elsewhere. Providers belong to an OpenShell
+workspace, and any workspace `user` can attach any provider in it
+(`crates/openshell-server/src/grpc/sandbox.rs:1224-1278`).
 
 ## Contract
 
-### Revision snapshot
+### Composition
 
-Add a delivery mode to the secret-backed harness-auth snapshot:
+Add `credential_gateway` to `DRIVER_CAPABILITIES`
+(`packages/contracts/src/index.ts:42`) and an `openshell` Backend type. The
+Backend owns the gateway client and declares both required members, following
+the existing [Backend membership](../docs/reference/backends.md) pattern:
 
-```ts
-type HarnessCredentialDelivery =
-  { type: "env" } | { type: "substitution"; sandboxDriverId: string };
-
-// HarnessAuthSnapshot, api_key and codex_pat members:
-//   { method; source; secretDriverId; delivery: HarnessCredentialDelivery }
+```yaml
+backends:
+  - id: openshell
+    type: openshell
+    configuration: { endpoint: https://…, auth: { mode: bearerTokenFile, path: … } }
+    drivers: { sandbox: openshell-sandbox, credential_gateway: openshell-credentials }
 ```
 
-The public `HarnessAuthBinding` is unchanged. The Installation's Sandbox
-selection determines delivery, not the Agent author. Admission freezes the mode
-with the revision's pinned `sandboxDriverId`. A revision never switches between
-`env` and `substitution`; a later selection applies only to a later deployment.
+Startup rejects a selected `credential_gateway` whose Backend members are not
+both selected. The shared Backend replaces #386's `sandboxDriverId`
+configuration, and each role keeps its own selection.
 
-### CredentialInjector
+### Driver interface
 
 ```ts
-interface CredentialInjectionEndpoint {
-  readonly host: string;
-  readonly port: number;
-  readonly path: string; // glob, for example "/v1/**"
+interface CredentialGatewayDriver extends Driver {
+  readonly capability: "credential_gateway";
+  listSourceTypes(context: CredentialGatewayContext): Promise<readonly CredentialSourceType[]>;
+
+  registerSource(context: SourceContext, input: CredentialSourceInput): Promise<SourceStatus>;
+  updateSource(context: SourceContext, input: CredentialSourceInput): Promise<SourceStatus>;
+  rotateSource(context: SourceContext): Promise<SourceStatus>;
+  sourceStatus(context: SourceContext): Promise<SourceStatus>;
+  removeSource(context: SourceContext): Promise<void>;
+
+  attachForRevision(context: RevisionContext): Promise<readonly SourceAttachment[]>;
+  attachmentStatus(context: RevisionContext): Promise<readonly AttachmentStatus[]>;
+  withdraw(context: RevisionContext & { readonly sourceId: string }): Promise<AttachmentStatus>;
 }
 
-interface CredentialInjectionRequest {
-  readonly envName: string; // "OPENAI_API_KEY"
-  readonly endpoints: readonly CredentialInjectionEndpoint[];
+interface CredentialSourceType {
+  readonly type: string; // implementation-defined, for example "openai" or "aws"
+  readonly config: readonly FieldSpec[]; // non-secret inputs
+  readonly secrets: readonly FieldSpec[]; // inputs supplied as OCC Secret references
+  readonly rotation: "none" | "external" | "gateway";
+  readonly harnessAuth?: { readonly modelProvider: string; readonly loginMode: string };
 }
 
-interface CredentialInjectionGrant {
-  readonly envName: string;
-  readonly ref: string; // opaque to OCC; meaningful to the same SandboxDriver
+interface CredentialSourceInput {
+  readonly type: string;
+  readonly config: Readonly<Record<string, string>>;
+  readonly secrets: Readonly<Record<string, string>>; // resolved values, never persisted by OCC
 }
 
-interface CredentialInjector {
-  supports(input: {
-    readonly execution: "dedicated" | "embedded";
-    readonly method: HarnessAuthSnapshot["method"];
-    readonly requests: readonly CredentialInjectionRequest[];
-  }): { readonly supported: true } | { readonly supported: false; readonly reason: string };
-
-  prepareRevisionCredentials(
-    context: SandboxNamespaceContext & {
-      readonly revision: AgentRevisionIdentity;
-      readonly credentials: readonly {
-        readonly request: CredentialInjectionRequest;
-        readonly read: () => Promise<string>;
-      }[];
-    },
-  ): Promise<readonly CredentialInjectionGrant[]>;
-
-  releaseRevisionCredentials(
-    context: SandboxNamespaceContext & { readonly revision: AgentRevisionIdentity },
-  ): Promise<void>;
-}
-
-interface SandboxDriver {
-  // existing members …
-  credentialInjection?: CredentialInjector;
-}
-
-interface HarnessWorkloadRequirements {
-  // existing members …
-  injectedCredentials: readonly CredentialInjectionGrant[];
+interface SourceAttachment {
+  readonly sourceId: string;
+  readonly ref: string; // opaque; consumed by the paired SandboxDriver
 }
 ```
 
 Contract rules:
 
-- `supports` is pure and runs at admission. It must not contact the gateway.
-- `prepareRevisionCredentials` is idempotent for one revision. It returns exactly
-  one grant for each request, or throws. A replay with the same revision returns
-  the same grants.
-- `provisionHarness` must consume every grant in `injectedCredentials` and must
-  reject any grant it did not issue. Unconsumed grants fail provisioning.
-- `releaseRevisionCredentials` succeeds only after the stored copy is verifiably
-  gone, and treats an already-absent copy as success. Namespace `cleanup` removes
-  every copy the driver owns in that Namespace.
-- `read` returns the value of the exact admitted source. The injector must not
-  log, persist, or return it, and must call `read` only to transfer the value
-  into its credential store.
+- `listSourceTypes` is the implementation's catalog, like `PluginDriver.listCatalog`.
+  OCC validates inputs against it; unknown types and fields fail before any effect.
+- Register, update, and remove are idempotent for one source. The driver never
+  logs, returns, or persists a secret value outside its credential store.
+- `attachForRevision` returns one attachment per bound source or throws. The
+  paired SandboxDriver's `provisionHarness` must consume every attachment and
+  reject any it did not issue.
+- `withdraw` returns `withdrawn` only after the implementation observes the
+  attachment removed. Otherwise it returns `pending`, and retries continue.
+- `removeSource` fails while any active or candidate revision references the
+  source. Withdrawal never deletes shared source material.
 
-The harness integration, not the injector, owns the request. Compute's
-`prepareHarnessAuth` (`apps/controller/src/drivers/compute/kubernetes/index.ts:358-406`)
-maps `api_key` with a Codex `openai/` or `codex/` model to
-`{ envName: "OPENAI_API_KEY", endpoints: [{ host: "api.openai.com", port: 443, path: "/v1/**" }] }`.
+### Resource and bindings
 
-### Admission and worker recheck
+`CredentialSource` is a Namespace-scoped OCC resource: name, type, non-secret
+config, OCC Secret references for secret inputs, selected driver ID, and safe
+status. It fills the deferred `SecretBroker` slot in the
+[resource model](../docs/design/resources.md). Values stay with the Secret Driver
+and the credential store, and never enter OCC state, revisions, or audit.
 
-In `deployAgent` (`packages/occ/src/index.ts:2842`), after selecting the Sandbox:
+An Agent gains nullable `credentialSources: CredentialSourceReference[]`.
+Admission freezes the references, source types, and `credentialGatewayId` in the
+revision. `harnessAuth` gains `{ method: "credential_source"; sourceId }`. It
+requires a source type whose `harnessAuth.modelProvider` matches the configured
+model. With a credential gateway selected, secret-backed `harnessAuth` methods
+return 409; there is no fallback to environment delivery.
 
-1. If the selected Sandbox declares `credentialInjection`, secret-backed harness
-   auth must use `substitution`. Admission calls `compute.validateHarnessAuth`
-   as today, then `credentialInjection.supports(...)`. An unsupported result
-   returns 409 with the injector's reason. There is no fallback to `env`.
-2. If the Sandbox does not declare it, the existing `env` delivery and the
-   Sandbox's own environment validation apply unchanged.
-3. The existing actor and service-principal Secret `operate` checks apply to
-   both modes; substitution requires no new permission.
+IAM follows existing Secret patterns. Source create, read, update, and delete are
+exact-resource actions. Registration also requires `operate` on each referenced
+OCC Secret. Binding a source to an Agent requires `operate` on the source for the
+actor, and admission also requires it for `Agent.servicePrincipalId`.
 
-`credentialInjection` is an optional member, not a new `SANDBOX_FACETS` entry.
-Facets describe containment and carry no methods. Today OCC checks only that the
-facet list is well formed, and never checks a facet against a method, policy, or
-revision field. A driver that declares `credentialInjection` must implement all
-three methods and must declare the `networking` facet. Three sites validate
-Sandbox contracts, and each adds these checks:
+### Lifecycle and authority
 
-- startup `validateCreatedSandboxDriver` (`apps/controller/src/composition/installation-config.ts:891-909`);
-- OCC `driverHasCapabilityContract` (`packages/occ/src/index.ts:444-453`);
-- worker `validSandboxDriver` (`apps/controller/src/worker.ts:171-185`).
+| Operation                    | Caller                                       | OpenShell calls                                                                                              |
+| ---------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Create or update a source    | API, after authorization                     | `ImportProviderProfiles` (once per workspace), `CreateProvider`/`UpdateProvider`, `ConfigureProviderRefresh` |
+| Rotate                       | API                                          | `RotateProviderCredential` or `UpdateProvider`                                                               |
+| Source status                | API                                          | `GetProvider`, `GetProviderRefreshStatus`                                                                    |
+| Prepare a revision           | Worker, in Compute before `provisionHarness` | none; provider names placed in `SandboxSpec.providers`                                                       |
+| Attachment status            | Worker, before activation                    | `GetSandboxProviderStatus`                                                                                   |
+| Withdraw one Agent           | API, then worker                             | `DetachSandboxProvider`                                                                                      |
+| Retire a revision            | Worker                                       | Sandbox deletion removes its attachments; `attachmentStatus` verifies                                        |
+| Delete a source or Namespace | API or worker                                | `DeleteProvider`, then `GetProvider` must return not found                                                   |
 
-This is the first check that ties a facet to another contract member. It
-verifies the driver's declaration only, not enforcement. The bypass guarantee
-comes from the OpenShell workload fence and its integration proof; see
-[Network policy](#network-policy).
+The API reads each OCC Secret through a new `SecretDriver` method that returns
+the value only for an authorized Credential Gateway registration. The API holds
+the gateway principal with workspace `admin` and `provider:write`. The worker
+keeps only `sandbox:write`, so it can attach providers but not read or change
+them. An Agent's model credential, therefore, no longer passes through the
+worker, unlike the current `deliverHarnessAuth` copy.
 
-These sites already disagree. Startup does not check facet values, and the worker
-does not check duplicates or `configureAgent`. Aligning them is a separate
-cleanup, outside this RFC.
-
-The worker's `authorizeRevision` and `resolveRevisionSecretContext` keep their
-current checks. The resolved context carries the frozen delivery mode.
-
-### Compute rendering
-
-For `substitution`, `prepareHarnessAuth` returns the literal `CODEX_LOGIN_MODE`
-and model variables plus the injection requests, and no `secretKeyRef` for the
-model key. `deliverHarnessAuth` (`index.ts:6830-6921`) keeps its source
-ownership and UID check. Instead of copying the value into the revision's
-`harness-secrets-…` Secret, it passes a `read` closure over that verified
-source to `prepareRevisionCredentials`. It then places the grants in the Sandbox
-requirements. The per-revision Secret still carries non-model entries, such as
-the app-server token.
-
-This keeps value access where it already is: the worker-side Compute read that
-`deliverHarnessAuth` performs today. The injector receives no Kubernetes Secret
-authority.
-
-In `shutdownRevisionRuntime` (`index.ts:2982-3004`), Compute calls
-`releaseRevisionCredentials` after the Sandbox `cleanup` for that revision
-succeeds. Namespace deletion relies on the Sandbox Namespace `cleanup`.
+Withdrawal is revocation, so it applies to a running revision. The revision
+keeps its frozen binding but cannot re-attach a withdrawn source; a later
+deployment must omit the source or bind a replacement.
 
 ### Harness runtime
 
-The Codex entrypoint is unchanged. It reads `OPENAI_API_KEY`, which now holds
-the placeholder, and passes it to `codex login --with-api-key` through stdin.
-Codex stores and sends the placeholder, and the supervisor's proxy substitutes
-the real key on the request to `api.openai.com`. The startup model probe
-exercises that path before readiness, so a failed substitution holds the Pod
-unready through the existing failure handling.
+The entrypoint receives only the literal login mode from the source type's
+`harnessAuth.loginMode`. For an `openai` static source, the supervisor sets the
+`OPENAI_API_KEY` placeholder, and `codex login --with-api-key` stores it. The
+upstream `codex` profile supplies `CODEX_AUTH_*` placeholders for a ChatGPT
+account. It declares no gateway refresh and only allows `auth.openai.com`, so
+the Codex CLI would refresh with placeholder values in the request body. The
+Codex startup model probe checks either path before readiness.
 
-## OpenShell implementation
+## Trust requirements
 
-```mermaid
----
-config:
-  theme: base
-  themeVariables:
-    fontSize: 15px
-    lineColor: "#8b949e"
-  flowchart:
-    htmlLabels: true
-    nodeSpacing: 30
-    rankSpacing: 45
-    subGraphTitleMargin:
-      top: 8
-      bottom: 16
----
-flowchart TB
-    SECRET[("<b>OCC Secret</b><br/>control-plane namespace")]
-    subgraph WORKER["OCE worker"]
-        COMPUTE["<b>Kubernetes Compute</b><br/>verifies source, reads value"]
-        DRIVER["<b>OpenShell SandboxDriver</b><br/>CredentialInjector"]
-    end
-    subgraph GW["oce-system"]
-        GATEWAY["<b>OpenShell Gateway</b><br/>per-revision provider"]
-    end
-    subgraph TENANT["Tenant namespace oce-*"]
-        SUP["<b>Supervisor Pod</b><br/>resolver and egress proxy"]
-        HARNESS["<b>Codex Harness Pod</b><br/>placeholder only"]
-    end
-    OPENAI["<b>api.openai.com:443</b><br/>/v1/**"]
-
-    SECRET -.->|"exact source read"| COMPUTE
-    COMPUTE -.->|"read closure"| DRIVER
-    DRIVER -.->|"CreateProvider, CreateSandbox"| GATEWAY
-    GATEWAY -.->|"provider environment"| SUP
-    SUP -.->|"placeholder env"| HARNESS
-    HARNESS -.->|"Bearer placeholder"| SUP
-    SUP -.->|"Bearer real key"| OPENAI
-
-    classDef platform fill:#e8eef5,stroke:#7d91a8,color:#172b42,stroke-width:1px
-    classDef capability fill:#e4efeb,stroke:#78968b,color:#19372d,stroke-width:1px
-    classDef external fill:#eee9f2,stroke:#95859f,color:#35263f,stroke-width:1px
-    class SECRET platform
-    class COMPUTE,DRIVER,GATEWAY,SUP,HARNESS capability
-    class OPENAI external
-```
-
-All arrows are dashed because the path is proposed.
-
-### Profile, provider, and attachment
-
-- **Profile.** The driver imports one workspace-scoped custom profile,
-  `oce-codex-openai`, into each OCC workspace. It declares credential
-  `OPENAI_API_KEY` with `auth_style: bearer`, the request's endpoints with
-  `protocol: rest` and `enforcement: enforce`, and the binaries from new
-  Installation configuration `credentialInjection.binaries`. The import is
-  idempotent and uses `resource_version` for updates. A profile whose content
-  differs from the derived definition is updated, never silently reused.
-- **Provider.** `prepareRevisionCredentials` creates one provider per revision
-  and request. Its name is derived from the Agent and revision IDs (for example
-  `oce-<sha(agentId)12>-<sha(revisionId)12>-model`), and it carries OCC ownership
-  labels. A replay finds the existing provider by name and ownership and
-  returns the same grant. A foreign provider with that name fails provisioning.
-  The grant `ref` is the provider name.
-- **Attachment.** `sandboxSpec` places every grant's provider in
-  `SandboxSpec.providers` at creation. The driver does not use runtime
-  `AttachSandboxProvider`. The existing static `providers` configuration remains
-  for operator-owned providers, and must not name an `oce-` provider.
-- **Environment check.** `environment()` keeps rejecting every `secretKeyRef`.
-  Substitution requests never produce one, so the model key no longer triggers
-  the rejection.
-
-### Network policy
-
-The attached profile supplies the model egress allowance through OpenShell's
-policy composition. The operator's static `model-provider` rule with `tls: skip`
-is removed from the development profile (`internal/occdev/kubernetes.go:276`)
-and test fixtures. The driver rejects Installation configuration in which a
-static network policy endpoint overlaps an injection endpoint, because the
-uninspected rule would conflict with the credentialed one.
-
-With TLS terminated at the proxy, Codex must trust the per-generation Sandbox
-CA, which OpenShell provides through `SSL_CERT_FILE`. See
-[verification gates](#verification-gates).
-
-Substitution protects the key only if every Harness connection passes through
-the supervisor. OpenShell's workload fence enforces this, not the `networking`
-facet or `network_policies`. The fence is a NetworkPolicy in each Sandbox
-namespace that gives workload Pods empty egress and admits only supervisor
-ingress (`docs/kubernetes/sandbox-runtime.mdx:52-78`). It takes effect only
-when the cluster's network plugin enforces NetworkPolicy, which OpenShell asks
-operators to verify before setting `supervisor.sandboxRuntime.networkPolicyEnforced`.
-The OpenShell reference states this requirement, and a direct-connection
-[test](#tests) proves it.
-
-### Authority and trust
-
-- The worker's gateway principal needs workspace `admin` and the
-  `provider:write` scope in every OCC workspace, in addition to its current
-  `sandbox:write`.
-- No other principal may hold a role in an OCC-owned workspace, because any
-  workspace user can attach any workspace provider. This becomes an operator
-  requirement in the OpenShell reference. OCC cannot verify it through the pre.7
-  API.
-- The value crosses the worker-to-gateway connection. Outside the local
-  development profile, the driver refuses to prepare credentials unless the
-  gateway endpoint uses `https` and bearer authentication.
-- The real key exists in the OCC Secret, transiently in the worker, in the
-  gateway credential store, and in the supervisor's memory. It is absent from
-  the Harness Pod, its environment, its workspace, and the tenant Kubernetes
-  Secrets. The gateway store's encryption key and backups become part of the
-  credential boundary.
-
-### Lifecycle
-
-- **Candidate failure.** The provider remains until the revision is retired or
-  the Namespace is deleted, like other candidate resources.
-- **Secret updates.** A provider is a point-in-time copy, so updating the OCC
-  Secret does not change a running revision. The operator redeploys.
-- **Retirement.** Sandbox deletion, then `DeleteProvider`, then `GetProvider`
-  must return not-found. Failure leaves retirement incomplete for retry.
-- **Namespace deletion.** The driver lists providers carrying OCC ownership labels
-  in the workspace, deletes each one, and verifies that none remain before
-  `DeleteWorkspace`.
+- OCC must be the only principal with a role in its OpenShell workspaces, because
+  workspace users can attach any provider. The OpenShell reference states this;
+  pre.7 offers no API for OCC to verify it.
+- Sources do not cross OCC Namespaces; each OCC Namespace maps to one workspace.
+- Credentialed endpoints require L7 inspection. Codex and other clients must
+  trust the per-generation Sandbox CA.
+- The guarantee depends on OpenShell's workload fence: a NetworkPolicy giving
+  workload Pods empty egress (`docs/kubernetes/sandbox-runtime.mdx:52-78`),
+  enforced by the cluster's network plugin.
+- Token grants require a SPIFFE Workload API for supervisors.
+- `token_exchange` stores a subject token. The design's non-goals exclude
+  "Delegating human identity or authentication to an Agent", so the subject must
+  be a non-human principal until that is revisited.
+- Outside development, registration requires an `https` gateway endpoint with
+  bearer authentication.
 
 ## Failure behavior
 
-All failures leave the candidate inactive and the previous revision unchanged:
+- Unknown source types, missing inputs, and unauthorized Secrets fail before any
+  gateway call.
+- A failed registration leaves no source. An uncertain one stays pending, and
+  the record keeps the provider name so retries adopt it or delete it.
+- Missing attachment readiness keeps the candidate inactive.
+- An endpoint mismatch at the proxy fails the request, and the Harness startup
+  probe keeps the Pod unready.
+- A pending withdrawal stays visible in attachment status and is retried; it
+  never reports success early.
 
-- Admission returns 409 for an unsupported method, topology, or model.
-- Profile or provider failures fail `prepareRevision` before Sandbox creation.
-- An unconsumed or foreign grant fails `provisionHarness`.
-- A proxy substitution failure fails the Codex startup probe; the Pod stays unready.
+## Differences from PR #386
 
-## Alternatives considered
-
-- **Separate `CredentialGatewayDriver` capability**, deferred by the
-  [archived Sandbox provisioning spec](.archive/13-sandbox-driver-provisioning.md).
-  Substitution works only at the proxy that contains the workload, so a
-  separately selected capability mostly adds invalid combinations. A future
-  non-Sandbox egress proxy can promote the standalone interface to a capability.
-- **A `credentialInjection` facet.** Facets are unverified labels without
-  methods; see [Admission and worker recheck](#admission-and-worker-recheck).
-- **Upstream `secretKeyRef` support**, which keeps the real key in the Harness.
-- **One provider per Agent.** Rotation would reach running revisions, and
-  upstream rotation semantics for existing placeholders are inconsistent
-  (`manage-providers.mdx:192`, `inference-routing.mdx:113-114`).
+- **Adopted:** separate capability, shared sources with per-Agent attachments,
+  the four provider operations mapped as above, and support for static,
+  refreshed, and dynamic credentials.
+- **Omitted:** `mediate`, `BoundExchange`, `Assurance` profiles, and branded
+  evidence types. OpenShell does not call OCE per request.
+- **Not yet a contract:** #386's 30-second active-traffic closure. Upstream
+  documentation disagrees on whether detach or rotation affects running
+  processes (`manage-providers.mdx:192`, `inference-routing.mdx:113-120`).
 
 ## Verification gates
 
-Confirm these against the pinned runtime image and pre.7 before moving to
-`Accepted`:
+Confirm before `Accepted`:
 
-1. The pinned Codex binary (`@openai/codex@0.156.0`) trusts a CA supplied through
-   `SSL_CERT_FILE`, or through another mechanism the Sandbox sets.
-2. Codex reaches `api.openai.com` only with request shapes the proxy can rewrite.
-   A WebSocket transport needs its upgrade `Authorization` header substituted.
-   Binary frames on credentialed endpoints are rejected.
-3. `codex login --with-api-key` accepts the placeholder without local validation.
-4. The worker's gateway principal can import workspace profiles and create
-   providers with the configured authentication.
-5. The pre.7 supervisor advertises static credential binding support, so the
-   gateway does not withhold the material.
+1. The pinned Codex binary trusts the Sandbox CA and sends request shapes the
+   proxy can rewrite, including any WebSocket upgrade.
+2. Codex accepts placeholders from `codex login --with-api-key` and the
+   `CODEX_AUTH_*` variables without parsing them locally. ChatGPT-account
+   refresh works through the proxy, or the source type uses gateway refresh
+   instead.
+3. `DetachSandboxProvider` stops new requests from a running Sandbox, and the
+   observed effect on open streams is recorded.
+4. The API's gateway principal can import profiles and manage providers, and the
+   worker's cannot.
+5. All of the above hold on `v0.1.0-pre.12`.
 
 ## Tests
 
-- Extend `tests/integration/sandbox-driver-openshell-k3d-real.test.mjs` so that
-  the regular Agent deploy workflow runs through the real OCC API, worker,
-  gateway, and supervisor. Remove `OPENAI_API_KEY` from the compatibility
-  bridge's staged inputs.
-  - The positive case completes the real model turn with the key injected by
-    the proxy. It asserts that the Harness Pod's environment holds only the
-    placeholder, and that no Pod spec, tenant Secret, or workspace file contains
-    the key.
-  - It asserts that retirement deletes the provider.
-- Mode `0` now asserts that the first remaining rejection is the app-server
-  token, with no model-key rejection.
-- Add a denied case: a Harness request to an unbound host with the placeholder
-  receives 403 and never reaches the host.
-- Add a bypass case: from inside the Harness Pod, direct DNS resolution and a
-  direct TCP connection to `api.openai.com:443` fail. This proves that the
-  workload fence, not the declared facet, keeps model traffic on the
-  substituting proxy.
-- Add conformance cases proving that all three validation sites reject a driver
-  that declares `credentialInjection` without the `networking` facet or
-  without all three methods.
-- Add a conformance case for the admission decision: an OpenShell selection with
-  `api_key` freezes `substitution`, and `codex_pat` returns 409.
+Extend `tests/integration/sandbox-driver-openshell-k3d-real.test.mjs` through the
+regular API and worker workflow:
+
+- Register a static OpenAI source, deploy a dedicated Codex Agent, and complete a
+  real model turn. Assert that no Pod spec, tenant Secret, environment, or
+  workspace file contains the key.
+- Withdraw the source from one Agent. That Agent's next model request fails,
+  while a second Agent attached to the same source keeps working.
+- Register a gateway-refresh source against a real in-cluster OAuth2 issuer, such
+  as Keycloak, and prove a rotation without a restart.
+- Prove fail-closed cases: an unbound host returns 403, and a direct connection
+  from the Harness Pod fails.
+- Add conformance cases for startup membership, catalog validation, and
+  admission rejection of secret-backed `harnessAuth` with a gateway selected.
+
+Token-grant and AWS STS proofs need SPIFFE and AWS respectively; they stay
+explicit gaps until that infrastructure exists.
 
 ## Documentation
 
-Update in the implementation PR:
+The implementation PR updates:
 
-- [OpenShell SandboxDriver](../docs/reference/drivers/openshell-sandbox.md):
-  configuration, workspace-role and fence requirements, remaining blockers.
-- [Sandbox Drivers](../docs/reference/drivers/sandbox.md): the optional contract.
-- [Harness execution](../docs/reference/harness-execution.md#harness-authentication)
-  and [Secret Driver](../docs/reference/drivers/secret.md): delivery modes.
-- [OpenShell provisioning flow](../docs/flows/openshell-sandbox-provisioning.md)
+- the platform design ([Drivers](../docs/design/drivers.md),
+  [resources](../docs/design/resources.md), and
+  [Secret access](../docs/design/safeguards.md#secret-access));
+- a new Credential Gateway Driver reference, plus the
+  [OpenShell SandboxDriver](../docs/reference/drivers/openshell-sandbox.md),
+  [Backends](../docs/reference/backends.md),
+  [Harness execution](../docs/reference/harness-execution.md), and
+  [Secret Driver](../docs/reference/drivers/secret.md) references;
+- the API, permissions, and database-entity cheat sheets;
+- the [OpenShell provisioning flow](../docs/flows/openshell-sandbox-provisioning.md)
   and [OpenShell testing](../docs/testing/openshell.md).
-- [Secret access](../docs/design/safeguards.md#secret-access): record OpenShell
-  substitution as implemented for this combination only.
 
 ## Open questions
 
-- Should the development profile ship the Codex binary identity for
-  `credentialInjection.binaries`, or derive it from the runtime image at build
-  time?
-- Is workspace membership observable through an OpenShell API that OCC could
-  check in `ensureNamespace`?
-- Should Anthropic-model embedded execution follow once OpenShell supports
-  embedded OpenClaw, or wait for a common inference path?
+- Should `CredentialSource` keep the design's reserved `SecretBroker` name?
+- Should ChatGPT account tokens issued by the ServiceAccount Driver become an
+  `external` source that the Driver updates?
+- Which principal may supply a `token_exchange` subject token?

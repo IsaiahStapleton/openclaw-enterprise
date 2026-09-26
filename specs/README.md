@@ -48,9 +48,9 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
-[Sandbox credential injection](39-sandbox-credential-injection.md) — Proposed;
-OpenShell stores Harness model keys and its egress proxy substitutes them for
-workload placeholders.
+[Credential Gateway Driver](39-sandbox-credential-injection.md) — Proposed;
+Namespace credential sources attached to Agent revisions, with OpenShell
+injecting static, refreshed, and dynamic credentials outside the workload.
 
 [Dedicated Harness RWO workspace](38-harness-rwo-workspace-plan.md) — Implementing;
 exclusive revision preparation, durable RWO workspaces, and retained existing claims.
