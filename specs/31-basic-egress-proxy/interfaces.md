@@ -6,16 +6,18 @@
 
 [Overview](../31-basic-egress-proxy.md) · [Admission order](architecture.md#admission-and-preparation)
 
-This page owns the RFC's complete proposed policy, resolution and startup
-contracts, followed by lifecycle and protected receiving requirements. These
-shapes do not establish an implemented interface or installed confinement.
-Unresolved owner decisions remain explicit below.
+This reference owns the historical policy, immutable snapshot, internal Compute
+resolution and Go startup contracts. Read selection before startup: the operator
+chooses policy, OCC admits it, and trusted Compute prepares the listener input.
+The receiving bridge still needs its real producers. These shapes do not establish
+a current public API or installed confinement.
 
 ## Selection and policy
 
 Installation supplies permitted modes, named policy generations and defaults.
 OCC must authorize the exact Agent and all referenced resources. Only authorized
-selection can change enforcement. Omitted input resolves to a materialized
+selection can change enforcement. Workload configuration, environment variables
+and request headers cannot broaden the admitted policy. Omitted input resolves to a materialized
 operator default. Without Installation configuration, compatibility is explicit
 open. Existing persisted Agents receive explicit open selection.
 
@@ -260,6 +262,11 @@ Independent roots must contain CA certificates and cannot overlap interception
 authority. [TLS custody](protocol-and-routing.md#tls-and-certificate-custody)
 retains the separate mandatory check on actual upstream verified chains.
 
+Use nominal platform identifiers and curated package indexes. These proposed
+wire shapes retain their declared strings. Startup derives from the immutable
+revision. Extra context, Driver capabilities, credential callbacks or Harness
+requirements need real producers and consumers.
+
 ## Close and observation
 
 Selected close ownership is authenticated Compute resource lifecycle and process
@@ -360,11 +367,6 @@ These outcomes precede resources. A stale generation during activation closes
 readiness/access rather than selecting open. Its observation wire shape is not
 selected here. Restricted success contains the full validated policy and computed
 digest shown in the declared union, never a fabricated digest or partial policy.
-
-Use nominal platform identifiers and curated package indexes. These proposed
-wire shapes retain their declared strings. Additional context, Driver
-capabilities, credential callbacks or Harness requirements need real producers
-and consumers. Startup derives from the immutable revision.
 
 Authority/receiver owners must define the committed withdrawal event, evidence
 age, request-start/skew rule, monotonic deadline, renewal cadence and closure

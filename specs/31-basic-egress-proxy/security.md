@@ -6,10 +6,10 @@
 
 [Overview](../31-basic-egress-proxy.md) · [Architecture](architecture.md)
 
-The proposal separates network confinement from permission to perform a protected
-operation. C1 constrains traffic from the qualified workload network profile.
-C3 adds external credential custody and authentic execution/requester checks.
-Neither guarantee follows from a diagram, policy type or successful fixture.
+The historical design separates network confinement from permission to perform
+an operation. C1 constrains workload traffic. C3 adds external credential custody
+and authentic execution/requester checks. Read these guarantees with their
+trust assumptions and unresolved mechanisms below.
 
 ## Assets, actors and trust
 

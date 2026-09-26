@@ -6,10 +6,10 @@
 
 [Overview](../31-basic-egress-proxy.md) · [Interfaces](interfaces.md)
 
-The restricted proxy admits a name, binds it to vetted numeric peers, verifies TLS
-and checks each HTTP request. Each decision has its own scope and lifetime. These
-procedures and the [policy/startup contracts](interfaces.md) are proposed behavior
-requiring connected listeners and installed qualification.
+The historical proxy authorizes a name, commits vetted numeric peers, verifies
+TLS and checks every HTTP request. These decisions have separate lifetimes. The
+[interface reference](interfaces.md) owns their input shapes. This page owns the
+ordered procedures and their cancellation and custody limits.
 
 ## DNS admission
 
@@ -181,3 +181,15 @@ does not prove provider-token revocation, and tokens can survive until original
 expiry. Keep cleanup uncertainty visible. C3's dedicated material and receiving
 integration must preserve these credential-owned outcomes while adding authentic
 execution and requester authority.
+
+Current [repository recovery](https://github.com/openclaw/openclaw-enterprise/blob/e387b38cc259ee4a55936ecb848bbce8210bcd68/docs/reference/repository-credentials.md#repo-driver-contract)
+adds an important distinction for consumers: worker restart can reuse surviving
+service sessions and Compute material. Known closing sessions block replacement
+with `REPOSITORY_CLEANUP_PENDING` until confirmed `DISPOSED`. A lost exposed session
+fails with `REPOSITORY_SESSION_RECOVERY_UNSAFE`, retains cleanup and queues runtime
+retirement. Never-delivered openings without a recorded session ID remain
+recoverable. State retains attempt identities and deadlines, not bearers. Service
+restart loses process-local correlations and provider cleanup inventory. Correlation
+cannot reconstruct that inventory. `CLOSED`, `DISPOSED`, remote revocation, physical
+stop and mutation outcome are separate facts. A new authorized revision neither
+settles old cleanup nor replays uncertain Git/API mutations.

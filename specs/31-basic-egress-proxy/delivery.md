@@ -6,10 +6,10 @@
 
 [Overview](../31-basic-egress-proxy.md) · [Architecture](architecture.md)
 
-C0, C1, C2 and C3 remain selected. Each needs its own connected consumer and
-acceptance evidence. Historical acceptance authorizes implementation work, and
-separate supplier contracts support only their demonstrated source scope. This
-RFC grants no deployment or release qualification.
+C0–C3 remain selected within the historical custom-proxy proposal, now deferred
+for 0.x. Each retains its connected consumer and acceptance requirements. Earlier
+implementation acceptance and separate supplier source do not establish current
+0.x approval, installed behavior or release qualification.
 
 ## Increments and qualification
 
@@ -100,6 +100,65 @@ Follow the [Kubernetes verification guide](https://github.com/openclaw/openclaw-
 Update Agent, Compute, networking, Harness and affected deployment, credential
 and testing references under the [platform design](https://github.com/openclaw/openclaw-enterprise/blob/724dcb5cb80b5e76a62e8267a21185a2e91a85c2/docs/design.md).
 Documentation checks establish none of the runtime gates above.
+
+## Source status and owner dependencies
+
+The earlier supplier record remains historical. A separate unmerged Go supplier
+provides bounded policy/startup work, not composed listeners or installed CNI
+proof. State owns the bounded admission and persistence changes, reserves the
+next available migration, and preserves accepted credential extensions. Draft
+migration filenames do not determine shipping order. SQL and ordinary Agent-flow
+evidence remain required.
+The separate [identity declarations](interfaces.md#receiving-bridge) at `65380694`
+do not supply the missing native listener bridge. The
+[native model adapter](https://github.com/openclaw/openclaw-enterprise/blob/65380694085693d6edb5218372ccddbc2ba493d9/docs/flows/external-model-egress.md)
+explicitly lacks a controller or Harness caller. These are source observations,
+not a composed acceptance record.
+
+The September 25 observation at `5b49801b6332dbd516df250c72a47820ff918208` records that
+[RepoDriver](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/packages/contracts/src/repo.ts) supports embedded OpenClaw and
+dedicated Codex. [Compute](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/index.ts#L1257-L1281)
+refuses repository credentials with a SandboxDriver. Main's
+[model-egress builder](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/index.ts#L6834-L6863)
+retains broad public IPv4 TCP/443, while the
+[embedded probe](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts#L1182-L1225)
+consumes the selected model credential. These facts do not establish the
+historical protected route or external custody.
+
+The September 25 source refresh adds a Compose-backed OpenShell development
+control plane alongside the Kubernetes-only default. The separate gateway runs in
+`openshell-system` in Compose mode and `oce-system` in Kubernetes-only mode.
+Both prepare operator Workspaces. Their
+[qualification procedures](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/docs/testing/openshell.md) distinguish infrastructure
+readiness from Agent creation and model turns. Stock pre.7 production projections
+remain refused, and the [first-Agent helper](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/scripts/first-agent.mjs#L114-L147)
+rejects OpenShell before external calls. Neither development profile is suitable
+for a shared cluster or container network.
+
+Production [Helm networking](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml)
+adds optional API-only TCP/443 to operator-maintained IPv4 `/32` model-discovery
+hosts. Empty defaults grant none. This does not change Harness egress or constrain
+services sharing an IP. The private Envoy proxy now inherits the trusted
+control-plane node selector. Dedicated Gateway and Harness selectors remain
+separate operator settings. The [EKS guide](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/docs/guides/deploy/eks.md)
+requires disjoint Ready pools, node-image seccomp provisioning, CSI prerequisites
+and actual webhook peers. Source changes do not prove installed enforcement.
+
+At that same pin, [Independent production image upgrades](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/specs/36-coordinated-image-upgrade.md)
+is a proposed workflow. Its controller/runtime separation, fleet convergence and
+recovery requirements are not implemented upgrade guarantees or egress closure.
+It does not change this RFC's historical C0–C3 status or select a new proxy.
+
+**September 26 source observation:** main `e387b38cc259ee4a55936ecb848bbce8210bcd68`
+contains the [production-upgrade script](https://github.com/openclaw/openclaw-enterprise/blob/e387b38cc259ee4a55936ecb848bbce8210bcd68/scripts/upgrade-production-images),
+authorized [deployment inventory API](https://github.com/openclaw/openclaw-enterprise/blob/e387b38cc259ee4a55936ecb848bbce8210bcd68/docs/reference/api.md#get-installationdeploymentinventory)
+and [CLI inventory/status commands](https://github.com/openclaw/openclaw-enterprise/blob/e387b38cc259ee4a55936ecb848bbce8210bcd68/docs/reference/cli.md).
+The script uses complete inventory and ordinary deployment admission, reloads
+configuration through a Helm checksum, and checks exact replacement revisions,
+workload images/readiness and Doctor results. These are source capabilities.
+Installed fleet upgrades and provider qualification were not performed here.
+The earlier observation and historical specification status remain unchanged.
+Upgrade source does not close this RFC's egress requirements.
 
 ## Decisions and follow-ups
 

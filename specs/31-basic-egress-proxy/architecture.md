@@ -6,11 +6,50 @@
 
 [Overview](../31-basic-egress-proxy.md) · [Interfaces](interfaces.md)
 
-The proposal makes Compute prepare a network path that the workload cannot
-broaden. OCC and State admit the policy before resources are built. A separate Go
-proxy mediates permitted traffic, while the existing owners continue to decide
-identity, permissions and credential effects. The restricted connections described
-here still require composition and installed qualification.
+The historical design puts policy admission in OCC and State, resource lifecycle
+in Compute, and traffic mediation in a separate Go proxy Pod. Existing identity,
+permission and credential owners retain their decisions. This page explains the
+proposed physical separation and lifecycle, not an installed deployment.
+
+## Historical proposal and reading path
+
+Authorized users select an operator-defined restricted policy or permitted open
+compatibility. Workload settings cannot broaden it. The deferred C1 path is:
+
+```mermaid
+---
+config:
+  theme: base
+  htmlLabels: true
+  themeVariables:
+    fontSize: 16px
+    lineColor: "#8B949E"
+    edgeLabelBackground: "#FFFFFF"
+  flowchart:
+    curve: linear
+    rankSpacing: 24
+    padding: 12
+---
+flowchart TB
+  User["<b>Deploy an Agent</b><br/>Select allowed traffic"]
+  Admit["<b>OCC and Compute</b><br/>Admit and prepare"]
+  Agent["<b>Workload Pod</b><br/>Probe, model, tools"]
+  Proxy["<b>Separate proxy Pod</b><br/>Check every request"]
+  Origin["<b>Configured origin</b><br/>Stream permitted result"]
+  User -.->|request| Admit
+  Admit -.->|confine| Agent
+  Agent -.->|DNS and HTTPS| Proxy
+  Proxy -.->|vetted peer| Origin
+  classDef owner fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
+  classDef pending fill:#F3F4F6,stroke:#98A2AE,color:#44505F,stroke-width:1px,stroke-dasharray:4 4
+  class Admit owner
+  class User,Agent,Proxy,Origin pending
+  linkStyle default stroke:#8B949E,stroke-width:1px
+```
+
+Historical C1 proposal. Dashed connections require implementation and qualification.
+C2 adds the separate private credential-service route. Follow admission below,
+then the protocol owner for request checks.
 
 ## Components and dependencies
 
@@ -69,7 +108,7 @@ New origins need newly admitted material. Replacement receives distinct resource
 identity and newly admitted material, while retirement closes the exact
 predecessor.
 
-Current [optional-plugin warnings](https://github.com/openclaw/openclaw-enterprise/blob/12fddc4805a1b090331af363ad10bf3b58ea5897/docs/reference/drivers/compute.md#L66-L80)
+The pinned [optional-plugin warnings](https://github.com/openclaw/openclaw-enterprise/blob/12fddc4805a1b090331af363ad10bf3b58ea5897/docs/reference/drivers/compute.md#L66-L80)
 permit readiness only after failed selections are safely disabled and remaining
 checks pass. They cannot relax this RFC's admitted proxy, resolver, protected
 receiver, credential, identity or real model-authentication requirements.
@@ -78,7 +117,7 @@ receiver, credential, identity or real model-authentication requirements.
 
 ![Proposed C1 lifecycle from admission through DNS, TLS, HTTP streaming and owned closure](request-lifecycle.svg)
 
-Proposed C1 lifecycle. Time flows downward. Solid sequence arrows are requests
+Historical C1 proposal, deferred for 0.x. Time flows downward. Solid sequence arrows are requests
 and dashed arrows are replies. Existing components and proposed contracts do
 not prove these restricted joins or installed enforcement.
 [Editable Mermaid source](request-lifecycle.mmd).
@@ -136,7 +175,7 @@ public upstream paths. Qualify UDP and TCP DNS through the actual resolver
 Service virtual IP and backend topology early. Unsupported tuples fail before
 resource construction, without ambient DNS or broad-CIDR fallback.
 
-Preserve the current [private plugin-status path](https://github.com/openclaw/openclaw-enterprise/blob/12fddc4805a1b090331af363ad10bf3b58ea5897/docs/reference/drivers/kubernetes-compute/networking-and-isolation.md#L12-L26)
+Preserve the pinned [private plugin-status path](https://github.com/openclaw/openclaw-enterprise/blob/12fddc4805a1b090331af363ad10bf3b58ea5897/docs/reference/drivers/kubernetes-compute/networking-and-isolation.md#L12-L26)
 when enabled selected plugins require it. Operator-configured
 `network.pluginStatusProxySourceCidrs` admits precise API-server Pod-proxy sources
 to the owned workload's TCP/18791 only. Prefer individual `/32` or `/128` sources
@@ -145,7 +184,7 @@ The [worker's `get` on `pods/proxy`](https://github.com/openclaw/openclaw-enterp
 is separate from workload grants. Dedicated Codex also needs its
 [gateway-to-Agent status path](https://github.com/openclaw/openclaw-enterprise/blob/12fddc4805a1b090331af363ad10bf3b58ea5897/docs/reference/drivers/kubernetes-compute.md#L191-L223)
 on TCP/18791. Apply this RFC's full revision/role/generation ownership to that
-current peer. These control paths grant no workload Kubernetes API access,
+peer. These control paths grant no workload Kubernetes API access,
 unrelated private access or additional public egress. Unavailable or untrusted
 required status withholds readiness.
 
