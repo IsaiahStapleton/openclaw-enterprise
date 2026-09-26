@@ -7429,8 +7429,16 @@ test("unsaved Preset drafts retain unfinished edits across navigation until expl
     unfinished,
   );
   assert.equal(await page.getByLabel("USER.md", { exact: true }).inputValue(), "");
-  // Navigation keeps the established credential-clearing rule, even though ordinary edits survive.
-  assert.equal(await page.getByLabel("API key", { exact: true }).inputValue(), "");
+  // Navigation clears the transient password and requires a fresh Secret selection.
+  assert.equal(await page.locator("#provider-api-key").inputValue(), "");
+  const credentialSecret = page.getByLabel("API key Secret", { exact: true });
+  await credentialSecret.waitFor();
+  await page.waitForFunction(() => {
+    const select = globalThis.document.querySelector("#provider-credential-secret");
+    return select && !select.disabled && select.required;
+  });
+  assert.equal(await credentialSecret.inputValue(), "");
+  assert.equal(await credentialSecret.evaluate((select) => select.validity.valueMissing), true);
   assert.deepEqual(
     await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } })),
     { local: {}, session: {} },
