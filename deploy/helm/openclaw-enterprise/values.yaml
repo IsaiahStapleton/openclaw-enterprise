@@ -53,7 +53,7 @@ bootstrap:
   serviceKey:
     fileName: initial-admin-service-key.json
 
-provider:
+backend:
   chatgpt:
     enabled: false
     secretName: occ-chatgpt-admin
@@ -65,7 +65,7 @@ provider:
 repositoryCredentials:
   enabled: false
   image: ""
-  providerId: ""
+  backendId: ""
   # Operator-created immutable, versioned ConfigMap shared by all three consumers.
   registryConfigMapName: ""
   registryKey: registry.json
@@ -117,6 +117,9 @@ database:
 api:
   port: 8080
   clients: []
+  # Optional model-list discovery: API Pod HTTPS egress to provider IPv4 /32 hosts.
+  # Operators maintain these addresses; Console model selection does not require it.
+  modelDiscoveryCidrs: []
 
 cluster:
   cidrs: []
@@ -124,6 +127,7 @@ cluster:
 
 controlPlane:
   nodeSelector: {}
+  installationChecksum: ""
 
 dns:
   namespace: kube-system

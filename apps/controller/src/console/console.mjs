@@ -4,6 +4,8 @@ import { createApiClient } from "./api-client.mjs";
 import { createViewLifetime } from "./view-lifetime.mjs";
 import { createNavigation, pages } from "./navigation.mjs";
 import { createShell, panel, sorted } from "./shell.mjs";
+import { createDraftStore } from "./drafts.mjs";
+import { renderRuntimeImages } from "./runtime-images.mjs";
 
 const app = document.querySelector("#app");
 const lifetime = createViewLifetime();
@@ -12,6 +14,8 @@ let namespaces = [];
 let namespaceId = null;
 let loggingOut = false;
 let navigateAgentTab = null;
+const drafts = createDraftStore();
+let draftUserId = null;
 const navigation = createNavigation({
   getNamespaceId: () => namespaceId,
   isLoggingOut: () => loggingOut,
@@ -27,13 +31,23 @@ const request = createApiClient({
 });
 
 function resetReads() {
+  drafts.flush();
   navigateAgentTab = null;
   shellUI.reset();
   return lifetime.reset();
 }
 
 function renderShell(feature) {
-  return shellUI.renderShell(feature, { session, namespaces, namespaceId });
+  const shell = shellUI.renderShell(feature, { session, namespaces, namespaceId });
+  if (shell.diagnostics) {
+    void renderRuntimeImages(shell.diagnostics, {
+      request,
+      namespaceId,
+      lifetime,
+      active: lifetime.capture(),
+    });
+  }
+  return shell;
 }
 
 function clearPrivate() {
@@ -42,7 +56,13 @@ function clearPrivate() {
   namespaceId = null;
 }
 
+function clearDrafts() {
+  drafts.clear();
+  draftUserId = null;
+}
+
 function showLogin(message = "", returnPath = null) {
+  clearDrafts();
   resetReads();
   clearPrivate();
   const url = new URL("/console/login", location.origin);
@@ -121,7 +141,12 @@ function showLogin(message = "", returnPath = null) {
     element(
       "main",
       { className: "auth" },
-      element("p", { className: "brand" }, "OpenClaw Enterprise"),
+      element(
+        "p",
+        { className: "brand" },
+        element("img", { src: "/console/oce-mascot.png", alt: "", width: "40", height: "40" }),
+        "OpenClaw Enterprise",
+      ),
       element("h1", {}, "Welcome back"),
       element("p", { className: "muted" }, "Sign in to your Installation."),
       form,
@@ -176,6 +201,10 @@ async function loadPage({ fromNavigation = false } = {}) {
       );
       return;
     }
+    if (draftUserId !== session.user.id) {
+      clearDrafts();
+      draftUserId = session.user.id;
+    }
     if (current.feature === "login") {
       history.replaceState(
         null,
@@ -229,7 +258,7 @@ async function loadPage({ fromNavigation = false } = {}) {
         shell.view,
         namespaceId === null ? "No readable Namespaces" : "Namespace unavailable",
         namespaceId === null
-          ? "Ask an administrator to provision a Namespace or grant access. Providers and Namespaces remain available in navigation."
+          ? "Ask an administrator to provision a Namespace or grant access. Namespaces remain available in navigation."
           : "This Namespace is missing or you no longer have access. Choose another Namespace.",
         namespaces.length ? "Switch Namespace" : "Refresh",
         () => (namespaces.length ? switchNamespace() : void loadPage()),
@@ -237,6 +266,8 @@ async function loadPage({ fromNavigation = false } = {}) {
       return;
     }
     const agentContext = {
+      drafts: drafts.scope(namespaceId, current.agentId ?? "create"),
+      flushDrafts: () => drafts.flush(),
       view: shell.view,
       namespaceId,
       request,
@@ -259,7 +290,18 @@ async function loadPage({ fromNavigation = false } = {}) {
       },
     };
     if (current.creating) {
-      renderCreateAgent(agentContext);
+      renderCreateAgent(
+        {
+          ...agentContext,
+          setDraftCapture(capture) {
+            agentContext.drafts.forget("create");
+            if (capture) {
+              agentContext.drafts.track("create", capture);
+            }
+          },
+        },
+        agentContext.drafts.get("create"),
+      );
       return;
     }
     if (current.agentId) {
@@ -271,8 +313,8 @@ async function loadPage({ fromNavigation = false } = {}) {
       current.feature === "namespaces"
         ? namespaces
         : await request(
-            current.feature === "providers"
-              ? "/providers"
+            current.feature === "backends"
+              ? "/backends"
               : `/namespaces/${encodeURIComponent(namespaceId)}/agents`,
           );
     if (!lifetime.isCurrent(active)) {
@@ -325,8 +367,8 @@ async function loadPage({ fromNavigation = false } = {}) {
             ? "Namespace unavailable"
             : error.name === "TypeError" || error.name === "TimeoutError"
               ? "Request interrupted"
-              : current.feature === "providers"
-                ? "Provider discovery unavailable"
+              : current.feature === "backends"
+                ? "Backend discovery unavailable"
                 : "Request unavailable";
     panel(
       shell.view,
@@ -348,6 +390,7 @@ async function loadPage({ fromNavigation = false } = {}) {
 
 async function logout() {
   loggingOut = true;
+  clearDrafts();
   const active = resetReads();
   clearPrivate();
   publicPanel("Signing out…", "Confirming that your session has ended.");
@@ -395,6 +438,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("pagehide", () => {
+  clearDrafts();
   resetReads();
   clearPrivate();
   document.querySelectorAll('input[type="password"]').forEach((input) => {

@@ -57,6 +57,7 @@ import type {
   SecretEnvironmentProjection,
   LoggingLevel,
   RuntimeFailureEvidence,
+  RuntimeImage,
   OpenClawConfigurationValue,
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
@@ -90,6 +91,7 @@ import {
   AGENT_WITH_NODE_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
   GATEWAY_READINESS_ENTRYPOINT,
+  GATEWAY_STOP_TIMEOUT_MS,
 } from "./runtime-entrypoints.ts";
 
 import {
@@ -458,8 +460,8 @@ const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
   ["agent", "/home/node/.openclaw/agents/main/agent"],
   ["media", "/home/node/.openclaw/media"],
 ] as const);
-const SHARED_WORKSPACE_VOLUME = "openclaw-workspace";
-const SHARED_WORKSPACE_SIZE = "40Gi";
+const HARNESS_WORKSPACE_VOLUME = "openclaw-workspace";
+const HARNESS_WORKSPACE_SIZE = "40Gi";
 type WorkspaceRole = "agent" | "gateway";
 const HARNESS_WORKSPACE_CATEGORIES = Object.freeze([
   ["workspace", "/home/node/workspace"],
@@ -678,6 +680,11 @@ function channelProxy(value: unknown): { address: string; port: number } {
 
 export function kubernetesNamespaceName(namespaceId: string): string {
   const id = required(namespaceId, "Platform Namespace ID");
+  return `oce-${sha256Hex(id, 15)}`;
+}
+
+function previousKubernetesNamespaceName(namespaceId: string): string {
+  const id = required(namespaceId, "Platform Namespace ID");
   const slug =
     id
       .toLowerCase()
@@ -686,6 +693,13 @@ export function kubernetesNamespaceName(namespaceId: string): string {
       .slice(0, 46)
       .replace(/-+$/g, "") || "ns";
   return `oce-${slug}-${sha256Hex(id, 12)}`;
+}
+
+function isManagedKubernetesNamespaceName(name: string, namespaceId: string): boolean {
+  return (
+    name === kubernetesNamespaceName(namespaceId) ||
+    name === previousKubernetesNamespaceName(namespaceId)
+  );
 }
 
 export function kubernetesGatewayNamespaceName(namespaceId: string): string {
@@ -735,7 +749,7 @@ function verifiedKubernetesNamespace(
   const external = annotations["openclaw.dev/namespace-lifecycle"] === "external";
   if (!external) {
     if (
-      name !== kubernetesNamespaceName(namespaceId) ||
+      !isManagedKubernetesNamespaceName(name, namespaceId) ||
       labels["app.kubernetes.io/managed-by"] !== MANAGER
     ) {
       throw new OwnershipFailure(
@@ -853,6 +867,10 @@ function harnessModelAuthentication(configuration: OpenClawConfigurationDocument
 
 export class KubernetesComputeDriver implements ComputeDriver {
   readonly discoverHarnessModels = discoverHarnessModels;
+
+  requiresStoppedPredecessors(revision: AgentRevision): boolean {
+    return revision.harness.mode === "dedicated";
+  }
 
   static readonly configurationSchema = Object.freeze({
     type: "object",
@@ -1456,7 +1474,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (this.options.runtime === undefined) {
         const context = await this.agentResourceContext(binding);
         if (context !== undefined) {
-          await this.deleteSharedWorkspaceClaim(context.ownership, context.namespace);
+          await this.deleteHarnessWorkspaceClaim(context.ownership, context.namespace);
         }
         return;
       }
@@ -1493,7 +1511,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       // Only Agent deletion owns durable state. Revision retirement also runs after
       // stop, when no gateway remains to distinguish it from final teardown.
       await this.deleteGatewayPrivateStateClaim(context.ownership, context.namespace);
-      await this.deleteSharedWorkspaceClaim(context.ownership, context.namespace);
+      await this.deleteHarnessWorkspaceClaim(context.ownership, context.namespace);
       const setupName = this.workspaceSetupSecretName(binding.agent.id);
       const setup = await this.getOwned("Secret", setupName, context.namespace, context.ownership);
       if (setup !== undefined) {
@@ -1904,6 +1922,99 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
+  async getRuntimeImages(revision: AgentRevision): Promise<readonly RuntimeImage[]> {
+    if (
+      revision.compute.id !== this.id ||
+      revision.compute.implementation !== this.implementation
+    ) {
+      throw new OwnershipFailure("The revision belongs to another Compute Driver.");
+    }
+    const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
+    const images: RuntimeImage[] = [];
+    for (const role of ["gateway", "agent"] as const) {
+      const targetNamespace =
+        role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
+      const pods = await this.revisionPods(revision, targetNamespace, role);
+      // Old or external images can lack the metadata endpoint. Image identity
+      // still comes from Kubernetes; never infer a commit from a configured tag.
+      // Optional provenance must leave room within the console's request deadline.
+      const ownerSignal = currentComputeAbortSignal();
+      const metadataDeadline = AbortSignal.timeout(2_000);
+      const metadataSignal = ownerSignal
+        ? AbortSignal.any([ownerSignal, metadataDeadline])
+        : metadataDeadline;
+      const provenance =
+        pods.length === 0
+          ? undefined
+          : await withComputeAbortSignal(metadataSignal, () =>
+              this.privateStatusReadback(revision, namespace, role, "/openclaw/runtime/image"),
+            ).catch(() => undefined);
+      for (const pod of pods) {
+        const metadata = asRecord(pod.metadata)!;
+        if (metadata.deletionTimestamp !== undefined) {
+          continue;
+        }
+        const spec = asRecord(pod.spec);
+        const status = asRecord(pod.status);
+        const commit = asRecord(provenance?.status)?.commit;
+        const openclawCommit = asRecord(provenance?.status)?.openclawCommit;
+        const sameContainer =
+          provenance?.podUid === metadata.uid &&
+          provenance?.containerId !== undefined &&
+          provenance.containerId === this.podContainerId(pod, role);
+        const runtimeImageId = (
+          Array.isArray(status?.containerStatuses) ? status.containerStatuses : []
+        )
+          .map(asRecord)
+          .find((item) => item?.name === role)?.imageID;
+        for (const [containers, states] of [
+          [spec?.containers, status?.containerStatuses],
+          [spec?.initContainers, status?.initContainerStatuses],
+          [spec?.ephemeralContainers, status?.ephemeralContainerStatuses],
+        ]) {
+          if (!Array.isArray(containers)) {
+            continue;
+          }
+          for (const value of containers) {
+            const container = asRecord(value);
+            if (!isNonEmptyString(container?.name) || !isNonEmptyString(container?.image)) {
+              throw new DependencyUnavailableError(
+                "Kubernetes returned incomplete image identity.",
+              );
+            }
+            const observed = (Array.isArray(states) ? states : [])
+              .map(asRecord)
+              .find((item) => item?.name === container.name);
+            const imageId = isNonEmptyString(observed?.imageID) ? observed.imageID : null;
+            images.push({
+              workload: `${targetNamespace}/${metadata.name}`,
+              container: container.name,
+              image: container.image,
+              imageId,
+              commit:
+                sameContainer &&
+                imageId !== null &&
+                imageId === runtimeImageId &&
+                typeof commit === "string" &&
+                /^[a-f0-9]{40}$/.test(commit)
+                  ? commit
+                  : null,
+              openclawCommit:
+                sameContainer &&
+                imageId !== null &&
+                imageId === runtimeImageId &&
+                typeof openclawCommit === "string" &&
+                /^[a-f0-9]{40}$/.test(openclawCommit)
+                  ? openclawCommit
+                  : null,
+            });
+          }
+        }
+      }
+    }
+    return images;
+  }
+
   async prepareRevision(
     revision: AgentRevision,
     context?: ComputeRevisionContext,
@@ -2208,7 +2319,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (!embedded) {
       await this.reconcile(
-        this.sharedWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
+        this.harnessWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
         gatewayOwnership,
         namespace,
       );
@@ -2300,11 +2411,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
           asRecord(existingGatewayService.spec?.selector)?.["app.kubernetes.io/name"] ===
             `${gatewayName}-inactive`);
       await this.reconcile(
-        this.service(gatewayName, gatewayOwnership, gatewayNamespace, {
-          "app.kubernetes.io/name": inactiveEmbeddedGateway
-            ? `${gatewayName}-inactive`
-            : gatewayName,
-        }),
+        this.service(
+          gatewayName,
+          gatewayOwnership,
+          gatewayNamespace,
+          inactiveEmbeddedGateway
+            ? { "app.kubernetes.io/name": `${gatewayName}-inactive` }
+            : this.gatewayServiceSelector(revision, gatewayName),
+        ),
         gatewayOwnership,
         gatewayNamespace,
       );
@@ -2447,12 +2561,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       const pluginWarnings = agentReadiness.warnings ?? [];
       await this.reconcile(
-        this.service(agentName, agentOwnership, namespace, {
-          "openclaw.dev/agent": revision.agentId,
-          "openclaw.dev/revision": revision.id,
-          "openclaw.dev/workload-role": "agent",
-          "app.kubernetes.io/name": revisionName,
-        }),
+        this.service(
+          agentName,
+          agentOwnership,
+          namespace,
+          this.agentServiceSelector(
+            revision,
+            sandboxDriver?.provisionHarness === undefined ? revisionName : undefined,
+          ),
+        ),
         agentOwnership,
         namespace,
       );
@@ -2748,7 +2865,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     await this.reconcileChannelNetworkPolicy(revision, channels, gatewayNamespace);
     await this.reconcile(
-      this.sharedWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
+      this.harnessWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
       gatewayOwnership,
       namespace,
     );
@@ -2781,22 +2898,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayNamespace,
     );
     await this.reconcile(
-      this.service(gatewayName, gatewayOwnership, gatewayNamespace, {
-        "app.kubernetes.io/name": gatewayName,
-      }),
+      this.service(
+        gatewayName,
+        gatewayOwnership,
+        gatewayNamespace,
+        this.gatewayServiceSelector(revision, gatewayName),
+      ),
       gatewayOwnership,
       gatewayNamespace,
     );
     await this.reconcileGatewayRoute(revision, gatewayOwnership, gatewayNamespace);
     await this.reconcile(
-      this.service(agentName, ownership, namespace, {
-        "openclaw.dev/agent": revision.agentId,
-        "openclaw.dev/revision": revision.id,
-        "openclaw.dev/workload-role": "agent",
-        ...(sandboxDriver?.provisionHarness === undefined
-          ? { "app.kubernetes.io/name": revisionName }
-          : {}),
-      }),
+      this.service(
+        agentName,
+        ownership,
+        namespace,
+        this.agentServiceSelector(
+          revision,
+          sandboxDriver?.provisionHarness === undefined ? revisionName : undefined,
+        ),
+      ),
       ownership,
       namespace,
     );
@@ -2854,7 +2975,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }),
       ownership,
       namespace,
-      { serviceSelector: { "openclaw.dev/revision": revision.id } },
+      {
+        serviceSelector: {
+          "openclaw.dev/agent": revision.agentId,
+          "openclaw.dev/revision": revision.id,
+          "openclaw.dev/workload-role": "agent",
+        },
+      },
     );
   }
 
@@ -3033,7 +3160,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       "openclaw.dev/revision": revision.id,
       "openclaw.dev/workload-role": role,
     };
-    const deadline = Date.now() + WORKLOAD_TERMINATION_TIMEOUT_MS;
+    const timeoutMs =
+      role === "gateway"
+        ? GATEWAY_STOP_TIMEOUT_MS + REQUEST_TIMEOUT_MS
+        : WORKLOAD_TERMINATION_TIMEOUT_MS;
+    const deadline = Date.now() + timeoutMs;
     for (;;) {
       signal.throwIfAborted();
       const observed = asRecord(
@@ -4968,7 +5099,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     (pod.volumes as V1Volume[]).push({
       name: NODE_STATE_VOLUME,
-      persistentVolumeClaim: { claimName: this.sharedWorkspaceClaimName(revision.agentId) },
+      persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(revision.agentId) },
     });
     // Create the private subdirectory as the runtime user before kubelet mounts it.
     // A kubelet-created subPath is root-owned; native setup cannot tighten its mode.
@@ -5162,7 +5293,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   ): readonly SandboxWorkspaceMount[] {
     const observedVolumes = Array.isArray(volumes) ? volumes : [];
     const workspaceVolume = observedVolumes.find(
-      (item) => asRecord(item)?.name === SHARED_WORKSPACE_VOLUME,
+      (item) => asRecord(item)?.name === HARNESS_WORKSPACE_VOLUME,
     );
     const claimName = required(
       asRecord(asRecord(workspaceVolume)?.persistentVolumeClaim)?.claimName,
@@ -5170,7 +5301,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     const observedMounts = Array.isArray(volumeMounts) ? volumeMounts : [];
     const workspaceMounts = observedMounts
-      .filter((item) => asRecord(item)?.name === SHARED_WORKSPACE_VOLUME)
+      .filter((item) => asRecord(item)?.name === HARNESS_WORKSPACE_VOLUME)
       .map((item) => {
         const mount = asRecord(item);
         return {
@@ -6090,7 +6221,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
-  private sharedWorkspaceClaimName(agentId: string): string {
+  private harnessWorkspaceClaimName(agentId: string): string {
     return `workspace-${sha256Hex(agentId, 12)}`;
   }
 
@@ -6098,7 +6229,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return `gateway-state-${sha256Hex(agentId, 12)}`;
   }
 
-  private sharedWorkspaceClaim(
+  private harnessWorkspaceClaim(
     agentId: string,
     ownership: Ownership,
     namespace: string,
@@ -6107,13 +6238,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
       ...this.manifest(
         "v1",
         "PersistentVolumeClaim",
-        this.sharedWorkspaceClaimName(agentId),
+        this.harnessWorkspaceClaimName(agentId),
         ownership,
         namespace,
       ),
       spec: {
-        accessModes: ["ReadWriteMany"],
-        resources: { requests: { storage: SHARED_WORKSPACE_SIZE } },
+        accessModes: ["ReadWriteOnce"],
+        resources: { requests: { storage: HARNESS_WORKSPACE_SIZE } },
       },
     };
   }
@@ -6151,10 +6282,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const expectedModes = Array.isArray(desired.spec?.accessModes) ? desired.spec.accessModes : [];
     const requests = asRecord(asRecord(claim.spec?.resources)?.requests);
     const expectedRequests = asRecord(asRecord(desired.spec?.resources)?.requests);
+    // Keep existing Agent workspace data on its original RWX claim. Never patch
+    // an immutable PVC access mode or broaden Gateway private-state acceptance.
+    const agentId = desired.metadata.annotations?.["openclaw.dev/agent-id"];
+    const existingWorkspace =
+      agentId !== undefined &&
+      desired.metadata.name === this.harnessWorkspaceClaimName(agentId) &&
+      accessModes.length === 1 &&
+      accessModes[0] === "ReadWriteMany";
     if (
       claim.metadata.deletionTimestamp !== undefined ||
-      accessModes.length !== expectedModes.length ||
-      accessModes.some((mode, index) => mode !== expectedModes[index]) ||
+      (!existingWorkspace &&
+        (accessModes.length !== expectedModes.length ||
+          accessModes.some((mode, index) => mode !== expectedModes[index]))) ||
       requests?.storage !== expectedRequests?.storage ||
       (claim.spec?.volumeMode ?? "Filesystem") !== (desired.spec?.volumeMode ?? "Filesystem") ||
       (desired.spec?.storageClassName !== undefined &&
@@ -6166,7 +6306,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private harnessWorkspaceVolumeMounts(): V1VolumeMount[] {
     return HARNESS_WORKSPACE_CATEGORIES.map(([subPath, mountPath]) => ({
-      name: SHARED_WORKSPACE_VOLUME,
+      name: HARNESS_WORKSPACE_VOLUME,
       mountPath,
       subPath,
       readOnly: false,
@@ -6222,7 +6362,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     writableConfiguration = false,
   ): KubernetesRecord {
     const directories = this.privateStateDirectories(role);
-    const volumeMounts: V1VolumeMount[] = [{ name: "runtime-state", mountPath: "/home/node" }];
+    const volumeMounts: V1VolumeMount[] = [
+      { name: "runtime-state", mountPath: "/home/node" },
+      { name: "runtime-temporary", mountPath: "/runtime-temporary" },
+    ];
     if (writableConfiguration) {
       volumeMounts.push({
         name: CONFIGURATION_VOLUME,
@@ -6246,6 +6389,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
       `for (const path of ${JSON.stringify(directories)}) {`,
       "  mkdirSync(path, { recursive: true });",
       "}",
+      // The emptyDir root is group-writable under fsGroup, without /tmp's sticky
+      // bit. Mount a private child so native safe-temp admission needs no privilege.
+      'mkdirSync("/runtime-temporary/tmp", { recursive: true, mode: 0o700 });',
       ...(writableConfiguration
         ? [
             `copyFileSync(${JSON.stringify(
@@ -6270,10 +6416,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
-  private async deleteSharedWorkspaceClaim(ownership: Ownership, namespace: string): Promise<void> {
-    const agentId = required(ownership.agentId, "Shared workspace Agent ID");
+  private async deleteHarnessWorkspaceClaim(
+    ownership: Ownership,
+    namespace: string,
+  ): Promise<void> {
+    const agentId = required(ownership.agentId, "Harness workspace Agent ID");
     await this.deletePersistentVolumeClaim(
-      this.sharedWorkspaceClaim(agentId, ownership, namespace),
+      this.harnessWorkspaceClaim(agentId, ownership, namespace),
       ownership,
       namespace,
     );
@@ -6352,6 +6501,31 @@ export class KubernetesComputeDriver implements ComputeDriver {
         policyTypes: ["Egress"],
         egress,
       },
+    };
+  }
+
+  private agentServiceSelector(
+    revision: AgentRevision,
+    workloadName?: string,
+  ): Record<string, string> {
+    return {
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/revision": revision.id,
+      "openclaw.dev/workload-role": "agent",
+      ...(workloadName === undefined ? {} : { "app.kubernetes.io/name": workloadName }),
+    };
+  }
+
+  private gatewayServiceSelector(
+    revision: AgentRevision,
+    workloadName: string,
+  ): Record<string, string> {
+    return {
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/workload-role": "gateway",
+      "app.kubernetes.io/name": workloadName,
     };
   }
 
@@ -7294,14 +7468,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       );
       volumeMounts.push(
         { name: "runtime-state", mountPath: "/home/node" },
-        { name: "runtime-temporary", mountPath: "/tmp" },
+        { name: "runtime-temporary", mountPath: "/tmp", subPath: "tmp" },
       );
     }
     if (dedicated && role === "agent") {
       const agentId = required(ownership.agentId, "Harness workspace Agent ID");
       volumes.push({
-        name: SHARED_WORKSPACE_VOLUME,
-        persistentVolumeClaim: { claimName: this.sharedWorkspaceClaimName(agentId) },
+        name: HARNESS_WORKSPACE_VOLUME,
+        persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(agentId) },
       });
       volumeMounts.push(...this.harnessWorkspaceVolumeMounts());
     }
@@ -7424,7 +7598,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
               "runtime-state",
               "runtime-temporary",
               GATEWAY_PRIVATE_STATE_VOLUME,
-              SHARED_WORKSPACE_VOLUME,
+              HARNESS_WORKSPACE_VOLUME,
               CONFIGURATION_VOLUME,
             ].includes(name),
           ),
@@ -7512,6 +7686,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
           spec: {
             serviceAccountName,
             automountServiceAccountToken: false,
+            ...(role === "gateway"
+              ? { terminationGracePeriodSeconds: GATEWAY_STOP_TIMEOUT_MS / 1000 }
+              : {}),
             ...runtimeNodeSelector,
             ...(volumes.length === 0 ? {} : { volumes }),
             ...(initContainers.length === 0 ? {} : { initContainers }),
