@@ -470,6 +470,82 @@ function repositoryAttempts(fixture, revision) {
 }
 
 test(
+  "exclusive replacement blocks overlap, supersedes old maintenance and recovers through a new revision",
+  { ...requiresPostgres, timeout: 30_000 },
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("exclusive-workspace", "dedicated");
+    const running = new Set();
+    const prepared = [];
+    let rejectStop = true;
+    let stopFailures = 0;
+    const compute = {
+      ...fixture.compute,
+      requiresStoppedPredecessors: () => true,
+      async prepareRevision(revision) {
+        // This Driver boundary represents a resource which cannot be held by
+        // two revisions. PostgreSQL and the real worker own ordering and retries.
+        assert.deepEqual(
+          [...running].filter((id) => id !== revision.id),
+          [],
+        );
+        running.add(revision.id);
+        prepared.push(revision.id);
+        return {
+          ...(await fixture.compute.prepareRevision(revision)),
+          ready: revision.revision !== 2,
+        };
+      },
+      async stopRevision(revision) {
+        if (rejectStop && running.has(revision.id)) {
+          rejectStop = false;
+          stopFailures += 1;
+          throw new Error("resource release temporarily unavailable");
+        }
+        running.delete(revision.id);
+      },
+      async retireRevision(revision) {
+        running.delete(revision.id);
+      },
+    };
+    await fixture.start(compute, undefined, 3_000);
+    const first = await fixture.revision(owner, 1);
+    await fixture.work(first, "succeeded");
+    const replacement = await fixture.revision(owner, 2);
+    await waitFor("replacement preparation after predecessor release", async () =>
+      running.has(replacement.id) ? true : undefined,
+    );
+    assert.equal(stopFailures, 1);
+    const firstPreparations = prepared.filter((id) => id === first.id).length;
+    const maintenance = {
+      id: first.id,
+      idempotencyKey: `agent_revision:${first.id}:maintenance:${randomUUID()}`,
+    };
+    await fixture.state.transactWithQueue((_unit, queue) =>
+      queue.enqueue({
+        idempotencyKey: maintenance.idempotencyKey,
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        revisionId: first.id,
+        actorId: fixture.actor.id,
+        availableAt: new Date(0),
+      }),
+    );
+    await fixture.work(maintenance, "succeeded");
+    assert.equal(prepared.filter((id) => id === first.id).length, firstPreparations);
+    await fixture.work(replacement, "failed_permanent");
+    assert.deepEqual([...running], [replacement.id]);
+    const recovery = await fixture.revision(owner, 3);
+    await fixture.work(recovery, "succeeded");
+    assert.deepEqual([...running], [recovery.id]);
+    const current = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(current.activeRevisionId, recovery.id);
+  },
+);
+
+test(
   "worker revalidates admitted repository selections through the concrete GitHub Driver and Unix control",
   { ...requiresPostgres, timeout: 30_000 },
   async (context) => {
@@ -1057,6 +1133,20 @@ for (const loss of ["missing", "closed-repair"]) {
       await waitFor("unsafe revision runtime to retire", async () =>
         stopped.includes(candidate.id) ? true : undefined,
       );
+      if (loss === "missing") {
+        await waitFor("invalidated cleanup to wait for Driver maintenance", async () => {
+          const delayed = await fixture.observerPool.query(
+            `SELECT EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+             FROM occ.controller_work
+             WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2`,
+            [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+          );
+          return Number(delayed.rows[0]?.delay_ms) >=
+            repository.driver.maintenanceIntervalMs - 1_000
+            ? true
+            : undefined;
+        });
+      }
       await fixture.stop();
       const refusal = await fixture.observerPool.query(
         "SELECT reason_code FROM occ.controller_work WHERE idempotency_key = $1",

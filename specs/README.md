@@ -45,12 +45,18 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 [Repository selection and inherited access](37-repository-picker-and-access.md) — Proposed;
 adaptive repository discovery, selected cards, and explicit per-repository overrides.
+[Dedicated Harness RWO workspace](38-harness-rwo-workspace-plan.md) — Implementing;
+exclusive revision preparation, durable RWO workspaces, and retained existing claims.
 
 [Plugin policy enforcement](37-plugin-policy-enforcement.md) — Proposed for alignment;
 revises the earlier plugin policy proposals with nested defaults and tool overrides,
 Driver extensions, and admission-to-runtime enforcement. Draft implementation
 exists; enforcement delivery awaits alignment. Catalog discovery proceeds in the
 separate Create Agent workstream.
+
+[Independent production image upgrades](36-coordinated-image-upgrade.md) — Proposed;
+release the controller without replacing Agents, or update the runtime image and
+redeploy the running fleet concurrently through OCC.
 
 [Native OpenClaw plugin tool policies](35-native-plugin-tool-policy.md) — Proposed;
 enforce Agent plugin policies through a managed native policy plugin and existing

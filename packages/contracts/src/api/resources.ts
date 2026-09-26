@@ -424,6 +424,40 @@ export const InstallationResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const InstallationDeploymentInventorySchema = Type.Object(
+  {
+    installationId: InstallationId,
+    namespaces: Type.Array(
+      Type.Object(
+        {
+          id: NamespaceId,
+          status: NamespaceSchema.properties.status,
+          agents: Type.Array(
+            Type.Object(
+              {
+                id: AgentId,
+                status: AgentSchema.properties.status,
+                desiredRuntimeState: AgentSchema.properties.desiredRuntimeState,
+                executionMode: AgentSchema.properties.executionMode,
+                activeRevisionId: Type.Optional(RevisionId),
+                deploymentInProgress: Type.Boolean(),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const InstallationDeploymentInventoryResponse = Type.Object(
+  { data: InstallationDeploymentInventorySchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 export const NamespaceResponse = Type.Object(
   { data: NamespaceSchema, meta: Meta },
   { additionalProperties: false },
@@ -703,6 +737,9 @@ export const WorkspaceFileUpdateResponse = Type.Object(
 );
 
 export type InstallationWire = Type.Static<typeof InstallationSchema>;
+export type InstallationDeploymentInventoryWire = Type.Static<
+  typeof InstallationDeploymentInventorySchema
+>;
 export type NamespaceWire = Type.Static<typeof NamespaceSchema>;
 export type ConfigurationWire = Type.Static<typeof ConfigurationSchema>;
 export type SecretWire = Type.Static<typeof SecretSchema>;
@@ -719,6 +756,9 @@ export type IAMAccessBindingWire = Type.Static<typeof IAMAccessBindingSchema>;
 export type AgentRevisionWire = Type.Static<typeof AgentRevisionSchema>;
 export type AgentDeploymentStatusWire = Type.Static<typeof AgentDeploymentStatusSchema>;
 export type InstallationResponse = Type.Static<typeof InstallationResponse>;
+export type InstallationDeploymentInventoryResponse = Type.Static<
+  typeof InstallationDeploymentInventoryResponse
+>;
 export type NamespaceResponse = Type.Static<typeof NamespaceResponse>;
 export type NamespaceListResponse = Type.Static<typeof NamespaceListResponse>;
 export type ConfigurationResponse = Type.Static<typeof ConfigurationResponse>;

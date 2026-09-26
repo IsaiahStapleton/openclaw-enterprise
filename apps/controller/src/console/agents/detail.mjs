@@ -158,10 +158,10 @@ function createDeploymentStatusPanel(context, path, revisionId) {
   return section;
 }
 
-export async function renderAgentDetail(context) {
+export async function renderAgentDetail(context, { agent: preloadedAgent = null } = {}) {
   const { view, namespaceId, agentId, request, url } = context;
   const path = `${namespacePath(namespaceId)}/agents/${encodeURIComponent(agentId)}`;
-  const agent = await request(path);
+  const agent = preloadedAgent ?? (await request(path));
   if (!context.isCurrent()) {
     return;
   }
@@ -416,14 +416,19 @@ export async function renderAgentDetail(context) {
     let deploy;
     let deployPending = false;
     let deployReloadMessage = "";
-    let deployFeedback = "";
+    let deployFeedback;
     let deployStatus;
     let authenticationForm;
+    const retainedAuthentication = context.drafts.get("authentication");
+    let authenticationPending = Boolean(
+      retainedAuthentication?.outcomeUnknown || retainedAuthentication?.savedAuthentication,
+    );
+    const retainedEditor = context.drafts.get("configuration");
     const draftEditorState = {
-      dirty: false,
+      dirty: Boolean(retainedEditor && retainedEditor.text !== retainedEditor.initialText),
       saving: false,
-      outcomeUnknown: false,
-      reloadRequired: false,
+      outcomeUnknown: retainedEditor?.outcomeUnknown ?? false,
+      reloadRequired: retainedEditor?.reloadRequired ?? false,
     };
     const runtimeAuth = agent.harnessAuth?.method === "runtime";
     const credentials =
@@ -460,10 +465,18 @@ export async function renderAgentDetail(context) {
       if (!deploy || !deployStatus) {
         return;
       }
+      const retainedConfiguration =
+        selectedTab === "configuration" ? null : context.drafts.get("configuration");
+      const retainedConfigurationDirty = Boolean(
+        retainedConfiguration && retainedConfiguration.text !== retainedConfiguration.initialText,
+      );
       deploy.disabled =
         deployPending ||
         authenticationSaveState !== "idle" ||
         Boolean(deployReloadMessage) ||
+        authenticationPending ||
+        retainedConfigurationDirty ||
+        Boolean(retainedConfiguration?.outcomeUnknown || retainedConfiguration?.reloadRequired) ||
         draftEditorState.dirty ||
         draftEditorState.saving ||
         draftEditorState.outcomeUnknown ||
@@ -479,6 +492,13 @@ export async function renderAgentDetail(context) {
         } else if (authenticationSaveState === "uncertain") {
           deployStatus.textContent =
             "Authentication may have been saved. Reload this draft before deploying.";
+        } else if (authenticationPending) {
+          deployStatus.textContent =
+            "Confirm authentication and Secret access in Credentials before deploying.";
+        } else if (retainedConfiguration?.outcomeUnknown || retainedConfiguration?.reloadRequired) {
+          deployStatus.textContent = "Reload the Configuration draft before deploying.";
+        } else if (retainedConfigurationDirty) {
+          deployStatus.textContent = "Save or cancel Configuration edits before deploying.";
         } else if (draftEditorState.outcomeUnknown) {
           deployStatus.textContent = `Reload this draft before deploying because the last ${editedSubject()} save outcome is unknown.`;
         } else if (draftEditorState.reloadRequired) {
@@ -487,8 +507,8 @@ export async function renderAgentDetail(context) {
           deployStatus.textContent = `Wait for ${editedSubject()} save to finish before deploying.`;
         } else if (draftEditorState.dirty) {
           deployStatus.textContent = `Save or cancel ${editedSubject()} edits before deploying.`;
-        } else if (deployFeedback) {
-          deployStatus.textContent = deployFeedback;
+        } else if (deployFeedback?.textContent) {
+          deployStatus.textContent = "";
         } else if (revisionResult.status !== "fulfilled") {
           deployStatus.textContent =
             "Revision history is required before deploying this new revision.";
@@ -504,10 +524,11 @@ export async function renderAgentDetail(context) {
     }
     if (draft) {
       deployStatus = element("p", { className: "muted", role: "status" });
+      deployFeedback = element("p", { className: "error", role: "alert" });
       deploy = button("Deploy new revision", async () => {
+        deployFeedback.textContent = "";
         deploy.disabled = true;
         deployPending = true;
-        deployFeedback = "";
         deployInFlight = true;
         content.toggleAttribute("inert", true);
         updateNavigationControls();
@@ -554,14 +575,14 @@ export async function renderAgentDetail(context) {
           // after this preflight can still race with the POST.
           const credentialBlockReason = runtimeCredentialBlockReason(freshConfig.values);
           if (credentialBlockReason !== null) {
-            deployFeedback = credentialBlockReason;
+            deployFeedback.textContent = credentialBlockReason;
             return;
           }
           if (
             !runtimeAuth &&
             !hasRequiredRuntimeCredentials(freshCredentials, freshConfig.values, freshConfig)
           ) {
-            deployFeedback =
+            deployFeedback.textContent =
               "Runtime credential metadata changed. Refresh status before deploying.";
             return;
           }
@@ -582,8 +603,10 @@ export async function renderAgentDetail(context) {
             context.onExpired();
             return;
           }
-          deployFeedback = message(error, submitted);
-          deployStatus.textContent = deployFeedback;
+          deployFeedback.textContent =
+            error.status === 403
+              ? "Deployment denied. Check your Agent deployment permission and this Agent’s access to the selected credential Secret in Credentials. Ask a Namespace administrator to confirm the required grants."
+              : message(error, submitted);
           if (!submitted || [400, 403, 404, 409, 429].includes(error.status)) {
             deployPending = false;
           }
@@ -611,6 +634,7 @@ export async function renderAgentDetail(context) {
         ),
         deploy,
         deployStatus,
+        deployFeedback,
       );
     }
     if (!draft) {
@@ -633,6 +657,10 @@ export async function renderAgentDetail(context) {
       draft,
       executionMode,
       credentials,
+      setAuthenticationPending(pending) {
+        authenticationPending = pending;
+        updateDeployControls();
+      },
       setDraftEditorState(nextState) {
         Object.assign(draftEditorState, nextState);
         draftEditorNavigationBlock = draftEditorState.outcomeUnknown
@@ -641,7 +669,7 @@ export async function renderAgentDetail(context) {
             ? "Reload this draft before leaving the editor."
             : draftEditorState.saving
               ? `Wait for ${editedSubject()} save to finish before leaving the editor.`
-              : draftEditorState.dirty
+              : draftEditorState.dirty && selectedTab === "repositories"
                 ? `Save or cancel ${editedSubject()} edits before leaving this tab.`
                 : null;
         updateNavigationControls();
@@ -663,6 +691,7 @@ export async function renderAgentDetail(context) {
   }
 
   async function renderTab() {
+    context.flushDrafts();
     const activeTab = ++tabGeneration;
     const tabContext = {
       ...context,
@@ -723,6 +752,8 @@ export async function renderAgentDetail(context) {
         executionMode,
         readOnly: !draft,
         drawerContext: {
+          drafts: context.drafts,
+          baseline: JSON.stringify([snapshot.id, snapshot.generation]),
           namespaceId,
           request,
           agentName: agent.name,
@@ -783,6 +814,7 @@ export async function renderAgentDetail(context) {
             }
             if (context.isCurrent()) {
               data.setDraftEditorState({ saving: false, outcomeUnknown: false });
+              context.drafts.forget("channels");
               change("draft", "channels");
             }
           } catch (error) {
@@ -813,7 +845,10 @@ export async function renderAgentDetail(context) {
             data.setDraftEditorState({ dirty: false, saving: pending, outcomeUnknown });
           }
         },
-        onReload: () => context.navigate(target("draft", "channels"), namespaceId, true),
+        onReload: () => {
+          context.drafts.forget("channels");
+          context.navigate(target("draft", "channels"), namespaceId, true);
+        },
       });
       const navigationFeedback = element("p", { className: "hint", role: "status" });
       showDraftEditorNavigationBlock = () => {
@@ -821,24 +856,27 @@ export async function renderAgentDetail(context) {
       };
       content.append(channels, navigationFeedback);
     } else if (selectedTab === "credentials" && draft) {
-      const auth = createHarnessAuthFields(context, agent.harnessAuth, agent.executionMode);
+      const retained = context.drafts.get("authentication");
+      const baseline = retained?.baseline ?? {
+        configurationId: agent.configurationId,
+        harnessAuth: agent.harnessAuth,
+      };
+      const auth = createHarnessAuthFields(context, agent.harnessAuth, agent.executionMode, {
+        agentName: agent.name,
+        draft: retained?.fields,
+      });
       const feedback = element("p", { role: "status", className: "hint" });
       const save = element(
         "button",
         { type: "submit", className: "primary" },
         "Save authentication source",
       );
-      const reload = button("Reload draft", () =>
-        context.navigate(target("draft", "credentials"), namespaceId, true),
-      );
-      let outcomeUnknown = data.authenticationSaveState === "uncertain";
-      reload.hidden = !outcomeUnknown;
-      save.disabled = outcomeUnknown;
-      auth.setDisabled(outcomeUnknown);
-      if (outcomeUnknown) {
-        feedback.textContent =
-          "Authentication may have been saved. Reload this draft before saving again.";
-      }
+      const reload = button("Reload authentication source", () => {
+        context.drafts.forget("authentication");
+        data.setAuthenticationSaveState("idle");
+        data.setAuthenticationPending(false);
+        context.navigate(target("draft", "credentials"), namespaceId, true);
+      });
       const form = element(
         "form",
         { className: "agent-card" },
@@ -848,36 +886,83 @@ export async function renderAgentDetail(context) {
         feedback,
       );
       data.setAuthenticationForm(form);
+      let outcomeUnknown = retained?.outcomeUnknown ?? false;
+      let pending = false;
+      let savedAuthentication = retained?.savedAuthentication ?? null;
+      const originalFields = retained?.originalFields ?? auth.capture();
+      context.drafts.track("authentication", () => {
+        const fields = auth.capture();
+        return pending ||
+          outcomeUnknown ||
+          savedAuthentication ||
+          JSON.stringify(fields) !== JSON.stringify(originalFields)
+          ? {
+              fields,
+              originalFields,
+              baseline,
+              savedAuthentication,
+              outcomeUnknown: outcomeUnknown || pending,
+            }
+          : undefined;
+      });
+      if (savedAuthentication) {
+        save.textContent = "Retry credential access";
+        auth.setDisabled(true);
+        feedback.textContent =
+          "Authentication source saved. Retry credential access to confirm this Agent can use the selected Secret.";
+      }
+      if (outcomeUnknown) {
+        save.disabled = true;
+        auth.setDisabled(true);
+        feedback.textContent = "Outcome unknown. Reload authentication source before saving again.";
+      }
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!form.reportValidity() || save.disabled) {
           return;
         }
         save.disabled = true;
+        pending = true;
+        reload.disabled = true;
         auth.setDisabled(true);
         data.setAuthenticationSaveState("saving");
+        data.setAuthenticationPending(true);
+        feedback.textContent = savedAuthentication
+          ? "Checking Secret access…"
+          : "Saving authentication…";
         let mutationStarted = false;
         try {
-          const harnessAuth = await auth.readBinding();
+          const harnessAuth = savedAuthentication?.harnessAuth ?? (await auth.readBinding());
           const current = await request(path);
           if (!context.isCurrent()) {
             return;
           }
+          const expected = savedAuthentication ?? baseline;
           if (
-            current.configurationId !== agent.configurationId ||
-            JSON.stringify(current.harnessAuth) !== JSON.stringify(agent.harnessAuth)
+            current.configurationId !== expected.configurationId ||
+            JSON.stringify(current.harnessAuth) !== JSON.stringify(expected.harnessAuth)
           ) {
             feedback.textContent =
-              "The Configuration changed. Refresh before saving authentication.";
+              "The Configuration changed. Reload authentication source before saving.";
+            outcomeUnknown = true;
             return;
           }
-          mutationStarted = true;
-          await request(path, {
-            method: "PATCH",
-            body: { configurationId: agent.configurationId, harnessAuth },
-          });
+          if (!savedAuthentication) {
+            mutationStarted = true;
+            savedAuthentication = await request(path, {
+              method: "PATCH",
+              body: { configurationId: agent.configurationId, harnessAuth },
+            });
+            details = null;
+          }
+          if (harnessAuth?.source?.kind === "secret") {
+            feedback.textContent = "Authentication saved. Checking Secret access…";
+            await ensureSecretOperateBinding(context, current, harnessAuth.source);
+          }
+          data.setAuthenticationPending(false);
           if (context.isCurrent()) {
             data.setAuthenticationSaveState("idle");
+            context.drafts.forget("authentication");
             change("draft", "credentials");
           }
         } catch (error) {
@@ -886,16 +971,27 @@ export async function renderAgentDetail(context) {
           }
           if (error.status === 401) {
             context.onExpired();
+          } else if (savedAuthentication) {
+            feedback.textContent = `Authentication source saved, but this Agent's Secret access could not be confirmed. ${message(error)} Ask a Namespace administrator to grant this Agent secret:operate on the selected Secret, then retry credential access. Deployment readiness is not confirmed.`;
           } else {
-            feedback.textContent = message(error, mutationStarted);
-            outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
+            outcomeUnknown =
+              error.outcomeUnknown ??
+              (mutationStarted && ![400, 403, 404, 409, 429].includes(error.status));
+            feedback.textContent = error.outcomeUnknown
+              ? error.message
+              : message(error, mutationStarted);
+            data.setAuthenticationPending(outcomeUnknown);
           }
         } finally {
           if (context.isCurrent()) {
             data.setAuthenticationSaveState(outcomeUnknown ? "uncertain" : "idle");
+            save.textContent = savedAuthentication
+              ? "Retry credential access"
+              : "Save authentication source";
+            pending = false;
+            reload.disabled = false;
             save.disabled = outcomeUnknown;
-            auth.setDisabled(outcomeUnknown);
-            reload.hidden = !outcomeUnknown;
+            auth.setDisabled(outcomeUnknown || savedAuthentication !== null);
           }
         }
       });
@@ -1075,11 +1171,13 @@ export async function renderAgentDetail(context) {
   function renderDraftConfigurationEditor(context, data) {
     const { snapshot, values, setDraftEditorState } = data;
     const container = element("div", { className: "configuration-draft-editor" });
-    let editing = false;
+    const retained = context.drafts.get("configuration");
+    let baseline = retained?.baseline ?? { id: snapshot.id, generation: snapshot.generation };
+    let editing = Boolean(retained);
     let pending = false;
-    let outcomeUnknown = false;
-    let reloadRequired = false;
-    const initialText = JSON.stringify(values, null, 2);
+    let outcomeUnknown = retained?.outcomeUnknown ?? false;
+    let reloadRequired = retained?.reloadRequired ?? false;
+    let initialText = retained?.initialText ?? JSON.stringify(values, null, 2);
     const editor = element("textarea", {
       id: "configuration-json",
       name: "configuration",
@@ -1089,7 +1187,18 @@ export async function renderAgentDetail(context) {
       spellcheck: "false",
       "aria-describedby": "configuration-json-hint",
     });
-    editor.value = initialText;
+    editor.value = retained?.text ?? initialText;
+    context.drafts.track("configuration", () =>
+      editing
+        ? {
+            text: editor.value,
+            initialText,
+            baseline,
+            outcomeUnknown: outcomeUnknown || pending,
+            reloadRequired,
+          }
+        : undefined,
+    );
     const feedback = element("p", { className: "hint", role: "status" });
     let feedbackLocked = false;
     const edit = button("Edit Configuration", () => {
@@ -1100,6 +1209,8 @@ export async function renderAgentDetail(context) {
       className: "primary",
     });
     const cancel = button("Cancel", () => {
+      baseline = { id: snapshot.id, generation: snapshot.generation };
+      initialText = JSON.stringify(values, null, 2);
       editing = false;
       editor.value = initialText;
       editor.setCustomValidity("");
@@ -1114,6 +1225,7 @@ export async function renderAgentDetail(context) {
       render();
     });
     const reload = button("Reload draft", () => {
+      context.drafts.forget("configuration");
       context.navigate(target("draft", "configuration"), namespaceId, true);
     });
 
@@ -1207,15 +1319,15 @@ export async function renderAgentDetail(context) {
         const [freshAgent, freshConfig] = await Promise.all([
           request(path),
           request(
-            `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(snapshot.id)}`,
+            `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(baseline.id)}`,
           ),
         ]);
         if (!context.isCurrent()) {
           return;
         }
         if (
-          freshAgent.configurationId !== snapshot.id ||
-          freshConfig.generation !== snapshot.generation
+          freshAgent.configurationId !== baseline.id ||
+          freshConfig.generation !== baseline.generation
         ) {
           feedback.textContent =
             "The saved Configuration changed while you were editing. Reload this draft before saving.";
@@ -1225,13 +1337,14 @@ export async function renderAgentDetail(context) {
         }
         mutationStarted = true;
         await request(
-          `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(snapshot.id)}`,
+          `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(baseline.id)}`,
           {
             method: "PATCH",
             body: { values: nextValues },
           },
         );
         if (context.isCurrent()) {
+          context.drafts.forget("configuration");
           context.navigate(target("draft", "configuration"), namespaceId, true);
         }
       } catch (error) {

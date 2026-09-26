@@ -376,6 +376,7 @@ export class ControllerWorker {
   private readonly convergenceTimeoutMs: number;
   private readonly maintenanceIntervalMs: number | undefined;
   private readonly repoDriver: RepoDriver | undefined;
+  private readonly repositoryCleanupRetryMs: number;
   private readonly pluginDriver: PluginDriver | undefined;
   private readonly repositoryCredentials: RepositoryCredentialLifecycle;
   private readonly mode: "development" | "production";
@@ -480,6 +481,10 @@ export class ControllerWorker {
       });
     this.onHealthy = options.onHealthy;
     this.repoDriver = drivers?.repoDriver;
+    this.repositoryCleanupRetryMs = positiveInteger(
+      this.repoDriver?.maintenanceIntervalMs ?? 30_000,
+      "Repository cleanup retry interval",
+    );
     this.pluginDriver = drivers?.pluginDriver;
     if (this.repoDriver !== undefined) {
       const driver = this.repoDriver;
@@ -862,6 +867,17 @@ export class ControllerWorker {
     revision: Readonly<AgentRevision>,
     context: ComputeRevisionContext,
   ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
+    if (this.compute.requiresStoppedPredecessors?.(revision) === true) {
+      const earlier = await this.state.read(async (view) =>
+        (await view.revisions.listRevisions(revision.namespaceId, revision.agentId)).filter(
+          (candidate) => candidate.revision < revision.revision,
+        ),
+      );
+      for (const previous of earlier) {
+        await this.closeRevisionCredentials(claim, previous);
+        await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(previous));
+      }
+    }
     let prepared = context;
     if (revision.repositoryCredentials !== undefined) {
       const repositoryCredentials = await this.repositoryCredentials.prepare(claim, revision);
@@ -961,12 +977,12 @@ export class ControllerWorker {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
+      const attempts = await unit.repositorySessions.listRevisionAttempts({
+        namespaceId: claim.namespaceId,
+        agentId: claim.agentId!,
+        revisionId: claim.revisionId!,
+      });
       if (complete) {
-        const attempts = await unit.repositorySessions.listRevisionAttempts({
-          namespaceId: claim.namespaceId,
-          agentId: claim.agentId!,
-          revisionId: claim.revisionId!,
-        });
         complete = !attempts.some(
           (attempt) => attempt.phase === "closing" || attempt.phase === "invalidated",
         );
@@ -974,7 +990,13 @@ export class ControllerWorker {
       if (complete) {
         await queue.complete(claim);
       } else {
-        await queue.defer(claim, { code: "REPOSITORY_CLEANUP_PENDING" });
+        await queue.defer(
+          claim,
+          { code: "REPOSITORY_CLEANUP_PENDING" },
+          attempts.some((attempt) => attempt.phase === "invalidated")
+            ? { delayMs: this.repositoryCleanupRetryMs }
+            : undefined,
+        );
       }
     }, this.queueOptions);
     this.emit({
@@ -1777,6 +1799,28 @@ export class ControllerWorker {
           await this.retireEarlierRevisions(claim, revision);
         }
         await this.completeStoppedRevisionWork(claim, revision, "REVISION_STOPPED");
+        return;
+      }
+      // Exclusive preparation cannot allow an older maintenance/retry pass to
+      // recreate a predecessor between the replacement's readiness observations.
+      const successor =
+        this.compute.requiresStoppedPredecessors === undefined
+          ? undefined
+          : await this.state.read(async (view) =>
+              (await view.revisions.listRevisions(revision.namespaceId, revision.agentId)).find(
+                (candidate) =>
+                  candidate.revision > revision.revision &&
+                  candidate.compute.id === this.compute.id &&
+                  candidate.compute.implementation === this.compute.implementation &&
+                  this.compute.requiresStoppedPredecessors?.(candidate) === true,
+              ),
+            );
+      if (successor !== undefined) {
+        await this.finalizeRevision(claim, {
+          outcome: "success",
+          code: "REVISION_SUPERSEDED",
+          supersededBy: successor,
+        });
         return;
       }
       if (revision.repositoryCredentials !== undefined) {

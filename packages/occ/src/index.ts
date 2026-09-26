@@ -19,6 +19,7 @@ import type {
   HarnessExecutionMode,
   IAMDriver,
   Installation,
+  InstallationDeploymentInventory,
   Namespace,
   NamespaceDeleteResult,
   NamespaceEnsureResult,
@@ -931,6 +932,97 @@ export class OpenClawController {
           ...driver.policyCapabilities,
         },
       },
+    });
+  }
+
+  async getInstallationDeploymentInventory(
+    principalId: string,
+  ): Promise<Readonly<InstallationDeploymentInventory>> {
+    await this.authorize(principalId, "administer", {
+      kind: "installation",
+      id: this.installation.id,
+    });
+    return this.read(async (state) => {
+      const deploymentsInProgress = new Set<string>();
+      for (const operation of await state.operations.list()) {
+        if (operation.kind !== "agent_revision") {
+          continue;
+        }
+        const work = await state.operations.findWork(
+          `agent_revision:${operation.resourceId}:reconcile`,
+        );
+        if (
+          work === undefined ||
+          work.namespaceId !== operation.namespaceId ||
+          work.revisionId !== operation.resourceId ||
+          !isNonEmptyString(work.agentId)
+        ) {
+          throw new DependencyUnavailableError("The Agent deployment inventory is incomplete.");
+        }
+        if (work.state === "queued" || work.state === "claimed") {
+          deploymentsInProgress.add(`${work.namespaceId}\u0000${work.agentId}`);
+        }
+      }
+
+      const namespaces = [];
+      for (const namespace of await state.namespaces.listNamespaces()) {
+        await this.authorize(principalId, "read", {
+          kind: "namespace",
+          id: namespace.id,
+          namespaceId: namespace.id,
+        });
+        const agents = [];
+        for (const agent of await state.agents.listAgents(namespace.id)) {
+          await this.authorize(principalId, "read", {
+            kind: "agent",
+            id: agent.id,
+            namespaceId: namespace.id,
+          });
+          const deploymentInProgress = deploymentsInProgress.has(
+            `${namespace.id}\u0000${agent.id}`,
+          );
+          if (
+            agent.status === "active" &&
+            agent.desiredRuntimeState === "running" &&
+            agent.activeRevisionId !== undefined &&
+            !deploymentInProgress
+          ) {
+            await this.authorize(principalId, "deploy", {
+              kind: "agent",
+              id: agent.id,
+              namespaceId: namespace.id,
+            });
+            await this.authorize(principalId, "read", {
+              kind: "agent_revision",
+              id: agent.activeRevisionId,
+              namespaceId: namespace.id,
+            });
+          }
+          agents.push(
+            Object.freeze({
+              id: agent.id,
+              status: agent.status,
+              desiredRuntimeState: agent.desiredRuntimeState,
+              executionMode: agent.executionMode,
+              ...(agent.activeRevisionId === undefined
+                ? {}
+                : { activeRevisionId: agent.activeRevisionId }),
+              deploymentInProgress,
+            }),
+          );
+        }
+        namespaces.push(
+          Object.freeze({
+            id: namespace.id,
+            status: namespace.status,
+            agents: Object.freeze(agents),
+          }),
+        );
+      }
+      return Object.freeze({
+        installationId: this.installation.id,
+        namespaces: Object.freeze(namespaces),
+      });
     });
   }
 

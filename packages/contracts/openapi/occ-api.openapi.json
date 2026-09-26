@@ -952,7 +952,7 @@
     },
     "/api/auth/session": {
       "get": {
-        "description": "Returns only authenticated status and public account identity, or null without a valid session; session tokens and credentials are never returned.",
+        "description": "Returns authenticated status, public account identity, and a noncredential sessionKey that stays stable across reads and changes for a new session, or null without a valid session; session tokens and credentials are never returned.",
         "operationId": "getAuthSession",
         "responses": {
           "200": {
@@ -969,6 +969,7 @@
                           "additionalProperties": false,
                           "properties": {
                             "authenticated": { "const": true, "type": "boolean" },
+                            "sessionKey": { "type": "string" },
                             "user": {
                               "additionalProperties": false,
                               "properties": {
@@ -980,7 +981,7 @@
                               "type": "object"
                             }
                           },
-                          "required": ["authenticated", "user"],
+                          "required": ["authenticated", "sessionKey", "user"],
                           "type": "object"
                         }
                       ]
@@ -1737,6 +1738,156 @@
         },
         "security": [{ "sessionCookie": [] }],
         "summary": "Bootstrap the singleton Installation",
+        "tags": ["Installation"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
+        ]
+      }
+    },
+    "/installation/deployment-inventory": {
+      "get": {
+        "description": "Requires administer permission on the requested Installation.",
+        "operationId": "getInstallationDeploymentInventory",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "installationId": {
+                          "pattern": "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "namespaces": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "agents": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "activeRevisionId": {
+                                      "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    },
+                                    "deploymentInProgress": { "type": "boolean" },
+                                    "desiredRuntimeState": {
+                                      "anyOf": [
+                                        { "const": "running", "type": "string" },
+                                        { "const": "stopped", "type": "string" }
+                                      ]
+                                    },
+                                    "executionMode": {
+                                      "anyOf": [
+                                        { "const": "embedded", "type": "string" },
+                                        { "const": "dedicated", "type": "string" }
+                                      ]
+                                    },
+                                    "id": {
+                                      "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        { "const": "active", "type": "string" },
+                                        { "const": "deleting", "type": "string" }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "status",
+                                    "desiredRuntimeState",
+                                    "executionMode",
+                                    "deploymentInProgress"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              },
+                              "id": {
+                                "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              },
+                              "status": {
+                                "anyOf": [
+                                  { "const": "provisioning", "type": "string" },
+                                  { "const": "ready", "type": "string" },
+                                  { "const": "failed", "type": "string" },
+                                  { "const": "deleting", "type": "string" }
+                                ]
+                              }
+                            },
+                            "required": ["id", "status", "agents"],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": ["installationId", "namespaces"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Get the complete authorized Agent deployment inventory",
         "tags": ["Installation"],
         "x-openclaw-permissions": [
           { "action": "administer", "resourceKind": "installation", "scope": "requested" }

@@ -216,8 +216,13 @@ async function finishProvisioningAttempt({ request, status, namespaceId, attempt
   });
 }
 
-export function renderCreateAgent(context) {
+export function renderCreateAgent(context, draft) {
   context.setTitle("Create Agent");
+  if (draft) {
+    renderAgentForm(context, draft.rendered, draft.presetOptions, draft);
+    return;
+  }
+  context.setDraftCapture(null);
   context.view.replaceChildren(
     link("← Agents", "agents", context),
     element(
@@ -247,7 +252,8 @@ export function renderCreateAgent(context) {
   );
 }
 
-function renderAgentForm(context, rendered, presetOptions = {}) {
+function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
+  context.drafts.forget("preset");
   const { view, request, namespaceId } = context;
   const agent = rendered.agent ?? {};
   const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -382,14 +388,16 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
   if (passwordAuth) {
     apiKey.value = passwordAuth.secret;
     delete passwordAuth.secret;
+    // The retained template must not turn a cleared password into an invalid saved binding.
+    delete agent.harnessAuth;
   }
   const authMethodField = field("Authentication method", authMethod);
   const credentialLabel = element("label", { for: apiKey.id }, "API key");
   const credentialHelp = element("p", { className: "hint", id: "provider-credential-help" });
   apiKey.setAttribute("aria-describedby", credentialHelp.id);
   let manualModel = !useModelChoices;
-  let pendingModelSettings;
-  let pendingProviderModel;
+  let pendingModelSettings = draft.pendingModelSettings;
+  let pendingProviderModel = draft.pendingProviderModel;
   const modelChoice = element(
     "select",
     { id: "agent-model" },
@@ -484,7 +492,7 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
     rendered.configuration?.values === undefined
       ? currentTemplate()
       : JSON.stringify(rendered.configuration.values, null, 2);
-  let edited = false;
+  let edited = draft.edited ?? false;
   const confirmDiscard = () => !edited || window.confirm("Discard your edited launch settings?");
   const reset = button("Reset template", () => {
     if (!confirmDiscard()) {
@@ -814,7 +822,9 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
   for (const control of [nativeProvider, authMethod, harness]) {
     control.addEventListener("change", resetPluginDiscovery);
   }
-  let configurationSecretBindings = structuredClone(rendered.configuration?.secretBindings ?? {});
+  let configurationSecretBindings = structuredClone(
+    draft.configurationSecretBindings ?? rendered.configuration?.secretBindings ?? {},
+  );
   const workspaceInputs = Object.entries(WORKSPACE_DEFAULTS).map(([filename, content]) => {
     const input = element("textarea", {
       id: `workspace-${filename.replace(".", "-")}`,
@@ -851,7 +861,7 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
   let savedSecret;
   let savedConfiguration;
   let savedAgent;
-  let stagedChannelSecrets = [];
+  let stagedChannelSecrets = draft.stagedChannelSecrets ?? [];
   const feedback = element("p", { className: "error", role: "alert" });
   const savedStatus = element("p", { className: "hint", role: "status" });
   const submit = element(
@@ -861,6 +871,7 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
   );
   const startOver = button("Start over", () => {
     if (window.confirm("Discard this draft and start again?")) {
+      context.drafts.forget("channels");
       renderCreateAgent(context);
     }
   });
@@ -931,6 +942,7 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
         `Configuration ${savedConfiguration.id} will remain saved. Start a new Agent draft?`,
       )
     ) {
+      context.drafts.forget("channels");
       renderCreateAgent(context);
     }
   });
@@ -977,7 +989,7 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
         feedback.textContent = "";
         updateControls();
       },
-      agent,
+      { ...agent, ...(draft.repositoryAccess ? { repositoryAccess: draft.repositoryAccess } : {}) },
     )).section,
     pluginFields.section,
     element(
@@ -1015,6 +1027,47 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
   form.addEventListener("change", () => {
     edited = true;
   });
+  const draftInputs = {
+    name,
+    mode,
+    harness,
+    nativeProvider,
+    authMethod,
+    model,
+    modelChoice,
+    configuration,
+    plugins,
+    ...Object.fromEntries(workspaceInputs),
+  };
+  if (draft.inputs && useModelChoices) {
+    modelChoice.replaceChildren(
+      element("option", { value: "" }, "Choose a model"),
+      ...MODEL_CHOICES[draft.inputs.nativeProvider].map((id) =>
+        element("option", { value: id }, id),
+      ),
+    );
+  }
+  for (const [key, input] of Object.entries(draftInputs)) {
+    if (Object.hasOwn(draft.inputs ?? {}, key)) {
+      input.value = draft.inputs[key];
+    }
+  }
+  manualModel = draft.manualModel ?? manualModel;
+  context.setDraftCapture(() => ({
+    rendered,
+    presetOptions,
+    // Keep raw editor text, including invalid JSON. Password controls are deliberately excluded.
+    inputs: Object.fromEntries(
+      Object.entries(draftInputs).map(([key, input]) => [key, input.value]),
+    ),
+    manualModel,
+    edited,
+    pendingModelSettings,
+    pendingProviderModel,
+    configurationSecretBindings,
+    stagedChannelSecrets,
+    repositoryAccess: repositories.access(),
+  }));
   function parseObject(input, reportInvalid = false) {
     try {
       const values = JSON.parse(input.value);
@@ -1095,6 +1148,8 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
       executionMode: mode.value,
       readOnly: Boolean(savedConfiguration),
       drawerContext: {
+        drafts: context.drafts,
+        baseline: JSON.stringify([values, configurationSecretBindings]),
         namespaceId,
         request,
         agentName: () => name.value,
@@ -1116,6 +1171,7 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
         if (!context.isCurrent() || pending || outcomeUnknown || savedConfiguration) {
           throw new Error("This view has changed. Reopen Agent creation before applying channels.");
         }
+        context.drafts.forget("channels");
         edited = true;
         configuration.value = JSON.stringify(updatedValues, null, 2);
         if (options.secretBindings !== undefined) {
@@ -1460,6 +1516,7 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
       ...(Object.keys(desiredPlugins).length ? { plugins: desiredPlugins } : {}),
       ...(agent.backendId ? { backendId: agent.backendId } : {}),
     };
+    context.setDraftCapture(null);
     pending = true;
     updateControls();
     feedback.textContent = "";
@@ -1525,7 +1582,10 @@ function renderAgentForm(context, rendered, presetOptions = {}) {
       }
       // Grant retries reread exact bindings, so uncertain model or channel grants never recreate the Agent.
       mutationStarted = false;
-      const modelSecret = savedSecret ?? presetExistingSecret;
+      const modelSecret =
+        savedSecret ??
+        presetExistingSecret ??
+        (hasBoundModelCredential ? binding.source : undefined);
       if (modelSecret) {
         await ensureSecretOperateBinding(context, savedAgent, modelSecret);
       }

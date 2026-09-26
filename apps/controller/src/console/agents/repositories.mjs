@@ -1016,6 +1016,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
       if (!context.isCurrent() || generation !== loadGeneration) {
         return { kind: "obsolete" };
       }
+      // A failed read cannot establish which retained choices are still approved.
       state.options = [];
       choices.setAttribute("aria-busy", "false");
       state.discovery = discoveryFailure(error, {
@@ -1036,7 +1037,19 @@ export function createRepositoryFields(context, onChange, initial = {}) {
         status.textContent = `Repository choices could not be reloaded. ${message(error)} Retry the reload or start a new draft.`;
       } else if (state.discovery === "draft-only") {
         status.className = "hint";
-        status.textContent = `Repository choices are unavailable. ${message(error)} You can save a draft without repository access; provisioning is unavailable until discovery succeeds.`;
+        status.replaceChildren(
+          "Repository choices are unavailable. ",
+          element(
+            "a",
+            {
+              href: "https://github.com/openclaw/openclaw-enterprise/blob/main/docs/guides/repository-credentials/team-runbook.md",
+              target: "_blank",
+              rel: "noopener noreferrer",
+            },
+            "Set up repository access",
+          ),
+          ". You can save a draft without repositories.",
+        );
       } else {
         status.className = "error";
         status.textContent = `Repository choices could not be loaded. ${message(error)} Retry repository choices before ${initial.agentId ? "saving repository access" : "creating an Agent"}.`;

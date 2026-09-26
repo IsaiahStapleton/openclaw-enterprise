@@ -1,15 +1,14 @@
 ---
 created: 2026-09-01
-updated: 2026-09-24
-last_updated_session: public-pr/374
+updated: 2026-09-26
+last_updated_session: authoring-run/ef70a4fa-4f10-413d-a2ce-2c8e9d5c2989
 ---
 
 # Platform console request flow
 
 ## Overview
 
-Opening `/console/` resolves a session and renders authorized resources.
-This trace follows Namespace selection, Agent workflows, Backends, and logout.
+`/console/` resolves a session and renders authorized resources.
 The [console reference](../reference/console.md) owns user-visible behavior;
 API and IAM authorize resources.
 
@@ -17,14 +16,12 @@ API and IAM authorize resources.
 
 - Browser entry: `apps/controller/src/console/console.mjs` composes the session,
   request client, view lifetime, navigation, and shell.
-- Browser modules: `apps/controller/src/console/api-client.mjs` owns request
-  cancellation and current-session expiry handling; `view-lifetime.mjs` owns
-  generation and abort state; `navigation.mjs` owns safe return paths and history;
-  `shell.mjs` owns shared navigation and collection rendering.
-- Capability pages: `apps/controller/src/console/agents/{list,create,detail}.mjs`
-  own Agent views, while `channels/{slack,shared-ui}.mjs` own the Slack form
-  and its shared editor. Existing `agents.mjs` and `channels.mjs` compose these
-  modules through their current entrypoints.
+- `api-client.mjs` owns cancellation and session expiry; `view-lifetime.mjs`
+  owns generation and abort state; `navigation.mjs` owns return paths and history;
+  `shell.mjs` owns navigation and collections.
+- `agents/{list,create,detail}.mjs` own Agent views;
+  `channels/{slack,shared-ui}.mjs` own Slack editing. `agents.mjs` and
+  `channels.mjs` compose them.
 - HTTP: `apps/controller/src/index.ts:createFastifyApp`.
 - Startup: `apps/controller/src/composition/production.ts:composeProduction`
   and `development-postgres.ts:composePostgresDevelopment`.
@@ -37,9 +34,10 @@ API and IAM authorize resources.
 ```mermaid
 graph TD
   subgraph Browser["Browser"]
-    A["Open console or change page"] --> B["Clear old rows and check session"]
-    B -->|no session| C["Login"]
-    B -->|authenticated| D["Read readable Namespaces and validate selection"]
+    A["Open console or change page"] --> B["Restore scoped preview or show first-load state"]
+    B --> B1["Recheck session and Namespace access"]
+    B1 -->|no session| C["Login"]
+    B1 -->|authenticated| D["Read readable Namespaces and validate selection"]
     D -->|debug=true| DBG["Read accessible Agents and runtime image metadata"]
     DBG --> F
     D --> E["Request current page resource"]
@@ -124,9 +122,15 @@ these reads. Missing provenance and failures remain explicit. The
 
 `apps/controller/src/console/console.mjs:loadPage`
 
-The browser clears the prior view, advances its generation, and requests
-`GET /api/auth/session`. Missing sessions open login; failed reads offer Retry.
-Login submits email and password.
+`loadPage` advances the request generation and requests `GET /api/auth/session`.
+First loads show loading. Return navigation and Refresh can restore one of at most
+16 document-local previews keyed by route, Namespace, and session owner while reads
+run. Password fields clear before retention. Preview resource controls cannot
+issue operations; the navigation shell remains available.
+
+A changed user or session key clears retained views and drafts before further
+private reads. Missing sessions open login; failed reads offer Retry.
+Login submits credentials.
 `apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` checks browser
 Origin before sign-in/out, including SDK calls that bypass Better Auth middleware.
 Headerless CLI requests remain supported. Better Auth owns session cookies and
@@ -155,50 +159,34 @@ Installation `administer` precedes the safe startup-summary response. Explicit
 empty configuration is a successful empty list; absent wiring and dependency
 failure return errors.
 
-`apps/controller/src/console/agents/create.mjs:renderCreateAgent` selects Provider,
-then Harness: OpenAI defaults to Dedicated Codex and offers Embedded OpenClaw;
-Anthropic offers OpenClaw. Provider/Harness changes reset incompatible credentials
-and model choices. The [creation reference](../reference/console/create-and-deploy.md)
-defines authentication combinations and token handling.
+`apps/controller/src/console/agents/create.mjs:renderCreateAgent` composes Provider,
+Harness, Preset, Configuration, and workspace inputs. Provider/Harness changes
+reset incompatible credentials and model choices. The
+[creation reference](../reference/console/create-and-deploy.md) owns combinations,
+Preset constraints, token handling, permissions, and recovery.
 
-Presets reject cross-provider JSON: credentials fix Provider; PATs fix
-Codex; operator-managed credentials fix OpenClaw. Installation Backend
-discovery is hidden. The [creation reference](../reference/console/create-and-deploy.md)
-owns permissions and recovery.
-
-Advanced settings holds Configuration JSON and initial workspace files; no model
-is selected initially. Preset Secret bindings stay in form state. Applying Slack
-preserves unrelated bindings. Preset workspace files prefill editors before
-submission.
-
-`agents/plugin-fields.mjs:createPluginFields` edits Agent-owned `plugins` through
-`#agent-plugins`, separately from Configuration. Invalid JSON and untouched fields
-survive; clearing overrides restores inheritance. Submission, uncertain outcomes,
-or invalid JSON lock editing. `capabilities.pluginPolicies` gates each policy scope;
-Missing capabilities preserve JSON and disable edits. Unsupported saved reviewers
-remain clearable. Agent submission saves the draft.
+`agents/plugin-fields.mjs:createPluginFields` edits Agent-owned `plugins` separately
+from Configuration. Invalid or untouched JSON survives; clearing overrides restores
+inheritance. Submission, uncertain outcomes, or invalid JSON lock editing.
+`capabilities.pluginPolicies` gates each scope; missing capabilities preserve JSON
+and disable edits. Unsupported saved reviewers remain clearable.
 
 `create.mjs:loadPluginCatalog` and `loadPluginTools` implement
-[transient PAT discovery](agent-plugins.md#credential-scoped-discovery): upstream
-pagination, local filtering, and tools loaded on selection. Credential, provider,
-and Harness changes clear results and invalidate pending reads. The Driver owns
-upstream access.
+[transient PAT discovery](agent-plugins.md#credential-scoped-discovery). Credential,
+provider, and Harness changes clear results and invalidate pending reads. The
+Driver owns upstream access.
 
-`create.mjs:MODEL_CHOICES` supplies static provider lists before credentials,
-without discovery requests or account verification. Manual entry remains available;
-Presets retain model/authentication.
-Credential edits preserve selection; Provider/authentication-method changes reset it.
-Model edits preserve transport and Codex plugin settings. Provider/Harness changes
-regenerate them, retaining unrelated JSON; reset restores the starter.
+`create.mjs:MODEL_CHOICES` supplies static lists without verifying accounts; manual
+entry remains available. Presets retain model and authentication. Credential edits
+preserve selection; Provider or authentication changes reset it. Model edits preserve
+transport and Codex plugins; Provider/Harness changes regenerate them while retaining
+unrelated JSON. Reset restores the starter.
 
 `configurationTemplate` enables Control UI with loopback origins on port 18789.
 Compute supplies gateway authentication from Installation trust; Presets replace
 the starter unchanged. [Native admin access](agent-native-admin.md) requires isolated
 HTTPS origins. [Agent editing](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
-traces Slack Secret selection/creation. **Apply channel settings** copies values
-and bindings; grants accumulate. Sender access belongs to each selected channel;
-direct-message `allowFrom` stays unchanged. Cancellation discards selections but
-retains created Secrets.
+traces Slack settings, staged bindings, grants, and cancellation effects.
 
 `createRepositoryFields` loads approved choices, then requests descriptions for
 visible refs asynchronously. Metadata updates leave checkbox focus and selection
@@ -206,13 +194,15 @@ intact; missing descriptions do not block selection. Checking a row selects it;
 unchecking and immediately rechecking or Undo restores its position and override.
 Submission sends `repositoryAccess`; [repository admission](agent-repository-credentials.md)
 resolves profiles. Read-only and Contributor use approved profiles; customization
-can disable issue management. Only `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a
-fresh draft without bindings; other discovery failures block submission.
+can disable issue management. The document-local draft retains selections and
+access intent across navigation and failed discovery. A successful retry checks
+selected repositories against current policy; unavailable selections must be
+removed. Only `503 REPOSITORY_OPTIONS_UNAVAILABLE` permits a fresh draft without
+bindings; other discovery failures block submission.
 
-Supported Dedicated runtimes submit Configuration, repository access, and Secret
-references to [provisioning](agent-provisioning.md). Console polls the job and opens
-its revision. The worker creates resources and Secret grants before deployment;
-Console does not duplicate grants.
+Dedicated runtimes submit Configuration, repositories, and Secret references to
+[provisioning](agent-provisioning.md). Console polls and opens the revision; the
+worker creates resources and Secret grants before deployment.
 
 Ordinary drafts post `{kind: "agent", values, secretBindings}` to
 `POST /namespaces/:namespaceId/configurations`, then submit its ID, plugins,
@@ -239,23 +229,21 @@ traces draft/revision rendering, channel changes, credential provisioning,
 workspace reads/writes, stopping, and deletion. Each request returns through the
 response-ordering checks below.
 
-`apps/controller/src/console/channels/slack.mjs:supportSlack` checks whether the
-editor can preserve settings. `updatedSlack` preserves `dmPolicy`, `groupPolicy`,
-their absence, and unrelated selected-channel properties while updating IDs,
-senders, and mention settings. Everyone writes `users: ["*"]` per selected
-channel; edits leave direct-message `allowFrom` unchanged. Only new configurations
-receive allowlist defaults. Mixed sender lists and `*` channel entries require
-native Configuration JSON.
+`apps/controller/src/console/channels/slack.mjs:supportSlack` rejects shapes the
+editor cannot preserve; [Agent editing](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
+traces these limits. `updatedSlack` preserves untouched policies and reply overrides;
+new blocks default to group allowlist and `replyToModeByChatType: { channel: "all" }`.
+Admission snapshots native values, and Kubernetes Compute's
+`apps/controller/src/drivers/compute/kubernetes/index.ts:prepareRevision` carries
+them to the Gateway ConfigMap without adding reply defaults.
 
-`apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers
-tab-only navigation with `console.mjs:loadPage`. Within the same Agent, Namespace,
-and revision, tabs and history replace content below the tabs while retaining the
-shell, native-admin panel, and revision controls. Detail views share Configuration
-and revision reads; direct Workspace URLs neither start nor await them. Refresh,
-revision changes, and saved channel or authentication edits reread the page.
+`apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers tab-only
+navigation with `console.mjs:loadPage`. Tabs and history retain the shell and
+share Configuration and revision reads. Direct Workspace URLs bypass those reads;
+refresh, revision changes, and saved channel or authentication edits reread the page.
 
 Each tab render captures its own generation. Late panel reads and form callbacks
-cannot overwrite a newer tab; leaving a tab clears its password inputs. Channel
+cannot overwrite a newer tab; password values clear while [draft captures](platform-console/agent-editing.md#4-render-draft-revision-or-channels) retain edits. Channel
 Secret saves update the shared draft snapshot used by other tabs and deployment
 preflight. Session expiry still clears the whole private view.
 
@@ -263,14 +251,18 @@ preflight. Session expiry still clears the whole private view.
 
 `apps/controller/src/console/console.mjs:loadPage`, `logout`
 
-Page or revision navigation, Namespace changes, refocus, and logout invalidate
-prior reads. The client cancels requests and checks generation before accepting
-success or failure. Late responses cannot restore rows, change selection, or
-redirect a newer session. Current authorization and dependency errors clear rows
-and expose recovery; a current protected `401` clears private state and opens
-login immediately. Failure views include only local reason messages and bounded
-request IDs, not backend error text.
-Global Backends and Namespaces pages remain visibly Installation-wide.
+Page/revision navigation, Namespace changes, refocus, and logout invalidate prior
+reads. Generation checks reject late responses. Previews remain during session,
+Namespace, and exact page reads until fresh results arrive. Drafts restore edits
+with their original save baselines. Namespace selection never reuses another
+scope's rows.
+
+Authorization and dependency failures clear affected content and expose recovery;
+a current protected `401` clears all private state immediately. `pagehide` clears
+private DOM, previews, and drafts even for BFCache; persisted `pageshow` performs
+a fresh load. Failure views show local reasons and bounded request IDs, never
+backend error text. Backend authorization denial clears every retained preview,
+including other Namespace selections, because the permission is Installation-wide.
 
 The [detail action flow](platform-console/agent-editing.md#stop-agent) traces
 confirmed Stop and Delete requests and their exact permission checks. Acceptance
@@ -331,9 +323,21 @@ uncertain response disables replay until refresh and inspection.
 
 ## Changelog
 
-- 2026-09-24 23:14: Trace asynchronous descriptions and checkbox selection. (public-pr/374 - 6ed3a6de9035b84693a180c28a78765510dd4a2d)
+- 2026-09-26 03:09: Reconcile repository access with retained drafts and channel editing. (authoring-run/ef70a4fa-4f10-413d-a2ce-2c8e9d5c2989 - be1e00549af5ea02775ee0d910ca32da515633d1)
 
-- 2026-09-24 17:13: Trace the header Namespace selector and preserved navigation scope. (public-change/namespace-selector - 1a458b227585c572ec0ac70fd10efc3834165075)
+- 2026-09-25 17:27: Trace scoped return previews and session-aware invalidation in accompanying changes. (01a0d992-db83-7843-b40c-355c0f2c2b9a - 64ab72aed5c4926e4a2080ade91d785e531801a2)
+
+- 2026-09-25 01:15: Trace channel-only Slack reply defaults and explicit DM policy editing. (01a0d5e6-743e-7743-8a5e-2d8c24b78b81 - 919f92c3bb3ea63acf7042b138e9a0c6e1d97719)
+
+- 2026-09-25 00:15: Trace new Slack reply defaults and preservation through gateway rendering. (01a0d5e6-743e-7743-8a5e-2d8c24b78b81 - 29bf7a8681390fe60ced612beeb538101c87bc34)
+
+- 2026-09-25 00:00: Retain repository draft bindings through failed rediscovery. (01a0d557-f6e3-7da2-af52-993d05735554 - 2e0604a2)
+
+- 2026-09-24 22:03: Link shared editor draft capture before tab teardown. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)
+
+- 2026-09-24 17:13: Trace the header Namespace selector and preserved navigation scope. (authoring-run/fdba83e7-9f34-4b8b-8af2-625214851f27 - 1a458b227585c572ec0ac70fd10efc3834165075)
+
+- 2026-09-24 23:14: Trace asynchronous descriptions and checkbox selection. (public-pr/374 - 6ed3a6de9035b84693a180c28a78765510dd4a2d)
 
 - 2026-09-24: Keep Preset bindings internal.
 

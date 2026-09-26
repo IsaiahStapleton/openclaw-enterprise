@@ -28,3 +28,4 @@ export const RevisionError = { ...story("revisionError"), name: "Revision histor
 export const DeployDenied = { ...story("deployDenied"), name: "Deployment denied" };
 
 export const RepositoryEditor = story("repositoryEditor");
+export const ConfigurationNavigation = story("configurationNavigation");

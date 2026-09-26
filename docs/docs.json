@@ -391,6 +391,10 @@
                     "label": "Control Plane Setup"
                   },
                   {
+                    "page": "guides/deploy/production-upgrade",
+                    "label": "Image Upgrades"
+                  },
+                  {
                     "page": "guides/deploy/kubernetes",
                     "label": "Kubernetes"
                   },
@@ -734,6 +738,7 @@
               "reference/settings/programmatic",
               "flows/platform-startup",
               "flows/production-startup",
+              "flows/coordinated-production-upgrade",
               "flows/docker-compose-development/startup",
               "flows/docker-compose-development/agent-execution",
               "flows/common-logging",
