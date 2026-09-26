@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { Check } from "typebox/value";
-import { immutableCopy } from "@openclaw-enterprise/utils";
+import { deepFreeze } from "@openclaw-enterprise/utils";
 import { SecretId, ServiceAccountId } from "./api/common.ts";
 import { isAllowedSecretBindingDestination } from "./secret-bindings.ts";
 import {
@@ -20,9 +20,13 @@ export type PresetVariable =
 export type PresetLaunchSettings = Omit<PresetTemplate, "variables">;
 
 // Typed launch fields may contain string tokens until rendering and admission.
+export interface PresetAgentTemplate extends Readonly<Record<string, unknown>> {
+  readonly initialWorkspaceFiles?: Readonly<Record<string, unknown>>;
+}
+
 export interface PresetTemplate {
   readonly variables?: Readonly<Record<string, PresetVariable>>;
-  readonly agent?: Readonly<Record<string, unknown>>;
+  readonly agent?: PresetAgentTemplate;
   readonly configuration?: {
     readonly values?: Readonly<Record<string, unknown>>;
     readonly secretBindings?: Readonly<Record<string, unknown>>;
@@ -149,5 +153,5 @@ export function normalizePresetTemplate(input: unknown, namespaceId: string): Pr
     }
   }
   validateCredentials(template, namespaceId);
-  return immutableCopy(template);
+  return deepFreeze(template);
 }

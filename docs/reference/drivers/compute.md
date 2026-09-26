@@ -21,6 +21,21 @@ The [shared contracts](../../../packages/contracts/src/index.ts) define the type
 Every `ComputeDriver` has an `id`,
 an `implementation`, and `capability: "compute"`.
 
+The optional `getRuntimeImages(revision)` method observes containers belonging to
+that admitted revision and returns `{workload, container, image, imageId, commit, openclawCommit}`
+entries. OCC requires exact Agent read authority and calls the Driver pinned by
+the active revision. The `runtime-images` API reports `undeployed` without an
+active revision and `unsupported` when the Driver omits this method.
+
+Docker reads the immutable image attached to each owned container and its OCI
+revision label plus `org.openclaw.image.revision` for the upstream OpenClaw commit,
+even if the configured tag has moved. Kubernetes reads image
+references and IDs from revision-owned Pods, including init and ephemeral
+containers. Its private runtime metadata read is bound to the Pod UID and running
+container ID; both commits apply only to containers with that same image ID.
+Commits must be full lowercase Git SHAs. Missing IDs or provenance remain `null`.
+These observations do not inventory separate Sandbox Driver workloads.
+
 The optional `discoverHarnessModels({provider, apiKey})` method returns native
 model IDs and names for Agent setup without persisting credentials. OCC checks
 Agent creation authority before calling it. Bundled Kubernetes and Docker use
@@ -55,6 +70,9 @@ activation after authorization.
 | `activateRevision(revision, context?)`, `deactivateRevision(revision)` | Production startup requires both. The worker also calls activation if a development Driver provides it. See [revision stages](#production-revision-stages).                                                                                         |
 | `setLifecycleDrivers(drivers)`                                         | Startup requires it when another selected Driver provides [Compute hooks](#optional-selected-driver-hooks).                                                                                                                                         |
 | `activationOrder`, `maintenanceIntervalMs`                             | Control [activation timing](#production-revision-stages) and optional [maintenance](#optional-active-runtime-maintenance).                                                                                                                          |
+
+`requiresStoppedPredecessors(revision)` opts into [exclusive replacement](#production-revision-stages).
+It must be a side-effect-free declaration derived from the admitted revision.
 
 ### Optional startup preflight
 
@@ -96,7 +114,7 @@ before retrying. See the [initial credential workflow](../console/create-and-dep
 `deleteAgentRuntimeCredentials(binding)` is the idempotent teardown counterpart.
 During Agent deletion, the worker calls it after retiring every revision and
 before removing the Agent's database identity. Kubernetes Compute deletes
-the admitted Agent-owned private-state and shared-workspace claims, workspace
+the admitted Agent-owned private-state and Harness-workspace claims, workspace
 setup Secret, and transport Secret; absence is success. Revision retirement
 retains those claims. Namespace-owned Harness model authentication survives Agent deletion.
 A Driver that supports provisioning but not deletion fails Agent deletion
@@ -145,7 +163,7 @@ that Agent. See [authorization](../authorization.md).
 
 `ComputeRevisionContext.harnessAuth` contains either the approved API-key source
 and its current backend reference, the managed-account credential reference and
-private Provider binding, or just `{ method: "runtime" }` for operator-managed
+private Backend binding, or just `{ method: "runtime" }` for operator-managed
 authentication. None contains credential values. The separate `secretEnvironment`
 contains Configuration bindings for gateway credentials. Deliver model credentials
 only to the selected Harness workload. Channel tokens are ordinary Namespace Secrets
@@ -169,7 +187,7 @@ managed resources. See the [Driver loading flow](../../flows/driver-plugin-loadi
 OCC records the Compute identity, Harness placement, and Configuration in the
 immutable revision. Before dispatch, the worker checks that the selected Compute
 still matches, rechecks authorization, and resolves current credential references.
-While preparing a replacement, the worker preserves the previous route until
+By default, while preparing a replacement, the worker preserves the previous route until
 activation checks that the active revision is still the expected one and switches
 the route. Activation lets the candidate serve; it must be safe to repeat and
 requires the configured runtime to be ready and authenticated. Deactivation is a
@@ -182,6 +200,19 @@ first production deployment, it deactivates an unpublished dedicated candidate.
 A Driver that keeps one stable Agent runtime can select `"beforeCommit"`; the
 worker then activates the candidate before publishing it and skips that initial
 deactivation. If a required stage becomes unavailable, the worker cannot proceed.
+
+A Driver may implement `requiresStoppedPredecessors(revision)` to return `true`
+for workloads needing exclusive preparation. Before preparing that revision,
+the worker closes earlier credential sessions and calls `stopRevision` for every
+earlier snapshot, including failed candidates. Stop must wait for resource
+release, preserve durable data, and be safe to repeat. A stop failure prevents
+preparation. The Driver owns backend-specific termination and Sandbox cleanup.
+
+A newer admitted exclusive revision supersedes older reconciliation and
+maintenance, even while the old revision remains the last committed active
+pointer. This prevents an old pass from recreating a competing runtime. This
+mode accepts downtime and has no automatic rollback: restore a configuration by
+deploying a new higher revision. Other Drivers keep the default ordering.
 
 ### SandboxDriver coordination
 
@@ -214,7 +245,8 @@ and original deployment Principal. The worker prepares and activates the revisio
 again; those operations must be safe to repeat. Failed observations, including
 asynchronous binding failures, schedule another authorized pass without changing
 the active revision. Maintenance survives worker restarts and ends when a newer
-revision replaces it. Without an interval, lifecycle work responds to events. New deployments have limited retries.
+revision replaces it, or is admitted with exclusive replacement enabled. Without
+an interval, lifecycle work responds to events. New deployments have limited retries.
 
 ### Plugin startup warnings
 
