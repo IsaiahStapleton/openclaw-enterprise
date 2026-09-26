@@ -678,12 +678,20 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await page.getByRole("button", { name: "Configuration", exact: true }).waitFor();
   await revealNativeConfiguration(page, "View native Configuration");
   await page.getByText('"marker": "create"').waitFor();
-  // Neither the summary nor expanded native Configuration reveals the credential or its ID.
+  // The summary identifies its Secret, while credential values remain private.
+  const boundSecret = page.getByRole("link", {
+    name: `${secret.name} · ${secret.id}`,
+    exact: true,
+  });
+  await boundSecret.waitFor();
+  assert.equal(
+    await boundSecret.getAttribute("href"),
+    `/namespaces/${namespace.id}/secrets/${secret.id}`,
+  );
   const visibleConfiguration = await page.locator("body").textContent();
-  assert.equal(visibleConfiguration.includes(secret.id), false);
+  assert.equal(visibleConfiguration.includes(key), false);
   assert.equal(visibleConfiguration.includes("never-visible-existing-slack-app-token"), false);
   assert.equal(visibleConfiguration.includes(createdSlackBotSecretValue), false);
-  await page.getByText("API key · Secret configured", { exact: true }).waitFor();
 
   const savedConfiguration = await fixture.request(
     "GET",
