@@ -33,8 +33,9 @@ to run it; repository writers can dispatch it too. There is no second-person
 approval or approval-comment requirement. Complete these prerequisites first.
 
 - Protect `main`, require the real `CI Required` check, and review workflow changes.
-- Retain repository access to `blacksmith-8vcpu-ubuntu-2404`. Runtime preparation
-  uses the same runner as repository-platform CI for build and export capacity.
+- Provision native AMD64 and ARM64 runners for both images. The defaults are
+  `blacksmith-16vcpu-ubuntu-2404` and `blacksmith-8vcpu-ubuntu-2404-arm`; see
+  [runner overrides and minimum resources](../deploy/runtime/README.md#verify-both-native-architectures).
 - Create a dedicated `container-publish` environment with no required reviewers or
   wait timer, administrator bypass disabled, and one deployment branch policy:
   branch `main`. Do not reuse the integration environments.
@@ -132,8 +133,8 @@ grant a workstation credential additional scopes.
    both platforms in one OCI archive, checks the index and child manifest/config
    digests, and loads each platform into Docker separately. Its config ID must
    match that index entry. Both platforms run the existing controller or runtime
-   startup smoke before sealing/uploading. ARM64 builds and smoke tests use QEMU
-   on the amd64 runner; this is not native ARM64 performance proof. The publisher copies those exact
+   startup smoke before sealing/uploading. AMD64 and ARM64 builds and smoke tests
+   run on their matching native Linux architectures. The publisher copies those exact
    archive and all child manifests with Skopeo and verifies the remote index digests. Source, CI attempt,
    environment branch policy, and package visibility are rechecked before transfer.
 4. Use the `image@sha256:...` references in the job summary and
@@ -154,12 +155,15 @@ expose the built images to public repository readers even with `publish: false`.
 No registry push does not mean artifact confidentiality; review the image
 contents and artifact audience before dispatch.
 
-A new dispatch rebuilds, so rerunning publication for the same source may be
-rejected if registry-resolved dependencies changed the bytes. Do not delete or
-overwrite existing tags to evade that rejection. Publication of the two images
-is not transactional; on a partial failure inspect each recorded registry digest
-before deciding on recovery. The publisher's concurrency lock serializes these
-workflow writes, not external registry administrators.
+Preparation pins image timestamps to the source commit and removes exporter-only
+annotations from the assembled multi-platform index. Repeating a build with the
+same resolved inputs therefore produces the same registry image identity. A
+rerun can still be rejected if mutable external package inputs resolve to
+different bytes. Do not delete or overwrite existing tags to evade that
+rejection. Publication of the two images is not transactional; on a partial
+failure inspect each recorded registry digest before deciding on recovery. The
+publisher's concurrency lock serializes these workflow writes, not external
+registry administrators.
 
 ## Recover a partial publication
 

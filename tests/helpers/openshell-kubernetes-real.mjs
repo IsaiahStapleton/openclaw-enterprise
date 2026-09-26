@@ -1,7 +1,6 @@
 import { sha256Hex } from "../../packages/utils/src/index.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -107,8 +106,8 @@ export function createOpenShellInstallationConfiguration({
     id: "sandbox-openshell-kubernetes",
     configuration: {
       gateway: {
+        workspaceMode: "operator",
         endpoint: "http://127.0.0.1:1",
-        workspace: "default",
         readiness: {
           serviceName: "openshell-gateway",
           podSelector: { "app.kubernetes.io/name": "openshell" },
@@ -173,7 +172,7 @@ export function createOpenShellInstallationConfiguration({
             endpoints: [{ host: "api.openai.com", ports: [443], tls: "skip" }],
             binaries: [
               {
-                path: "/app/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+                path: "/app/node_modules/openclaw/node_modules/.pnpm/@openai+codex@0.156.0-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex",
               },
             ],
           },
@@ -530,6 +529,13 @@ export function createOpenShellKubernetesFixture({
   }
 
   async function installOpenShellGateway(namespace, { sandboxServiceAccountName } = {}) {
+    await kubectl(
+      "label",
+      "namespace",
+      namespace,
+      "openshell.ai/openclaw-workspace=true",
+      "--overwrite",
+    );
     await applyOpenShellGatewayNetworkPolicies(namespace);
     await ensureOpenShellJwtSecret(namespace);
     const values = [
@@ -537,6 +543,8 @@ export function createOpenShellKubernetesFixture({
       "--set=pkiInitJob.enabled=false",
       "--set=server.disableTls=true",
       "--set=server.auth.allowUnauthenticatedUsers=true",
+      "--set-string=server.drivers.kubernetes.workspaceMode=operator",
+      "--set-string=server.drivers.kubernetes.operatorNamespaceLabel=openshell.ai/openclaw-workspace=true",
       "--set=podSecurityContext.seccompProfile.type=RuntimeDefault",
       "--set=supervisor.sandboxRuntime.networkPolicyEnforced=true",
       `--set-string=server.defaultRuntimeClassName=${openShellRuntimeClass}`,
@@ -587,32 +595,12 @@ export function createOpenShellKubernetesFixture({
     return await base.startPortForward(namespace, openShellGatewayServiceName(namespace));
   }
 
-  async function provisionAgentTransportCredentials(directory, namespace, agentId) {
+  async function readAgentTransportCredentials(namespace, agentId) {
     const suffix = openshellHash(agentId);
-    const tokenDirectory = await mkdtemp(join(directory, `openshell-transport-${suffix}-`));
-    const appServerToken = randomBytes(32).toString("hex");
-    const gatewayPassword = randomBytes(32).toString("base64url");
-    try {
-      const appServerTokenPath = join(tokenDirectory, "app-server-token");
-      const gatewayPasswordPath = join(tokenDirectory, "gateway-password");
-      await Promise.all([
-        writeFile(appServerTokenPath, appServerToken, { mode: 0o600 }),
-        writeFile(gatewayPasswordPath, gatewayPassword, { mode: 0o600 }),
-      ]);
-      await kubectl(
-        "create",
-        "secret",
-        "generic",
-        `${transportSecretPrefix}-${suffix}`,
-        "--namespace",
-        namespace,
-        `--from-file=app-server-token=${appServerTokenPath}`,
-        `--from-file=gateway-password=${gatewayPasswordPath}`,
-      );
-    } finally {
-      await rm(tokenDirectory, { recursive: true, force: true });
-    }
-    return { appServerToken, gatewayPassword };
+    const secret = await base.resource("secret", `${transportSecretPrefix}-${suffix}`, namespace);
+    const encodedToken = secret.data?.["app-server-token"];
+    assert.equal(typeof encodedToken, "string", "the generated transport token must exist");
+    return { appServerToken: Buffer.from(encodedToken, "base64").toString() };
   }
 
   async function waitForOpenShellGateway(namespace) {
@@ -1003,7 +991,7 @@ export function createOpenShellKubernetesFixture({
     validateOpenShellPrerequisites: validatePrerequisites,
     customResources,
     maybeResource,
-    provisionAgentTransportCredentials,
+    readAgentTransportCredentials,
     waitForOpenShellGateway,
     installOpenShellGateway,
     startOpenShellGatewayPortForward,

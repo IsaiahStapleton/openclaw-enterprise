@@ -31,25 +31,31 @@ missing or expired session clears private content and asks you to sign in again.
 
 ## Identify the control-plane build
 
-The sidebar shows **OCE** followed by the first eight characters of the running
-OCC image's source commit; hover over the hash for the full OCC revision. Published images bake the checked release revision into the console HTML.
-The hash identifies OCC, not an Agent's gateway. A source checkout or image built
-without revision metadata shows **dev** beside OCE, with a tooltip explaining
-that the build revision is unavailable.
+With `debug=true`, the sidebar shows **OCE** followed by the first eight
+characters of the running OCC image's source commit. Hover for the full revision
+or use the [build and runtime image panel](#inspect-build-and-runtime-images).
+Published images bake the checked release revision into the console HTML.
+Builds without metadata show **dev** beside OCE.
 
 ## Browse and select a Namespace
 
 The sidebar opens **Agents** or **Namespaces**. **Refresh** repeats the current
 read. Model provider and API-key setup are part of Agent creation; the separate
-Providers tab is hidden. Namespace rows remain read-only collection entries.
+[experimental Backends](backends.md) tab is hidden. Namespace rows remain read-only collection entries.
 
 | Page       | Scope and permission                                                     |
 | ---------- | ------------------------------------------------------------------------ |
 | Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |
 | Namespaces | Installation-wide collection filtered by exact Namespace `read`.         |
 
-Use the bottom **OpenClaw Enterprise** menu for **Namespace**, **Settings**, or
-**Logout**. Settings shows the signed-in account and no configurable settings.
+The console uses a light appearance. Its fonts are served by OCC;
+no external font service is required.
+
+Use the **Namespace** selector in the page header to switch scope on desktop or
+mobile. It lists readable Namespaces and shows the current selection. The
+Installation-wide Namespaces page omits the selector. The bottom
+**OpenClaw Enterprise** menu contains **Settings** and **Logout**. Settings shows
+the signed-in account and no configurable settings.
 
 The selected Namespace stays in `?namespace=<id>` across pages, reload, and Back.
 An unreadable explicit ID shows **Namespace unavailable** and requires another
@@ -57,9 +63,21 @@ selection. With no readable Namespaces, Agents explains that provisioning or
 access is needed; global pages remain available.
 
 Switching Namespace from Agent detail or creation returns to the Agents list in
-the new scope. Global pages stay open because Namespaces remain
-Installation-wide. The API makes all authorization decisions; the selector does
+the new scope. Other global pages stay open. The API makes all authorization decisions; the selector does
 not broaden access.
+
+## Inspect build and runtime images
+
+Append `debug=true` to the console URL, for example
+`/console/agents?debug=true` (or `&debug=true` after an existing query).
+The sidebar shows the full OCE source commit and expandable entries for readable
+Agents in the selected Namespace. Each container lists its configured Docker
+image, observed image ID or digest, and source commit when available.
+Navigation preserves the flag; remove it to hide diagnostics and stop these reads.
+
+See [Debug sidebar fields](console/debug-fields.md) for every field, Docker and
+Kubernetes differences, inspection scope, and unavailable states.
+Use **Refresh** to retry unavailable metadata or update the snapshot.
 
 ## Agent creation and deployment
 
@@ -77,27 +95,43 @@ unsupported catalog or policy choices.
 
 Switching between **Configuration**, **Channels**, **Credentials**, and **Workspace
 files** updates only the tab content. The surrounding Agent panels stay in place,
-and browser Back/Forward restores the selected tab. Password fields are cleared
-when leaving a tab. Use **Refresh** to reload the Agent and its Configuration.
+and browser Back/Forward restores the selected tab. Unsaved Configuration JSON,
+live workspace text, authentication source choices, and open Slack drawers survive
+tab and page navigation. Drafts stay in this document, scoped to the signed-in
+user, Namespace, and Agent. Preset variables and the Agents search filter also
+survive navigation. Password values clear; existing Secret IDs remain references.
+Reloading the browser, leaving the document, or signing out clears local drafts.
 
-An Agent detail page has a **New revision** view and immutable AgentRevisions. The new revision view
-reads the current Configuration and supports native JSON editing through **Edit Configuration**,
-plus the channel editor and harness authentication controls. Choose **Operator-managed
-credentials** for SSH embedded OpenClaw: “Configured on the runtime host; not
-validated by OCC.” This saves `{ "method": "runtime" }` without a Secret ID or
-account. Its deployment action does not wait for OCC-managed credential metadata;
-the API still enforces permissions and driver/topology support. Gateway readiness
-does not establish model access. **Selected revision** displays `activeRevisionId`; neither the
-newest admitted revision nor the viewed snapshot must match it.
+**Cancel**, **Start over**, and each editor's explicit **Reload** discard its edits.
+Successful saves clear that editor's draft. **Refresh** rereads saved resources
+while retaining unsaved edits. Restored Configuration and authentication editors
+keep their original save baseline; concurrent changes require the editor's reload.
+Unsaved Configuration edits still block deployment. Pending or uncertain saves
+retain their recovery guard until readback; navigation never retries a mutation.
 
-Read-only AgentRevision snapshots cannot be edited, rolled back, redeployed, or
-used as a live-health check. **Edit current Configuration** opens the current
-draft; saving it leaves the viewed snapshot unchanged. Activation means the revision was admitted and
-selected by OCC. The console displays persisted deployment and startup evidence,
-not live gateway health. Follow the
-[deployment guide](../guides/deploy/production-agents.md#configure-the-agent-runtime) and
-[Agent deployment reference](agents/deployment.md#revisions-and-deployment) for the
-installed runtime.
+**New revision** edits the current Configuration through native JSON, channels,
+and authentication controls. **Operator-managed credentials** saves
+`{ "method": "runtime" }` for SSH embedded OpenClaw, without a Secret or account.
+Deployment skips OCC-managed credential metadata; API permissions and
+Driver/topology checks still apply. OCC does not validate host credentials.
+**Selected revision** displays `activeRevisionId`, which may differ from the
+newest admitted revision or viewed snapshot.
+
+**Save authentication source** saves the binding, then confirms exact
+`secret:operate` access for the Agent service principal on the selected API-key
+or Service Accounts Secret. Grant changes require the signed-in actor's Namespace
+IAM authority. Issued ChatGPT accounts and operator-managed authentication skip
+this grant. A failed grant reports partial success and offers **Retry credential
+access** without repeating the Agent update. Partial saves survive navigation.
+Deployment errors remain visible; confirmed grants do not establish runtime or
+provider readiness.
+
+AgentRevision snapshots are read-only: they cannot be edited, rolled back, or
+redeployed. **Edit current Configuration** opens the draft without changing the
+snapshot. Activation means OCC admitted and selected a revision. Persisted
+deployment and startup evidence does not establish live gateway health; see the
+[deployment guide](../guides/deploy/production-agents.md#configure-the-agent-runtime)
+and [deployment reference](agents/deployment.md#revisions-and-deployment).
 
 The Channels tab edits Slack settings on the saved Configuration draft.
 Microsoft Teams has no console editor: its credentials and Bot Framework ingress
@@ -120,17 +154,17 @@ Refresh loads current saved state. The write may have succeeded; there is no
 automatic replay. **Disable Slack** edits only the draft. It does not disable
 access, stop execution, or change an admitted revision.
 
-Slack editing preserves existing direct-message and channel policies, including
-pairing, open, disabled, and omitted policies. It preserves unrelated
-per-channel settings while replacing the selected channels' sender lists.
+Slack editing preserves untouched DM/channel policies and unrelated per-channel
+settings while replacing selected channels' sender lists.
 New Slack configurations use allowlist policies. **Allowed channel user IDs**
 edits each selected channel's `users` list. Selecting **Allow everyone in these
 channels to mention the agent** writes `users: ["*"]` on each selected channel
 and leaves direct-message `allowFrom` unchanged. The checkbox and user ID input
 are mutually exclusive: entering IDs disables the everyone option, clearing IDs
 makes everyone selectable, and turning everyone off re-enables ID entry.
-**Require a mention** is independent of sender access. The editor does not
-change DM or group policy when saving channel settings. Slack Socket Mode uses fixed
+**Require a mention** is independent of sender access. Use **Direct-message policy** and **Allowed DM user IDs** to change DM access
+separately; see [Slack policies](configuration/secrets.md#native-channel-configuration).
+Channel sender edits leave DM and group policies unchanged. Slack Socket Mode uses fixed
 unresolved references to `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`.
 Slack requires dedicated execution and Kubernetes runtime projection.
 
@@ -145,10 +179,9 @@ An unconfirmed creation blocks another submission in that modal. Refresh and
 inspect Secret metadata before creating another Secret; the first may exist.
 
 Menu choices stay in the drawer until **Save configuration**. Cancel discards
-those choices. Saving grants the Agent's service principal access to selected
-Secrets through Namespace IAM, then patches the Configuration; the caller needs
-permission for both operations. These are separate writes, so a grant may remain
-if the Configuration save fails. Neither saving nor creating a Secret deploys it.
+those choices. Saving patches the Configuration, then grants the Agent access to selected
+Secrets through Namespace IAM; both require caller permission. A failed grant
+leaves the Configuration saved and requires access recovery. Neither saving nor creating a Secret deploys it.
 
 Bound Secret metadata and **Open Agent Credentials** links open in new tabs,
 preserving unsaved channel inputs. Save channel edits before changing credentials
@@ -199,9 +232,9 @@ An authorized empty list is different from a failed read. Access denied,
 unavailable dependencies, missing resources, and network failures clear affected
 rows and offer the relevant recovery action. Include a displayed request ID when
 reporting an API failure. Backend error text is not rendered. A current protected
-`401` clears private content and closes an open channel editor and harness authentication controls. Provider
+`401` clears private content and closes an open channel editor and harness authentication controls. Backend
 discovery shows configured IDs and types only; see
-[Providers](providers.md#read-configured-providers) for its limits.
+[Backends](backends.md#read-configured-backends) for its limits.
 
 Logout immediately hides private content and stops pending reads. The console
 returns to login after sign-out succeeds or a session check confirms that the
@@ -268,7 +301,7 @@ Agent-host activity does not extend that console session.
 ## Routes
 
 Supported pages are `/console/login`, `/console/agents`,
-`/console/agents/new`, `/console/agents/:agentId`, `/console/providers`,
+`/console/agents/new`, `/console/agents/:agentId`, `/console/backends`,
 `/console/namespaces`, and `/console/settings`. `/console/` resolves the session
 and opens Agents. Unknown console paths show a generic not-found page.
 See the [request flow](../flows/platform-console.md) and
