@@ -56,22 +56,32 @@ async function setup(
     "persisted IAM must contain a Principal authorized for Agent lifecycle and Secret cleanup",
   );
 
-  let worker;
-  context.after(async () => {
-    if (worker === undefined) {
-      await workerPool.end();
-    } else {
-      await worker.stop();
-    }
-    await observerPool.end();
-  });
-
   const namespace = {
     id: `ns_${randomUUID()}`,
     name: `revision-worker-${randomUUID()}`,
     status: "ready",
     createdAt: new Date().toISOString(),
   };
+  let worker;
+  context.after(async () => {
+    try {
+      if (worker === undefined) {
+        await workerPool.end();
+      } else {
+        await worker.stop();
+      }
+      // Preserve unresolved evidence, but keep another test's worker from
+      // consuming this stopped fixture's cleanup or maintenance Work.
+      await observerPool.query(
+        `UPDATE occ.controller_work SET state = 'queued', claim_token = NULL,
+         lease_expires_at = NULL, available_at = 'infinity'
+         WHERE namespace_id = $1 AND state IN ('queued', 'claimed')`,
+        [namespace.id],
+      );
+    } finally {
+      await observerPool.end();
+    }
+  });
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = {
     ...createDevelopmentComputeDriver(),
@@ -973,14 +983,6 @@ test(
       ["recover", "open"],
     );
     await fixture.stop();
-    // Keep unresolved evidence, but quiesce this stopped fixture's queue so
-    // another test's worker cannot consume its cleanup or maintenance Work.
-    await fixture.observerPool.query(
-      `UPDATE occ.controller_work SET state = 'queued', claim_token = NULL,
-       lease_expires_at = NULL, available_at = 'infinity'
-       WHERE namespace_id = $1 AND state IN ('queued', 'claimed')`,
-      [candidate.namespaceId],
-    );
   },
 );
 
@@ -1118,12 +1120,6 @@ for (const loss of ["missing", "closed-repair"]) {
         assert.equal(repository.calls.filter(({ operation }) => operation === "open").length, 2);
         assert.equal(delivered.filter(({ kind }) => kind === "new").length, 2);
         assert.deepEqual(stopped, []);
-        await fixture.observerPool.query(
-          `UPDATE occ.controller_work SET state = 'queued', claim_token = NULL,
-           lease_expires_at = NULL, available_at = 'infinity'
-           WHERE namespace_id = $1 AND state IN ('queued', 'claimed')`,
-          [candidate.namespaceId],
-        );
         return;
       }
       await fixture.work(
@@ -1204,14 +1200,6 @@ for (const loss of ["missing", "closed-repair"]) {
       assert.notEqual(fresh.admissionId, original.admissionId);
       assert.equal((await repositoryAttempts(fixture, candidate))[0].phase, retained.phase);
       assert.equal(repository.calls.filter(({ operation }) => operation === "open").length, 2);
-      // The worker is stopped. Preserve unresolved rows while removing only
-      // this fixture's Work from subsequent tests' scheduling horizon.
-      await fixture.observerPool.query(
-        `UPDATE occ.controller_work SET state = 'queued', claim_token = NULL,
-         lease_expires_at = NULL, available_at = 'infinity'
-         WHERE namespace_id = $1 AND state IN ('queued', 'claimed')`,
-        [candidate.namespaceId],
-      );
     },
   );
 }
