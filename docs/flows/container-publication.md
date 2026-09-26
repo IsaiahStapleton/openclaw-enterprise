@@ -195,6 +195,13 @@ source, CI, environment, and private chart package before each write. After
 manifest digest, and writes a separate `chart-publication.json`. A partial
 failure can be retried against identical packaged files. Registry conflict, ambiguous
 lookup, or permission failure stops publication without a success receipt.
+The receipt binds the chart manifest digest observed after the pull. This
+assumes the protected publication workflows and trusted package administrators
+are the only package writers; their workflow concurrency group does not exclude
+independent GHCR writers. A tag change between the pull and digest lookup could
+make the receipt refer to a different manifest. The operator's
+[single-writer requirement](../../.github/chart-publication.md#choose-one-release-version)
+owns package-write access and coordination.
 
 ## Debugging and Verification
 

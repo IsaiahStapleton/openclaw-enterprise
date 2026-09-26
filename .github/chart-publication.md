@@ -33,6 +33,15 @@ inspect registry digests before rerunning the same source; existing tags with
 different bytes are never replaced. A later source revision requires a new OCE
 version.
 
+Treat release version tags as single-writer state. Limit package-write access for
+the chart and both images to this repository's reviewed publication workflows
+and trusted package administrators; do not retag them during publication. The
+workflow concurrency group serializes participating jobs only. The receipt
+records the chart's immutable manifest digest after verification, but an
+independent writer changing the version tag between the pull and digest lookup
+would break that binding. Coordinated external writers need a registry-supported
+conditional write or an equivalent shared lock before using this flow.
+
 ## Pull and install
 
 Authenticate a workstation with a GitHub personal access token (classic) with
