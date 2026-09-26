@@ -3,9 +3,9 @@
 **Date:** 2026-09-26
 **Status:** Proposed; not implemented or approved.
 **Owner:** Driver contracts, Agent deployment, and the OpenShell integration.
-**Source baseline:** OCE `main` at `64ab72ae`; OpenShell
-[`v0.1.0-pre.7`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0-pre.7) (`f8002d19`).
-The OpenShell facts below must be rechecked against `v0.1.0-pre.12` before acceptance.
+**Source baseline:** OCE `main` at `e4a807e7`, which pins OpenShell
+[`v0.1.0`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0) (`496ebba2`). Upstream
+paths below are relative to that tag.
 
 ## Problem and decision
 
@@ -42,7 +42,9 @@ In scope:
   composition with the OpenShell SandboxDriver.
 - A Namespace-scoped `CredentialSource` resource, Agent bindings to it, and
   Harness model authentication through a bound source.
-- Every OpenShell source type (see [the next section](#openshell-source-types)).
+- A contract that accommodates every OpenShell source type, with first delivery
+  limited to the types that have a real integration proof (see
+  [the next section](#openshell-source-types)).
 - Withdrawing one Agent's access without affecting other Agents.
 
 Out of scope:
@@ -56,21 +58,28 @@ Out of scope:
 
 ## OpenShell source types
 
-Sources: `docs/sandboxes/manage-providers.mdx:204-302` and
-`docs/providers/profiles.mdx:490-512,542-580` at `v0.1.0-pre.7`.
+Sources: `docs/how-it-works/providers/overview.mdx:204-302` and
+`docs/how-it-works/providers/profiles.mdx:500-600`.
 
-| Source type                                                                                        | How OpenShell applies it                                                             | Inputs OCE supplies                                                |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| `static`                                                                                           | Placeholder in the workload environment; the proxy substitutes it at bound endpoints | Secret values                                                      |
-| `external`                                                                                         | Same as `static`; an external owner pushes new values                                | Secret values, updated later                                       |
-| Gateway refresh: `oauth2_refresh_token`, `oauth2_client_credentials`, `google_service_account_jwt` | Gateway mints access tokens; the placeholder stays stable across rotations           | Secret and non-secret refresh material                             |
-| `aws_sts_assume_role`                                                                              | Gateway mints three credentials; the proxy re-signs requests with SigV4              | Role ARN, optional session settings and long-lived source keys     |
-| Token grant: `client_credentials`, `token_exchange`                                                | Supervisor obtains a token with its SPIFFE JWT-SVID; the proxy inserts the header    | Profile configuration; a stored subject token for `token_exchange` |
+| Source type                                                          | How OpenShell applies it                                                             | Inputs OCE supplies                                                | First delivery                                                     |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `static`                                                             | Placeholder in the workload environment; the proxy substitutes it at bound endpoints | Secret values                                                      | Yes: real OpenAI key                                               |
+| `external`                                                           | Same as `static`; an external owner pushes new values                                | Secret values, updated later                                       | Yes: real OpenAI key                                               |
+| Gateway refresh: `oauth2_refresh_token`, `oauth2_client_credentials` | Gateway mints access tokens; the placeholder stays stable across rotations           | Secret and non-secret refresh material                             | Yes: real in-cluster Keycloak                                      |
+| Gateway refresh: `google_service_account_jwt`                        | Same as above                                                                        | Service account email and private key                              | Deferred: needs an authorized Google service account               |
+| `aws_sts_assume_role`                                                | Gateway mints three credentials; the proxy re-signs requests with SigV4              | Role ARN, optional session settings and long-lived source keys     | Deferred: needs an authorized AWS role                             |
+| Token grant: `client_credentials`, `token_exchange`                  | Supervisor obtains a token with its SPIFFE JWT-SVID; the proxy inserts the header    | Profile configuration; a stored subject token for `token_exchange` | Deferred: needs SPIRE and an issuer that accepts SPIFFE assertions |
+
+The contract and catalog shape cover every row. The OpenShell driver's
+`listSourceTypes` omits deferred types, so registration rejects them. Each
+deferred type ships in its own change with a real-path integration test.
+None is claimed as delivered without one.
 
 Every type binds credentials to profile endpoints and returns 403
-(`credential_endpoint_mismatch`) elsewhere. Providers belong to an OpenShell
-workspace, and any workspace `user` can attach any provider in it
-(`crates/openshell-server/src/grpc/sandbox.rs:1224-1278`).
+(`credential_endpoint_mismatch`) elsewhere
+(`docs/how-it-works/providers/overview.mdx:411-433`). Providers belong to an
+OpenShell workspace, and any workspace `user` can attach any provider in it
+(`crates/openshell-server/src/grpc/sandbox.rs:1257-1278`).
 
 ## Contract
 
@@ -140,10 +149,17 @@ Contract rules:
 - `attachForRevision` returns one attachment per bound source or throws. The
   paired SandboxDriver's `provisionHarness` must consume every attachment and
   reject any it did not issue.
-- `withdraw` returns `withdrawn` only after the implementation observes the
-  attachment removed. Otherwise it returns `pending`, and retries continue.
+- `withdraw` returns `withdrawn` only after the implementation observes
+  revocation. For OpenShell, that is a detach receipt in state `revoked`: the
+  withdrawn placeholders stop resolving, even in running processes, but
+  requests already forwarded upstream are not undone
+  (`docs/how-it-works/providers/profiles.mdx:1018-1080`). Otherwise `withdraw`
+  returns `pending`, and retries continue.
 - `removeSource` fails while any active or candidate revision references the
-  source. Withdrawal never deletes shared source material.
+  source. OpenShell also refuses to delete an attached provider. Withdrawal never
+  deletes shared source material.
+- Static updates reach only newly started processes, so a running Harness keeps
+  the previous value until it restarts. Gateway refresh keeps stable references.
 
 ### Resource and bindings
 
@@ -167,27 +183,63 @@ actor, and admission also requires it for `Agent.servicePrincipalId`.
 
 ### Lifecycle and authority
 
-| Operation                    | Caller                                       | OpenShell calls                                                                                              |
-| ---------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Create or update a source    | API, after authorization                     | `ImportProviderProfiles` (once per workspace), `CreateProvider`/`UpdateProvider`, `ConfigureProviderRefresh` |
-| Rotate                       | API                                          | `RotateProviderCredential` or `UpdateProvider`                                                               |
-| Source status                | API                                          | `GetProvider`, `GetProviderRefreshStatus`                                                                    |
-| Prepare a revision           | Worker, in Compute before `provisionHarness` | none; provider names placed in `SandboxSpec.providers`                                                       |
-| Attachment status            | Worker, before activation                    | `GetSandboxProviderStatus`                                                                                   |
-| Withdraw one Agent           | API, then worker                             | `DetachSandboxProvider`                                                                                      |
-| Retire a revision            | Worker                                       | Sandbox deletion removes its attachments; `attachmentStatus` verifies                                        |
-| Delete a source or Namespace | API or worker                                | `DeleteProvider`, then `GetProvider` must return not found                                                   |
+OpenShell checks both the token scope and the caller's role on every RPC
+(`proto/openshell.proto` authorization options). OCC uses two gateway principals:
+
+- **Worker principal:** global `platform_admin`, which the existing Sandbox
+  driver already needs to create and delete workspaces. Its token carries
+  `workspace:read`, `workspace:write`, `sandbox:read`, and `sandbox:write`, and
+  no `provider:*` scope, so it cannot read or change provider material.
+- **API principal:** workspace `admin` membership in each OCC workspace, with
+  `provider:read` and `provider:write`. It has no role outside OCC workspaces
+  and no `sandbox:*` scope.
+
+| Operation                 | Principal | OpenShell RPCs (scope; role)                                                                                                                                                                                |
+| ------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prepare a Namespace       | Worker    | `GetWorkspace` (`workspace:read`; user), `CreateWorkspace` (`workspace:write`; `platform_admin`), `AddWorkspaceMember` for the API principal as admin and `ListWorkspaceMembers` (`workspace:write`/`read`) |
+| Create or update a source | API       | `ImportProviderProfiles`, `CreateProvider`, `UpdateProvider`, `ConfigureProviderRefresh` (`provider:write`; admin)                                                                                          |
+| Rotate a source           | API       | `RotateProviderCredential` (`provider:write`; admin)                                                                                                                                                        |
+| Read source status        | API       | `GetProvider`, `GetProviderRefreshStatus` (`provider:read`; user)                                                                                                                                           |
+| Provision a revision      | Worker    | `CreateSandbox` with `SandboxSpec.providers` (`sandbox:write`; user)                                                                                                                                        |
+| Read attachment status    | Worker    | `GetSandboxProviderStatus` (`sandbox:read`; user)                                                                                                                                                           |
+| Withdraw one Agent        | Worker    | `DetachSandboxProvider` (`sandbox:write`; user), then `GetSandboxProviderStatus`                                                                                                                            |
+| Retire a revision         | Worker    | `DeleteSandbox` (`sandbox:write`; user); attachments go with the Sandbox                                                                                                                                    |
+| Delete a source           | API       | `DeleteProvider`, `DeleteProviderProfile` with the last source (`provider:write`; admin), then `GetProvider` (`provider:read`)                                                                              |
+| Delete a Namespace        | Worker    | `DeleteWorkspace` (`workspace:write`; `platform_admin`)                                                                                                                                                     |
 
 The API reads each OCC Secret through a new `SecretDriver` method that returns
-the value only for an authorized Credential Gateway registration. The API holds
-the gateway principal with workspace `admin` and `provider:write`. The worker
-keeps only `sandbox:write`, so it can attach providers but not read or change
-them. An Agent's model credential, therefore, no longer passes through the
-worker, unlike the current `deliverHarnessAuth` copy.
+the value only for an authorized Credential Gateway registration. An Agent's
+model credential therefore no longer passes through the worker, unlike the
+current `deliverHarnessAuth` copy. An authorized withdrawal request is recorded
+by the API and carried out by the worker, because only the worker holds
+`sandbox:write`.
 
 Withdrawal is revocation, so it applies to a running revision. The revision
 keeps its frozen binding but cannot re-attach a withdrawn source; a later
 deployment must omit the source or bind a replacement.
+
+### Cleanup and retry
+
+- **Sources.** Deleting a source marks it `deleting`, then the API calls
+  `DeleteProvider` and confirms that `GetProvider` returns not found. If the
+  gateway is unavailable or the outcome is uncertain, the record stays
+  `deleting`, the API returns 503, and the caller retries. A provider that is
+  already absent counts as deleted. `DeleteProvider` also removes the provider's
+  refresh state (`crates/openshell-server/src/grpc/provider.rs`,
+  `delete_provider_record_with_credentials`).
+- **Namespaces.** `CredentialSource` joins the resources that make a Namespace
+  nonempty, so Namespace deletion returns `409 NAMESPACE_NOT_EMPTY` while any
+  source record exists, including one in `deleting`. The worker therefore
+  deletes the workspace only after every OCC provider and profile is gone.
+  OpenShell rejects `DeleteWorkspace` with `FailedPrecondition` while providers,
+  profiles, or refresh state remain (`docs/how-it-works/workspaces.mdx:221-234`).
+  The worker keeps the Namespace `deleting` and retries.
+- **Withdrawal.** The worker repeats `DetachSandboxProvider`, which is
+  idempotent, until the receipt reaches `revoked`. After
+  `CONFIG_OPERATION_STORAGE_UNCERTAIN`, it reads the current status before
+  retrying, as upstream requires.
+- **Revisions.** Existing retirement retries until the Sandbox is gone. Sources
+  it referenced become deletable only after that.
 
 ### Harness runtime
 
@@ -201,15 +253,18 @@ Codex startup model probe checks either path before readiness.
 
 ## Trust requirements
 
-- OCC must be the only principal with a role in its OpenShell workspaces, because
-  workspace users can attach any provider. The OpenShell reference states this;
-  pre.7 offers no API for OCC to verify it.
+- OCC's two principals must be the only members of its OpenShell workspaces,
+  because workspace users can attach any provider. The worker checks this with
+  `ListWorkspaceMembers` when preparing the Namespace and fails on any other
+  member. Platform Admins bypass membership, so the worker principal must be the
+  only Platform Admin; OCC cannot verify that through the API.
 - Sources do not cross OCC Namespaces; each OCC Namespace maps to one workspace.
 - Credentialed endpoints require L7 inspection. Codex and other clients must
   trust the per-generation Sandbox CA.
-- The guarantee depends on OpenShell's workload fence: a NetworkPolicy giving
-  workload Pods empty egress (`docs/kubernetes/sandbox-runtime.mdx:52-78`),
-  enforced by the cluster's network plugin.
+- The guarantee depends on OpenShell's NetworkPolicy, which admits only
+  supervisor ingress to the workload and denies workload-initiated connections.
+  The cluster's network plugin must enforce it
+  (`docs/kubernetes/setup.mdx:11-34`).
 - Token grants require a SPIFFE Workload API for supervisors.
 - `token_exchange` stores a subject token. The design's non-goals exclude
   "Delegating human identity or authentication to an Agent", so the subject must
@@ -232,13 +287,13 @@ Codex startup model probe checks either path before readiness.
 ## Differences from PR #386
 
 - **Adopted:** separate capability, shared sources with per-Agent attachments,
-  the four provider operations mapped as above, and support for static,
+  the four provider operations mapped as above, and a contract for static,
   refreshed, and dynamic credentials.
 - **Omitted:** `mediate`, `BoundExchange`, `Assurance` profiles, and branded
   evidence types. OpenShell does not call OCE per request.
-- **Not yet a contract:** #386's 30-second active-traffic closure. Upstream
-  documentation disagrees on whether detach or rotation affects running
-  processes (`manage-providers.mdx:192`, `inference-routing.mdx:113-120`).
+- **Not yet a contract:** #386's 30-second active-traffic closure. OpenShell
+  `v0.1.0` defines revocation for new resolution, but it does not undo requests
+  already forwarded, and it sets no bound for open streams.
 
 ## Verification gates
 
@@ -250,11 +305,10 @@ Confirm before `Accepted`:
    `CODEX_AUTH_*` variables without parsing them locally. ChatGPT-account
    refresh works through the proxy, or the source type uses gateway refresh
    instead.
-3. `DetachSandboxProvider` stops new requests from a running Sandbox, and the
-   observed effect on open streams is recorded.
-4. The API's gateway principal can import profiles and manage providers, and the
-   worker's cannot.
-5. All of the above hold on `v0.1.0-pre.12`.
+3. A `revoked` detach receipt stops new requests from a running Codex process,
+   and the observed effect on open streams is recorded.
+4. The principal split works as specified: the worker principal is denied
+   provider RPCs, and the API principal is denied workspace and Sandbox RPCs.
 
 ## Tests
 
@@ -262,19 +316,29 @@ Extend `tests/integration/sandbox-driver-openshell-k3d-real.test.mjs` through th
 regular API and worker workflow:
 
 - Register a static OpenAI source, deploy a dedicated Codex Agent, and complete a
-  real model turn. Assert that no Pod spec, tenant Secret, environment, or
-  workspace file contains the key.
+  real model turn. Assert that the key is absent from the Harness Pod spec, every
+  Agent- or revision-owned Kubernetes Secret, the Harness process environment,
+  and workspace files. The source's own OCC Secret is excluded: it is the stored
+  source of record, which the Kubernetes Secret Driver keeps in the tenant's
+  control-plane namespace. Also assert that no Pod references that Secret.
+- Update an `external` source and prove that a restarted Harness uses the new
+  value.
 - Withdraw the source from one Agent. That Agent's next model request fails,
   while a second Agent attached to the same source keeps working.
-- Register a gateway-refresh source against a real in-cluster OAuth2 issuer, such
-  as Keycloak, and prove a rotation without a restart.
+- Register `oauth2_client_credentials` and `oauth2_refresh_token` sources against
+  a real in-cluster Keycloak, call a Keycloak-protected endpoint from the
+  Harness, and prove a rotation without a restart.
+- Prove the permission split and cleanup: denied RPCs for each principal, source
+  deletion refused while attached, and Namespace deletion refused while a source
+  exists.
 - Prove fail-closed cases: an unbound host returns 403, and a direct connection
   from the Harness Pod fails.
-- Add conformance cases for startup membership, catalog validation, and
-  admission rejection of secret-backed `harnessAuth` with a gateway selected.
+- Add conformance cases for startup membership, catalog validation, rejection of
+  deferred types, and admission rejection of secret-backed `harnessAuth` with a
+  gateway selected.
 
-Token-grant and AWS STS proofs need SPIFFE and AWS respectively; they stay
-explicit gaps until that infrastructure exists.
+Deferred source types stay out of the catalog until their real-path tests exist.
+This avoids the need for a human override to omit tests.
 
 ## Documentation
 
@@ -286,6 +350,7 @@ The implementation PR updates:
 - a new Credential Gateway Driver reference, plus the
   [OpenShell SandboxDriver](../docs/reference/drivers/openshell-sandbox.md),
   [Backends](../docs/reference/backends.md),
+  [Namespaces](../docs/reference/namespaces.md),
   [Harness execution](../docs/reference/harness-execution.md), and
   [Secret Driver](../docs/reference/drivers/secret.md) references;
 - the API, permissions, and database-entity cheat sheets;
