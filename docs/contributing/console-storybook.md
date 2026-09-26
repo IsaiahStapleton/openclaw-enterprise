@@ -182,8 +182,7 @@ not backend persistence or live gateway proof.
 
 In **Components / Credentials / Slack tokens stored**, inspect all three Secret
 references. Cancel **Create new Secret...** without writing; select an existing
-Secret, then Save. Switching app tokens preserves the bot binding. The API-key
-switch story supplies a second model Secret.
+Secret, then Save. Switching app tokens preserves the bot binding.
 
 **Secret list denied** retains bound IDs. **Slack grant denied** preserves the
 saved reference but requires Agent access recovery before deployment.
@@ -198,13 +197,11 @@ Review the [bound model Secret](../assets/revision-secret-picker/harness-bound.p
 ### Inspect bound Secrets in revisions
 
 In **Components/Channels → Revision read only**, inspect Slack Secret identities;
-switch to **Configuration** for Harness authentication. Bindings belong to the
-revision; names are current metadata. Values never appear.
+switch to **Configuration** for Harness authentication. Values never appear.
 
 **Revision Secret metadata denied**, **Revision Secret metadata missing**, and
 **Revision Secret metadata loading** retain IDs during failed or pending reads.
 **Revision without Slack bindings** shows **No Secret bound**.
-Browser integration checks separately exercise real API/IAM with in-memory state.
 
 ### Discover and configure plugins
 
