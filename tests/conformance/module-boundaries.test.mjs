@@ -509,6 +509,21 @@ test("fails closed when modeled Node helpers are changed or exposed", async (t) 
   );
   assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PUBLIC");
   assert.ok(from(await check(), esm).some((item) => item.to.endsWith("/public/chosen.mjs")));
+  for (const declaration of [
+    'import {URL as U} from "node:url";',
+    'import url from "node:url"; const {URL: U} = url;',
+    'import url from "node:url"; const U = url["URL"];',
+  ]) {
+    await write(
+      esm,
+      `${declaration} console.log((await import(new U("./chosen.mjs", import.meta.url).href)).default);`,
+    );
+    assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PUBLIC");
+    assert.ok(
+      from(await check(), esm).some((item) => item.to.endsWith("/public/chosen.mjs")),
+      declaration,
+    );
+  }
   await write(
     esm,
     'const global = {}; global.URL = class {}; console.log((await import(new URL("./chosen.mjs", import.meta.url).href)).default);',

@@ -237,7 +237,7 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
           parent.name === node) ||
         ((ts.isImportSpecifier(parent) || ts.isBindingElement(parent)) &&
           (parent.name === node || parent.propertyName === node)) ||
-        (ts.isCallExpression(parent) && parent.expression === node))
+        ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === node))
     ) {
       return false;
     }
