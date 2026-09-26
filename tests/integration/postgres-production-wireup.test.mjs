@@ -499,6 +499,7 @@ test(
       const defaults = await request("GET", presetPath);
       assert.equal(defaults.status, 200);
       assert.deepEqual(defaults.data.map((preset) => preset.name).sort(), [
+        "default-codex",
         "standard-codex",
         "standard-openclaw",
       ]);
@@ -549,6 +550,7 @@ test(
       endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
       const afterRestart = await request("GET", presetPath);
       assert.deepEqual(afterRestart.data.map((preset) => preset.name).sort(), [
+        "default-codex",
         "standard-codex",
         "standard-openclaw",
       ]);
@@ -566,6 +568,7 @@ test(
       assert.equal(newNamespace.status, 201);
       const newPresets = await request("GET", `/namespaces/${newNamespace.data.id}/presets`);
       assert.deepEqual(newPresets.data.map((preset) => preset.name).sort(), [
+        "default-codex",
         "standard-codex",
         "standard-openclaw",
       ]);
