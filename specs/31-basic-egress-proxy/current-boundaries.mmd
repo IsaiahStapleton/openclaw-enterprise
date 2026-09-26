@@ -2,37 +2,12 @@
 config:
   theme: base
   htmlLabels: true
-  themeVariables:
-    fontSize: 16px
-    lineColor: "#8B949E"
-    edgeLabelBackground: "#FFFFFF"
   flowchart:
     curve: linear
-    nodeSpacing: 22
-    rankSpacing: 22
-    padding: 10
-    subGraphTitleMargin:
-      top: 8
-      bottom: 12
 ---
-flowchart TB
-  subgraph AgentGateway["Agent OpenClaw Gateway · upstream capability"]
-    Child["<b>Hosted children</b><br/>Sentinels + proxy/trust"]
-    Worker["<b>Gateway Worker</b><br/>Loopback secret proxy"]
-    Child -->|proxied request| Worker
-  end
-  Destination["<b>Admitted HTTPS host</b><br/>Receives substituted secret"]
-  Driver["<b>Compute / SandboxDriver</b><br/>Enterprise worker code"]
-  OpenShell["<b>OpenShell Gateway</b><br/>Separately installed"]
-  Harness["<b>Dedicated Codex Harness</b><br/>Provider-owned Pod"]
-  Worker -->|substitute and forward| Destination
-  Driver -->|provisionHarness| OpenShell
-  OpenShell -->|controller creates| Harness
-  classDef owner fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
-  classDef protected fill:#E8F2EF,stroke:#819D96,color:#294B43,stroke-width:1px
-  classDef external fill:#F0ECF5,stroke:#A093B2,color:#453653,stroke-width:1px
-  class Child,Driver owner
-  class Worker,Harness protected
-  class OpenShell,Destination external
-  style AgentGateway fill:#FAFAFA,stroke:#CBD2D9,color:#344054
-  linkStyle default stroke:#8B949E,stroke-width:1px
+flowchart LR
+  Agent["Sandboxed Agent"] -. placeholder request .-> Proxy["OpenShell network proxy"]
+  Provider["OpenShell provider"] -. credential .-> Proxy
+  Proxy -. allowed request .-> Service["Approved service"]
+  Host["Gateway-hosted command"] -. placeholder request .-> HostProxy["OpenClaw secret proxy"]
+  HostProxy -. allowed request .-> Service
