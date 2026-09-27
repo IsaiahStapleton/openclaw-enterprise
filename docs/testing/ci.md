@@ -136,6 +136,12 @@ Prepare infrastructure only on a disposable host or through reviewed CI helpers.
 Each run owns its Compose project, databases, cluster and temp files. CI writes
 private cleanup state under `RUNNER_TEMP` and uploads sanitized results plus
 bootstrap diagnostics; hosted-runner cleanup state disappears after the job.
+The images-packaging lane attempts to retain sanitized cleanup records for its
+prepared controller and runtime tags; a planned record does not prove an image
+exists. It does not cover the separate tag created by the runtime-images test.
+Export or upload failure and runner loss can prevent retention. Missing state or
+an empty inventory does not prove cleanup; the tag name is metadata, not
+authentication or authority to delete an image.
 Results include source commit, case outcomes, cleanup status and available image
 digests by role, excluding private registry names and prepared environment
 values. Local failures can retain cleanup state while the host and state path
