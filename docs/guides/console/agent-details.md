@@ -141,6 +141,11 @@ access. Existing
 selections and **Plugin selections JSON** remain editable when browsing is
 unavailable.
 
+An open Slack approver search keeps its query and results when you return to the
+browser tab and still have Agent access. Moving to another Console control closes
+the results; focus the search field to open them again. Switching Agent tabs and
+returning keeps a completed query.
+
 Select **Save plugin selections** to update the Agent's desired plugin map, then
 **Deploy new version** to apply it. Saving does not alter an admitted revision
 or the reusable Configuration. An empty map removes all Agent-owned plugin

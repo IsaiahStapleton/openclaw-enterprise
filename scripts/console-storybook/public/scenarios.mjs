@@ -1927,12 +1927,19 @@ export const scenarios = {
     agentPluginApprovers: [],
     pluginCapabilities,
     actions: [
+      { selector: '.content [aria-live="polite"][aria-busy="false"]' },
       click("Plugins"),
       { selector: 'select[aria-label="Default plugin approvers mode"]', value: "chosen" },
       { selector: '[aria-label="Default plugin approvers people"]', focus: true },
+      { selector: '[aria-label="Default plugin approvers people"]', value: "Alex" },
+      { selector: '[aria-label="Default plugin approvers people results"] [role="option"]' },
     ],
     description:
-      "The selected bot Secret resolves names within Demo workspace. Duplicate Alex Chen results show their distinct user IDs; choosing one saves a team-qualified selector.",
+      "The selected bot Secret resolves names within Demo workspace. The open Alex search keeps its results on browser refocus; choosing one saves a team-qualified selector.",
+    steps: [
+      "Switch to another browser tab and return. The open query and results remain while Agent access is checked.",
+      "Move focus to another Console control to close the list, then focus the search field to reopen it.",
+    ],
     gap: "The fixture simulates directory data; it does not contact Slack or read a real Secret.",
   },
   pluginsAdmitted: {
