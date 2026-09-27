@@ -307,8 +307,6 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     );
   }
 
-  context.setDiscardOnExit(Boolean(draft.discardOnExit));
-  context.drafts.forget("preset");
   const formId = "create-agent-form";
   const name = element("input", {
     id: "agent-name",
@@ -1090,7 +1088,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
   }
   manualModel = draft.manualModel ?? manualModel;
-  context.setDraftCapture(() => ({
+  const captureDraft = () => ({
     discardOnExit: Boolean(draft.discardOnExit),
     rendered,
     presetOptions,
@@ -1107,7 +1105,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     modelCredentialSource,
     modelCredentialSecret,
     repositoryBindings: repositories.draftBindings(),
-  }));
+  });
   function parseObject(input, reportInvalid = false) {
     try {
       const values = JSON.parse(input.value);
@@ -1710,4 +1708,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     recovery,
     actions,
   );
+  context.setDraftCapture(captureDraft);
+  context.drafts.forget("preset");
+  context.setDiscardOnExit(Boolean(draft.discardOnExit));
 }

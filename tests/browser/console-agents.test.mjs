@@ -7602,6 +7602,54 @@ test("invalid Preset application retains chooser edits and preserves the selecte
   }
 });
 
+test("failed Preset form construction retains chooser edits for both origins", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, "/console/agents");
+
+  for (const origin of ["shortcut", "explicit"]) {
+    const namespace = await fixture.createNamespace(`Invalid model ${origin}`, { ready: true });
+    const presets = await fixture.request("GET", `/namespaces/${namespace.id}/presets`);
+    const starter = presets.data.find((preset) => preset.name === "default-codex");
+    const validTemplate = structuredClone(starter.template);
+    const fallback = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+      body: { name: "Usable fallback", template: validTemplate },
+    });
+    assert.equal(fallback.status, 201);
+    const invalidTemplate = structuredClone(validTemplate);
+    invalidTemplate.variables = { marker: { type: "string" } };
+    invalidTemplate.configuration.values.agents = { defaults: { model: { primary: 42 } } };
+    const updated = await fixture.request(
+      "PATCH",
+      `/namespaces/${namespace.id}/presets/${starter.id}`,
+      { body: { template: invalidTemplate } },
+    );
+    assert.equal(updated.status, 200);
+
+    await page.goto(`${fixture.origin}/console/agents/new?namespace=${namespace.id}`);
+    if (origin === "shortcut") {
+      await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
+    } else {
+      await page.getByLabel("Preset template").selectOption(starter.id);
+    }
+    const marker = page.getByLabel("Variable: marker", { exact: true });
+    await marker.fill(`draft ${origin}`);
+    await page.getByRole("button", { name: "Use Preset", exact: true }).click();
+    await page
+      .getByRole("alert")
+      .filter({ hasText: /startsWith/ })
+      .waitFor();
+    await page.getByRole("link", { name: "← Agents" }).click();
+    await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    await marker.waitFor();
+    assert.equal(await marker.inputValue(), `draft ${origin}`, origin);
+    await page.getByLabel("Preset template").selectOption(fallback.data.id);
+    await page.getByRole("button", { name: "Use Preset", exact: true }).click();
+    await page.getByLabel("Agent name", { exact: true }).waitFor();
+  }
+});
+
 test("unsaved Preset drafts retain unfinished edits across navigation until explicit discard", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
