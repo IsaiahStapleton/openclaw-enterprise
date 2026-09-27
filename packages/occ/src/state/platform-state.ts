@@ -33,6 +33,8 @@ import type {
   ServiceAccount,
   ServiceAccountCredential,
   Role,
+  IAMPolicyReadRepository,
+  IAMPolicyRepository,
 } from "@openclaw-enterprise/contracts";
 import {
   normalizeInitialWorkspaceFiles,
@@ -527,22 +529,7 @@ export interface PlatformOperationRepository extends PlatformOperationReadReposi
 
 export type { AgentProvisioningRecord } from "./agent-provisioning.ts";
 
-export interface IAMPolicyReadRepository {
-  listRoles(namespaceId: string): Promise<readonly Readonly<Role>[]>;
-  getRole(namespaceId: string, roleId: string): Promise<Readonly<Role> | undefined>;
-  listAccessBindings(namespaceId: string): Promise<readonly Readonly<AccessBinding>[]>;
-  getAccessBinding(
-    namespaceId: string,
-    bindingId: string,
-  ): Promise<Readonly<AccessBinding> | undefined>;
-}
-
-export interface IAMPolicyRepository extends IAMPolicyReadRepository {
-  createRole(role: Role): Promise<Readonly<Role>>;
-  deleteRole(namespaceId: string, roleId: string): Promise<boolean>;
-  createAccessBinding(binding: AccessBinding): Promise<Readonly<AccessBinding>>;
-  deleteAccessBinding(namespaceId: string, bindingId: string): Promise<boolean>;
-}
+export type { IAMPolicyReadRepository, IAMPolicyRepository } from "@openclaw-enterprise/contracts";
 
 export interface PlatformReadView {
   readonly installations: InstallationReadRepository;
