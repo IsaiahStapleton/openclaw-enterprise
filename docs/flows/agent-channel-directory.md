@@ -97,4 +97,4 @@ until the operator saves the channel edit.
 
 ## Changelog
 
-- 2026-09-27 06:41: Describe authorized Slack directory lookup. (01a0df20-f340-7810-bb59-b1df6c0bbbd3 - 2a6ebc5e374357dc2c90594555ce92c1990f68f3)
+- 2026-09-27 06:41: Describe authorized Slack directory lookup. (01a0df20-f340-7810-bb59-b1df6c0bbbd3 - 1d7b0b3b4e419cb8e085996be873ec233eeabf6d)

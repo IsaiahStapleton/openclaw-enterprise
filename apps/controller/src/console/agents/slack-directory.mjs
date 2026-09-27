@@ -361,24 +361,40 @@ export function createSlackDirectoryPicker({
     previous.disabled = true;
     next.disabled = true;
     try {
-      const page = await context.request(
-        `${namespacePath(context.namespaceId)}/channel-directory/lookup`,
-        {
+      const requestPage = (selection) =>
+        context.request(`${namespacePath(context.namespaceId)}/channel-directory/lookup`, {
           method: "POST",
           body: {
             secretId,
             kind,
-            ...(exactTarget
-              ? { ids: [exactTarget.id] }
-              : {
-                  ...(query ? { query } : {}),
-                  ...(cursor ? { cursor } : {}),
-                }),
+            ...selection,
             ...(agentId ? { agentId } : {}),
             ...(configurationId ? { configurationId } : {}),
           },
-        },
+        });
+      let page = await requestPage(
+        exactTarget
+          ? { ids: [exactTarget.id] }
+          : { ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) },
       );
+      if (
+        exactTarget &&
+        query.length >= 8 &&
+        isSlackId(query, kind) &&
+        page.candidates.length === 0 &&
+        dialog.open &&
+        context.isCurrent() &&
+        active === generation &&
+        getSecretId() === secretId
+      ) {
+        const exactWorkspaceId = page.workspaceId;
+        page = await requestPage({ query });
+        if (page.workspaceId !== exactWorkspaceId) {
+          status.textContent =
+            "The Slack bot workspace changed during this search. Start a new search.";
+          return;
+        }
+      }
       if (!dialog.open || !context.isCurrent() || active !== generation) {
         return;
       }

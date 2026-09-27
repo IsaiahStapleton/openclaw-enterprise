@@ -7780,6 +7780,7 @@ test("Slack directory selections show names and save exact channel IDs", async (
               { id: "CEXIST123", name: "existing-room" },
               { id: "CTEST456", name: "release-room" },
               { id: "CGENERAL", name: "general" },
+              { id: "CUPPER123", name: "GENERALX" },
             ];
       await route.fulfill({
         status: 200,
@@ -7830,6 +7831,11 @@ test("Slack directory selections show names and save exact channel IDs", async (
   await channelPicker.getByRole("button", { name: "Search" }).click();
   await channelPicker.getByRole("button", { name: /general.*CGENERAL/ }).waitFor();
   assert.ok(directoryBodies.some((body) => body.query === "general" && !body.ids));
+  await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("GENERALX");
+  await channelPicker.getByRole("button", { name: "Search" }).click();
+  await channelPicker.getByRole("button", { name: /GENERALX.*CUPPER123/ }).waitFor();
+  assert.ok(directoryBodies.some((body) => body.ids?.[0] === "GENERALX"));
+  assert.ok(directoryBodies.some((body) => body.query === "GENERALX" && !body.ids));
   await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("CTEST456");
   await channelPicker.getByRole("button", { name: "Search" }).click();
   await channelPicker.getByRole("button", { name: /release-room.*CTEST456/ }).click();
