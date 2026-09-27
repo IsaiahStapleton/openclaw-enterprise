@@ -231,9 +231,12 @@ test(
     // No other records have entered this fresh Collector, so a filter count
     // proves the near-match was processed and rejected before capture assertions.
     assert.equal(await filtered(), false);
-    await send("worker", [warningLine("compute.preflight-warning-unreviewed")], [], [
-      "com.docker.compose.service=worker",
-    ]);
+    await send(
+      "worker",
+      [warningLine("compute.preflight-warning-unreviewed")],
+      [],
+      ["com.docker.compose.service=worker"],
+    );
     await waitFor(filtered);
 
     await send("gateway", [
