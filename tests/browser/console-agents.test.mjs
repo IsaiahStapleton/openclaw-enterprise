@@ -5859,6 +5859,14 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   const brokenImageRequest = page.waitForRequest(brokenLogoUrl);
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  async function closePluginDialog() {
+    // The close handler restores focus; wait for it before using another credential control.
+    const closed = dialog.evaluate(
+      (node) => new Promise((resolve) => node.addEventListener("close", resolve, { once: true })),
+    );
+    await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await closed;
+  }
   const calendar = dialog.getByRole("button", { name: "Calendar", exact: true });
   await calendar.waitFor();
   const setup = dialog.locator(".plugin-access-help");
@@ -5997,7 +6005,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await dialog.getByRole("button", { name: "Configured plugins", exact: true }).click();
   await dialog.getByRole("button", { name: "Calendar", exact: true }).waitFor();
   await dialog.getByRole("button", { name: "Available plugins", exact: true }).click();
-  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await closePluginDialog();
   const reminder = page.locator(".plugin-setup-reminder");
   assert.equal(await reminder.isVisible(), true);
   await reminder
@@ -6017,7 +6025,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   holdList = true;
   await dialog.getByRole("button", { name: "Next page", exact: true }).click();
   await listPending;
-  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await closePluginDialog();
   await token.fill("");
   const clearedSetup = page.locator(".plugin-access-help");
   assert.equal(await clearedSetup.locator("a").count(), 0);
@@ -6038,7 +6046,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await dialog.getByRole("button", { name: "New-account-plugin", exact: true }).waitFor();
   assert.equal(await dialog.getByRole("button", { name: "Documents", exact: true }).count(), 0);
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
-  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await closePluginDialog();
   assert.equal(await dialog.isVisible(), false);
   // Selecting a saved PAT sends only its reference to OCC for both list and detail reads.
   holdList = false;
@@ -6058,11 +6066,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     pluginId: "remote-calendar",
   });
   assert.doesNotMatch(JSON.stringify(selectedRequests.at(-2).body), /at-browser-plugin/);
-  const dialogClosed = dialog.evaluate(
-    (node) => new Promise((resolve) => node.addEventListener("close", resolve, { once: true })),
-  );
-  await dialog.getByRole("button", { name: "Done", exact: true }).click();
-  await dialogClosed;
+  await closePluginDialog();
 
   // Switching the saved Secret discards the previous account's catalog and reloads with the new one.
   await selectSecret(page, "Service account token Secret", secondSecret);
@@ -6073,7 +6077,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     requests.filter((request) => request.path.endsWith("/agents/plugins")).at(-1).body,
     { secretRef: secondSecret.ref },
   );
-  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await closePluginDialog();
   assert.equal(
     upstreamCalls.some((call) => call.token === "Bearer at-browser-plugin-two"),
     true,
