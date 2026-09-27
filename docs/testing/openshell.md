@@ -125,7 +125,10 @@ strict CI runner forwards the selector and accounts for one stable test identity
 in either mode. The positive scenario uses a test-only operator Job to stage the
 app-server token, plugin-runtime files, and projected workload token in
 revision-specific PVC subpaths before OpenShell starts the provider-owned
-Harness. The Job no longer receives the model key. The test asserts that Compute
+Harness. The same bridge mounts writable revision subpaths for runtime assets,
+workspace-node state, and the native state root `/home/node/.openclaw`, where
+the Agent entrypoint publishes plugin skills. Kubernetes Compute backs the
+whole Harness home with an emptyDir. The Job no longer receives the model key. The test asserts that Compute
 rendered no `OPENAI_API_KEY` and exactly one credential attachment, and that
 every Harness process holds only an `openshell:resolve:env:` placeholder, so the
 real model turn proves that the supervisor proxy substituted the key. The Driver asks OpenShell to expose the app-server port in the original

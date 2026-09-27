@@ -83,6 +83,9 @@ const credentialMountPath = "/run/enterprise-credentials";
 const pluginRuntimeMountPath = "/etc/openclaw/plugin-runtime";
 const runtimeAssetsMountPath = "/home/node/openclaw-runtime-assets";
 const nodeStateMountPath = "/home/node/.openclaw-node";
+// Kubernetes Compute backs all of /home/node with an emptyDir; stock OpenShell has no equivalent,
+// so the bridge stages the native state root where the Agent entrypoint publishes plugin skills.
+const openclawHomeMountPath = "/home/node/.openclaw";
 const workspaceMountPath = "/home/node/workspace";
 const bridgedWorkspaceSubPath = "workspace/openshell-home";
 const portableCommandArgumentBytes = 30 * 1024;
@@ -751,6 +754,7 @@ function credentialBridgeResource(context, claimName, subPath) {
                   "mkdir -p /bootstrap/plugin-runtime",
                   "mkdir -p /bootstrap/node-state",
                   "mkdir -p /bootstrap/runtime-assets",
+                  "mkdir -p /bootstrap/openclaw-home",
                   `mkdir -p /bootstrap/service-principal/${tokenParent}`,
                   "mkdir -p /workspace-home/openshell-home/.codex",
                   "chmod 0700 /bootstrap/plugin-runtime /bootstrap/service-principal",
@@ -776,7 +780,7 @@ function credentialBridgeResource(context, claimName, subPath) {
                   "chmod 0444 /bootstrap/plugin-runtime/runtime.json /bootstrap/plugin-runtime/config.toml",
                   `chmod 0444 /bootstrap/service-principal/${servicePrincipalToken.path}`,
                   "chmod 0555 /bootstrap/plugin-runtime /bootstrap/service-principal",
-                  "chmod 0700 /bootstrap/runtime-assets",
+                  "chmod 0700 /bootstrap/runtime-assets /bootstrap/openclaw-home",
                   "chmod 0700 /workspace-home/openshell-home /workspace-home/openshell-home/.codex",
                 ].join("\n"),
               ],
@@ -956,6 +960,12 @@ ${runtimeCommand[programIndex]}`;
         claimName,
         subPath: `${subPath}/runtime-assets`,
         mountPath: runtimeAssetsMountPath,
+        readOnly: false,
+      },
+      {
+        claimName,
+        subPath: `${subPath}/openclaw-home`,
+        mountPath: openclawHomeMountPath,
         readOnly: false,
       },
       {
@@ -1227,6 +1237,17 @@ function assertBridgedWorkspaceMounts(pod) {
     ),
     true,
     "the stock OpenShell bridge requires revision-scoped writable node state.",
+  );
+  assert.equal(
+    mounts.some(
+      ({ mountPath, readOnly, subPath }) =>
+        mountPath === openclawHomeMountPath &&
+        readOnly === false &&
+        subPath.startsWith(".openclaw/openshell-bootstrap/") &&
+        subPath.endsWith("/openclaw-home"),
+    ),
+    true,
+    "the stock OpenShell bridge requires a revision-scoped writable native state root.",
   );
   assert.equal(
     mounts.some(
@@ -1563,7 +1584,7 @@ function createIntegrationSandboxDriverFactory(
                 [
                   "chmod -R u+w /bootstrap/plugin-runtime /bootstrap/service-principal",
                   "rm -f /bootstrap/app-server-token /bootstrap/openclaw-node-setup-code /bootstrap/openclaw-node-ca.pem",
-                  "rm -rf /bootstrap/plugin-runtime /bootstrap/service-principal /bootstrap/node-state /bootstrap/runtime-assets",
+                  "rm -rf /bootstrap/plugin-runtime /bootstrap/service-principal /bootstrap/node-state /bootstrap/runtime-assets /bootstrap/openclaw-home",
                 ].join("\n"),
               ];
               container.volumeMounts = container.volumeMounts.filter(

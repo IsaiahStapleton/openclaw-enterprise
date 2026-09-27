@@ -291,6 +291,10 @@ require upstream OpenShell to satisfy all of these conditions:
   template bridge is not a supported workaround.
 - OpenShell must preserve all approved Agent workspace PVC subpath mounts
   without falling back to its default workspace claim or mounting the PVC root.
+- OpenShell must provide the Harness's bounded Pod-local writable home, which
+  Kubernetes Compute backs with an emptyDir at `/home/node`. The Agent entrypoint
+  writes runtime assets there and publishes plugin skills at
+  `/home/node/.openclaw/plugin-skills`.
 - OpenShell must preserve the immutable plugin-runtime `runtime.json` and
   `config.toml` ConfigMap entries at `/etc/openclaw/plugin-runtime`. The Codex
   entrypoint reads these files even when the Agent selects no optional plugins.
