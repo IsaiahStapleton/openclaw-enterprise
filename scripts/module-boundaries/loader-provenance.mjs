@@ -285,6 +285,14 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
       }
       if (origin?.kind === "commonjs-module") {
         const parent = outer.parent;
+        let observed = node;
+        while (observed.parent && unwrap(observed.parent) === unwrap(observed)) {
+          observed = observed.parent;
+        }
+        const typeObservation =
+          observed.parent &&
+          ts.isTypeOfExpression(observed.parent) &&
+          observed.parent.expression === observed;
         let first;
         if (
           (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
@@ -298,6 +306,7 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
         }
         if (
           first !== "exports" &&
+          !typeObservation &&
           (exposedOrWritten(node) || (first !== undefined && first !== "require"))
         ) {
           mutableCommonjsModule = true;

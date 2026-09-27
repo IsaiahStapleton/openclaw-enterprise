@@ -2747,3 +2747,49 @@ test("tracks the shared Node module loader and ignores binding property names", 
     ),
   );
 });
+
+test("observes the CommonJS module type without exposing its loader", async (t) => {
+  const source = "apps/app/src/public/typeof-module.cjs";
+  const { root, write, check } = await workspace(t);
+  await write("apps/app/src/public/secret.cjs", 'module.exports = "PUBLIC";');
+  for (const observation of ["typeof module", "typeof (module)", "typeof (((module)))"]) {
+    await write(
+      source,
+      `console.log(${observation}, require.resolve("./secret.cjs"), module.require("./secret.cjs"));`,
+    );
+    const native = (await run(process.execPath, [join(root, source)])).stdout.trim();
+    assert.match(native, /^object .*secret\.cjs PUBLIC$/);
+    const report = await check();
+    assert.equal(
+      report.violations.some((item) => item.from === source),
+      false,
+      observation,
+    );
+    assert.ok(from(report, source).some((item) => item.to === "apps/app/src/public/secret.cjs"));
+  }
+  await write(
+    source,
+    'function shadow(module) { return typeof (module); } console.log(shadow({}), require.resolve("./secret.cjs"));',
+  );
+  assert.match(
+    (await run(process.execPath, [join(root, source)])).stdout.trim(),
+    /^object .*secret\.cjs$/,
+  );
+  assert.equal(
+    (await check()).violations.some((item) => item.from === source),
+    false,
+  );
+  for (const exposure of [
+    "const box = {module}; void box;",
+    "function expose(value) { return value; } expose(module);",
+  ]) {
+    await write(source, `${exposure} console.log(require("./secret.cjs"));`);
+    assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
+    assert.ok(
+      (await check()).violations.some(
+        (item) => item.from === source && item.rule === "unresolved-dynamic-import",
+      ),
+      exposure,
+    );
+  }
+});
