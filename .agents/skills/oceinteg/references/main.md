@@ -35,6 +35,10 @@ logs, screenshots, transcripts, or reports, and never manually handle refresh
 tokens. Credential failures block affected assertions; they are not permission
 to weaken security or switch identities.
 
+Before accessing a credential store or entering values in Console, follow
+[Supply credentials](./credentials.md) for field selection, protected retrieval,
+and the supported binding steps.
+
 ## Installation acceptance
 
 Use standard Helm installation with the following profile:
