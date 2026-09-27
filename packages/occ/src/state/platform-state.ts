@@ -27,6 +27,7 @@ import type {
   Namespace,
   NamespaceStatus,
   PluginDesiredState,
+  PluginApprovers,
   Preset,
   RepositoryBindingSelection,
   Secret,
@@ -41,10 +42,12 @@ import {
   normalizeInitialWorkspaceFiles,
   normalizeWorkspaceDefaultsId,
   normalizePluginDesiredState,
+  normalizePluginApprovers,
   normalizeHarnessAuthBinding,
   harnessAuthBindingFromSnapshot,
   normalizeSecretBindings,
   validPluginRevisionState,
+  validPluginApprovers,
 } from "@openclaw-enterprise/contracts";
 import { immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
@@ -130,6 +133,7 @@ export interface AgentRepository extends AgentReadRepository {
     backendId?: string | null,
     plugins?: PluginDesiredState,
     repositoryBindings?: readonly RepositoryBindingSelection[],
+    pluginApprovers?: PluginApprovers | null,
   ): Promise<Readonly<Agent> | undefined>;
   compareAndSetActiveRevision(
     namespaceId: string,
@@ -348,6 +352,10 @@ function normalizedPlugins(plugins?: PluginDesiredState): PluginDesiredState | u
   return normalizePluginDesiredState(plugins, invalidPluginState);
 }
 
+function normalizedPluginApprovers(approvers?: PluginApprovers): PluginApprovers | undefined {
+  return normalizePluginApprovers(approvers, invalidPluginState);
+}
+
 export function validHarnessAuthSnapshot(value: HarnessAuthSnapshot, namespaceId: string): boolean {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -532,6 +540,7 @@ function assertAdmittedAgentRevision(revision: AgentRevision): void {
     Object.hasOwn(revision, "serviceAccount") ||
     !validHarnessAuthSnapshot(revision.harnessAuth, revision.namespaceId) ||
     !validPluginRevisionState(revision.plugins) ||
+    !validPluginApprovers(revision.pluginApprovers) ||
     (revision.repositoryCredentials !== undefined &&
       !validRepositoryRevisionState(revision.repositoryCredentials))
   ) {
@@ -1678,6 +1687,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         throw new ScopeViolationError("The Agent Backend identity is invalid.");
       }
       const plugins = normalizedPlugins(agent.plugins);
+      const pluginApprovers = normalizedPluginApprovers(agent.pluginApprovers);
       const repositoryBindings = normalizedRepositoryBindings(agent.repositoryBindings);
       const namespace = await namespaces.lockNamespace(agent.namespaceId);
       if (
@@ -1719,12 +1729,14 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       }
       const {
         plugins: _providedPlugins,
+        pluginApprovers: _providedPluginApprovers,
         repositoryBindings: _providedRepositoryBindings,
         ...withoutPlugins
       } = agent;
       const saved = immutableCopy({
         ...withoutPlugins,
         ...(plugins === undefined ? {} : { plugins }),
+        ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
         desiredRuntimeState: "stopped" as const,
         status: "active" as const,
@@ -1780,6 +1792,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       backendId,
       nextPlugins,
       nextRepositoryBindings,
+      nextPluginApprovers,
     ) => {
       const current = await agents.findAgent(namespaceId, agentId);
       if (!current) {
@@ -1807,12 +1820,19 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       );
       const nextBackendId = backendId === undefined ? current.backendId : backendId;
       const plugins = nextPlugins === undefined ? current.plugins : normalizedPlugins(nextPlugins);
+      const pluginApprovers =
+        nextPluginApprovers === undefined
+          ? current.pluginApprovers
+          : nextPluginApprovers === null
+            ? undefined
+            : normalizedPluginApprovers(nextPluginApprovers);
       const repositoryBindings =
         nextRepositoryBindings === undefined
           ? current.repositoryBindings
           : normalizedRepositoryBindings(nextRepositoryBindings);
       const {
         plugins: _currentPlugins,
+        pluginApprovers: _currentPluginApprovers,
         repositoryBindings: _currentRepositoryBindings,
         ...withoutPlugins
       } = current;
@@ -1823,6 +1843,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         executionMode: executionMode ?? current.executionMode,
         harnessAuth: association,
         ...(plugins === undefined ? {} : { plugins }),
+        ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
       });
       snapshot.agents.set(agentKey(namespaceId, agentId), updated);

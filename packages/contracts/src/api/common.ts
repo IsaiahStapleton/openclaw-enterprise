@@ -46,6 +46,17 @@ export const Name = Type.String({
   pattern: /^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$/.source,
 });
 
+export const PluginApproversSchema = Type.Array(
+  Type.Object(
+    {
+      channel: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z][a-z0-9_-]*$" }),
+      id: Type.String({ minLength: 1, maxLength: 200, pattern: "^[^\\u0000-\\u0020\\u007f]+$" }),
+    },
+    { additionalProperties: false },
+  ),
+  { maxItems: 64, uniqueItems: true, $id: "PluginApprovers" },
+);
+
 export const KubernetesNamespaceName = Type.String({
   minLength: 1,
   maxLength: 63,
@@ -303,13 +314,17 @@ const PluginDiscoveryAccessToken = Type.String({
 // At most one credential source is accepted; the selected Driver determines whether it is required.
 export const DiscoverAgentPluginsBody = Type.Union([
   Type.Object(
-    { cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })) },
+    {
+      cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
+    },
     { additionalProperties: false },
   ),
   Type.Object(
     {
       accessToken: PluginDiscoveryAccessToken,
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
     { additionalProperties: false },
   ),
@@ -317,6 +332,7 @@ export const DiscoverAgentPluginsBody = Type.Union([
     {
       secretRef: SecretReference,
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
     { additionalProperties: false },
   ),
@@ -341,7 +357,10 @@ export const DiscoverAgentPluginDetailsBody = Type.Union([
 ]);
 
 export const DiscoverSavedAgentPluginsBody = Type.Object(
-  { cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })) },
+  {
+    cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+    q: Type.Optional(Type.String({ maxLength: 1024 })),
+  },
   { additionalProperties: false },
 );
 
@@ -506,6 +525,7 @@ export const CreateAgentBody = Type.Object(
     harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
   },
   { additionalProperties: false },
@@ -531,6 +551,7 @@ export const ProvisionAgentBody = Type.Object(
     harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
   },
   { additionalProperties: false },
@@ -543,10 +564,48 @@ export const UpdateAgentBody = Type.Object(
     harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    pluginApprovers: Type.Optional(Type.Union([Type.Ref("PluginApprovers"), Type.Null()])),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
   },
   { additionalProperties: false },
 );
+
+const ChannelDirectoryLookupFields = {
+  secretId: SecretId,
+  kind: Type.Union([Type.Literal("users"), Type.Literal("channels")]),
+  query: Type.Optional(Type.String({ maxLength: 200, pattern: "^[^\\u0000]*$" })),
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 2048, pattern: "^[^\\u0000]*$" })),
+};
+
+const ChannelDirectoryHydrationFields = {
+  secretId: SecretId,
+  kind: Type.Union([Type.Literal("users"), Type.Literal("channels")]),
+  ids: Type.Array(
+    Type.String({ minLength: 1, maxLength: 200, pattern: "^[^\\u0000-\\u001f\\u007f]+$" }),
+    { minItems: 1, maxItems: 20, uniqueItems: true },
+  ),
+};
+
+export const ChannelDirectoryLookupBody = Type.Union([
+  Type.Object(ChannelDirectoryLookupFields, { additionalProperties: false }),
+  Type.Object(
+    { ...ChannelDirectoryLookupFields, agentId: AgentId },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { ...ChannelDirectoryLookupFields, configurationId: ConfigurationId },
+    { additionalProperties: false },
+  ),
+  Type.Object(ChannelDirectoryHydrationFields, { additionalProperties: false }),
+  Type.Object(
+    { ...ChannelDirectoryHydrationFields, agentId: AgentId },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { ...ChannelDirectoryHydrationFields, configurationId: ConfigurationId },
+    { additionalProperties: false },
+  ),
+]);
 
 export const UpdateWorkspaceFileBody = Type.Object(
   {
@@ -605,6 +664,11 @@ export const ERROR_CODES = Object.freeze([
   "PLUGIN_DISCOVERY_RATE_LIMITED",
   "PLUGIN_DISCOVERY_UNAVAILABLE",
   "PLUGIN_DISCOVERY_INVALID_RESPONSE",
+  "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED",
+  "CHANNEL_DIRECTORY_MISSING_SCOPE",
+  "CHANNEL_DIRECTORY_RATE_LIMITED",
+  "CHANNEL_DIRECTORY_INVALID_RESPONSE",
+  "CHANNEL_DIRECTORY_UNAVAILABLE",
 ] as const);
 
 export const ErrorDetail = Type.Object(
@@ -659,6 +723,11 @@ export const ErrorResponse = Type.Object(
           Type.Literal("PLUGIN_DISCOVERY_RATE_LIMITED"),
           Type.Literal("PLUGIN_DISCOVERY_UNAVAILABLE"),
           Type.Literal("PLUGIN_DISCOVERY_INVALID_RESPONSE"),
+          Type.Literal("CHANNEL_DIRECTORY_CREDENTIALS_REJECTED"),
+          Type.Literal("CHANNEL_DIRECTORY_MISSING_SCOPE"),
+          Type.Literal("CHANNEL_DIRECTORY_RATE_LIMITED"),
+          Type.Literal("CHANNEL_DIRECTORY_INVALID_RESPONSE"),
+          Type.Literal("CHANNEL_DIRECTORY_UNAVAILABLE"),
         ]),
         message: Type.String({ minLength: 1, maxLength: 256 }),
         details: Type.Optional(Type.Array(ErrorDetail, { maxItems: 32 })),
@@ -717,6 +786,7 @@ export type UpdateServiceAccountCredentialBody = Type.Static<
 export type CreateAgentBody = Type.Static<typeof CreateAgentBody>;
 export type ProvisionAgentBody = Type.Static<typeof ProvisionAgentBody>;
 export type UpdateAgentBody = Type.Static<typeof UpdateAgentBody>;
+export type ChannelDirectoryLookupBody = Type.Static<typeof ChannelDirectoryLookupBody>;
 export type UpdateWorkspaceFileBody = Type.Static<typeof UpdateWorkspaceFileBody>;
 export type ErrorDetail = Type.Static<typeof ErrorDetail>;
 export type ErrorResponse = Type.Static<typeof ErrorResponse>;

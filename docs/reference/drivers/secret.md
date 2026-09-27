@@ -57,6 +57,12 @@ rechecks those grants and the binding after the backend read, before sending
 the value to the selected Plugin Driver. Never expose values in responses,
 configuration documents, audit, or logs. A running revision may still use an
 older projected value.
+For channel directory lookup, the caller selects an existing same-Namespace
+Secret while creating an Agent or editing an Agent or Configuration. OCC requires
+the corresponding create/update permission and exact Secret `operate`, uses
+`withValue` to read the current value, and rechecks the target permission and
+Secret identity before passing it to the selected ChannelDriver in-process.
+The lookup response contains IDs, names, and workspace identity, never the token.
 Backend permissions and encryption remain the operator's responsibility. See
 [Secret binding permissions](../configuration/secrets.md) and [authorization](../authorization.md).
 

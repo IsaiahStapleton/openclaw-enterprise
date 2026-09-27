@@ -16,6 +16,7 @@ import {
   DiscoverAgentPluginDetailsBody,
   DiscoverSavedAgentPluginsBody,
   DiscoverSavedAgentPluginDetailsBody,
+  ChannelDirectoryLookupBody,
   CreateConfigurationBody,
   CreateNamespaceBody,
   ProvisionAgentBody,
@@ -46,6 +47,7 @@ import {
   AgentPluginCatalogResponse,
   AgentPluginDetailsResponse,
   AgentPluginPolicyCapabilitiesResponse,
+  ChannelDirectoryLookupResponse,
   PresetResponse,
   PresetListResponse,
   AgentDeploymentStatusResponse,
@@ -784,6 +786,28 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "lookupChannelDirectory",
+    method: "POST",
+    path: "/namespaces/:namespaceId/channel-directory/lookup",
+    action: "openclaw.channel_directory.lookup",
+    iamAction: "operate",
+    resourceKind: "secret",
+    authorizationTarget: "namespace_collection",
+    summary: "Search a channel directory using an authorized Namespace Secret",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: NamespaceParams,
+      body: ChannelDirectoryLookupBody,
+      response: {
+        200: ChannelDirectoryLookupResponse,
+        429: ErrorResponseRef,
+        501: ErrorResponseRef,
+        ...createErrors,
+      },
+    },
+  },
+  {
     operationId: "discoverAgentPlugins",
     method: "POST",
     path: "/namespaces/:namespaceId/agents/plugins",
@@ -791,7 +815,7 @@ export const occApiRoutes = [
     iamAction: "create",
     resourceKind: "agent",
     authorizationTarget: "namespace_collection",
-    summary: "List available plugins for Agent creation using the selected Driver",
+    summary: "List or search available plugins for Agent creation using the selected Driver",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -857,7 +881,7 @@ export const occApiRoutes = [
     resourceKind: "agent",
     authorizationTarget: "agent",
     summary:
-      "List plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants",
+      "List or search plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,

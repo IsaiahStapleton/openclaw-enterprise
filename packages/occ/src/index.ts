@@ -39,9 +39,13 @@ import type {
   PermissionAction,
   PluginDesiredSelection,
   PluginDesiredState,
+  PluginApprovers,
   PluginCatalogEntry,
   PluginCatalogPage,
   PluginDriver,
+  ChannelDriver,
+  ChannelDirectoryResult,
+  ChannelDirectoryLookupInput,
   PluginRevisionState,
   BackendDefinition,
   BackendRef,
@@ -78,6 +82,7 @@ import {
   admitLoggingConfiguration,
   normalizeLoggingLevel,
   normalizePluginDesiredState,
+  normalizePluginApprovers,
   normalizePresetTemplate,
   presetTemplateDefaults,
   PresetValidationError,
@@ -93,6 +98,7 @@ import {
   DriverSelectionError,
   ModelDiscoveryError,
   PluginDiscoveryError,
+  ChannelDirectoryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
@@ -157,6 +163,7 @@ export {
   DriverSelectionError,
   ModelDiscoveryError,
   PluginDiscoveryError,
+  ChannelDirectoryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
@@ -288,6 +295,7 @@ export interface CreateAgentInput {
   readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
+  readonly pluginApprovers?: PluginApprovers;
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
 }
 
@@ -299,7 +307,18 @@ export interface UpdateAgentInput {
   readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
+  readonly pluginApprovers?: PluginApprovers | null;
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
+}
+
+export interface LookupChannelDirectoryInput {
+  readonly secretId: string;
+  readonly kind: ChannelDirectoryLookupInput["kind"];
+  readonly query?: string;
+  readonly cursor?: string;
+  readonly ids?: readonly string[];
+  readonly agentId?: string;
+  readonly configurationId?: string;
 }
 
 export interface CreateServiceAccountInput {
@@ -409,6 +428,7 @@ type DriverByCapability = {
   sandbox: SandboxDriver;
   compute: ComputeDriver;
   plugin: PluginDriver;
+  channel: ChannelDriver;
   repo: RepoDriver;
   credential_gateway: CredentialGatewayDriver;
 };
@@ -547,6 +567,9 @@ function driverHasCapabilityContract(driver: Driver): boolean {
   }
   if (driver.capability === "plugin") {
     return typeof candidate.listCatalog === "function";
+  }
+  if (driver.capability === "channel") {
+    return typeof candidate.lookupDirectory === "function";
   }
   if (driver.capability === "repo") {
     return (
@@ -860,6 +883,69 @@ function normalizeAgentPlugins(
   plugins: PluginDesiredState | undefined,
 ): PluginDesiredState | undefined {
   return normalizePluginDesiredState(plugins, invalidPluginRequest);
+}
+
+function normalizeAgentPluginApprovers(
+  approvers: PluginApprovers | undefined,
+): PluginApprovers | undefined {
+  return normalizePluginApprovers(approvers, invalidPluginRequest);
+}
+
+function sameSecretBackend(left: Secret, right: Secret): boolean {
+  return (
+    left.id === right.id &&
+    left.namespaceId === right.namespaceId &&
+    left.driverId === right.driverId &&
+    left.backendRef.uid === right.backendRef.uid &&
+    left.backendRef.name === right.backendRef.name &&
+    left.backendRef.namespaceName === right.backendRef.namespaceName &&
+    left.backendRef.key === right.backendRef.key
+  );
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validChannelDirectoryResult(value: unknown): value is ChannelDirectoryResult {
+  const result = asRecord(value);
+  const bounded = (candidate: unknown, maxLength: number): candidate is string =>
+    typeof candidate === "string" &&
+    candidate.length > 0 &&
+    candidate.length <= maxLength &&
+    !hasControlCharacters(candidate);
+  if (
+    result === undefined ||
+    !bounded(result.workspaceId, 200) ||
+    (result.workspaceName !== undefined && !bounded(result.workspaceName, 200)) ||
+    !Array.isArray(result.candidates) ||
+    result.candidates.length > 100 ||
+    (result.nextCursor !== undefined && !bounded(result.nextCursor, 2048)) ||
+    typeof result.complete !== "boolean"
+  ) {
+    return false;
+  }
+  const ids = new Set<string>();
+  for (const candidate of result.candidates) {
+    const entry = asRecord(candidate);
+    if (
+      entry === undefined ||
+      !bounded(entry.id, 200) ||
+      !bounded(entry.name, 200) ||
+      (entry.displayName !== undefined && !bounded(entry.displayName, 200)) ||
+      ids.has(entry.id)
+    ) {
+      return false;
+    }
+    ids.add(entry.id);
+  }
+  return true;
 }
 
 export class OpenClawController {
@@ -1566,6 +1652,7 @@ export class OpenClawController {
     }
     const backendId = this.backendId(input.backendId);
     const plugins = normalizeAgentPlugins(input.plugins);
+    const pluginApprovers = normalizeAgentPluginApprovers(input.pluginApprovers);
     const workspace = normalizeProvisioningWorkspace(
       input.initialWorkspaceFiles,
       input.workspaceDefaultsId,
@@ -1603,6 +1690,7 @@ export class OpenClawController {
       harnessAuth,
       executionMode,
       ...(plugins === undefined ? {} : { plugins }),
+      ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
       ...(input.repositoryBindings === undefined
         ? {}
         : { repositoryBindings: input.repositoryBindings }),
@@ -1642,7 +1730,7 @@ export class OpenClawController {
         id: namespace.id,
         namespaceId: namespace.id,
       });
-      this.validatePluginPolicies(plugins);
+      this.validatePluginPolicies(plugins, pluginApprovers);
       await this.authorizeProvisioningSecretSources(
         state,
         principalId,
@@ -1678,6 +1766,7 @@ export class OpenClawController {
           executionMode,
           ...(backendId === undefined ? {} : { backendId }),
           ...(plugins === undefined ? {} : { plugins }),
+          ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
           ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
           ...(workspace.initialWorkspaceFiles === undefined
             ? {}
@@ -3228,7 +3317,7 @@ export class OpenClawController {
   async discoverAgentPlugins(
     principalId: string,
     namespaceId: string,
-    input: PluginDiscoveryCredential & { readonly cursor?: string },
+    input: PluginDiscoveryCredential & { readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
@@ -3249,10 +3338,194 @@ export class OpenClawController {
           {
             ...(accessToken === undefined ? {} : { accessToken }),
             ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+            ...(input.q === undefined ? {} : { q: input.q }),
           },
           signal,
         );
       };
+    });
+  }
+
+  async lookupChannelDirectory(
+    principalId: string,
+    namespaceId: string,
+    input: LookupChannelDirectoryInput,
+    signal?: AbortSignal,
+  ): Promise<ChannelDirectoryResult> {
+    const ids = input.ids;
+    const bounded = (value: unknown, max: number, allowEmpty = false): value is string =>
+      typeof value === "string" &&
+      (allowEmpty || value.length > 0) &&
+      value.length <= max &&
+      !value.includes("\u0000");
+    if (
+      !bounded(input.secretId, 200) ||
+      (input.kind !== "users" && input.kind !== "channels") ||
+      (input.query !== undefined && !bounded(input.query, 200, true)) ||
+      (input.cursor !== undefined && !bounded(input.cursor, 2048)) ||
+      (ids !== undefined &&
+        (!Array.isArray(ids) ||
+          ids.length === 0 ||
+          ids.length > 20 ||
+          ids.some(
+            (id) =>
+              typeof id !== "string" ||
+              id.length === 0 ||
+              id.length > 200 ||
+              hasControlCharacters(id),
+          ) ||
+          new Set(ids).size !== ids.length ||
+          input.query !== undefined ||
+          input.cursor !== undefined)) ||
+      (input.agentId !== undefined && !bounded(input.agentId, 200)) ||
+      (input.configurationId !== undefined && !bounded(input.configurationId, 200)) ||
+      (input.agentId !== undefined && input.configurationId !== undefined)
+    ) {
+      throw new ScopeViolationError("The channel directory lookup input is invalid.");
+    }
+    const first = await this.channelDirectorySecret(principalId, namespaceId, input);
+    let driver: ChannelDriver;
+    try {
+      driver = this.selectedDriver("channel");
+    } catch {
+      throw new NotImplementedError(
+        "channel_directory.lookup",
+        "Channel directory lookup is unavailable.",
+      );
+    }
+    if (!first.driver.withValue) {
+      throw new DependencyUnavailableError(
+        "The selected Secret Driver cannot use credentials for directory lookup.",
+      );
+    }
+    const outcome = await this.secretOperation(() =>
+      first.driver.withValue!(first.secret, async (token) => {
+        if (!isNonEmptyString(token)) {
+          return { error: new ChannelDirectoryError("invalid_response") };
+        }
+        try {
+          // Recheck the exact target grant and Secret identity after backend I/O.
+          const current = await this.channelDirectorySecret(principalId, namespaceId, input);
+          if (!sameSecretBackend(first.secret, current.secret)) {
+            return {
+              validationError: new ResourceConflictError(
+                "The channel directory credential changed. Refresh and retry.",
+              ),
+            };
+          }
+        } catch (error) {
+          return { validationError: error };
+        }
+        try {
+          const result = await driver.lookupDirectory(
+            {
+              token,
+              kind: input.kind,
+              ...(input.query === undefined ? {} : { query: input.query }),
+              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+              ...(ids === undefined ? {} : { ids }),
+            },
+            signal,
+          );
+          if (
+            !validChannelDirectoryResult(result) ||
+            (ids !== undefined &&
+              (!result.complete ||
+                result.nextCursor !== undefined ||
+                result.candidates.some((candidate) => !ids.includes(candidate.id))))
+          ) {
+            return { error: new ChannelDirectoryError("invalid_response") };
+          }
+          const safeResult = {
+            workspaceId: result.workspaceId,
+            ...(result.workspaceName === undefined ? {} : { workspaceName: result.workspaceName }),
+            candidates: result.candidates.map((candidate) => ({
+              id: candidate.id,
+              name: candidate.name,
+              ...(candidate.displayName === undefined
+                ? {}
+                : { displayName: candidate.displayName }),
+            })),
+            ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }),
+            complete: result.complete,
+          };
+          if (JSON.stringify(safeResult).includes(JSON.stringify(token).slice(1, -1))) {
+            return { error: new ChannelDirectoryError("invalid_response") };
+          }
+          return { value: immutableCopy(safeResult) };
+        } catch (error) {
+          return {
+            error: new ChannelDirectoryError(
+              error instanceof ChannelDirectoryError ? error.reason : "unavailable",
+            ),
+          };
+        }
+      }),
+    );
+    if ("validationError" in outcome) {
+      throw outcome.validationError;
+    }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  }
+
+  private async channelDirectorySecret(
+    principalId: string,
+    namespaceId: string,
+    input: LookupChannelDirectoryInput,
+  ): Promise<{ readonly secret: Readonly<Secret>; readonly driver: SecretDriver }> {
+    if (input.agentId !== undefined) {
+      await this.authorize(principalId, "update", {
+        kind: "agent",
+        id: input.agentId,
+        namespaceId,
+      });
+    } else if (input.configurationId !== undefined) {
+      await this.authorize(principalId, "update", {
+        kind: "configuration",
+        id: input.configurationId,
+        namespaceId,
+      });
+    } else {
+      await this.authorize(principalId, "create", {
+        kind: "agent",
+        id: namespaceId,
+        namespaceId,
+      });
+    }
+    await this.authorize(principalId, "operate", {
+      kind: "secret",
+      id: input.secretId,
+      namespaceId,
+    });
+    return this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      if (input.agentId !== undefined) {
+        const agent = await state.agents.findAgent(namespace.id, input.agentId);
+        if (agent === undefined) {
+          throw new ScopeViolationError("The Agent does not belong to the exact Namespace.");
+        }
+        if (agent.status !== "active") {
+          throw new AgentDeletingError();
+        }
+      } else if (input.configurationId !== undefined) {
+        const configuration = await state.configurations.findConfiguration(
+          namespace.id,
+          input.configurationId,
+        );
+        if (configuration?.kind !== "agent") {
+          throw new ScopeViolationError(
+            "The Configuration does not belong to the exact Namespace.",
+          );
+        }
+      }
+      const secret = await state.secrets.findSecret(namespace.id, input.secretId);
+      if (secret === undefined) {
+        throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
+      }
+      return { secret, driver: this.secretDriver(secret.driverId) };
     });
   }
 
@@ -3397,7 +3670,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     agentId: string,
-    input: { readonly cursor?: string },
+    input: { readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     return this.withSavedAgentPluginCredential(principalId, namespaceId, agentId, () => {
@@ -3546,6 +3819,7 @@ export class OpenClawController {
     }
     const backendId = this.backendId(input.backendId);
     const plugins = normalizeAgentPlugins(input.plugins);
+    const pluginApprovers = normalizeAgentPluginApprovers(input.pluginApprovers);
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "provisioning" && namespace.status !== "ready") {
@@ -3573,7 +3847,7 @@ export class OpenClawController {
       }
       await this.guardProvisioningConfiguration(state, namespace.id, input.configurationId);
       await this.authorizeHarnessAuthSource(state, principalId, namespace.id, harnessAuth);
-      this.validatePluginPolicies(plugins);
+      this.validatePluginPolicies(plugins, pluginApprovers);
       const agentId = this.nextIdentifier("agent");
       await this.authorizeBindings(
         state,
@@ -3595,6 +3869,7 @@ export class OpenClawController {
         harnessAuth,
         executionMode,
         ...(plugins === undefined ? {} : { plugins }),
+        ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
         servicePrincipalId: `service-agent-${agentId}`,
         desiredRuntimeState: "stopped",
@@ -3628,6 +3903,8 @@ export class OpenClawController {
       throw new ScopeViolationError("The Agent Harness execution mode is invalid.");
     }
     const plugins = normalizeAgentPlugins(input.plugins);
+    const pluginApprovers =
+      input.pluginApprovers === null ? null : normalizeAgentPluginApprovers(input.pluginApprovers);
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.lockAgent(namespace.id, input.agentId);
@@ -3672,7 +3949,10 @@ export class OpenClawController {
         input.repositoryBindings === undefined
           ? undefined
           : (this.repositoryBindingSelections(namespace.id, input.repositoryBindings) ?? []);
-      this.validatePluginPolicies(plugins);
+      this.validatePluginPolicies(
+        plugins ?? agent.plugins,
+        pluginApprovers === null ? undefined : (pluginApprovers ?? agent.pluginApprovers),
+      );
       const updated = await state.agents.updateConfiguration(
         namespace.id,
         agent.id,
@@ -3682,6 +3962,7 @@ export class OpenClawController {
         input.backendId === undefined ? undefined : backendId,
         plugins,
         repositoryBindings,
+        pluginApprovers,
       );
       if (!updated) {
         throw new ResourceConflictError("The Agent Configuration changed during its update.");
@@ -3847,7 +4128,7 @@ export class OpenClawController {
           ? undefined
           : (() => {
               const driver = this.pluginDriver();
-              driver.validatePolicies(lockedAgent.plugins);
+              driver.validatePolicies(lockedAgent.plugins, lockedAgent.pluginApprovers);
               return immutableCopy({
                 driver: { id: driver.id, implementation: driver.implementation },
                 plugins: lockedAgent.plugins,
@@ -3925,6 +4206,9 @@ export class OpenClawController {
             ? {}
             : { secretDriverId: secretDriver.id, secretBindings }),
           ...(pluginState === undefined ? {} : { plugins: pluginState }),
+          ...(lockedAgent.pluginApprovers === undefined
+            ? {}
+            : { pluginApprovers: lockedAgent.pluginApprovers }),
           ...(repositoryCredentials === undefined ? {} : { repositoryCredentials }),
           harnessAuth,
           servicePrincipalId: lockedAgent.servicePrincipalId,
@@ -4653,6 +4937,7 @@ export class OpenClawController {
     }
     this.validatePluginPolicies(
       normalizeAgentPlugins(record.plan.plugins as PluginDesiredState | undefined),
+      normalizeAgentPluginApprovers(record.plan.pluginApprovers as PluginApprovers | undefined),
     );
     if (agent !== undefined) {
       this.admitRepositoryCredentials(
@@ -5052,6 +5337,9 @@ export class OpenClawController {
       const plugins = normalizeAgentPlugins(
         planRecord.plugins as Readonly<Record<string, PluginDesiredSelection>> | undefined,
       );
+      const pluginApprovers = normalizeAgentPluginApprovers(
+        planRecord.pluginApprovers as PluginApprovers | undefined,
+      );
       const repositoryBindings = this.repositoryBindingSelections(
         namespace.id,
         planRecord.repositoryBindings as readonly RepositoryBindingRequest[] | undefined,
@@ -5089,6 +5377,7 @@ export class OpenClawController {
           harnessAuth: plan.harnessAuth,
           executionMode: plan.executionMode,
           ...(plugins === undefined ? {} : { plugins }),
+          ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
           ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
           servicePrincipalId: `service-agent-${agentId}`,
           desiredRuntimeState: "stopped",
@@ -5976,9 +6265,15 @@ export class OpenClawController {
     }
   }
 
-  private validatePluginPolicies(plugins: PluginDesiredState | undefined): void {
-    if (plugins !== undefined && Object.keys(plugins).length > 0) {
-      this.pluginDriver().validatePolicies(plugins);
+  private validatePluginPolicies(
+    plugins: PluginDesiredState | undefined,
+    pluginApprovers?: PluginApprovers,
+  ): void {
+    if (
+      (plugins !== undefined && Object.keys(plugins).length > 0) ||
+      (pluginApprovers !== undefined && pluginApprovers.length > 0)
+    ) {
+      this.pluginDriver().validatePolicies(plugins ?? {}, pluginApprovers);
     }
   }
 
