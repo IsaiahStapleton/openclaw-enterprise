@@ -127,14 +127,11 @@ Configuration JSON. See the [Configuration reference](../../reference/configurat
 
 ## Plugins tab
 
-Open **Create new version** → **Plugins** to change this Agent's plugin selections and
-tool policies. Existing selections load from the Agent. With a bound Service
-Accounts token Secret, the first catalog page loads in the background while this
-tab is open. **Configure plugins** opens the same policy editor used when creating
-an Agent and reuses that request or its results. Search and tool lookups show a
-loading indicator while waiting. **Plugin selections JSON** also shows the
-complete selection map. Dedicated Codex browsing requires
-exact active Agent `read`/`update` and a catalog-capable Plugin Driver. The
+In **Create new version** → **Plugins**, edit the Agent's existing selections and
+tool policies with **Configure plugins** or **Plugin selections JSON**. With a bound
+Service Accounts token Secret, the tab preloads the first catalog page for the
+picker. Search and tool lookups show loading indicators. Dedicated Codex browsing
+requires exact active Agent `read`/`update` and a catalog-capable Plugin Driver. The
 curated catalog needs no Secret. Hosted discovery uses the bound Service Accounts
 token Secret server-side and requires caller and Agent ServicePrincipal Secret
 `operate`; the browser never receives the token. Other execution modes cannot
