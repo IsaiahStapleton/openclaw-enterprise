@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
-updated: 2026-09-26
-last_updated_session: 01a0db1e-7ab2-7bf1-936b-e71c9d6f9911
+updated: 2026-09-27
+last_updated_session: 01a0e099-da9d-78f1-8e79-ea4a919edf7d
 ---
 
 # Platform console request flow
@@ -165,18 +165,16 @@ reset incompatible credentials and model choices. The
 [creation reference](../reference/console/create-and-deploy.md) owns combinations,
 Preset constraints, token handling, permissions, and recovery.
 
-`agents/plugin-fields.mjs:createPluginFields` edits Agent-owned `plugins` through
-`#agent-plugins`, separately from Configuration. Invalid JSON and untouched fields
-survive; clearing overrides restores inheritance. Submission, uncertain outcomes,
-or invalid JSON lock editing. `capabilities.pluginPolicies` gates each policy scope;
-Missing capabilities preserve JSON and disable edits. Unsupported saved reviewers
-remain clearable. Agent submission saves the draft.
+`agents/plugin-fields.mjs:createPluginFields` edits Agent `plugins` separately
+from Configuration. Invalid JSON and untouched fields survive; clearing overrides
+restores inheritance. Submission, uncertain outcomes, or invalid JSON lock editing.
+`capabilities.pluginPolicies` gates policy edits; unsupported reviewers remain clearable.
 
 `create.mjs:loadPluginCatalog` and `loadPluginTools` implement
-[transient PAT discovery](agent-plugins.md#credential-scoped-discovery): upstream
-pagination, local filtering, and tools loaded on selection. Credential, provider,
-and Harness changes clear results and invalidate pending reads. The Driver owns
-upstream access.
+[PAT discovery](agent-plugins.md#credential-scoped-discovery): the selected or
+Preset Secret takes precedence over an entered token. OCC reads the
+Secret server-side. Pagination is upstream; filtering is local. Selecting a plugin loads tools.
+Credential, provider, and Harness changes clear results and invalidate pending reads.
 
 `create.mjs:MODEL_CHOICES` supplies static provider lists before credentials,
 without discovery requests or account verification. Manual entry remains available;
@@ -325,6 +323,8 @@ uncertain response disables replay until refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 02:30: Use selected PAT Secrets for discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - ec4e9dc517497afe05be63a320542abcf61e8a55)
 
 - 2026-09-26 00:37: Link Secret summary metadata flow. (01a0db1e-7ab2-7bf1-936b-e71c9d6f9911 - e387b38cc259ee4a55936ecb848bbce8210bcd68)
 

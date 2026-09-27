@@ -16,6 +16,12 @@ behavior; this page owns contributor setup, fixture inputs, and proof notes.
 | Controlled status boundary     | `node --test tests/integration/kubernetes-plugin-status-real.test.mjs`                                                                                                                   | Real Kubernetes Compute status transport, workload identity, safe readiness and runtime restart behavior with controlled producers.                             |
 | Native runtime proof           | `node --test tests/integration/plugin-driver-real.test.mjs`                                                                                                                              | Opt-in Kubernetes proof against real OpenClaw or Codex, including continued operation after a selected Codex install/auth failure.                              |
 
+The `plugin-discovery-api` integration exercises the real HTTP and IAM path and
+Codex Plugin Driver with simulated upstream responses and a test Secret Driver.
+The Kubernetes provisioning fixture also exercises selected-PAT discovery using
+the bundled Kubernetes Secret Driver and a real cluster, with simulated upstream
+responses. Neither test verifies the live hosted provider.
+
 Skipped infrastructure or native-runtime cases are not evidence. Record the exact
 commit, selected suite, nonsecret image references, native runtime versions,
 model, pass/fail/skip counts, and relevant sanitized log path for every claimed
