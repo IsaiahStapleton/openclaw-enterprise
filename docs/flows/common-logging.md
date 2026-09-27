@@ -148,6 +148,13 @@ The `k8sattributes` processor maps identity onto each record before
 labels in the record loop would discard identity for later records in the same
 batch.
 
+The chart's `templates/collector.yaml` validates an exclusive exporter destination:
+one IPv4 `/32` or paired namespace/Pod selectors, with a bounded TCP port. It
+renders the selected exporter egress alongside DNS/API access. Empty Collector
+metrics selectors grant no ingress; paired selectors admit port 8888. Policies
+are additive. The independent demo release uses this same Collector pipeline and
+provides a private Loki OTLP destination; it does not change source filtering.
+
 ### 7. Collector exports only operational classes
 
 `deploy/logging/collector.yaml:transform/operational`
@@ -195,6 +202,8 @@ reconciliation, or PostgreSQL audit persistence.
 ## Changelog
 
 - 2026-09-25 09:53: Documented preflight warning export and message exclusion with the accompanying Collector allowlist repair. (codex/01a0d57b-51eb-7551-874e-38c5b633af76 - 939ae63ac2be06d424cdbd5c626cfa675561d127)
+
+- 2026-09-23 17:40: Documented private Collector scraping and selected in-cluster export in the accompanying observability change. (authoring-run/8fb2b0ce-9ad1-401c-a9b9-4e3919b5f573 - faf0b0ae467a3bebfd5b5ed0a92f259248e5da74)
 
 - 2026-09-04 21:04: Documented that native logging admission drops the retired redaction key while preserving JSON levels, disabled OTLP logs, runtime redaction ownership and read-only Kubernetes config mounting. (cody/01a06dd0-9fff-7e90-aae3-4e7099a6d154 - 87234e1766e5802b45424523246a52a4b2d45590)
 

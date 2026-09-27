@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -79,6 +79,9 @@ async function render(overrides = {}, options = {}) {
     "--namespace",
     options.namespace ?? "openclaw-system",
   ];
+  if (options.isUpgrade) {
+    args.push("--is-upgrade");
+  }
   for (const [key, value] of Object.entries({ ...values, ...overrides })) {
     args.push("--set", `${key}=${value}`);
   }
@@ -159,7 +162,39 @@ test(
   "metrics chart requires exact scraper selectors and isolates the extra Pod ports",
   tooling,
   async () => {
-    await assert.rejects(render({ "metrics.enabled": "true" }), /scraperNamespaceLabels/);
+    const defaults = await resources((await render()).stdout);
+    for (const component of ["api", "worker"]) {
+      const container = defaults.find(
+        (item) =>
+          item.kind === "Deployment" && item.metadata.name === `openclaw-enterprise-${component}`,
+      ).spec.template.spec.containers[0];
+      assert.equal(container.env.find(({ name }) => name === "OCC_METRICS_ENABLED")?.value, "true");
+      assert.ok(
+        container.ports.some(
+          ({ name, containerPort }) => name === "metrics" && containerPort === 9464,
+        ),
+      );
+    }
+    assert.ok(
+      !defaults.some(
+        (item) => item.kind === "NetworkPolicy" && item.metadata.name.endsWith("-metrics"),
+      ),
+    );
+    const disabled = await resources((await render({ "metrics.enabled": "false" })).stdout);
+    for (const item of disabled.filter((item) => item.kind === "Deployment")) {
+      assert.ok(
+        !item.spec.template.spec.containers[0].ports?.some(({ name }) => name === "metrics"),
+      );
+    }
+    for (const override of [
+      { "metrics.scraperNamespaceLabels.team": "monitoring" },
+      { "metrics.scraperPodLabels.app": "prometheus" },
+    ]) {
+      await assert.rejects(render(override), /scraperNamespaceLabels/);
+    }
+    for (const port of ["0", "65536", "8080", "9.5"]) {
+      await assert.rejects(render({ "metrics.port": port }), /metrics.port/);
+    }
     const selected = {
       "metrics.enabled": "true",
       "metrics.scraperNamespaceLabels.kubernetes\\.io/metadata\\.name": "monitoring",
@@ -317,6 +352,25 @@ test("control-plane node selectors are optional unless configured", tooling, asy
   for (const component of ["api", "worker"]) {
     assert.equal(selected("Deployment", component).spec.template.spec.nodeSelector, undefined);
   }
+});
+
+test("Installation checksum rolls both control-plane Deployments", tooling, async () => {
+  const checksum = "c".repeat(64);
+  const objects = await resources(
+    (await render({ "controlPlane.installationChecksum": checksum })).stdout,
+  );
+  const deployments = objects.filter(({ kind }) => kind === "Deployment");
+  assert.equal(deployments.length, 2);
+  for (const deployment of deployments) {
+    assert.equal(
+      deployment.spec.template.metadata.annotations["openclaw.dev/installation-checksum"],
+      checksum,
+    );
+  }
+  await assert.rejects(
+    render({ "controlPlane.installationChecksum": "not-a-checksum" }),
+    /must be an empty string or a lowercase SHA-256 digest/,
+  );
 });
 
 test(
@@ -527,7 +581,7 @@ test(
     ]);
     assert.deepEqual(service.args, [
       "--public-origin",
-      "https://openclaw-enterprise-repository-credentials.openclaw-system.svc",
+      "https://git.openclaw-system.svc.cluster.local",
       "--backend-id",
       "github-primary",
     ]);
@@ -537,7 +591,7 @@ test(
     ]);
 
     // Service and CNI policy use different ports: authorization traffic reaches endpoint TCP 8443.
-    const endpoint = named("Service", "openclaw-enterprise-repository-credentials");
+    const endpoint = named("Service", "git");
     assert.equal(endpoint.spec.type, "ClusterIP");
     assert.deepEqual(endpoint.spec.selector, worker.spec.selector.matchLabels);
     assert.deepEqual(endpoint.spec.ports, [
@@ -566,6 +620,265 @@ test(
           roleRef.name === tenantWorker.metadata.name,
       ),
     );
+  },
+);
+
+test(
+  "repository credential Helm packaging derives the broker origin from Service settings",
+  tooling,
+  async () => {
+    for (const [namespace, serviceName, clusterDomain, expectedOrigin, hostname] of [
+      ["tenant-control", undefined, undefined, "https://git.tenant-control.svc.cluster.local"],
+      ["tenant-control", "git", undefined, "https://git.tenant-control.svc.cluster.local"],
+      [
+        "tenant-control",
+        "git",
+        undefined,
+        "https://git.tenant-control.svc",
+        "git.tenant-control.svc",
+      ],
+      [
+        "tenant-control",
+        "git",
+        "cluster.internal",
+        "https://git.tenant-control.svc.cluster.internal",
+        "git.tenant-control.svc.cluster.internal",
+      ],
+      [
+        "tenant-control",
+        "git",
+        "cluster.internal",
+        "https://git.tenant-control.svc.cluster.internal",
+      ],
+      [
+        "openclaw-system",
+        "openclaw-enterprise-repository-credentials",
+        undefined,
+        "https://openclaw-enterprise-repository-credentials.openclaw-system.svc.cluster.local",
+      ],
+    ]) {
+      const overrides = {
+        ...repositoryCredentialValues,
+        ...(hostname === undefined ? {} : { "repositoryCredentials.hostname": hostname }),
+        ...(serviceName === undefined ? {} : { "repositoryCredentials.serviceName": serviceName }),
+        ...(clusterDomain === undefined
+          ? {}
+          : { "repositoryCredentials.clusterDomain": clusterDomain }),
+      };
+      const objects = await resources(
+        (await render(overrides, { namespace, isUpgrade: serviceName !== undefined })).stdout,
+      );
+      const endpointName = serviceName ?? "git";
+      assert.ok(
+        objects.some(
+          (object) => object.kind === "Service" && object.metadata.name === endpointName,
+        ),
+      );
+      const worker = objects.find(
+        ({ kind, metadata }) =>
+          kind === "Deployment" && metadata.name === "openclaw-enterprise-worker",
+      );
+      const broker = worker.spec.template.spec.containers.find(
+        ({ name }) => name === "repository-credentials",
+      );
+      assert.deepEqual(broker.args, [
+        "--public-origin",
+        expectedOrigin,
+        "--backend-id",
+        "github-primary",
+      ]);
+    }
+  },
+);
+
+test(
+  "image upgrade helper preserves the live broker endpoint before rendering Helm",
+  tooling,
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "broker-upgrade-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const bin = join(directory, "bin");
+    await mkdir(bin);
+    const liveValues = join(directory, "live-values.yaml");
+    // Use chart defaults and real Helm/yq; only remote reads are fixtures.
+    const defaults = await readFile(
+      new URL("../../deploy/helm/openclaw-enterprise/values.yaml", import.meta.url),
+      "utf8",
+    );
+    await writeFile(liveValues, defaults, { mode: 0o600 });
+    const initial = { ...values, ...repositoryCredentialValues };
+    for (const [key, value] of Object.entries(initial)) {
+      await execute(process.env.OCC_YQ_BIN ?? "yq", [
+        "-i",
+        `${key.startsWith(".") ? key : `.${key}`} = ${JSON.stringify(value)}`,
+        liveValues,
+      ]);
+    }
+    await execute(process.env.OCC_YQ_BIN ?? "yq", [
+      "-i",
+      ".repositoryCredentials.enabled = true | del(.repositoryCredentials.hostname, .repositoryCredentials.serviceName)",
+      liveValues,
+    ]);
+    const installation = join(directory, "installation.json");
+    const kubeconfig = join(directory, "kubeconfig");
+    const key = join(directory, "key");
+    for (const path of [installation, kubeconfig, key]) {
+      await writeFile(path, "{}", { mode: 0o600 });
+    }
+    const secret = join(directory, "secret.json");
+    await writeFile(
+      secret,
+      JSON.stringify({
+        metadata: { annotations: { "openclaw.dev/installation-id": "ins_test" } },
+        data: { "installation.yaml": Buffer.from("{}").toString("base64") },
+      }),
+      { mode: 0o600 },
+    );
+    const worker = join(directory, "worker.json");
+    const wrappers = {
+      kubectl: `#!/usr/bin/env bash
+case "$*" in
+  *'get secret '*) cat "$TEST_SECRET" ;;
+  *'get deployment openclaw-enterprise-worker '*) cat "$TEST_WORKER" ;;
+  *'get deployments,statefulsets,pods,persistentvolumeclaims '*) printf '{"items":[]}' ;;
+  *'get --raw=/readyz'*) printf 'ok' ;;
+  *) exit 90 ;;
+esac
+`,
+      occ: `#!/usr/bin/env bash
+printf '{"id":"ins_test"}'
+`,
+      helm: `#!/usr/bin/env bash
+case "$1 $2" in
+  'get values') cat "$TEST_LIVE_VALUES" ;;
+  'status oce') printf 'deployed' ;;
+  'template oce') exec "$TEST_REAL_HELM" "$@" ;;
+  'upgrade --install') exit 47 ;;
+  *) exit 91 ;;
+esac
+`,
+    };
+    for (const [name, contents] of Object.entries(wrappers)) {
+      await writeFile(join(bin, name), contents);
+      await chmod(join(bin, name), 0o755);
+    }
+    const realHelm = (await execute("sh", ["-c", 'command -v "$1"', "sh", helm])).stdout.trim();
+    for (const [name, hostname, configuredHostname, failure] of [
+      ["short", "broker.openclaw-system.svc"],
+      ["full", "broker.openclaw-system.svc.cluster.local"],
+      [
+        "conflicting",
+        "broker.openclaw-system.svc",
+        "broker.openclaw-system.svc.cluster.local",
+        /live origin and Helm Service settings disagree/,
+      ],
+      [
+        "foreign",
+        "broker.other-namespace.svc",
+        undefined,
+        /live origin and Helm Service settings disagree/,
+      ],
+    ]) {
+      await writeFile(
+        worker,
+        JSON.stringify({
+          metadata: { labels: { "app.kubernetes.io/instance": "oce" } },
+          spec: {
+            template: {
+              spec: {
+                containers: [
+                  {
+                    name: "repository-credentials",
+                    args: [
+                      "--public-origin",
+                      `https://${hostname}`,
+                      "--backend-id",
+                      "github-primary",
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      );
+      await execute(process.env.OCC_YQ_BIN ?? "yq", [
+        "-i",
+        configuredHostname
+          ? `.repositoryCredentials.hostname = ${JSON.stringify(configuredHostname)}`
+          : "del(.repositoryCredentials.hostname)",
+        liveValues,
+      ]);
+      const evidence = join(directory, name);
+      await assert.rejects(
+        execute(
+          new URL("../../scripts/upgrade-production-images", import.meta.url).pathname,
+          [
+            "--kubeconfig",
+            kubeconfig,
+            "--context",
+            "fixture",
+            "--namespace",
+            "openclaw-system",
+            "--release",
+            "oce",
+            "--values",
+            liveValues,
+            "--installation",
+            installation,
+            "--controller-image",
+            `registry.example.invalid/controller@sha256:${"c".repeat(64)}`,
+            "--source-revision",
+            "d".repeat(40),
+            "--evidence-dir",
+            evidence,
+            "--occ",
+            join(bin, "occ"),
+          ],
+          {
+            cwd: repository,
+            env: {
+              ...process.env,
+              PATH: `${bin}:${process.env.PATH}`,
+              OCC_URL: "https://occ.example.invalid",
+              OCC_SERVICE_KEY_FILE: key,
+              TEST_SECRET: secret,
+              TEST_WORKER: worker,
+              TEST_LIVE_VALUES: liveValues,
+              TEST_REAL_HELM: realHelm,
+            },
+          },
+        ),
+        (error) => {
+          if (failure) {
+            assert.match(error.stderr, failure);
+          } else {
+            assert.equal(error.code, 47, error.stderr);
+          }
+          return true;
+        },
+      );
+      if (!failure) {
+        const candidate = await resources(await readFile(join(evidence, "rendered.yaml"), "utf8"));
+        const deployment = candidate.find(
+          ({ kind, metadata }) =>
+            kind === "Deployment" && metadata.name === "openclaw-enterprise-worker",
+        );
+        const broker = deployment.spec.template.spec.containers.find(
+          ({ name }) => name === "repository-credentials",
+        );
+        assert.equal(broker.args[1], `https://${hostname}`);
+        assert.ok(
+          candidate.some(({ kind, metadata }) => kind === "Service" && metadata.name === "broker"),
+        );
+        const retained = loadYaml(await readFile(liveValues, "utf8"));
+        assert.equal(
+          retained.repositoryCredentials.serviceName,
+          undefined,
+          "dry-run must not mutate protected inputs",
+        );
+      }
+    }
   },
 );
 
@@ -650,9 +963,37 @@ test(
       [{ "repositoryCredentials.tlsSecretName": "repository-config" }, /dedicated Secret/],
       [{ "repositoryCredentials.upstreamCidrs[0]": "0.0.0.0/0" }, /explicit IPv4 CIDRs/],
       [{ "repositoryCredentials.upstreamCidrs[0]": "999.1.1.1/32" }, /invalid IPv4 address/],
+      ...[
+        "external.example.com",
+        "git.other-namespace.svc",
+        "other.openclaw-system.svc",
+        "git.openclaw-system.svc.other-cluster",
+        "https://git.openclaw-system.svc",
+        "git.openclaw-system.svc:443",
+        "git.openclaw-system.svc.",
+      ].map((hostname) => [{ "repositoryCredentials.hostname": hostname }, /hostname must match/]),
+      [{ "repositoryCredentials.hostname[0]": "git" }, /hostname must be a string/],
+      [{ "repositoryCredentials.serviceName": "1git" }, /DNS-1035/],
+      [{ "repositoryCredentials.serviceName": "git.openclaw-system.svc" }, /DNS-1035/],
+      [{ "repositoryCredentials.serviceName": "a".repeat(64) }, /DNS-1035/],
+      [{ "repositoryCredentials.clusterDomain": "cluster.local." }, /cluster DNS domain/],
+      [{ "repositoryCredentials.clusterDomain": "Cluster.local" }, /cluster DNS domain/],
+      [{ "repositoryCredentials.clusterDomain": `${"a".repeat(64)}.local` }, /cluster DNS domain/],
+      [{ "repositoryCredentials.clusterDomain": "a".repeat(254) }, /cluster DNS domain/],
+      [{ "repositoryCredentials.clusterDomain[0]": "cluster" }, /cluster DNS domain/],
+      [
+        {
+          "repositoryCredentials.clusterDomain": `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(38)}`,
+        },
+        /broker hostname/,
+      ],
     ]) {
       await assert.rejects(render({ ...repositoryCredentialValues, ...overrides }), message);
     }
+    await assert.rejects(
+      render(repositoryCredentialValues, { isUpgrade: true }),
+      /repositoryCredentials.serviceName must be explicit during upgrades/,
+    );
   },
 );
 
@@ -936,6 +1277,57 @@ test(
       [{ ipBlock: { cidr: "10.43.0.1/32" } }, { ipBlock: { cidr: "10.43.0.2/32" } }],
     );
     assert.ok(!objects.some(({ metadata }) => metadata.name.endsWith("-api-chatgpt-egress")));
+  },
+);
+
+test(
+  "optional model discovery grants only API HTTPS egress to configured hosts",
+  tooling,
+  async () => {
+    const name = "openclaw-enterprise-api-model-discovery-egress";
+    const defaults = await resources((await render()).stdout);
+    assert.ok(!defaults.some(({ metadata }) => metadata.name === name));
+    const objects = await resources(
+      (
+        await render({
+          "api.modelDiscoveryCidrs[0]": "198.51.100.25/32",
+          "api.modelDiscoveryCidrs[1]": "198.51.100.26/32",
+        })
+      ).stdout,
+    );
+    const policy = objects.find(
+      ({ kind, metadata }) => kind === "NetworkPolicy" && metadata.name === name,
+    );
+    assert.ok(policy, "configured discovery destinations must render an egress policy");
+    assert.deepEqual(policy.spec, {
+      podSelector: {
+        matchLabels: {
+          "app.kubernetes.io/name": "openclaw-enterprise",
+          "app.kubernetes.io/instance": "oce",
+          "app.kubernetes.io/component": "api",
+        },
+      },
+      policyTypes: ["Egress"],
+      egress: [
+        {
+          to: [
+            { ipBlock: { cidr: "198.51.100.25/32" } },
+            { ipBlock: { cidr: "198.51.100.26/32" } },
+          ],
+          ports: [{ protocol: "TCP", port: 443 }],
+        },
+      ],
+    });
+    for (const cidr of ["0.0.0.0/0", "198.51.100.0/24", "api.openai.com", "999.1.1.1/32"]) {
+      await assert.rejects(
+        render({ "api.modelDiscoveryCidrs[0]": cidr }),
+        /api.modelDiscoveryCidrs/,
+      );
+    }
+    await assert.rejects(
+      render({ "api.modelDiscoveryCidrs": "198.51.100.25/32" }),
+      /api.modelDiscoveryCidrs/,
+    );
   },
 );
 
@@ -1235,7 +1627,9 @@ test(
     const serviceName = gatewayServiceName(gatewayNamespace, gatewayName);
     const hostname = defaultGatewayHostname(gatewayNamespace, gatewayName, envoyNamespace);
     const rootSecret = rootSecretName(gatewayNamespace, gatewayName);
-    const configured = await resources((await render(gatewayRoutingValues)).stdout);
+    const configured = await resources(
+      (await render({ ...gatewayRoutingValues, ...controlPlaneSelectorValues })).stdout,
+    );
     const alternateNamespace = "openclaw-alt";
     const alternateObjects = await resources(
       (await render(gatewayRoutingValues, { namespace: alternateNamespace })).stdout,
@@ -1297,6 +1691,10 @@ test(
     const envoyProxy = configured.find(({ kind }) => kind === "EnvoyProxy");
     assert.equal(envoyProxy.metadata.name, gatewayName);
     assert.equal(envoyProxy.metadata.namespace, gatewayNamespace);
+    // The credential-checking proxy must stay on the trusted control-plane pool.
+    assert.deepEqual(envoyProxy.spec.provider.kubernetes.envoyDeployment?.pod?.nodeSelector, {
+      "oce-role": "control",
+    });
     assert.deepEqual(envoyProxy.spec.provider.kubernetes.envoyService, {
       name: serviceName,
       type: "ClusterIP",
@@ -1414,6 +1812,10 @@ test(
           {
             namespaceSelector: { matchLabels: { "openclaw-enterprise.io/gateway": label } },
             podSelector: { matchLabels: { "openclaw.dev/workload-role": "agent" } },
+          },
+          {
+            namespaceSelector: { matchLabels: { "openclaw-enterprise.io/gateway": label } },
+            podSelector: { matchLabels: { "openshell.ai/boundary-role": "supervisor" } },
           },
         ],
         ports: [{ protocol: "TCP", port: 10443 }],
@@ -1566,6 +1968,7 @@ test(
       },
     });
     const envoyProxy = configured.find(({ kind }) => kind === "EnvoyProxy");
+    assert.equal(envoyProxy.spec.provider.kubernetes.envoyDeployment, undefined);
     assert.deepEqual(envoyProxy.spec.provider.kubernetes.envoyService, {
       name: serviceName,
       type: "ClusterIP",

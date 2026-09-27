@@ -89,7 +89,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 
 func (app *application) installationCommand() *cobra.Command {
 	command := commandGroup("installation", "Inspect the singleton Installation")
-	command.AddCommand(&cobra.Command{
+	get := &cobra.Command{
 		Use:   "get",
 		Short: "Show the Installation",
 		Args:  cobra.NoArgs,
@@ -108,7 +108,27 @@ func (app *application) installationCommand() *cobra.Command {
 				{title: "CREATED", key: "createdAt"},
 			})
 		},
-	})
+	}
+	deploymentInventory := &cobra.Command{
+		Use:   "deployment-inventory",
+		Short: "Show the complete authorized Agent deployment inventory",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			result, err := client.GetInstallationDeploymentInventory()
+			if err != nil {
+				return err
+			}
+			return app.printItems(result, false, []column{
+				{title: "INSTALLATION", key: "installationId"},
+				{title: "NAMESPACES", key: "namespaces"},
+			})
+		},
+	}
+	command.AddCommand(get, deploymentInventory)
 	return command
 }
 
@@ -728,6 +748,31 @@ func (app *application) agentCommand() *cobra.Command {
 			})
 		},
 	}
+	deploymentStatus := &cobra.Command{
+		Use:   "deployment-status AGENT_ID DEPLOYMENT_ID",
+		Short: "Show durable status for one Agent deployment",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			deployment, err := client.GetAgentDeployment(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printItems(deployment, false, []column{
+				{title: "ID", key: "deploymentId"},
+				{title: "AGENT", key: "agentId"},
+				{title: "STATUS", key: "status"},
+				{title: "ERROR", key: "error"},
+			})
+		},
+	}
 	stop := &cobra.Command{
 		Use:   "stop ID",
 		Short: "Stop an Agent while retaining its revision history and persistent state",
@@ -769,7 +814,7 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, stop, deleteAgent)
+	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent)
 	return command
 }
 

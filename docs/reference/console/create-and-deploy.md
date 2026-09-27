@@ -9,7 +9,7 @@ Secret references; ordinary draft creation also requires permission to grant
 Agent key access. After deployment, [verify this same
 Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
 The [local first-Agent walkthrough](../../guides/first-agent.md) creates a separate
-Agent; it does not verify your Console Agent.
+Agent, not this one.
 
 ## Create an Agent
 
@@ -37,7 +37,8 @@ Presets and edited Configuration JSON retain their settings.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
    Service Accounts, open [OpenAI admin](https://admin.openai.com/), choose your
    workspace, open **Service accounts**, and create a token with Codex scope.
-   The fields show `sk-…` and `at-…` hints; prefixes do not select the method.
+   Choose an existing model credential Secret or **Create new Secret...**.
+   Creating saves it immediately, even if you cancel Agent creation.
    Choose a model from the starter list or select **Enter model ID manually**.
    The hardcoded list has no preselected model and appears before credential entry;
    confirm credential and runtime support. The form updates native model
@@ -76,22 +77,22 @@ Presets and edited Configuration JSON retain their settings.
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no
    update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
 
-Before saving, Preset variables and one Agent draft per Namespace survive navigation,
-including Back/Forward. Reopen **Create Agent** to resume edits; reenter new
-credentials because password fields clear on navigation. **Start over** confirms
-discard. Reload, page exit, and sign-out clear local drafts. Once saving begins,
-navigation does not retain partial-save or uncertain-outcome form state; follow
-save recovery below.
+Before saving, Preset variables and forms survive navigation, including Back/Forward;
+passwords clear. Leaving a form started without a Preset discards its unsaved state;
+the next visit shows the initial choices. Saved Agents and Secrets remain. **Start
+over** confirms discard. Reload, page exit, and sign-out clear local drafts. Once
+saving begins, navigation does not retain partial-save or uncertain-outcome form
+state; follow save recovery below.
 
-For Codex plugins, enter a **Service Accounts** token with **Codex** and open
-**Configure plugins**. **Previous page** and **Next page** fetch
+For Codex plugins, select **Service Accounts** with **Codex**, expand
+**Plugin discovery token (optional)**, enter a token, and open **Configure plugins**. **Previous page** and **Next page** fetch
 upstream pages; **Filter this page** filters locally. PAT catalog search is unavailable.
 Select a plugin to load tools, then **Add**. Use toggles for enablement and
 **Tool policy** for overrides. **Configured plugins** includes other pages'
 selections. **Done** closes the modal; **Create Agent** saves changes.
 
 [Discovery](../../flows/agent-plugins.md#credential-scoped-discovery) uses the entered
-token transiently, excluding saved Preset credentials. Credential/provider/Harness
+token transiently; saved Secret values are never read back. Credential/provider/Harness
 changes clear results; **Plugin selections JSON** preserves selections separately
 from Configuration. Check permissions for rejection or outbound access for service
 failure, then retry. Editing follows installation capabilities and the
@@ -101,7 +102,9 @@ Credentials are masked Namespace Secrets, excluded from Configuration JSON, Agen
 responses, and browser storage. Provisioning creates exact grants; ordinary drafts
 require IAM administration permission.
 
-Presets retain their authentication binding. API-key and Service Accounts Presets
+Presets with only an authentication method preselect that method and require a
+model credential Secret selection. Presets with saved authentication bindings
+retain them. Bound API-key and Service Accounts Presets
 fix the provider, including JSON edits; saved service account tokens also fix Codex.
 Operator-managed credentials fix OpenClaw across provider changes. Start without a
 Preset to change these choices, or edit authentication later in **Credentials**.
@@ -112,20 +115,22 @@ and clears token/model. API-key Harness changes preserve both. Credential edits
 preserve model selection. Select or enter a model before saving; the starter list
 does not prove runtime compatibility or provider acceptance.
 
-The model-discovery API remains available independently of Console model selection.
-It requires Namespace Agent `create`, sends credentials to the selected method's
-official API without saving them, and lists Codex models for `codex_pat`.
-For this API, OCC needs destination-scoped HTTPS egress to `api.openai.com:443`
-for OpenAI API keys, `api.anthropic.com:443` for Anthropic, or both
-`auth.openai.com:443` and `chatgpt.com:443` for service account tokens. Helm's
-default-deny policy does not grant these destinations. Operators must maintain
-provider IP CIDRs or use their cluster's FQDN policy support; standard NetworkPolicy
-does not accept DNS names. Console model selection does not require this discovery.
+The optional model-discovery API requires Namespace Agent `create`, sends
+credentials upstream without saving them, and lists Codex models for `codex_pat`.
+Console selection needs no discovery.
 
-API failures distinguish rejected credentials/model-list permissions, rate limits,
-connectivity, and unsupported responses. Recovery guidance includes the request ID,
-never the raw provider response. A listing denial does not prove model execution
-is denied; manual entry remains available.
+Configure Helm `api.modelDiscoveryCidrs` with provider IPv4 `/32` hosts, then
+upgrade. This grants only API Pods TCP 443 egress; Harness rules are unchanged.
+Destinations: `api.openai.com` (OpenAI API key), `api.anthropic.com` (Anthropic),
+or `auth.openai.com` plus `chatgpt.com` (`codex_pat`). Defaults grant none.
+Operators must refresh addresses when DNS changes, or supply a cluster-specific
+FQDN policy. Standard NetworkPolicy cannot match DNS names or distinguish
+services sharing an IP.
+
+Failures distinguish credential/model-list rejection, rate limits, connectivity,
+and invalid responses. Errors include request IDs, never upstream response bodies.
+Listing rejection does not prove model execution is denied; manual entry remains
+available.
 
 These managed keys require a configured Secret Driver and compatible Compute.
 Kubernetes supports both providers; the current Docker development composition
@@ -167,7 +172,8 @@ all of them and always submits the chosen level explicitly. The server rechecks
 current Namespace policy when it creates the Agent and again when it admits a
 deployment.
 
-Failed rediscovery retains unsaved repository choices across navigation and retry.
+Failed rediscovery retains unsaved repository choices for retry. Preset forms also
+retain them across navigation.
 **Create Agent** stays blocked until discovery succeeds and filters choices against
 current policy. **Start over** discards selections.
 
@@ -252,38 +258,42 @@ stored status before explicitly retrying. Already-created Secrets remain in plac
 even when later storage or audit work fails; there is no automatic retry or
 rollback deletion.
 
-On the **Credentials** tab, bound Slack tokens appear as filled password fields using a synthetic mask.
-The browser never reads saved tokens. Focus a field to enter a
-replacement; leave it empty to keep its existing binding. Missing tokens remain
-empty and must be supplied before saving. **Save channel Secrets** requires at
-least one new value and a saved binding or new value for each token.
+On the **Credentials** tab, Slack token fields use the same Secret picker as the
+creation and channel-editing flows. Select a readable Namespace Secret or
+**Create new Secret...**. The browser never reads saved token values. Missing
+tokens must be bound before saving. **Save channel Secrets** requires at least
+one changed selection and a saved binding for each token.
 
-Saving writes only the entered tokens through the Namespace Secret API, creates
-exact IAM bindings for the returned Agent `servicePrincipalId`, and saves
-gateway environment references in the Agent's Configuration `secretBindings`. It
-reuses only Roles with the required permission set. Unchanged tokens and their
-bindings are preserved; the mask is never submitted. Entered values clear after
-a save attempt or when leaving the tab, and bound fields return to their mask.
-Tokens are never stored in local storage, URLs, or native Configuration values. A stored channel Secret confirms storage and binding only; it does not
-prove provider acceptance, runtime readiness, or a channel connection.
+Saving writes only Configuration `secretBindings` and exact IAM bindings for
+the changed Secret references. It reuses only Roles with the required permission
+set. Unchanged token bindings are preserved. Switching a picker changes which
+Secret is referenced; it does not overwrite an existing shared Secret value.
+Tokens are never stored in local storage, URLs, or native Configuration values.
+A stored channel Secret confirms storage and binding only; it does not prove
+provider acceptance, runtime readiness, or a channel connection.
 
 <span id="deploy-a-saved-draft"></span>
 
 ## Deploy a new revision
 
-Open the Agent's new revision and select **Deploy new revision** after generated transport credentials are stored, required channel Secret bindings are saved, and a harness source is selected. The console rereads the Agent and Configuration
-and requests deployment through the existing exact-Agent endpoint. A changed draft
-requires a refresh. These checks are separate reads, not an atomic compare-and-set.
+Select **Deploy new revision** from a draft or admitted revision after storing
+generated credentials, saving required channel Secret bindings, and selecting
+harness authentication. The action deploys the current saved Configuration;
+it never copies the viewed snapshot or rolls back. Every accepted request
+creates an immutable revision, even at the same Configuration generation.
+
+Before admission, the console rereads the Agent, Configuration and managed
+credential metadata. Changed draft generations, associations or authentication
+bindings require refresh when viewing the draft. These reads are not atomic
+with admission.
 Teams-enabled drafts cannot deploy through this console path because Teams credential
 readiness is not exposed; use the operator deployment workflow for those Agents.
 
 If a deployment response is lost, inspect the Agent's revision history before
 trying again; the console does not automatically repeat an uncertain request.
 To follow the deployment worker, use the [deployment status API](../agents.md#deployment-status).
-The revision view displays the stored deployment failure and, when available,
-its startup component, check, code, and observation timestamp. Missing evidence
-leaves the cause unspecified; it does not mean the runtime is healthy.
-The console does not display live runtime health. Give your operator the
+The revision view displays stored deployment failures and available startup evidence.
+Missing evidence leaves the cause unspecified. The console does not display live runtime health. Give your operator the
 Namespace ID, the Agent ID shown on its detail page, and the full revision ID
 in the `revision` query parameter of the page URL after deployment. Ask them to
 [verify that exact workload and get a real model response](../../guides/deploy/production-agents.md#verify-production-workloads).

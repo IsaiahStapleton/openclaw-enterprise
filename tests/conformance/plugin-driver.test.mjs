@@ -301,6 +301,29 @@ test("Codex startup default-denies plugins", () => {
   assert.deepEqual(empty.installs, []);
 });
 
+test("Codex bridge configuration carries repository broker network policy without plugins", () => {
+  const bridgeConfiguration = codexOpenClawConfiguration({}, [], {
+    host: "git.tenant.svc",
+    domains: { "github.com": "allow" },
+  });
+
+  assert.deepEqual(bridgeConfiguration.plugins.entries.codex.config, {
+    appServer: {
+      networkProxy: {
+        enabled: true,
+        mode: "full",
+        allowLocalBinding: true,
+        readOnlyPaths: [
+          "/app/node_modules/openclaw",
+          "/opt/oce/repository-credentials",
+          "/run/oce/repository-credentials",
+        ],
+        domains: { "github.com": "allow", "git.tenant.svc": "allow" },
+      },
+    },
+  });
+});
+
 test("Codex startup translation renders selected marketplace app plugins", () => {
   const selections = {
     ...codexSelection(linearPluginId),

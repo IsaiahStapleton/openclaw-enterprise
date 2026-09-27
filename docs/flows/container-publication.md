@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-24
-last_updated_session: codex/01a0d171-59c4-7b42-95ab-4050d18eab79
+updated: 2026-09-26
+last_updated_session: codex/01a0b1f2-e696-7232-a439-5b668154bcd9
 ---
 
 # Container publication flow
@@ -29,11 +29,12 @@ not deploy workloads or change package visibility.
 ```mermaid
 graph TD
   A["Operator selects main SHA and successful CI"] --> B["Validate source, CI and approved base"]
-  B --> C["Build controller and runtime on native AMD64 and ARM64"]
-  C --> D["Load and smoke each native config ID"]
-  D --> E["Verify successful receipts and assemble OCI indexes"]
-  E -->|either fails| X["Stop before publication"]
-  E -->|both pass| F["Seal and upload each archive"]
+  B --> C["Pin timestamps to the source commit"]
+  C --> D["Build controller and runtime on native AMD64 and ARM64"]
+  D --> E["Load and smoke each native config ID"]
+  E --> H["Canonicalize descriptors and assemble OCI indexes"]
+  H -->|either fails| X["Stop before publication"]
+  H -->|both pass| F["Seal and upload each archive"]
   F -->|publish false| G["Finish with retained artifacts"]
   F -->|publish true| I["Recheck source, CI, seals and private packages"]
   I --> J["Copy all manifests with digest preservation"]
@@ -75,9 +76,14 @@ verified before the workflow first lands on main. It has no publication job or
 package-write permission.
 The build exports
 an OCI directory without registry publication or credentials.
+Before Buildx runs, the workflow derives `SOURCE_DATE_EPOCH` from the exact
+source commit. BuildKit rewrites image and filesystem timestamps to that epoch,
+so wall-clock time does not change the image manifests on a cold-cache rebuild.
 
 `deploy/runtime/Dockerfile:openclaw-source` verifies the pinned source archive and
-applies the reviewed Codex 0.156.0 dependency/lockfile patch. Both installs use
+applies the reviewed Codex 0.156.0 dependency/lockfile patch, selecting stock
+packages without modifying their binary. The OpenClaw bridge forwards the bound
+Agent's stock network settings. Both installs use
 frozen lockfiles and upstream's selected-plugin manifests, retaining required
 bundled plugins plus Codex and Slack. The standalone Codex command links to the
 plugin's installation. Build tools remain in full Bookworm stages; final images
@@ -86,11 +92,15 @@ use a separately pinned Node 24 Bookworm slim base.
 `scripts/build-runtime-assets.mjs` removes development/QA source, extension tests,
 and documentation media, while retaining runtime templates, skills, and help.
 It follows importer-relative runtime dependencies to remove unreachable pnpm
-store entries without collapsing distinct package versions. It writes a content
-inventory and provenance containing source, patch, lockfile,
-and inventory hashes. The runtime copies the assembled directory directly;
-there is no gzip archive or second Codex installation. Upstream import-closure
-and native-addon checks remain. See the [runtime recipe](../../deploy/runtime/README.md).
+store entries without collapsing distinct package versions. It writes initial
+provenance containing source, patch, lockfile, and inventory hashes. The runtime
+copies the assembled directory directly; there is no gzip archive or second
+Codex installation. After final-stage permission normalization, the inventory
+helper rewrites `contents.json` from `/app/node_modules/openclaw` and updates
+`runtimeContentsSha256` and the stock `codex` package/binary identity. Provenance
+therefore describes the final runtime tree. Upstream
+import-closure and native-addon checks remain. See the
+[runtime recipe](../../deploy/runtime/README.md).
 
 ### 2. Verify and assemble both platform variants
 
@@ -104,11 +114,21 @@ smokes cannot upload platform artifacts. The temporary loaded image is removed.
 `.github/workflows/container-publish.yml:jobs.assemble` downloads both successful
 platform artifacts from this exact run/attempt. `container-release.mjs:assemble`
 rejects mismatched receipts, platform configs, blob sizes, or hashes before linking
-blobs into one OCI layout. It writes the multi-platform index and archive without
-rebuilding either variant, then removes the temporary layouts.
+blobs into one OCI layout. It retains only the manifest media type, digest, size,
+and platform in each assembled descriptor, excluding exporter-only annotations
+such as the build time and local reference name. It writes the multi-platform
+index and archive without rebuilding either variant, then removes the temporary layouts.
 `readArchivePlatforms` checks the archive contains exactly one AMD64 and one ARM64
 Linux manifest with matching config and content digests. Publication still consumes
 this sealed archive; registry access is not needed during assembly.
+
+Before runtime smoke, `scripts/ci/prepare.mjs:prepareRuntimeImageSmoke` imports
+the loaded config ID into a disposable k3d cluster. It reuses the Images and
+Packaging lane's reviewed Codex seccomp derivation and sandbox probes, then passes
+the resulting profile and ownership state to the Docker tests. This preparation
+does not rebuild the runtime. Cleanup removes the owned cluster and temporary
+image tag on success or failure; a workflow cleanup step also runs after an
+interrupted smoke command.
 
 ### 3. Seal and enter publication
 
@@ -148,6 +168,10 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 - Run `actionlint .github/workflows/container-publish.yml` for workflow syntax.
 - In a hosted preparation, require smoke output for both architectures of both
   images. A config mismatch, missing platform, or failed startup blocks upload.
+- Repeat publication for the same source and CI evidence to prove that the
+  registry index identity is stable; the second run must retain the existing
+  source tag. Mutable external package inputs can still produce a legitimate
+  conflict, which remains fail-closed.
 - Inspect the published reference with `docker buildx imagetools inspect` and
   require Linux amd64 and arm64 plus the receipt's index digest. Startup checks
   do not establish native ARM64 performance, cluster behavior, or model turns.
@@ -161,6 +185,15 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-26 20:36: Prepare the reviewed Codex seccomp profile for native release smoke using the exact exported runtime image. (codex/01a0b1f2-e696-7232-a439-5b668154bcd9 - 849b2b24)
+
+- 2026-09-26 09:07: Retain final runtime provenance while selecting stock Codex packages and forwarding stock broker network settings. (authoring-run/c29b3860-d1f0-4a14-a264-49090586cb20 - 20123a3aa96021391616e918deee0ce60b009fa3)
+  Removed the custom Codex private-endpoint requirement. (NOT_IN_SPEC)
+
+- 2026-09-26 02:37: Recompute runtime contents after final-stage Codex replacement and permission normalization so provenance describes the final OpenClaw package tree. (authoring-run/5396927a-061a-4dda-b2d1-d3975a89c1e8 - 2ba56d35)
+
+- 2026-09-25 00:51: Pin build timestamps to the source commit and exclude exporter-only annotations from registry image identity so same-source publication is idempotent when resolved inputs are unchanged. (authoring-run/79b51ae7-5ded-47f2-bb2f-ebcb115445d0 - 0f3a4789)
 
 - 2026-09-24 17:20: Keep the default native build cache on Blacksmith sticky disks and avoid exporting the same intermediate layers to the GitHub Actions cache. (codex/01a0d171-59c4-7b42-95ab-4050d18eab79 - 6b5c9093)
 

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadTestSuites } from "./test-suites.mjs";
+import { prepareRuntimeImageSmoke } from "./prepare.mjs";
 
 export const repository = "openclaw/openclaw-enterprise";
 export const publishWorkflow = ".github/workflows/container-publish.yml";
@@ -364,7 +365,15 @@ async function assemble(directory, env) {
     for (const layer of manifest.layers) {
       await retain(layer);
     }
-    manifests.push({ ...descriptor, platform: { os: "linux", architecture: arch } });
+    // BuildKit's one-platform index may add exporter annotations such as the
+    // current build time. They do not describe the tested manifest bytes and
+    // must not make the assembled image identity depend on the workflow run.
+    manifests.push({
+      mediaType: descriptor.mediaType,
+      digest: descriptor.digest,
+      size: descriptor.size,
+      platform: { os: "linux", architecture: arch },
+    });
   }
   const index = {
     schemaVersion: 2,
@@ -416,11 +425,18 @@ async function smoke(directory, env) {
   assert.equal(manifest.mediaType, "application/vnd.oci.image.manifest.v1+json");
   const tag = `localhost/enterprise-${env.IMAGE}:prepared-${arch}`;
   skopeo(["copy", `oci:${directory}`, `docker-daemon:${tag}`], { stdio: "inherit" });
+  let prepared;
   try {
     const [loaded] = JSON.parse(execFileSync("docker", ["image", "inspect", tag]));
     assert.equal(loaded.Id, manifest.config.digest);
     assert.equal(loaded.Os, "linux");
     assert.equal(loaded.Architecture, arch);
+    if (env.IMAGE === "runtime") {
+      prepared = await prepareRuntimeImageSmoke({
+        image: loaded.Id,
+        statePath: join(env.RUNNER_TEMP ?? tmpdir(), `runtime-smoke-${arch}.json`),
+      });
+    }
     console.log(`Smoke ${env.IMAGE} ${env.PLATFORM} @ ${descriptor.digest}`);
     execFileSync(
       process.execPath,
@@ -431,6 +447,7 @@ async function smoke(directory, env) {
       {
         env: {
           ...env,
+          ...prepared?.env,
           OCC_TEST_IMAGE_TIMEOUT_MULTIPLIER: "1",
           [env.IMAGE === "controller" ? "OCC_TEST_PRODUCTION_IMAGE" : "OCC_TEST_RUNTIME_IMAGE"]:
             loaded.Id,
@@ -453,7 +470,11 @@ async function smoke(directory, env) {
       )}\n`,
     );
   } finally {
-    execFileSync("docker", ["image", "rm", tag], { stdio: "inherit" });
+    try {
+      await prepared?.cleanup();
+    } finally {
+      execFileSync("docker", ["image", "rm", tag], { stdio: "inherit" });
+    }
   }
 }
 

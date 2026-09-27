@@ -7,6 +7,17 @@ runtime namespace; embedded OpenClaw remains in the data plane.
 Kubernetes supports a managed model API key for both modes and a managed
 ChatGPT service-account credential for dedicated Codex only.
 
+New managed tenant namespaces use the opaque physical name `oce-` plus the first
+15 hexadecimal characters of the Namespace ID's SHA-256 digest. This is stable,
+DNS-safe, and short enough to serve as an OpenShell pre.5 operator Workspace
+name. A previously created managed namespace that uses the earlier
+`oce-<slug>-<hash12>` canonical name remains valid only when Kubernetes
+discovery finds its exact tenant label, matching `namespace-id` annotation, and
+OpenClaw manager label. The Driver does not create new namespaces with the
+previous name form, and wrong names or duplicate tenant claims fail closed. An
+explicitly adopted existing namespace retains its operator-selected name;
+OpenShell selection rejects it if it exceeds that Workspace limit.
+
 The optional [OpenShell Sandbox Driver](openshell-sandbox.md) is designed to
 own the dedicated Codex Harness Pod while Compute keeps the other resources.
 Stock OpenShell cannot provide required credential and workload-identity
@@ -57,12 +68,15 @@ credentials, or permission to create or escalate RoleBindings.
 
 If OpenShell sandboxing is enabled, the Compute Driver's Kubernetes access is
 also used directly by the optional `SandboxDriver.ensureNamespace` hook to
-apply approved namespace-scoped OpenShell NetworkPolicy resources
-and check gateway readiness. The selected driver's optional `provisionHarness`
-hook creates the provider-owned Harness Sandbox; without that hook, Compute
-creates the ordinary Harness Deployment. Stop and retirement delete that
-ordinary Deployment when present and then always invoke the selected provider's
-required revision cleanup. An absent Deployment does not skip cleanup.
+apply approved namespace-scoped OpenShell labels and NetworkPolicy resources,
+check Gateway readiness, and create or adopt the Namespace Workspace. The
+selected driver's optional `provisionHarness` hook creates the provider-owned
+Harness Sandbox; without that hook, Compute creates the ordinary Harness
+Deployment. Stop and retirement delete that ordinary Deployment when present
+and then always invoke the selected provider's required revision cleanup. An
+absent Deployment does not skip cleanup. Namespace deletion calls the selected
+provider's Namespace cleanup first and does not delete Kubernetes infrastructure
+when that provider cleanup fails.
 Provider-owned Harness removal remains delegated to the provider, so Compute
 does not need Sandbox custom-resource permissions. No separate SandboxDriver
 Kubernetes access adapter is introduced. The privileged

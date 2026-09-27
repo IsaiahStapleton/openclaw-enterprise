@@ -455,6 +455,26 @@ export interface Agent extends Scope {
   readonly createdAt: string;
 }
 
+export interface InstallationDeploymentInventoryAgent {
+  readonly id: string;
+  readonly status: AgentStatus;
+  readonly desiredRuntimeState: AgentDesiredRuntimeState;
+  readonly executionMode: HarnessExecutionMode;
+  readonly activeRevisionId?: string;
+  readonly deploymentInProgress: boolean;
+}
+
+export interface InstallationDeploymentInventoryNamespace {
+  readonly id: string;
+  readonly status: NamespaceStatus;
+  readonly agents: readonly InstallationDeploymentInventoryAgent[];
+}
+
+export interface InstallationDeploymentInventory {
+  readonly installationId: string;
+  readonly namespaces: readonly InstallationDeploymentInventoryNamespace[];
+}
+
 export interface HarnessDescriptor {
   readonly id: string;
   readonly version: string;
