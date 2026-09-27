@@ -838,6 +838,8 @@ export interface SecretDriver extends Driver {
   delete(secret: Secret): Promise<void>;
   /** Verify live exact ownership and return only safe projection identity. */
   resolve(secret: Secret): Promise<SecretBackendRef>;
+  /** Verify live ownership and use the current value only within a transient server-side operation. */
+  withValue?<T>(secret: Secret, use: (value: string) => Promise<T>): Promise<T>;
 }
 
 export interface SandboxDriver extends Driver {

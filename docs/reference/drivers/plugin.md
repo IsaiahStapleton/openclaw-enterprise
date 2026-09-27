@@ -65,11 +65,24 @@ cursor?}, signal?)` returns `{plugins, nextCursor, setup?}`, and
 `getCatalogPlugin({accessToken, pluginId}, signal?)` returns tool details. Here
 `pluginId` is the opaque `remoteId` from a discovery entry; the entry's `id` is
 the stable selection key. The HTTP routes are `POST /namespaces/:namespaceId/agents/plugins`
-and its `/details` child. Both require Agent-create authority in the Namespace,
-perform no platform writes, and return `Cache-Control: no-store`. Tokens are
-write-only request fields and never appear in catalog responses or audit events.
-A missing method reports unsupported discovery. These methods do not require an
-existing Agent, plugin installation, or runtime connection.
+and its `/details` child. Supply exactly one credential source: `accessToken`,
+or `secretRef` with the standard `{kind, namespaceId, id}` Secret reference.
+For details also provide `pluginId`; for a list you can provide `cursor`.
+Both routes require Agent `create` in the Namespace. A Secret reference must
+belong to that Namespace and additionally requires caller `operate` on the exact
+Secret. OCC reads the current value through the selected SecretDriver and passes
+it to the PluginDriver in server memory. The bundled Codex Driver derives the
+account ID from that PAT; clients do not provide an account ID. A deleted or
+foreign Secret or backend ownership mismatch returns `404`, a denied grant returns
+`403`, and an unavailable backend returns a safe dependency error. A rejected PAT returns
+`PLUGIN_DISCOVERY_CREDENTIALS_REJECTED`; rotate the Secret and retry.
+
+Discovery performs no platform writes and returns `Cache-Control: no-store`.
+Credential values do not appear in catalog responses or audit events; responses
+that echo a credential are rejected. A missing PluginDriver method reports
+unsupported discovery, and a SecretDriver without transient value use cannot
+serve Secret-backed requests. These methods do not require an existing Agent,
+plugin installation, or runtime connection.
 See [bundled selection and catalog setup](plugin-bundled.md#selection-and-catalogs).
 
 ## IAM
