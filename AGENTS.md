@@ -50,7 +50,8 @@ Follow the [contribution and review policy](CONTRIBUTING.md#prepare-a-pull-reque
 through merge. Core team authors may use their authorized merge bypass for their
 own PRs after the applicable review, CI, and specific holds are satisfied. Ask
 for human feedback on architectural RFCs early; implementation and RFC revision
-can proceed in parallel. New contributors wait for maintainer feedback.
+can proceed in parallel. Follow the [RFC process](docs/contributing/rfcs.md).
+New contributors wait for maintainer feedback.
 
 ## Development style
 

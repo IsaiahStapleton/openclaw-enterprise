@@ -16,10 +16,10 @@ Read [AGENTS.md](AGENTS.md) for repository boundaries and verification rules.
 The [platform design](docs/design.md) owns architecture; the
 [documentation map](docs/README.md) identifies current references and procedures.
 Check open issues and pull requests before starting overlapping work. For an
-architectural change that the team needs to understand, open an RFC early and
-request human feedback. Implementation can proceed while the RFC is reviewed
-and revised. Changes outside approved milestones still need a decision from
-the responsible maintainers.
+architectural change that the team needs to understand, open an
+[RFC](docs/contributing/rfcs.md) early and request human feedback. Implementation
+can proceed while the RFC is reviewed and revised. Changes outside approved
+milestones still need a decision from the responsible maintainers.
 
 Use a focused branch or worktree. Preserve other contributors' changes, local
 configuration, dependency trees, and running services. Never use a shared or

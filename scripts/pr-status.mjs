@@ -56,7 +56,9 @@ try {
     ["api", `repos/${repository}/commits/${encodeURIComponent(pr.baseRefName)}`],
     "target branch",
   );
-  if (!base.sha) throw new Error("GitHub did not return the target branch commit.");
+  if (!base.sha) {
+    throw new Error("GitHub did not return the target branch commit.");
+  }
 
   const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
   console.log(`Observed at: ${new Date().toISOString()}`);
