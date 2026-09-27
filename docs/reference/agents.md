@@ -143,12 +143,9 @@ For an already issued ChatGPT account credential, use
 This requires dedicated Codex and the account's matching `backendId`. Binding
 an account does not issue its credential or change the model, Harness, or Backend.
 
-For a [credential source](credential-sources.md), use
-`{ "method": "credential_source", "sourceId": "cs_123e4567-e89b-42d3-a456-426614174000" }`.
-It requires dedicated Codex and the selected Credential Gateway; binding and
-deployment check `operate` on the source for the actor and, at deployment, the
-Agent principal. While a gateway is selected, deployment rejects the other
-credential methods.
+For dedicated Codex with a Credential Gateway, use
+`{ "method": "credential_source", "sourceId": "cs_…" }`; see
+[credential sources](credential-sources.md#bind-a-source-to-an-agent) for grants.
 
 For SSH embedded OpenClaw, use `{ "method": "runtime" }`. The operator supplies
 credentials in the protected host environment file; OCC neither reads nor
@@ -357,9 +354,8 @@ each deployed Agent still owns its own gateway and stable service principal.
 ## Current limitations
 
 The public API has no revision mutation/deletion or explicit rollback endpoint.
-Controller API authentication for Agent service principals remains unavailable;
-gateway-held model credentials exist only through the OpenShell
-[credential sources](credential-sources.md). The optional
+Controller API authentication for Agent service principals remains unavailable.
+The optional
 [OpenShell SandboxDriver](drivers/openshell-sandbox.md) requires bundled
 Kubernetes Compute and dedicated Codex. Stock OpenShell cannot provide all the
 required workload credentials; review the documented compatibility limits before
@@ -376,8 +372,7 @@ planning a deployment. Other sandbox execution combinations are rejected.
 - `404`: The selected Configuration does not belong to the Agent's Namespace.
 - `404`: An associated service account does not belong to the Agent's Namespace.
 - `409 RESOURCE_CONFLICT`: Harness authentication is missing, the selected
-  account has no issued access token, its Backend binding or topology is incompatible,
-  or a selected Credential Gateway requires `credential_source`.
+  account has no issued access token, or its Backend binding or topology is incompatible.
 - `400 INVALID_REQUEST`: A runtime `modelApiKey` selector is supplied. Use
   `harnessAuth` explicitly.
 - `409 RESOURCE_CONFLICT`: Another Agent already uses that name in the same

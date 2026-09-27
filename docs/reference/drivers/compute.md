@@ -62,14 +62,14 @@ activation after authorization.
 
 ### Optional additions
 
-| Method or declaration                                                  | When it is needed                                                                                                                                                                                                                                          |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bindAgent({ namespace, agent })`                                      | Receives the approved Namespace, Agent, and ServicePrincipal before the worker operates on a revision. It may be asynchronous. Failure stops that attempt before further runtime work.                                                                     |
-| `validateHarnessAuth(harness, auth, configuration)`                    | Deployment requires this check of the Harness, authentication snapshot, and native Configuration. It must have no side effects. A missing method causes a dependency-unavailable error; a thrown error becomes a resource conflict before queueing.        |
-| `activateRevision(revision, context?)`, `deactivateRevision(revision)` | Production startup requires both. The worker also calls activation if a development Driver provides it. See [revision stages](#production-revision-stages).                                                                                                |
-| `setLifecycleDrivers(drivers)`                                         | Startup requires it when another selected Driver provides [Compute hooks](#optional-selected-driver-hooks).                                                                                                                                                |
-| `resolveSandboxNamespace(namespace)`                                   | Required to register [credential sources](credential-gateway.md). Returns the Namespace with `name` set to this Driver's runtime placement, the same name the paired Sandbox receives. A missing method makes registration fail as dependency-unavailable. |
-| `activationOrder`, `maintenanceIntervalMs`                             | Control [activation timing](#production-revision-stages) and optional [maintenance](#optional-active-runtime-maintenance).                                                                                                                                 |
+| Method or declaration                                                  | When it is needed                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bindAgent({ namespace, agent })`                                      | Receives the approved Namespace, Agent, and ServicePrincipal before the worker operates on a revision. It may be asynchronous. Failure stops that attempt before further runtime work.                                                              |
+| `validateHarnessAuth(harness, auth, configuration)`                    | Deployment requires this check of the Harness, authentication snapshot, and native Configuration. It must have no side effects. A missing method causes a dependency-unavailable error; a thrown error becomes a resource conflict before queueing. |
+| `activateRevision(revision, context?)`, `deactivateRevision(revision)` | Production startup requires both. The worker also calls activation if a development Driver provides it. See [revision stages](#production-revision-stages).                                                                                         |
+| `setLifecycleDrivers(drivers)`                                         | Startup requires it when another selected Driver provides [Compute hooks](#optional-selected-driver-hooks).                                                                                                                                         |
+| `resolveSandboxNamespace(namespace)`                                   | Returns the Sandbox runtime placement for [credential source](credential-gateway.md) registration.                                                                                                                                                  |
+| `activationOrder`, `maintenanceIntervalMs`                             | Control [activation timing](#production-revision-stages) and optional [maintenance](#optional-active-runtime-maintenance).                                                                                                                          |
 
 `requiresStoppedPredecessors(revision)` opts into [exclusive replacement](#production-revision-stages).
 It must be a side-effect-free declaration derived from the admitted revision.
@@ -187,9 +187,8 @@ that Agent. See [authorization](../authorization.md).
 its current backend reference, the managed-account credential reference and
 private Backend binding, the current [credential source](../credential-sources.md)
 record, or just `{ method: "runtime" }` for operator-managed authentication.
-None contains credential values. For a credential source, Compute obtains
-attachments from the selected [Credential Gateway](credential-gateway.md) and
-projects no model Secret. The separate `secretEnvironment`
+None contains credential values.
+The separate `secretEnvironment`
 contains Configuration bindings for gateway credentials. Deliver model credentials
 only to the selected Harness workload. Channel tokens are ordinary Namespace Secrets
 referenced by Configuration bindings; never expose them in responses, Configuration,
