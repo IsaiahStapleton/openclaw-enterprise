@@ -1,9 +1,9 @@
 # Agent Presets
 
-A Preset stores reusable Agent launch settings and variable definitions in one
-Namespace. Select it when creating an Agent, fill its variables, and edit the
-copied settings before saving. The new Agent and Configuration are independent:
-editing or deleting the Preset cannot change them or their deployed revisions.
+A Preset stores reusable Agent launch settings and variables in one Namespace.
+Select it when creating an Agent, fill its variables, and edit the copied settings
+before saving. Editing or deleting the Preset cannot change the new Agent,
+Configuration, or deployed revisions.
 See [Create an Agent from a Preset](../guides/topics/agent-presets.md).
 
 The checked-in [standard Codex Preset](../guides/topics/standard-codex-preset.md)
@@ -63,7 +63,7 @@ Codex `config.toml` or a reasoning-effort override.
 | [`SWE Agent` / `devday.json`](../../deploy/presets/devday.json)                         | Dedicated; name/model variables; model defaults to `gpt-6-astra`; `codex_pat`   | Standard Codex settings plus Slack and workspace instructions                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
 | [`Q&A Agent` / `devday-qa.json`](../../deploy/presets/devday-qa.json)                   | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
 | [`Oncall Agent` / `devday-oncall.json`](../../deploy/presets/devday-oncall.json)        | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
-| [`Community Agent` / `devday-partners.json`](../../deploy/presets/devday-partners.json) | Same model/auth defaults as SWE Agent                                           | Standard Codex and Slack settings; community instructions; DMs disabled                                             | Same as Standard Codex, except `approvalPolicy: never`                                                |
+| [`Community Agent` / `devday-partners.json`](../../deploy/presets/devday-partners.json) | Same model/auth defaults as SWE Agent                                           | Codex; Control UI enabled; community Slack channels and instructions; DMs disabled                                  | Same as Standard Codex, except `approvalPolicy: never`                                                |
 
 ### Plain console default
 
@@ -118,16 +118,15 @@ to `gpt-6-astra` and remains editable. After **Use Preset**, choose an existing 
 **Create new Secret...** before creating the Agent.
 DevDay files are opt-in through `presets.files`; `includeDefaults` does not load them.
 
-[`Community Agent`](../../deploy/presets/devday-partners.json) copies the SWE
-Agent runtime and Slack channels, with community-focused workspace instructions
-to answer questions, discuss the roadmap, and check Linear for relevant updates when
-available. Direct messages are disabled; it uses other sources if Linear access fails.
+[`Community Agent`](../../deploy/presets/devday-partners.json) uses the SWE
+runtime with Control UI enabled and community instructions. It checks Linear
+when available and uses other sources if access fails. Direct messages are disabled.
 
 [`Q&A Agent`](../../deploy/presets/devday-qa.json) and
 [`Oncall Agent`](../../deploy/presets/devday-oncall.json) copy the entire SWE Agent
-template, including its Slack and workspace instructions. Uncomment the desired files in the example Installation YAML to install them.
+template, including Slack and workspace instructions. Uncomment desired files in the example Installation YAML.
 
-All four DevDay presets prefill these channels:
+SWE Agent, Q&A Agent, and Oncall Agent prefill these channels:
 
 | Channel           | ID            |
 | ----------------- | ------------- |
@@ -136,10 +135,18 @@ All four DevDay presets prefill these channels:
 | oce-feedback-test | `C0C569NN9ME` |
 | oce-team-test     | `C0C4A0JH2BG` |
 
-In the Console, choose **SWE Agent**, fill its variables, then use **Edit Slack** to
-choose allowed senders and bind Slack app/bot Secrets. The presets allow all channel members (`users: ["*"]`)
-and do not require mentions in any of the four channels. Narrow the sender list in the drawer if
-needed. No credentials are stored in the file.
+Community Agent prefills its own channel list:
+
+| Channel            | ID            |
+| ------------------ | ------------- |
+| oce-team           | `C0C43A2QA11` |
+| oce-team-test      | `C0C4A0JH2BG` |
+| oce-community      | `C0C5KF0JLSC` |
+| oce-community-test | `C0C5KF0DWLQ` |
+
+In the Console, choose **SWE Agent**, fill its variables, and use **Edit Slack** to
+choose allowed senders and bind Slack app/bot Secrets. Presets allow all channel members (`users: ["*"]`)
+without requiring mentions. Narrow the sender list if needed. Files contain no credentials.
 Workspace instructions in `template.agent.initialWorkspaceFiles.AGENTS.md` include
 draft decisions. `{{vars.name}}` expands when applying the Preset; later name edits
 do not re-render the copied file.

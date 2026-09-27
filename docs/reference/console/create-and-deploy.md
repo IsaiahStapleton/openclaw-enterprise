@@ -37,11 +37,10 @@ Presets and edited Configuration JSON retain their settings.
    Service Accounts, open [OpenAI admin](https://admin.openai.com/), choose your
    workspace, open **Service accounts**, and create a token with Codex scope.
    Choose an existing model credential Secret or **Create new Secret...**.
-   Creating saves it immediately, even if you cancel Agent creation.
+   It saves immediately, even if you cancel Agent creation.
    Choose a model from the starter list or select **Enter model ID manually**.
-   The static list appears before credential entry without a preselected model.
-   Confirm credential and runtime support. The form updates native model configuration;
-   credentials stay separate.
+   The list appears before credential entry without a preselected model. Confirm
+   credential and runtime support; credentials stay outside Configuration.
 4. Confirm your Installation has access to the chosen model. Primary and fallback
    models must use the same supported provider and Harness. For custom settings,
    open **Advanced settings**. Selection changes preserve unrelated JSON edits;
@@ -53,8 +52,8 @@ Presets and edited Configuration JSON retain their settings.
    for an Agent without repository access.
 
 6. If you need Slack, use OpenAI with the **Codex** harness and its channel card.
-   Each token menu lets you select a readable Namespace Secret or **Create new Secret...**.
-   Creating a Secret stores it immediately, even if you cancel Agent creation.
+   Each token menu selects a readable Namespace Secret or **Create new Secret...**.
+   New Secrets persist even if you cancel Agent creation.
    **Apply channel settings** stages settings and bindings into the form;
    cancelling the drawer discards its selections.
    Channel settings, plugin entries, and selected Secret bindings are saved with
@@ -83,16 +82,19 @@ over** confirms discard. Reload, page exit, and sign-out clear local drafts. Onc
 saving begins, navigation does not retain partial-save or uncertain-outcome form
 state; follow save recovery below.
 
-For Codex plugins, select **Service Accounts** with **Codex**, choose a PAT Secret,
-and open **Configure plugins**. Without a selected Secret, enter a token under
-**Plugin discovery token (optional)**. **Previous page** and **Next page** fetch
-upstream pages; **Filter this page** filters locally. PAT catalog search is unavailable.
+For Codex plugins, open **Configure plugins**. With the
+[OpenAI curated catalog](../drivers/plugin-bundled.md#selection-and-catalogs),
+you can browse and select supported plugins without a discovery token. Their tool
+inventory and account access are unknown. In hosted mode, select **Service Accounts** with
+**Codex** and choose a PAT Secret, or enter a token under **Plugin discovery token
+(optional)**. **Previous page** and **Next page** fetch hosted pages; **Filter this
+page** filters locally. PAT catalog search is unavailable.
 Select a plugin to load tools, then **Add**. Use toggles and **Tool policy** for
 overrides. **Configured plugins** includes selections from other pages. **Done**
 closes the modal; **Create Agent** saves changes.
 
 [Discovery](../../flows/agent-plugins.md#credential-scoped-discovery) requires
-permission to use the selected Secret. The server reads its value without returning
+permission to use any selected Secret. The server reads its value without returning
 it to the browser. Credential, provider, and Harness changes clear results; **Plugin
 selections JSON** preserves selections separately from Configuration. Check permissions
 or outbound access on failure, then retry. Editing follows installation capabilities
