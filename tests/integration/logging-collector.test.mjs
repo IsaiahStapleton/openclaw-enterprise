@@ -211,6 +211,31 @@ test(
         await docker(["rm", "--force", name]).catch(() => {});
       }
     }
+    const warningLine = (event) =>
+      JSON.stringify({
+        event,
+        severity: "WARN",
+        code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+        computeDriverId: "kubernetes",
+        message: canaries.join(" "),
+        sessionId: canaries.at(-1),
+        ...payload,
+        "service.name": "forged-service",
+        "openclaw.agent.id": "forged-agent",
+      });
+    const filtered = async () =>
+      /otelcol_processor_filter_logs_filtered[^\n]* [1-9]/.test(
+        await fetch(`http://${metricsAddress}/metrics`).then((response) => response.text()),
+      );
+
+    // No other records have entered this fresh Collector, so a filter count
+    // proves the near-match was processed and rejected before capture assertions.
+    assert.equal(await filtered(), false);
+    await send("worker", [warningLine("compute.preflight-warning-unreviewed")], [], [
+      "com.docker.compose.service=worker",
+    ]);
+    await waitFor(filtered);
+
     await send("gateway", [
       JSON.stringify({
         level: "info",
@@ -246,19 +271,7 @@ test(
     );
     await send(
       "worker",
-      ["compute.preflight-warning", "compute.preflight-warning-unreviewed"].map((event) =>
-        JSON.stringify({
-          event,
-          severity: "WARN",
-          code: "KUBERNETES_VERSION_BELOW_MINIMUM",
-          computeDriverId: "kubernetes",
-          message: canaries.join(" "),
-          sessionId: canaries.at(-1),
-          ...payload,
-          "service.name": "forged-service",
-          "openclaw.agent.id": "forged-agent",
-        }),
-      ),
+      [warningLine("compute.preflight-warning")],
       [],
       ["com.docker.compose.service=worker"],
     );
@@ -306,6 +319,7 @@ test(
       "occ.code": "KUBERNETES_VERSION_BELOW_MINIMUM",
     });
     const serialized = JSON.stringify(initial);
+    assert.equal(serialized.includes("compute.preflight-warning-unreviewed"), false);
     for (const value of [...canaries, "forged-service", "forged-agent"]) {
       assert.equal(serialized.includes(value), false);
     }
