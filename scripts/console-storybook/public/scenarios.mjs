@@ -2232,7 +2232,11 @@ export const scenarios = {
     slack: true,
     actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
     description:
-      "The picker shows the bot's workspace, channel names and exact IDs. Next page reaches more channels. Selecting one adds a removable chip and saves only its ID. Search text stays separate from selections.",
+      "The picker shows five channels per page with the bot's workspace, names and exact IDs. Next page shows two buffered matches before another directory request. Typing waits 300 ms; Enter searches immediately. Selecting a result saves only its ID.",
+    steps: [
+      "Use Next page to see design and engineering, then Previous page to restore the first five without another directory request.",
+      "Use Next page twice to fetch product and announcements. Type platform and select its result.",
+    ],
     gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
   },
   slackDirectorySavedNames: {
@@ -2269,7 +2273,7 @@ export const scenarios = {
     slack: true,
     actions: [click("Edit Slack"), { selector: "#slack-dm-user-ids-search", focus: true }],
     description:
-      "Two people share the same display name. Their handle and exact Slack user IDs identify which one will be saved.",
+      "People appear five per page. Two share the same display name; their handle and exact Slack user IDs identify which one will be saved. Next page preserves the remaining matches from the directory response.",
     gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
   },
   slackDirectoryDenied: {
@@ -2310,7 +2314,7 @@ export const scenarios = {
     ],
     actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
     description:
-      "An older directory request is delayed. Search for platform before it returns; the late results must not replace the newer search.",
+      "An older directory request is delayed. Search for platform before it returns; typing cancels the browser request and searches after 300 ms. Escape dismisses results and cancels a queued search. Enter searches immediately.",
   },
   slackDirectoryMissingSecret: {
     group: "Components/Channels",

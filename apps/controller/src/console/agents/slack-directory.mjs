@@ -3,6 +3,7 @@ import { namespacePath } from "./list.mjs";
 
 const USER_ID = /^[UW][A-Z0-9]{1,31}$/;
 const CHANNEL_ID = /^[CG][A-Z0-9]{1,31}$/;
+const PAGE_SIZE = 5;
 const nameLookupCache = new WeakMap();
 
 export function isSlackId(value, kind) {
@@ -246,8 +247,9 @@ export function createSlackDirectoryField({
   let workspaceIdentity = null;
   let generation = 0;
   let timer;
+  let requestController;
   let pageIndex = 0;
-  let cursors = [null];
+  let pages = [];
   let query = "";
   let nextCursor = null;
   let searchAsName = false;
@@ -285,9 +287,14 @@ export function createSlackDirectoryField({
       workspace.title = page.workspaceId;
     }
   }
-  function close() {
+  function cancelSearch() {
     clearTimeout(timer);
     generation += 1;
+    requestController?.abort();
+    requestController = null;
+  }
+  function close() {
+    cancelSearch();
     panel.hidden = true;
     search.setAttribute("aria-expanded", "false");
     search.removeAttribute("aria-activedescendant");
@@ -409,8 +416,7 @@ export function createSlackDirectoryField({
     );
   }
   function prepareSearch() {
-    clearTimeout(timer);
-    generation += 1;
+    cancelSearch();
     panel.hidden = false;
     nameStatus.hidden = true;
     search.setAttribute("aria-expanded", "true");
@@ -427,7 +433,7 @@ export function createSlackDirectoryField({
       ? "Searching Slack directory…"
       : "Select a Slack bot token Secret to search by name. You can still paste exact IDs.";
     query = search.value.trim();
-    cursors = [null];
+    pages = [];
     pageIndex = 0;
     nextCursor = null;
     searchAsName = false;
@@ -438,12 +444,12 @@ export function createSlackDirectoryField({
   }
   async function load(index) {
     const secretId = getSecretId();
-    if (!secretId || (index > pageIndex && !nextCursor)) {
+    if (!secretId || (index >= pages.length && pages.length > 0 && !nextCursor)) {
       return;
     }
-    const cursor = index > pageIndex ? nextCursor : cursors[index];
+    cancelSearch();
     const exactTarget = searchAsName ? null : searchTarget(query, kind);
-    const active = ++generation;
+    const active = generation;
     activeOption = -1;
     search.removeAttribute("aria-activedescendant");
     previous.disabled = true;
@@ -453,56 +459,67 @@ export function createSlackDirectoryField({
     status.textContent = "Searching Slack directory…";
     errorText.textContent = "";
     try {
-      const requestPage = (selection) =>
-        context.request(`${namespacePath(context.namespaceId)}/channel-directory/lookup`, {
-          method: "POST",
-          body: {
-            secretId,
-            kind,
-            ...selection,
-            ...(agentId ? { agentId } : {}),
-            ...(configurationId ? { configurationId } : {}),
-          },
-        });
-      let searchedAsName = exactTarget === null;
-      let page = await requestPage(
-        exactTarget
-          ? { ids: [exactTarget.id] }
-          : { ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) },
-      );
-      if (
-        exactTarget &&
-        query.length >= 8 &&
-        isSlackId(query, kind) &&
-        page.candidates.length === 0 &&
-        current(active, secretId)
-      ) {
-        const exactWorkspaceId = page.workspaceId;
-        page = await requestPage({ query });
-        if (page.workspaceId !== exactWorkspaceId) {
-          if (current(active, secretId)) {
-            status.textContent = "The Slack bot workspace changed. Search again.";
+      let page = pages[index];
+      if (!page) {
+        requestController = new AbortController();
+        const signal = requestController.signal;
+        const requestPage = (selection) =>
+          context.request(`${namespacePath(context.namespaceId)}/channel-directory/lookup`, {
+            method: "POST",
+            signal,
+            body: {
+              secretId,
+              kind,
+              ...selection,
+              ...(agentId ? { agentId } : {}),
+              ...(configurationId ? { configurationId } : {}),
+            },
+          });
+        let searchedAsName = exactTarget === null;
+        page = await requestPage(
+          exactTarget
+            ? { ids: [exactTarget.id] }
+            : { ...(query ? { query } : {}), ...(nextCursor ? { cursor: nextCursor } : {}) },
+        );
+        if (
+          exactTarget &&
+          query.length >= 8 &&
+          isSlackId(query, kind) &&
+          page.candidates.length === 0 &&
+          current(active, secretId)
+        ) {
+          const exactWorkspaceId = page.workspaceId;
+          page = await requestPage({ query });
+          if (page.workspaceId !== exactWorkspaceId) {
+            if (current(active, secretId)) {
+              status.textContent = "The Slack bot workspace changed. Search again.";
+            }
+            return;
           }
+          searchedAsName = true;
+        }
+        if (!current(active, secretId)) {
           return;
         }
-        searchedAsName = true;
-      }
-      if (!current(active, secretId)) {
-        return;
-      }
-      if (index > 0 && workspaceIdentity && workspaceIdentity !== page.workspaceId) {
-        status.textContent = "The Slack bot workspace changed. Search again.";
-        return;
+        if (index > 0 && workspaceIdentity && workspaceIdentity !== page.workspaceId) {
+          status.textContent = "The Slack bot workspace changed. Search again.";
+          return;
+        }
+        searchAsName = searchedAsName;
+        nextCursor = page.nextCursor ?? null;
+        const candidates = page.candidates.filter((candidate) => isSlackId(candidate.id, kind));
+        // Keep every match from the provider batch before following its continuation cursor.
+        // An empty batch still gets a page so a sparse search can continue explicitly.
+        for (let offset = 0; offset < Math.max(candidates.length, 1); offset += PAGE_SIZE) {
+          pages.push({ ...page, candidates: candidates.slice(offset, offset + PAGE_SIZE) });
+        }
+        page = pages[index];
       }
       updateWorkspace(page);
-      searchAsName = searchedAsName;
       pageIndex = index;
-      cursors[index] = cursor;
-      nextCursor = page.nextCursor ?? null;
       const wrongWorkspace = exactTarget?.teamId && exactTarget.teamId !== page.workspaceId;
-      const candidates = page.candidates.filter(
-        (candidate) => isSlackId(candidate.id, kind) && !wrongWorkspace,
-      );
+      const candidates = wrongWorkspace ? [] : page.candidates;
+      const hasNext = index + 1 < pages.length || Boolean(nextCursor);
       results.replaceChildren(
         ...candidates.map((candidate, index) => {
           const selected = values().some((id) =>
@@ -542,13 +559,13 @@ export function createSlackDirectoryField({
       status.textContent = wrongWorkspace
         ? `That ID belongs to workspace ${exactTarget.teamId}; this bot belongs to ${page.workspaceId}.`
         : candidates.length
-          ? `${candidates.length} result${candidates.length === 1 ? "" : "s"}${page.complete ? "" : " · more results may be available"}`
-          : page.complete
+          ? `${candidates.length} result${candidates.length === 1 ? "" : "s"}${hasNext ? " · more results may be available" : ""}`
+          : !hasNext
             ? "No matches found. Try another name or paste an exact ID."
             : "No results on this page. More results may be available.";
-      pagination.hidden = index === 0 && !nextCursor;
+      pagination.hidden = index === 0 && !hasNext;
       previous.disabled = index === 0;
-      next.disabled = !nextCursor;
+      next.disabled = !hasNext;
     } catch (error) {
       if (!current(active, secretId)) {
         return;
@@ -572,7 +589,7 @@ export function createSlackDirectoryField({
       if (field.isConnected && context.isCurrent()) {
         void load(0);
       }
-    }, 250);
+    }, 300);
   });
   search.addEventListener("keydown", (event) => {
     const options = [...results.children];

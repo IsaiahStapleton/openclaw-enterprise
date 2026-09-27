@@ -7790,26 +7790,43 @@ test("Slack directory selections show names and save exact channel IDs", async (
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
   const directoryBodies = [];
+  const pendingDirectory = Promise.withResolvers();
+  const releaseDirectory = Promise.withResolvers();
   // The browser test owns Console selection and saved API state; only provider directory data is simulated.
   await page.route(
     `${fixture.origin}/namespaces/${namespace.id}/channel-directory/lookup`,
     async (route) => {
       const body = route.request().postDataJSON();
       directoryBodies.push(body);
-      const firstUppercasePage = body.query === "GENERALX" && !body.cursor;
-      const candidates =
-        body.kind === "users"
-          ? [{ id: "UTEST123", name: "alex", displayName: "Alex" }]
-          : body.query === "GENERALX"
-            ? firstUppercasePage
-              ? [{ id: "CUPPER111", name: "GENERALX-first" }]
-              : [{ id: "CUPPER123", name: "GENERALX" }]
-            : [
-                { id: "CEXIST123", name: "existing-room" },
-                { id: "CTEST456", name: "release-room" },
-                { id: "CGENERAL", name: "general" },
-                { id: "CUPPER123", name: "GENERALX" },
-              ];
+      if (body.query === "pending") {
+        pendingDirectory.resolve(route.request());
+        await releaseDirectory.promise;
+      }
+      let nextCursor;
+      let candidates;
+      if (body.kind === "users") {
+        candidates = [{ id: "UTEST123", name: "alex", displayName: "Alex" }];
+      } else if (body.query === "GENERALX") {
+        if (!body.cursor) {
+          candidates = Array.from({ length: 7 }, (_, index) => ({
+            id: `CUPPER11${index + 1}`,
+            name: `GENERALX-first-${index + 1}`,
+          }));
+          nextCursor = "upper-next";
+        } else if (body.cursor === "upper-next") {
+          candidates = [];
+          nextCursor = "upper-final";
+        } else {
+          candidates = [{ id: "CUPPER123", name: "GENERALX" }];
+        }
+      } else {
+        candidates = [
+          { id: "CEXIST123", name: "existing-room" },
+          { id: "CTEST456", name: "release-room" },
+          { id: "CGENERAL", name: "general" },
+          { id: "CUPPER123", name: "GENERALX" },
+        ];
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -7820,8 +7837,8 @@ test("Slack directory selections show names and save exact channel IDs", async (
             candidates: body.ids
               ? candidates.filter((candidate) => body.ids.includes(candidate.id))
               : candidates,
-            complete: !firstUppercasePage,
-            ...(firstUppercasePage ? { nextCursor: "upper-next" } : {}),
+            complete: !nextCursor,
+            ...(nextCursor ? { nextCursor } : {}),
           },
           meta: { requestId: "req_test_slack_directory" },
         }),
@@ -7836,8 +7853,52 @@ test("Slack directory selections show names and save exact channel IDs", async (
   const channelSearch = channelDialog.getByRole("combobox", { name: "Channels", exact: true });
   const channelPicker = channelSearch.locator("..").locator("..");
   await channelPicker.getByText("#existing-room", { exact: true }).waitFor();
+  await channelSearch.focus();
+  await channelPicker.getByRole("option", { name: /existing-room.*CEXIST123/ }).waitFor();
+  // Advance browser time explicitly: intermediate keystrokes and dismissed searches must not query.
+  const clockTime = new Date("2026-09-27T12:00:00Z");
+  await page.clock.install({ time: new Date("2026-09-27T11:59:00Z") });
+  await page.clock.pauseAt(clockTime);
+  await channelSearch.fill("g");
+  await page.clock.runFor(200);
+  await channelSearch.fill("ge");
+  await page.clock.runFor(200);
   await channelSearch.fill("general");
+  await page.clock.runFor(299);
+  assert.deepEqual(
+    directoryBodies.filter((body) => body.query),
+    [],
+  );
+  await page.clock.runFor(1);
   await channelPicker.getByRole("option", { name: /general.*CGENERAL/ }).waitFor();
+  assert.deepEqual(
+    directoryBodies.filter((body) => body.query).map((body) => body.query),
+    ["general"],
+  );
+  await channelSearch.fill("dismissed");
+  await channelSearch.press("Escape");
+  await page.clock.runFor(300);
+  assert.equal(
+    directoryBodies.some((body) => body.query === "dismissed"),
+    false,
+  );
+  // A new query aborts the old browser request, even while its provider response is held.
+  await channelSearch.fill("pending");
+  await channelSearch.press("Enter");
+  const pendingRequest = await pendingDirectory.promise;
+  const canceledRequest = page.waitForEvent(
+    "requestfailed",
+    (request) => request === pendingRequest,
+  );
+  await channelSearch.fill("general");
+  await canceledRequest;
+  releaseDirectory.resolve();
+  // Enter submits immediately and removes the queued debounce, so it cannot send the same query twice.
+  await channelSearch.press("Enter");
+  await channelPicker.getByRole("option", { name: /general.*CGENERAL/ }).waitFor();
+  await page.clock.runFor(300);
+  assert.equal(directoryBodies.filter((body) => body.query === "general").length, 2);
+  await page.clock.resume();
   assert.equal(await slackSelectionValue(channelSearch), "CEXIST123");
   assert.equal(await page.getByRole("dialog").count(), 1);
   assert.ok(directoryBodies.some((body) => body.query === "general" && !body.ids));
@@ -7851,6 +7912,25 @@ test("Slack directory selections show names and save exact channel IDs", async (
   assert.equal(await channelDialog.isVisible(), true);
   await channelSearch.fill("GENERALX");
   await channelPicker.getByRole("option", { name: /GENERALX-first.*CUPPER111/ }).waitFor();
+  assert.equal(await channelPicker.getByRole("option").count(), 5);
+  // Seven provider matches span two display pages; neither overflow nor Previous rereads the provider.
+  const initialSearchRequests = directoryBodies.filter((body) => body.query === "GENERALX").length;
+  await channelPicker.getByRole("button", { name: "Next page" }).click();
+  await channelPicker.getByRole("option", { name: /GENERALX-first-6.*CUPPER116/ }).waitFor();
+  assert.equal(await channelPicker.getByRole("option").count(), 2);
+  await channelPicker.getByRole("button", { name: "Previous page" }).click();
+  await channelPicker.getByRole("option", { name: /GENERALX-first-1.*CUPPER111/ }).waitFor();
+  assert.equal(await channelPicker.getByRole("option").count(), 5);
+  await channelPicker.getByRole("button", { name: "Next page" }).click();
+  assert.equal(
+    directoryBodies.filter((body) => body.query === "GENERALX").length,
+    initialSearchRequests,
+  );
+  await channelPicker.getByRole("button", { name: "Next page" }).click();
+  await channelPicker
+    .getByText("No results on this page. More results may be available.")
+    .waitFor();
+  // A provider scan without matches still permits continuing to a later matching channel.
   await channelPicker.getByRole("button", { name: "Next page" }).click();
   await channelPicker.getByRole("option", { name: /GENERALX.*CUPPER123/ }).click();
   assert.equal(await slackSelectionValue(channelSearch), "CEXIST123, CUPPER123");

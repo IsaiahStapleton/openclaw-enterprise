@@ -1,7 +1,7 @@
 ---
 created: 2026-09-27
 updated: 2026-09-27
-last_updated_session: 01a0e49c-a051-7df2-9689-3bc1e0ac51c8
+last_updated_session: 01a0e4d2-4f51-7780-b0fc-2352cb99078f
 ---
 
 # Agent Channel Directory Lookup Flow
@@ -73,11 +73,19 @@ An incomplete page cannot establish that a name is absent or unique.
 
 ### 3. Display names and save IDs
 
-`apps/controller/src/console/channels/slack.mjs:appendFields`
+`apps/controller/src/console/channels/slack.mjs:appendFields`,
+`apps/controller/src/console/agents/slack-directory.mjs:createSlackDirectoryField`
 
-The Console searches inline after typing and shows each candidate's name, exact
-ID, and workspace. Selecting a result or confirming pasted IDs adds removable
-chips to the field; search text remains separate from committed IDs. Arrow keys
+The Console debounces typing and shows each candidate's name, exact ID, and
+workspace. It buffers the provider's complete returned batch and divides it into
+[display pages](../reference/drivers/slack-channel.md). Previous and Next reuse
+those pages before Next follows the provider cursor. An empty provider page with
+a continuation still offers Next. New input, dismissal, or a changed Secret
+cancels the queued search and its browser request; generation checks also discard
+obsolete responses. Browser cancellation does not guarantee cancellation of
+provider work already started by the API.
+
+Selecting a result or confirming pasted IDs adds removable chips to the field; search text remains separate from committed IDs. Arrow keys
 and Enter select results, and Escape closes the list. It resolves saved IDs again
 when the editor opens or the selected Secret changes. A denied or failed lookup leaves manual
 exact-ID entry available; no directory result changes the saved Configuration
@@ -109,6 +117,8 @@ until the operator saves the channel edit.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 21:52: Buffer directory results for compact pages and cancel superseded browser searches. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - 1e1628335710f7bcb66e0c3d0d6bdc35b6a0baaf)
 
 - 2026-09-27 21:03: Replace modal lookup with inline search and selected chips. (01a0e49c-a051-7df2-9689-3bc1e0ac51c8 - ab70527a70201544d29b72c60ced7b9133910e92)
 

@@ -18,6 +18,9 @@ or [`conversations.info`](https://docs.slack.dev/reference/methods/conversations
 directly. The Console shows selected names as removable chips, with exact IDs
 available on hover. IDs the bot cannot see remain visible without a name.
 Search in the field and choose a result, or paste exact IDs and press Enter.
+The Console waits 300 ms after typing and shows up to five results per page.
+Enter searches immediately. Next and Previous reuse fetched matches before
+requesting another provider page.
 Unselected search text is never saved. Channel access explicitly selects
 **Specific people** or **Everyone in these channels**; removing the last person
 does not switch to everyone.
