@@ -517,10 +517,11 @@ select:not([multiple])[size="1"] {
     linear-gradient(135deg, transparent 42%, #403c35 42%, #403c35 58%, transparent 58%);
   background-repeat: no-repeat;
   background-position:
-    right 18px center,
-    right 12px center;
+    right 22px center,
+    right 16px center;
   background-size: 6px 6px;
-  padding-right: 36px;
+  padding-right: 40px;
+  text-overflow: ellipsis;
 }
 @media (forced-colors: active) {
   select:not([multiple]):not([size]),
