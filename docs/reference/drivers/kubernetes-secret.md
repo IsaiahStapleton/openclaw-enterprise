@@ -9,9 +9,13 @@ Configuration `secretBindings` entry for gateway-only credentials.
 The [SecretDriver base contract](secret.md) defines the shared interface, IAM, and
 lifecycle. This page owns Kubernetes setup and operator procedures.
 
-This driver is storage and env delivery only. It does not issue credentials,
-share Secrets across Namespaces, keep value history, restart workloads after an
-update, roll values back, or broker per-access secret reads. Native OpenClaw
+The Driver stores values for environment delivery and transient server-side
+hosted plugin discovery. Hosted existing-Agent discovery uses its bound
+`codex_pat` Secret; Create Agent discovery can use a selected Secret. Curated
+discovery needs no Secret. Values never enter Console
+responses. The Driver does not issue credentials, share Secrets across Namespaces,
+keep value history, restart workloads after an update, roll values back, or
+broker per-access Secret reads. Native OpenClaw
 `SecretRef` handling for `env`, `file`, and `exec` configuration remains the
 gateway's responsibility.
 
@@ -20,7 +24,7 @@ gateway's responsibility.
 - The bundled Kubernetes Compute Driver must select or create the backing
   control-plane Kubernetes namespace for the OpenClaw Namespace.
 - The OpenClaw Namespace must be `ready` before Secret create, update, or
-  projection validation can succeed.
+  projection validation or server-side credential use can succeed.
 - The controller API needs tenant-local Kubernetes Secret `get`, `create`,
   `update`, `patch`, and `delete` permission in each tenant control-plane namespace.
   The trusted worker reads admitted sources and manages selected runtime projections
@@ -31,6 +35,7 @@ gateway's responsibility.
   also requires the deploying actor and the consuming Agent's service principal
   to have `operate` on every bound Secret; see
   [binding and deployment requirements](#bind-a-secret-to-gateway-environment).
+  Plugin discovery requires Agent `create` and exact Secret `operate` by the caller.
 - Secret values must be nonempty UTF-8 strings without NUL bytes, at most
   65,536 UTF-8 bytes, and fit the OCC request-body limit.
 

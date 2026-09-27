@@ -65,10 +65,13 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
   requires `installation:administer`.
 - [Provisioning Agent runtime credentials](../api.md#post-namespacesnamespaceidagentsagentidruntimecredentials)
   requires both `agent:operate` and `agent:read`.
+- A first [Agent deployment](../agents/deployment.md#revisions-and-deployment)
+  also requires exact-Agent `read` and `operate` when the selected Compute Driver
+  must create missing generated transport credentials.
 - [Namespace IAM operations](../api.md#iam) require `installation:administer`
   and `namespace:read`. [Creating an AccessBinding](../api.md#post-namespacesnamespaceidiamaccessbindings)
-  also requires `read` on its exact target. [Listing Providers](../api.md#get-providers)
-  uses `installation:administer`; Provider and IAM policy objects have no
+  also requires `read` on its exact target. [Listing Backends](../api.md#get-backends)
+  uses `installation:administer`; Backend and IAM policy objects have no
   separate permission resource kinds.
 
 The [Namespace policy API](../authorization.md#manage-namespace-policy) accepts

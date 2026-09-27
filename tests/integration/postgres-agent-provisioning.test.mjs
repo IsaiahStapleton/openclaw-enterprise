@@ -11,14 +11,14 @@ import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
-import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
+import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/backends/repository-credentials/control-client.ts";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { authenticatedHeaders, signInToControllerApp } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
-import { waitFor } from "../helpers/postgres-provider-state.mjs";
+import { waitFor } from "../helpers/postgres-backend-state.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "postgres-agent-provisioning-v2@example.test";
@@ -127,6 +127,7 @@ function createRuntimeComputeDriver(options = {}) {
   return {
     ...base,
     agentProvisioning: { executionModes: ["dedicated"] },
+    requiresAgentRuntimeCredentials: true,
     calls,
     validateAgentProvisioning(input) {
       if (input.executionMode !== "dedicated") {
@@ -204,7 +205,7 @@ function installationDrivers({ computeDriver, configurationDriver, secretDriver,
     installation: {
       occ: { cluster: "postgres-agent-provisioning" },
       logging: {},
-      provider:
+      backend:
         repoDriver === undefined
           ? []
           : [
@@ -553,7 +554,7 @@ test(
       },
       {
         version: 1,
-        providerId: "provisioning-repositories",
+        backendId: "provisioning-repositories",
         providerInstanceId: "provisioning-github",
         appId: "123",
         githubInstallationId: "456",
@@ -1076,14 +1077,18 @@ test(
       return { namespace, admitted, failed, pendingEffect: pending.rows[0].pending_effect };
     }
 
-    function failingTransportDriver() {
+    function failingTransportDriver(reportStoredCredentials = () => false) {
       const computeDriver = createRuntimeComputeDriver();
       const provisionRuntimeCredentials = computeDriver.provisionAgentRuntimeCredentials;
+      const getRuntimeCredentialStatus = computeDriver.getAgentRuntimeCredentialStatus;
       computeDriver.provisionAgentRuntimeCredentials = async (...args) => {
         await provisionRuntimeCredentials(...args);
         throw new Error("synthetic pre-handoff transport failure");
       };
-      computeDriver.getAgentRuntimeCredentialStatus = async () => ({ transportConfigured: false });
+      computeDriver.getAgentRuntimeCredentialStatus = async (...args) =>
+        reportStoredCredentials()
+          ? getRuntimeCredentialStatus(...args)
+          : { transportConfigured: false };
       return computeDriver;
     }
 
@@ -1105,7 +1110,10 @@ test(
       return settled;
     }
 
-    const stopFixture = await createFixture(context, { computeDriver: failingTransportDriver() });
+    let reportStoredCredentials = false;
+    const stopFixture = await createFixture(context, {
+      computeDriver: failingTransportDriver(() => reportStoredCredentials),
+    });
     const stopTarget = await createFailedPreHandoffAgent(stopFixture);
     const stopped = await stopFixture.request(
       "POST",
@@ -1122,6 +1130,7 @@ test(
     assert.equal(stoppedProvisioning.data.error?.code, "PROVISIONING_CANCELLED");
 
     await settleLateTransport(stopFixture, stopTarget);
+    reportStoredCredentials = true;
     const deployed = await stopFixture.request(
       "POST",
       `/namespaces/${stopTarget.namespace.id}/agents/${stopTarget.failed.agentId}/deploy`,

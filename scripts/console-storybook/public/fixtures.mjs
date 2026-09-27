@@ -1,7 +1,14 @@
 import standardCodexPreset from "/console/standard-codex-preset.mjs";
+import standardOpenclawPreset from "/console/standard-openclaw-preset.mjs";
+import devdayPreset from "/console/devday-preset.mjs";
+import devdayPartnersPreset from "/console/devday-partners-preset.mjs";
+import devdayQaPreset from "/console/devday-qa-preset.mjs";
+import devdayOncallPreset from "/console/devday-oncall-preset.mjs";
 
 const createdAt = "2026-09-01T12:00:00.000Z";
 const namespaceId = "ns_00000000-0000-4000-8000-000000000001";
+const currentRevisionId = "rev_00000000-0000-4000-8000-000000000006";
+const candidateRevisionId = "rev_00000000-0000-4000-8000-000000000007";
 const secretRef = (id) => ({ kind: "secret", namespaceId, id });
 const auth = { method: "api_key", source: secretRef("sec_demo_model") };
 
@@ -20,13 +27,17 @@ function slackChannels(scenario) {
 function configurationValues(scenario) {
   const values = {
     gateway: { mode: "local" },
-    agents: { defaults: { model: "codex/gpt-6-astra" } },
+    agents: { defaults: { model: "codex/gpt-4.1" } },
     channels: {},
   };
   if (scenario.slack) {
     values.channels.slack = {
       enabled: true,
       mode: scenario.slackMode ?? "socket",
+      ...(scenario.slackReplyToMode === undefined
+        ? {}
+        : { replyToMode: scenario.slackReplyToMode }),
+      ...(scenario.slackEnterpriseOrgInstall ? { enterpriseOrgInstall: true } : {}),
       dmPolicy: scenario.slackPolicy ?? "pairing",
       groupPolicy: scenario.slackPolicy === "open" ? "open" : "allowlist",
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
@@ -58,11 +69,20 @@ export function installFixture(scenario, evidence) {
   const roles = [];
   const bindings = [];
   const deleted = new Set();
-  const session = { user: { name: "Demo Operator", email: "operator@example.com" } };
+  const session = {
+    authenticated: true,
+    sessionKey: "storybook-session",
+    user: { id: "storybook-operator", name: "Demo Operator", email: "operator@example.com" },
+  };
   const namespaces = scenario.emptyNamespaces
     ? []
     : [
-        { id: namespaceId, name: "Engineering", status: "ready", createdAt },
+        {
+          id: namespaceId,
+          name: scenario.namespaceName ?? "Engineering",
+          status: "ready",
+          createdAt,
+        },
         {
           id: "ns_00000000-0000-4000-8000-000000000002",
           name: "Research",
@@ -70,15 +90,17 @@ export function installFixture(scenario, evidence) {
           createdAt,
         },
       ];
-  const providers = scenario.emptyProviders
+  const backends = scenario.emptyBackends
     ? []
     : [{ id: "chatgpt-demo", name: "ChatGPT", type: "chatgpt" }];
   const secretMetadata = (id, name) => ({ id, namespaceId, name, ref: secretRef(id) });
   for (const secret of [
     secretMetadata("sec_demo_model", "Demo model API key (simulated)"),
+    secretMetadata("sec_demo_service_account", "Demo Service Accounts token (simulated)"),
     secretMetadata("sec_demo_slack_app_token", "Slack app token (simulated)"),
     secretMetadata("sec_demo_slack_bot_token", "Slack bot token (simulated)"),
     secretMetadata("sec_demo_slack_backup_token", "Slack backup token (simulated)"),
+    ...(scenario.extraSecrets ?? []).map((secret) => secretMetadata(secret.id, secret.name)),
   ]) {
     secrets.set(secret.id, secret);
   }
@@ -86,7 +108,7 @@ export function installFixture(scenario, evidence) {
     {
       id: "sa_demo",
       name: "Research service",
-      providerId: "chatgpt-demo",
+      backendId: "chatgpt-demo",
       status: "active",
       createdAt,
     },
@@ -100,6 +122,10 @@ export function installFixture(scenario, evidence) {
     values: configurationValues(scenario),
     secretBindings: {},
   };
+  if (scenario.candidateDeploymentStatus) {
+    config.generation = 2;
+    config.values.agents.defaults.model = "codex/gpt-5.1";
+  }
   if (scenario.slack && scenario.slackBindings !== false) {
     const keys =
       scenario.slackBindings === "app"
@@ -120,19 +146,31 @@ export function installFixture(scenario, evidence) {
         ? { method: "runtime" }
         : scenario.auth === "service"
           ? { method: "chatgpt_service_account", serviceAccountId: "sa_demo" }
-          : auth;
+          : scenario.auth === "codex_pat"
+            ? { method: "codex_pat", source: secretRef("sec_demo_service_account") }
+            : auth;
+  let selectedRevisionId = null;
+  if (scenario.candidateDeploymentStatus) {
+    selectedRevisionId =
+      scenario.candidateDeploymentStatus === "succeeded" || scenario.candidateSelected
+        ? candidateRevisionId
+        : currentRevisionId;
+  } else if (scenario.deployed) {
+    selectedRevisionId = "rev_00000000-0000-4000-8000-000000000001";
+  }
   const agent = {
     id: "agt_00000000-0000-4000-8000-000000000001",
     namespaceId,
-    name: "Research assistant",
+    name: scenario.agentName ?? "Research assistant",
     status: scenario.deleting ? "deleting" : "active",
     desiredRuntimeState: scenario.stopped ? "stopped" : scenario.deployed ? "running" : "stopped",
     configurationId: config.id,
     executionMode: "dedicated",
     harnessAuth: selectedAuth,
+    ...(scenario.agentPlugins ? { plugins: structuredClone(scenario.agentPlugins) } : {}),
     servicePrincipalId: "identity_demo_agent",
     createdAt,
-    activeRevisionId: scenario.deployed ? "rev_00000000-0000-4000-8000-000000000001" : null,
+    activeRevisionId: selectedRevisionId,
     ...(scenario.repositoryBindings
       ? { repositoryBindings: structuredClone(scenario.repositoryBindings) }
       : {}),
@@ -146,13 +184,22 @@ export function installFixture(scenario, evidence) {
       namespaceId,
       agentId: owner.id,
       revision,
-      providerId: owner.providerId ?? null,
+      backendId: owner.backendId ?? null,
       configurationId: configuration.id,
       configurationKind: configuration.kind,
       configurationGeneration: configuration.generation,
       createdAt,
       configuration: structuredClone(configuration.values),
+      secretBindings: structuredClone(configuration.secretBindings),
       harnessAuth: structuredClone(owner.harnessAuth),
+      ...(owner.plugins
+        ? {
+            plugins: {
+              driver: structuredClone(scenario.pluginCapabilities.driver),
+              plugins: structuredClone(owner.plugins),
+            },
+          }
+        : {}),
       harness: { id: "codex", version: "demo", mode: owner.executionMode },
       compute: { id: "kubernetes-demo", implementation: "kubernetes" },
       servicePrincipalId: owner.servicePrincipalId,
@@ -163,7 +210,7 @@ export function installFixture(scenario, evidence) {
               deadlineWallMs: Date.parse(createdAt) + 3600000,
               bindings: owner.repositoryBindings.map((binding) => ({
                 ...binding,
-                providerId: "github-demo",
+                backendId: "github-demo",
                 grant: {
                   providerInstanceId: "github-demo",
                   repositoryId: `demo-${binding.repositoryRef}`,
@@ -176,30 +223,57 @@ export function installFixture(scenario, evidence) {
     };
   }
   if (scenario.deployed) {
-    revisions.set(
-      "rev_00000000-0000-4000-8000-000000000001",
-      snapshot(agent, "rev_00000000-0000-4000-8000-000000000001", 1),
-    );
-    deployments.set("rev_00000000-0000-4000-8000-000000000001", {
-      deploymentId: "dep_demo",
-      revisionId: "rev_00000000-0000-4000-8000-000000000001",
-      status: scenario.deploymentStatus ?? "succeeded",
-      error:
-        scenario.deploymentStatus === "failed"
-          ? {
-              code: "RUNTIME_NOT_READY",
-              message: "The Harness did not become ready before the startup deadline.",
-              data: {
-                runtimeFailure: {
-                  component: "harness",
-                  check: "readiness",
-                  code: "TIMEOUT",
-                  checkedAt: createdAt,
-                },
-              },
-            }
-          : null,
+    const revisionId = scenario.candidateDeploymentStatus
+      ? currentRevisionId
+      : "rev_00000000-0000-4000-8000-000000000001";
+    const currentRevision = snapshot(agent, revisionId, scenario.candidateDeploymentStatus ? 6 : 1);
+    if (scenario.candidateDeploymentStatus) {
+      currentRevision.createdAt = "2026-09-25T12:00:00.000Z";
+      currentRevision.configurationGeneration = 1;
+      currentRevision.configuration.agents.defaults.model = "codex/gpt-4.1";
+    }
+    revisions.set(revisionId, currentRevision);
+    deployments.set(revisionId, {
+      deploymentId: revisionId,
+      namespaceId,
+      agentId: agent.id,
+      status: "succeeded",
+      error: null,
+      warnings: [],
     });
+    if (scenario.candidateDeploymentStatus) {
+      const candidate = snapshot(agent, candidateRevisionId, 7);
+      candidate.createdAt = "2026-09-26T22:52:53.000Z";
+      revisions.set(candidate.id, candidate);
+      deployments.set(candidate.id, {
+        deploymentId: candidate.id,
+        namespaceId,
+        agentId: agent.id,
+        status: scenario.candidateDeploymentStatus,
+        error:
+          scenario.candidateDeploymentStatus === "failed"
+            ? scenario.candidateSelected
+              ? {
+                  code: "REVISION_FINALIZATION_INCOMPLETE",
+                  message: "Deployment reconciliation failed.",
+                }
+              : {
+                  code: "CONVERGENCE_DEADLINE_EXCEEDED",
+                  message: "Deployment convergence deadline exceeded.",
+                  data: {
+                    timeoutMs: 60000,
+                    runtimeFailure: {
+                      component: "harness",
+                      check: "readiness",
+                      code: "TIMEOUT",
+                      checkedAt: candidate.createdAt,
+                    },
+                  },
+                }
+            : null,
+        warnings: scenario.candidateDeploymentWarnings ?? [],
+      });
+    }
   }
   if (scenario.emptyAgents) {
     agents.clear();
@@ -212,7 +286,7 @@ export function installFixture(scenario, evidence) {
     });
   }
   const preset = {
-    id: "pre_00000000-0000-4000-8000-000000000001",
+    id: scenario.devdayPreset ? "pre_devday_codex" : "pre_00000000-0000-4000-8000-000000000001",
     namespaceId,
     name: "Research assistant",
     template: {
@@ -220,7 +294,7 @@ export function installFixture(scenario, evidence) {
         name: { type: "string", description: "Name for this Agent." },
         model: {
           type: "string",
-          default: "codex/gpt-6-astra",
+          default: "codex/gpt-4.1",
           description: "Model reference copied into the draft.",
         },
       },
@@ -234,8 +308,36 @@ export function installFixture(scenario, evidence) {
       },
     },
   };
-  if (scenario.standardCodexPreset) {
-    Object.assign(preset, structuredClone(standardCodexPreset));
+  if (scenario.standardCodexPreset || scenario.standardOpenclawPreset || scenario.devdayPreset) {
+    Object.assign(
+      preset,
+      structuredClone(
+        scenario.devdayPreset
+          ? devdayPreset
+          : scenario.standardOpenclawPreset
+            ? standardOpenclawPreset
+            : standardCodexPreset,
+      ),
+    );
+  }
+  if (scenario.presetWorkspaceFiles) {
+    preset.template.agent.initialWorkspaceFiles = structuredClone(scenario.presetWorkspaceFiles);
+  }
+  const presets = [preset];
+  if (scenario.devdayPreset) {
+    for (const [name, definition] of [
+      ["standard-codex", standardCodexPreset],
+      ["standard-openclaw", standardOpenclawPreset],
+      ["devday-partners", devdayPartnersPreset],
+      ["devday-qa", devdayQaPreset],
+      ["devday-oncall", devdayOncallPreset],
+    ]) {
+      presets.push({
+        ...structuredClone(definition),
+        id: `pre_${name.replaceAll("-", "_")}`,
+        namespaceId,
+      });
+    }
   }
   const response = (data, status = 200, errorCode) =>
     new Response(
@@ -263,7 +365,29 @@ export function installFixture(scenario, evidence) {
       ) {
         continue;
       }
+      if (rule.skip > 0) {
+        rule.skip -= 1;
+        continue;
+      }
       rule.used = rule.once === true;
+      if (rule.delayMs) {
+        await new Promise((resolve, reject) => {
+          const finish = () => {
+            options.signal?.removeEventListener("abort", abort);
+            resolve();
+          };
+          const timer = setTimeout(finish, rule.delayMs);
+          const abort = () => {
+            clearTimeout(timer);
+            reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+          };
+          if (options.signal?.aborted) {
+            abort();
+          } else {
+            options.signal?.addEventListener("abort", abort, { once: true });
+          }
+        });
+      }
       if (rule.hold) {
         return new Promise((_resolve, reject) => {
           const abort = () =>
@@ -275,7 +399,9 @@ export function installFixture(scenario, evidence) {
           }
         });
       }
-      return error(rule.status, rule.code);
+      if (rule.status) {
+        return error(rule.status, rule.code);
+      }
     }
     const body = options.body ? JSON.parse(options.body) : {};
     if (path === "/api/auth/session") {
@@ -294,16 +420,22 @@ export function installFixture(scenario, evidence) {
         id: "ins_00000000-0000-4000-8000-000000000001",
         name: "Demo installation",
         createdAt,
-        ...(scenario.unsupportedProvisioning === true
-          ? {}
-          : { capabilities: { agentProvisioning: { executionModes: ["dedicated"] } } }),
+        capabilities: {
+          ...(scenario.unsupportedProvisioning === true
+            ? {}
+            : { agentProvisioning: { executionModes: ["dedicated"] } }),
+          ...(scenario.pluginCapabilities ? { pluginPolicies: scenario.pluginCapabilities } : {}),
+          ...(scenario.pluginDiscoveryCredential
+            ? { pluginDiscovery: { credential: scenario.pluginDiscoveryCredential } }
+            : {}),
+        },
       });
     }
     if (path === "/namespaces" && method === "GET") {
       return response(namespaces);
     }
-    if (path === "/providers" && method === "GET") {
-      return response(providers);
+    if (path === "/backends" && method === "GET") {
+      return response(backends);
     }
     const match = path.match(/^\/namespaces\/([^/]+)\/(.*)$/);
     if (match) {
@@ -331,10 +463,19 @@ export function installFixture(scenario, evidence) {
         );
       }
       if (resource === "presets" && method === "GET") {
-        return response(scenario.emptyPresets ? [] : [preset]);
+        return response(scenario.emptyPresets ? [] : presets);
       }
-      if (resource === "presets/pre_00000000-0000-4000-8000-000000000001" && method === "GET") {
-        return response(preset);
+      if (resource.startsWith("presets/") && method === "GET") {
+        const selectedPreset = presets.find((item) => item.id === resource.split("/")[1]);
+        return selectedPreset ? response(selectedPreset) : error(404);
+      }
+      if (resource === "agents/plugins" && method === "POST" && scenario.pluginDiscovery) {
+        const page = scenario.pluginDiscovery.pages[body.cursor ?? "initial"];
+        return page ? response(page) : error(400, "PLUGIN_DISCOVERY_INVALID_RESPONSE");
+      }
+      if (resource === "agents/plugins/details" && method === "POST" && scenario.pluginDiscovery) {
+        const entry = scenario.pluginDiscovery.details[body.pluginId];
+        return entry ? response(entry) : error(503, "PLUGIN_DISCOVERY_UNAVAILABLE");
       }
       if (resource === "configurations" && method === "POST") {
         const saved = {
@@ -422,11 +563,13 @@ export function installFixture(scenario, evidence) {
         const revision = snapshot(saved, nextId("rev"), 1);
         revisions.set(revision.id, revision);
         deployments.set(revision.id, {
-          deploymentId: `dep_${revision.id}`,
-          revisionId: revision.id,
+          deploymentId: revision.id,
+          namespaceId,
+          agentId: saved.id,
           status: "queued",
           reads: 0,
           error: null,
+          warnings: [],
         });
         provisioning.set(saved.id, {
           requestId,
@@ -516,6 +659,20 @@ export function installFixture(scenario, evidence) {
         if (!saved) {
           return error(404);
         }
+        if (suffix === "/plugins/capabilities" && method === "GET" && scenario.pluginCapabilities) {
+          return response({
+            ...scenario.pluginCapabilities,
+            discoveryCredential: scenario.pluginDiscoveryCredential ?? "required",
+          });
+        }
+        if (suffix === "/plugins" && method === "POST" && scenario.pluginDiscovery) {
+          const page = scenario.pluginDiscovery.pages[body.cursor ?? "initial"];
+          return page ? response(page) : error(400, "PLUGIN_DISCOVERY_INVALID_RESPONSE");
+        }
+        if (suffix === "/plugins/details" && method === "POST" && scenario.pluginDiscovery) {
+          const entry = scenario.pluginDiscovery.details[body.pluginId];
+          return entry ? response(entry) : error(503, "PLUGIN_DISCOVERY_UNAVAILABLE");
+        }
         if (suffix === "") {
           if (method === "GET") {
             if (deleted.has(id)) {
@@ -542,8 +699,13 @@ export function installFixture(scenario, evidence) {
         if (suffix === "/native-admin" && method === "GET") {
           return response({
             status: scenario.nativeAdmin ?? "disabled",
-            url: "/storybook-fixtures/native-admin.html",
+            url:
+              (id === agent.id ? scenario.nativeAdminUrl : undefined) ??
+              "/storybook-fixtures/native-admin.html",
           });
+        }
+        if (suffix === "/runtime-images" && method === "GET") {
+          return response(scenario.runtimeImages ?? { status: "unsupported", images: [] });
         }
         if (suffix === "/runtime-credentials") {
           if (method === "POST") {
@@ -554,11 +716,13 @@ export function installFixture(scenario, evidence) {
           }
         }
         if (suffix === "/deploy" && method === "POST") {
-          const next = snapshot(
-            saved,
-            nextId("rev"),
-            [...revisions.values()].filter((item) => item.agentId === id).length + 1,
+          const lastRevision = Math.max(
+            0,
+            ...[...revisions.values()]
+              .filter((item) => item.agentId === id)
+              .map((item) => item.revision),
           );
+          const next = snapshot(saved, nextId("rev"), lastRevision + 1);
           revisions.set(next.id, next);
           const stagedFiles = stagedWorkspaceFiles.get(id);
           for (const [filename, content] of Object.entries(stagedFiles ?? {})) {
@@ -567,11 +731,13 @@ export function installFixture(scenario, evidence) {
           stagedWorkspaceFiles.delete(id);
           saved.desiredRuntimeState = "running";
           deployments.set(next.id, {
-            deploymentId: `dep_${next.id}`,
-            revisionId: next.id,
+            deploymentId: next.id,
+            namespaceId,
+            agentId: id,
             status: "queued",
             reads: 0,
             error: null,
+            warnings: [],
           });
           return response(next, 202);
         }
@@ -583,6 +749,64 @@ export function installFixture(scenario, evidence) {
             ? response(revisions.get(suffix.split("/")[2]))
             : error(404);
         }
+        if (
+          suffix.startsWith("/deployments/") &&
+          suffix.endsWith("/diagnostics") &&
+          method === "POST"
+        ) {
+          const revisionId = suffix.split("/")[2];
+          if (!revisions.has(revisionId)) {
+            return error(404);
+          }
+          return response({
+            revisionId,
+            observedAt: "2026-09-27T12:00:00.000Z",
+            checks:
+              scenario.diagnosticsState === "unknown"
+                ? [
+                    {
+                      component: "gateway",
+                      check: "configuration",
+                      state: "succeeded",
+                      checkedAt: "2026-09-27T11:59:59.000Z",
+                    },
+                    {
+                      component: "gateway",
+                      check: "authentication",
+                      state: "unknown",
+                      checkedAt: "2026-09-27T11:59:59.000Z",
+                      code: "PROBE_FAILED",
+                    },
+                    {
+                      component: "gateway",
+                      check: "connectivity",
+                      state: "unknown",
+                      checkedAt: "2026-09-27T11:59:59.000Z",
+                      code: "INCOMPATIBLE_RESPONSE",
+                    },
+                  ]
+                : [
+                    {
+                      component: "gateway",
+                      check: "configuration",
+                      state: "succeeded",
+                      checkedAt: "2026-09-27T11:59:59.000Z",
+                    },
+                    {
+                      component: "gateway",
+                      check: "authentication",
+                      state: "succeeded",
+                      checkedAt: "2026-09-27T11:59:59.000Z",
+                    },
+                    {
+                      component: "gateway",
+                      check: "connectivity",
+                      state: "succeeded",
+                      checkedAt: "2026-09-27T11:59:59.000Z",
+                    },
+                  ],
+          });
+        }
         if (suffix.startsWith("/deployments/") && method === "GET") {
           const deployment = deployments.get(suffix.split("/")[2]);
           if (!deployment) {
@@ -591,7 +815,7 @@ export function installFixture(scenario, evidence) {
           if (deployment.reads !== undefined && ++deployment.reads > 1) {
             deployment.status = "succeeded";
             saved.desiredRuntimeState = "running";
-            saved.activeRevisionId = deployment.revisionId;
+            saved.activeRevisionId = deployment.deploymentId;
           }
           return response(deployment);
         }
@@ -636,9 +860,16 @@ export function installFixture(scenario, evidence) {
           return response(undefined, 403, "FORBIDDEN");
         }
         if (method === "GET") {
-          return response([...secrets.values()].map((secret) => structuredClone(secret)));
+          return response(
+            scenario.emptySecrets
+              ? []
+              : [...secrets.values()].map((secret) => structuredClone(secret)),
+          );
         }
         if (method === "POST") {
+          if ([...secrets.values()].some((secret) => secret.name === body.name?.trim())) {
+            return response(undefined, 409, "RESOURCE_CONFLICT");
+          }
           const id = nextId("sec");
           const secret = secretMetadata(id, body.name ?? "Demo Secret (simulated)");
           secrets.set(secret.id, secret);

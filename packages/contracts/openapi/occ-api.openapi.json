@@ -30,15 +30,20 @@
         "additionalProperties": false,
         "minProperties": 1,
         "properties": {
-          "approvalMode": {
+          "approval": {
             "anyOf": [
-              { "const": "always", "type": "string" },
-              { "const": "never", "type": "string" },
+              { "const": "native", "type": "string" },
               { "const": "prompt", "type": "string" },
-              { "const": "auto", "type": "string" }
+              { "const": "approve", "type": "string" }
             ]
           },
-          "enabled": { "type": "boolean" }
+          "enabled": { "type": "boolean" },
+          "reviewer": {
+            "anyOf": [
+              { "const": "human", "type": "string" },
+              { "const": "auto", "type": "string" }
+            ]
+          }
         },
         "title": "PluginToolPolicy",
         "type": "object"
@@ -46,45 +51,17 @@
       "def-3": {
         "additionalProperties": false,
         "properties": {
-          "approvalMode": {
-            "anyOf": [
-              { "const": "always", "type": "string" },
-              { "const": "never", "type": "string" },
-              { "const": "prompt", "type": "string" },
-              { "const": "auto", "type": "string" }
-            ]
-          },
-          "approvalsReviewer": {
-            "anyOf": [
-              { "const": "user", "type": "string" },
-              { "const": "auto_review", "type": "string" }
-            ]
-          },
-          "destructiveActions": {
-            "anyOf": [
-              { "const": "always", "type": "string" },
-              { "const": "never", "type": "string" },
-              { "const": "prompt", "type": "string" },
-              { "const": "auto", "type": "string" }
-            ]
-          },
+          "driverPolicy": { "additionalProperties": {}, "type": "object" },
           "enabled": { "type": "boolean" },
+          "toolDefaults": { "$ref": "#/components/schemas/def-2" },
           "tools": {
             "additionalProperties": { "$ref": "#/components/schemas/def-2" },
-            "description": "Plugin tool policy map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$.",
-            "propertyNames": { "pattern": "^[A-Za-z0-9._~:@-]{1,253}$" },
+            "description": "Tool overrides keyed by exact opaque tool IDs from the selected Plugin Driver catalog.",
+            "propertyNames": { "pattern": "^[^\\u0000-\\u0020\\u007f]{1,1024}$" },
             "type": "object"
-          },
-          "writes": {
-            "anyOf": [
-              { "const": "always", "type": "string" },
-              { "const": "never", "type": "string" },
-              { "const": "prompt", "type": "string" },
-              { "const": "auto", "type": "string" }
-            ]
           }
         },
-        "required": ["enabled", "approvalMode"],
+        "required": ["enabled"],
         "title": "PluginDesiredSelection",
         "type": "object"
       },
@@ -127,7 +104,11 @@
                   { "const": "MODEL_DISCOVERY_CREDENTIALS_REJECTED", "type": "string" },
                   { "const": "MODEL_DISCOVERY_RATE_LIMITED", "type": "string" },
                   { "const": "MODEL_DISCOVERY_UNAVAILABLE", "type": "string" },
-                  { "const": "MODEL_DISCOVERY_INVALID_RESPONSE", "type": "string" }
+                  { "const": "MODEL_DISCOVERY_INVALID_RESPONSE", "type": "string" },
+                  { "const": "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED", "type": "string" },
+                  { "const": "PLUGIN_DISCOVERY_RATE_LIMITED", "type": "string" },
+                  { "const": "PLUGIN_DISCOVERY_UNAVAILABLE", "type": "string" },
+                  { "const": "PLUGIN_DISCOVERY_INVALID_RESPONSE", "type": "string" }
                 ]
               },
               "details": {
@@ -183,6 +164,87 @@
         "properties": {
           "data": {
             "additionalProperties": false,
+            "properties": {
+              "checks": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "check": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                      "type": "string"
+                    },
+                    "checkedAt": {
+                      "anyOf": [
+                        {
+                          "format": "date-time",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                          "type": "string"
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "code": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                      "type": "string"
+                    },
+                    "component": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                      "type": "string"
+                    },
+                    "state": {
+                      "anyOf": [
+                        { "const": "succeeded", "type": "string" },
+                        { "const": "failed", "type": "string" },
+                        { "const": "unknown", "type": "string" }
+                      ]
+                    }
+                  },
+                  "required": ["component", "check", "state", "checkedAt"],
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "observedAt": {
+                "format": "date-time",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                "type": "string"
+              },
+              "revisionId": {
+                "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["revisionId", "observedAt", "checks"],
+            "type": "object"
+          },
+          "meta": {
+            "additionalProperties": false,
+            "properties": {
+              "requestId": {
+                "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["requestId"],
+            "type": "object"
+          }
+        },
+        "required": ["data", "meta"],
+        "title": "AgentDeploymentDiagnosticsResponse",
+        "type": "object"
+      },
+      "def-7": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
             "properties": { "transportConfigured": { "type": "boolean" } },
             "required": ["transportConfigured"],
             "type": "object"
@@ -203,7 +265,7 @@
         "title": "AgentRuntimeCredentialResponse",
         "type": "object"
       },
-      "def-7": {
+      "def-8": {
         "additionalProperties": false,
         "properties": {
           "data": {
@@ -971,7 +1033,7 @@
     },
     "/api/auth/session": {
       "get": {
-        "description": "Returns only authenticated status and public account identity, or null without a valid session; session tokens and credentials are never returned.",
+        "description": "Returns authenticated status, public account identity, and a noncredential sessionKey that stays stable across reads and changes for a new session, or null without a valid session; session tokens and credentials are never returned.",
         "operationId": "getAuthSession",
         "responses": {
           "200": {
@@ -988,6 +1050,7 @@
                           "additionalProperties": false,
                           "properties": {
                             "authenticated": { "const": true, "type": "boolean" },
+                            "sessionKey": { "type": "string" },
                             "user": {
                               "additionalProperties": false,
                               "properties": {
@@ -999,7 +1062,7 @@
                               "type": "object"
                             }
                           },
-                          "required": ["authenticated", "user"],
+                          "required": ["authenticated", "sessionKey", "user"],
                           "type": "object"
                         }
                       ]
@@ -1261,6 +1324,102 @@
         "tags": ["Authentication"]
       }
     },
+    "/backends": {
+      "get": {
+        "description": "Requires administer permission on the requested Installation.",
+        "operationId": "listBackends",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                            "type": "string"
+                          },
+                          "type": {
+                            "anyOf": [
+                              { "const": "chatgpt", "type": "string" },
+                              { "const": "github", "type": "string" }
+                            ]
+                          }
+                        },
+                        "required": ["id", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List configured Backends (experimental)",
+        "tags": ["Backends"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
+        ]
+      }
+    },
     "/installation": {
       "get": {
         "description": "Requires read permission on the requested Installation.",
@@ -1294,6 +1453,85 @@
                                 }
                               },
                               "required": ["executionModes"],
+                              "type": "object"
+                            },
+                            "pluginDiscovery": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "credential": {
+                                  "anyOf": [
+                                    { "const": "required", "type": "string" },
+                                    { "const": "none", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["credential"],
+                              "type": "object"
+                            },
+                            "pluginPolicies": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "driver": { "$ref": "#/components/schemas/def-1" },
+                                "driverPolicySchema": {
+                                  "additionalProperties": {},
+                                  "type": "object"
+                                },
+                                "toolDefaults": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "approval": {
+                                      "items": {
+                                        "anyOf": [
+                                          { "const": "native", "type": "string" },
+                                          { "const": "prompt", "type": "string" },
+                                          { "const": "approve", "type": "string" }
+                                        ]
+                                      },
+                                      "type": "array"
+                                    },
+                                    "enabled": { "type": "boolean" },
+                                    "reviewer": {
+                                      "items": {
+                                        "anyOf": [
+                                          { "const": "human", "type": "string" },
+                                          { "const": "auto", "type": "string" }
+                                        ]
+                                      },
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": ["enabled", "approval", "reviewer"],
+                                  "type": "object"
+                                },
+                                "tools": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "approval": {
+                                      "items": {
+                                        "anyOf": [
+                                          { "const": "native", "type": "string" },
+                                          { "const": "prompt", "type": "string" },
+                                          { "const": "approve", "type": "string" }
+                                        ]
+                                      },
+                                      "type": "array"
+                                    },
+                                    "enabled": { "type": "boolean" },
+                                    "reviewer": {
+                                      "items": {
+                                        "anyOf": [
+                                          { "const": "human", "type": "string" },
+                                          { "const": "auto", "type": "string" }
+                                        ]
+                                      },
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": ["enabled", "approval", "reviewer"],
+                                  "type": "object"
+                                }
+                              },
+                              "required": ["driver", "toolDefaults", "tools", "driverPolicySchema"],
                               "type": "object"
                             }
                           },
@@ -1435,6 +1673,85 @@
                               },
                               "required": ["executionModes"],
                               "type": "object"
+                            },
+                            "pluginDiscovery": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "credential": {
+                                  "anyOf": [
+                                    { "const": "required", "type": "string" },
+                                    { "const": "none", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["credential"],
+                              "type": "object"
+                            },
+                            "pluginPolicies": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "driver": { "$ref": "#/components/schemas/def-1" },
+                                "driverPolicySchema": {
+                                  "additionalProperties": {},
+                                  "type": "object"
+                                },
+                                "toolDefaults": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "approval": {
+                                      "items": {
+                                        "anyOf": [
+                                          { "const": "native", "type": "string" },
+                                          { "const": "prompt", "type": "string" },
+                                          { "const": "approve", "type": "string" }
+                                        ]
+                                      },
+                                      "type": "array"
+                                    },
+                                    "enabled": { "type": "boolean" },
+                                    "reviewer": {
+                                      "items": {
+                                        "anyOf": [
+                                          { "const": "human", "type": "string" },
+                                          { "const": "auto", "type": "string" }
+                                        ]
+                                      },
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": ["enabled", "approval", "reviewer"],
+                                  "type": "object"
+                                },
+                                "tools": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "approval": {
+                                      "items": {
+                                        "anyOf": [
+                                          { "const": "native", "type": "string" },
+                                          { "const": "prompt", "type": "string" },
+                                          { "const": "approve", "type": "string" }
+                                        ]
+                                      },
+                                      "type": "array"
+                                    },
+                                    "enabled": { "type": "boolean" },
+                                    "reviewer": {
+                                      "items": {
+                                        "anyOf": [
+                                          { "const": "human", "type": "string" },
+                                          { "const": "auto", "type": "string" }
+                                        ]
+                                      },
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": ["enabled", "approval", "reviewer"],
+                                  "type": "object"
+                                }
+                              },
+                              "required": ["driver", "toolDefaults", "tools", "driverPolicySchema"],
+                              "type": "object"
                             }
                           },
                           "type": "object"
@@ -1528,6 +1845,156 @@
         },
         "security": [{ "sessionCookie": [] }],
         "summary": "Bootstrap the singleton Installation",
+        "tags": ["Installation"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
+        ]
+      }
+    },
+    "/installation/deployment-inventory": {
+      "get": {
+        "description": "Requires administer permission on the requested Installation.",
+        "operationId": "getInstallationDeploymentInventory",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "installationId": {
+                          "pattern": "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "namespaces": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "agents": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "activeRevisionId": {
+                                      "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    },
+                                    "deploymentInProgress": { "type": "boolean" },
+                                    "desiredRuntimeState": {
+                                      "anyOf": [
+                                        { "const": "running", "type": "string" },
+                                        { "const": "stopped", "type": "string" }
+                                      ]
+                                    },
+                                    "executionMode": {
+                                      "anyOf": [
+                                        { "const": "embedded", "type": "string" },
+                                        { "const": "dedicated", "type": "string" }
+                                      ]
+                                    },
+                                    "id": {
+                                      "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        { "const": "active", "type": "string" },
+                                        { "const": "deleting", "type": "string" }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "status",
+                                    "desiredRuntimeState",
+                                    "executionMode",
+                                    "deploymentInProgress"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              },
+                              "id": {
+                                "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              },
+                              "status": {
+                                "anyOf": [
+                                  { "const": "provisioning", "type": "string" },
+                                  { "const": "ready", "type": "string" },
+                                  { "const": "failed", "type": "string" },
+                                  { "const": "deleting", "type": "string" }
+                                ]
+                              }
+                            },
+                            "required": ["id", "status", "agents"],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": ["installationId", "namespaces"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Get the complete authorized Agent deployment inventory",
         "tags": ["Installation"],
         "x-openclaw-permissions": [
           { "action": "administer", "resourceKind": "installation", "scope": "requested" }
@@ -2081,6 +2548,17 @@
                             "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                             "type": "string"
                           },
+                          "backendId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "configurationId": {
                             "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                             "type": "string"
@@ -2199,17 +2677,6 @@
                             "type": "string"
                           },
                           "plugins": { "$ref": "#/components/schemas/def-4" },
-                          "providerId": {
-                            "anyOf": [
-                              {
-                                "maxLength": 200,
-                                "minLength": 1,
-                                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                                "type": "string"
-                              },
-                              { "type": "null" }
-                            ]
-                          },
                           "repositoryBindings": {
                             "items": {
                               "additionalProperties": false,
@@ -2252,7 +2719,7 @@
                           "name",
                           "servicePrincipalId",
                           "configurationId",
-                          "providerId",
+                          "backendId",
                           "harnessAuth",
                           "executionMode",
                           "desiredRuntimeState",
@@ -2346,6 +2813,17 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "backendId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                        "type": "string"
+                      },
+                      { "type": "null" }
+                    ]
+                  },
                   "configurationId": {
                     "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                     "type": "string"
@@ -2466,17 +2944,6 @@
                     "type": "string"
                   },
                   "plugins": { "$ref": "#/components/schemas/def-4" },
-                  "providerId": {
-                    "anyOf": [
-                      {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                        "type": "string"
-                      },
-                      { "type": "null" }
-                    ]
-                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -2523,6 +2990,17 @@
                         "activeRevisionId": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
+                        },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -2642,17 +3120,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -2695,7 +3162,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -2955,6 +3422,496 @@
         ]
       }
     },
+    "/namespaces/{namespaceId}/agents/plugins": {
+      "post": {
+        "description": "Requires create permission for Agent resources in the requested Namespace. Requires operate permission on the exact same-Namespace Secret when a Secret reference is supplied.",
+        "operationId": "discoverAgentPlugins",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accessToken": {
+                        "maxLength": 16384,
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" }
+                    },
+                    "required": ["accessToken"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" },
+                      "secretRef": {
+                        "additionalProperties": false,
+                        "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                        "properties": {
+                          "id": {
+                            "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          },
+                          "kind": { "const": "secret", "type": "string" },
+                          "namespaceId": {
+                            "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "namespaceId", "id"],
+                        "type": "object"
+                      }
+                    },
+                    "required": ["secretRef"],
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "nextCursor": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                        "plugins": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "available": { "type": "boolean" },
+                              "description": { "type": "string" },
+                              "id": { "type": "string" },
+                              "logoUrl": { "type": "string" },
+                              "name": { "type": "string" },
+                              "privacyPolicyUrl": { "type": "string" },
+                              "remoteId": { "type": "string" },
+                              "selectableWithoutTools": { "type": "boolean" },
+                              "termsOfServiceUrl": { "type": "string" },
+                              "tools": {
+                                "anyOf": [
+                                  { "type": "null" },
+                                  {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "available": { "type": "boolean" },
+                                        "description": { "type": "string" },
+                                        "destructive": { "type": "boolean" },
+                                        "id": { "type": "string" },
+                                        "name": { "type": "string" },
+                                        "ownerId": { "type": "string" },
+                                        "unavailableReason": { "type": "string" },
+                                        "writes": { "type": "boolean" }
+                                      },
+                                      "required": ["id", "name", "ownerId"],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  }
+                                ]
+                              },
+                              "unavailableHelp": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "label": { "type": "string" },
+                                  "url": { "type": "string" }
+                                },
+                                "required": ["label", "url"],
+                                "type": "object"
+                              },
+                              "unavailableReason": { "type": "string" },
+                              "websiteUrl": { "type": "string" }
+                            },
+                            "required": ["id", "name", "tools"],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "setup": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "links": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "label": { "type": "string" },
+                                  "url": { "type": "string" }
+                                },
+                                "required": ["label", "url"],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "message": { "type": "string" }
+                          },
+                          "required": ["message", "links"],
+                          "type": "object"
+                        }
+                      },
+                      "required": ["plugins", "nextCursor"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "429": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "501": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List available plugins for Agent creation using the selected Driver",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "create", "resourceKind": "agent", "scope": "namespace" },
+          {
+            "action": "operate",
+            "condition": "selected_secret",
+            "resourceKind": "secret",
+            "scope": "request_body"
+          }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/agents/plugins/details": {
+      "post": {
+        "description": "Requires create permission for Agent resources in the requested Namespace. Requires operate permission on the exact same-Namespace Secret when a Secret reference is supplied.",
+        "operationId": "discoverAgentPluginDetails",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pluginId": { "maxLength": 256, "minLength": 1, "type": "string" }
+                    },
+                    "required": ["pluginId"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accessToken": {
+                        "maxLength": 16384,
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "pluginId": { "maxLength": 256, "minLength": 1, "type": "string" }
+                    },
+                    "required": ["accessToken", "pluginId"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pluginId": { "maxLength": 256, "minLength": 1, "type": "string" },
+                      "secretRef": {
+                        "additionalProperties": false,
+                        "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                        "properties": {
+                          "id": {
+                            "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          },
+                          "kind": { "const": "secret", "type": "string" },
+                          "namespaceId": {
+                            "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "namespaceId", "id"],
+                        "type": "object"
+                      }
+                    },
+                    "required": ["secretRef", "pluginId"],
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "available": { "type": "boolean" },
+                        "description": { "type": "string" },
+                        "id": { "type": "string" },
+                        "logoUrl": { "type": "string" },
+                        "name": { "type": "string" },
+                        "privacyPolicyUrl": { "type": "string" },
+                        "remoteId": { "type": "string" },
+                        "selectableWithoutTools": { "type": "boolean" },
+                        "termsOfServiceUrl": { "type": "string" },
+                        "tools": {
+                          "anyOf": [
+                            { "type": "null" },
+                            {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "available": { "type": "boolean" },
+                                  "description": { "type": "string" },
+                                  "destructive": { "type": "boolean" },
+                                  "id": { "type": "string" },
+                                  "name": { "type": "string" },
+                                  "ownerId": { "type": "string" },
+                                  "unavailableReason": { "type": "string" },
+                                  "writes": { "type": "boolean" }
+                                },
+                                "required": ["id", "name", "ownerId"],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            }
+                          ]
+                        },
+                        "unavailableHelp": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "label": { "type": "string" },
+                            "url": { "type": "string" }
+                          },
+                          "required": ["label", "url"],
+                          "type": "object"
+                        },
+                        "unavailableReason": { "type": "string" },
+                        "websiteUrl": { "type": "string" }
+                      },
+                      "required": ["id", "name", "tools"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "429": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "501": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Read plugin details using the selected Driver",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "create", "resourceKind": "agent", "scope": "namespace" },
+          {
+            "action": "operate",
+            "condition": "selected_secret",
+            "resourceKind": "secret",
+            "scope": "request_body"
+          }
+        ]
+      }
+    },
     "/namespaces/{namespaceId}/agents/provision": {
       "post": {
         "description": "Requires create permission for Agent resources in the requested Namespace. Requires create permission for Configuration resources in the requested Namespace. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each existing Secret reference supplied in provisioning inputs.",
@@ -2976,6 +3933,17 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "backendId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                        "type": "string"
+                      },
+                      { "type": "null" }
+                    ]
+                  },
                   "configuration": {
                     "additionalProperties": false,
                     "properties": {
@@ -3143,17 +4111,6 @@
                     "type": "string"
                   },
                   "plugins": { "$ref": "#/components/schemas/def-4" },
-                  "providerId": {
-                    "anyOf": [
-                      {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                        "type": "string"
-                      },
-                      { "type": "null" }
-                    ]
-                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -3834,6 +4791,17 @@
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -3952,17 +4920,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -4005,7 +4962,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -4119,6 +5076,17 @@
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -4237,17 +5205,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -4290,7 +5247,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -4390,6 +5347,17 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "backendId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                        "type": "string"
+                      },
+                      { "type": "null" }
+                    ]
+                  },
                   "configurationId": {
                     "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                     "type": "string"
@@ -4478,17 +5446,6 @@
                     ]
                   },
                   "plugins": { "$ref": "#/components/schemas/def-4" },
-                  "providerId": {
-                    "anyOf": [
-                      {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                        "type": "string"
-                      },
-                      { "type": "null" }
-                    ]
-                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -4534,6 +5491,17 @@
                         "activeRevisionId": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
+                        },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -4653,17 +5621,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -4706,7 +5663,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -4811,7 +5768,7 @@
     },
     "/namespaces/{namespaceId}/agents/{agentId}/deploy": {
       "post": {
-        "description": "Requires deploy permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Deployment also requires the owning Agent service principal to have operate permission on each bound Secret.",
+        "description": "Requires deploy permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires operate permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Deployment also requires the owning Agent service principal to have operate permission on each bound Secret.",
         "operationId": "deployAgent",
         "parameters": [
           {
@@ -4846,6 +5803,17 @@
                         "agentId": {
                           "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
+                        },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "compute": {
                           "additionalProperties": false,
@@ -4981,17 +5949,6 @@
                           "required": ["driver", "plugins"],
                           "type": "object"
                         },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryCredentials": {
                           "additionalProperties": false,
                           "properties": {
@@ -5082,7 +6039,7 @@
                         "namespaceId",
                         "agentId",
                         "revision",
-                        "providerId",
+                        "backendId",
                         "configurationId",
                         "configurationKind",
                         "configurationGeneration",
@@ -5161,6 +6118,18 @@
         "x-openclaw-permissions": [
           { "action": "deploy", "resourceKind": "agent", "scope": "requested" },
           { "action": "read", "resourceKind": "configuration", "scope": "requested" },
+          {
+            "action": "read",
+            "condition": "missing_runtime_credentials",
+            "resourceKind": "agent",
+            "scope": "requested"
+          },
+          {
+            "action": "operate",
+            "condition": "missing_runtime_credentials",
+            "resourceKind": "agent",
+            "scope": "requested"
+          },
           {
             "action": "read",
             "condition": "associated_service_account",
@@ -5390,6 +6359,179 @@
         ]
       }
     },
+    "/namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/diagnostics": {
+      "post": {
+        "description": "Requires operate permission on the requested Agent. Requires read permission on the requested Agent. Requires read permission on the requested AgentRevision.",
+        "operationId": "diagnoseAgentDeployment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "checks": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "check": {
+                                "maxLength": 64,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                                "type": "string"
+                              },
+                              "checkedAt": {
+                                "anyOf": [
+                                  {
+                                    "format": "date-time",
+                                    "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                                    "type": "string"
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "code": {
+                                "maxLength": 64,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                                "type": "string"
+                              },
+                              "component": {
+                                "maxLength": 64,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9._~:@-]{1,64}$",
+                                "type": "string"
+                              },
+                              "state": {
+                                "anyOf": [
+                                  { "const": "succeeded", "type": "string" },
+                                  { "const": "failed", "type": "string" },
+                                  { "const": "unknown", "type": "string" }
+                                ]
+                              }
+                            },
+                            "required": ["component", "check", "state", "checkedAt"],
+                            "type": "object"
+                          },
+                          "maxItems": 32,
+                          "type": "array"
+                        },
+                        "observedAt": {
+                          "format": "date-time",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                          "type": "string"
+                        },
+                        "revisionId": {
+                          "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["revisionId", "observedAt", "checks"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Run explicit current-runtime diagnostics for one exact Agent revision",
+        "tags": ["Agent deployments"],
+        "x-openclaw-permissions": [
+          { "action": "operate", "resourceKind": "agent", "scope": "requested" },
+          { "action": "read", "resourceKind": "agent", "scope": "requested" },
+          { "action": "read", "resourceKind": "agent_revision", "scope": "requested" }
+        ]
+      }
+    },
     "/namespaces/{namespaceId}/agents/{agentId}/native-admin": {
       "get": {
         "description": "Requires a human session with administer permission on the exact Agent. Service API keys cannot launch or inspect native admin UI access.",
@@ -5484,6 +6626,620 @@
         ]
       }
     },
+    "/namespaces/{namespaceId}/agents/{agentId}/plugins": {
+      "post": {
+        "description": "Requires update permission on the requested Agent. Requires read permission on the requested Agent. Requires operate permission on the Agent's bound Secret when the selected Plugin Driver requires a discovery credential.",
+        "operationId": "discoverSavedAgentPlugins",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": { "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" } },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "nextCursor": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                        "plugins": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "available": { "type": "boolean" },
+                              "description": { "type": "string" },
+                              "id": { "type": "string" },
+                              "logoUrl": { "type": "string" },
+                              "name": { "type": "string" },
+                              "privacyPolicyUrl": { "type": "string" },
+                              "remoteId": { "type": "string" },
+                              "selectableWithoutTools": { "type": "boolean" },
+                              "termsOfServiceUrl": { "type": "string" },
+                              "tools": {
+                                "anyOf": [
+                                  { "type": "null" },
+                                  {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "available": { "type": "boolean" },
+                                        "description": { "type": "string" },
+                                        "destructive": { "type": "boolean" },
+                                        "id": { "type": "string" },
+                                        "name": { "type": "string" },
+                                        "ownerId": { "type": "string" },
+                                        "unavailableReason": { "type": "string" },
+                                        "writes": { "type": "boolean" }
+                                      },
+                                      "required": ["id", "name", "ownerId"],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  }
+                                ]
+                              },
+                              "unavailableHelp": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "label": { "type": "string" },
+                                  "url": { "type": "string" }
+                                },
+                                "required": ["label", "url"],
+                                "type": "object"
+                              },
+                              "unavailableReason": { "type": "string" },
+                              "websiteUrl": { "type": "string" }
+                            },
+                            "required": ["id", "name", "tools"],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "setup": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "links": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "label": { "type": "string" },
+                                  "url": { "type": "string" }
+                                },
+                                "required": ["label", "url"],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "message": { "type": "string" }
+                          },
+                          "required": ["message", "links"],
+                          "type": "object"
+                        }
+                      },
+                      "required": ["plugins", "nextCursor"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "429": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "501": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "update", "resourceKind": "agent", "scope": "requested" },
+          { "action": "read", "resourceKind": "agent", "scope": "requested" },
+          {
+            "action": "operate",
+            "condition": "authenticated_plugin_discovery",
+            "resourceKind": "secret",
+            "scope": "requested"
+          }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/agents/{agentId}/plugins/capabilities": {
+      "get": {
+        "description": "Requires update permission on the requested Agent. Requires read permission on the requested Agent.",
+        "operationId": "getSavedAgentPluginPolicyCapabilities",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "discoveryCredential": {
+                          "anyOf": [
+                            { "const": "required", "type": "string" },
+                            { "const": "none", "type": "string" }
+                          ]
+                        },
+                        "driver": { "$ref": "#/components/schemas/def-1" },
+                        "driverPolicySchema": { "additionalProperties": {}, "type": "object" },
+                        "toolDefaults": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "approval": {
+                              "items": {
+                                "anyOf": [
+                                  { "const": "native", "type": "string" },
+                                  { "const": "prompt", "type": "string" },
+                                  { "const": "approve", "type": "string" }
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            "enabled": { "type": "boolean" },
+                            "reviewer": {
+                              "items": {
+                                "anyOf": [
+                                  { "const": "human", "type": "string" },
+                                  { "const": "auto", "type": "string" }
+                                ]
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": ["enabled", "approval", "reviewer"],
+                          "type": "object"
+                        },
+                        "tools": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "approval": {
+                              "items": {
+                                "anyOf": [
+                                  { "const": "native", "type": "string" },
+                                  { "const": "prompt", "type": "string" },
+                                  { "const": "approve", "type": "string" }
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            "enabled": { "type": "boolean" },
+                            "reviewer": {
+                              "items": {
+                                "anyOf": [
+                                  { "const": "human", "type": "string" },
+                                  { "const": "auto", "type": "string" }
+                                ]
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": ["enabled", "approval", "reviewer"],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "driver",
+                        "toolDefaults",
+                        "tools",
+                        "driverPolicySchema",
+                        "discoveryCredential"
+                      ],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "501": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Read selected Plugin Driver policy capabilities for an active Agent with caller Agent read/update permission",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "update", "resourceKind": "agent", "scope": "requested" },
+          { "action": "read", "resourceKind": "agent", "scope": "requested" }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/agents/{agentId}/plugins/details": {
+      "post": {
+        "description": "Requires update permission on the requested Agent. Requires read permission on the requested Agent. Requires operate permission on the Agent's bound Secret when the selected Plugin Driver requires a discovery credential.",
+        "operationId": "discoverSavedAgentPluginDetails",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "pluginId": { "maxLength": 256, "minLength": 1, "type": "string" }
+                },
+                "required": ["pluginId"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "available": { "type": "boolean" },
+                        "description": { "type": "string" },
+                        "id": { "type": "string" },
+                        "logoUrl": { "type": "string" },
+                        "name": { "type": "string" },
+                        "privacyPolicyUrl": { "type": "string" },
+                        "remoteId": { "type": "string" },
+                        "selectableWithoutTools": { "type": "boolean" },
+                        "termsOfServiceUrl": { "type": "string" },
+                        "tools": {
+                          "anyOf": [
+                            { "type": "null" },
+                            {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "available": { "type": "boolean" },
+                                  "description": { "type": "string" },
+                                  "destructive": { "type": "boolean" },
+                                  "id": { "type": "string" },
+                                  "name": { "type": "string" },
+                                  "ownerId": { "type": "string" },
+                                  "unavailableReason": { "type": "string" },
+                                  "writes": { "type": "boolean" }
+                                },
+                                "required": ["id", "name", "ownerId"],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            }
+                          ]
+                        },
+                        "unavailableHelp": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "label": { "type": "string" },
+                            "url": { "type": "string" }
+                          },
+                          "required": ["label", "url"],
+                          "type": "object"
+                        },
+                        "unavailableReason": { "type": "string" },
+                        "websiteUrl": { "type": "string" }
+                      },
+                      "required": ["id", "name", "tools"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "429": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "501": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Read plugin details for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "update", "resourceKind": "agent", "scope": "requested" },
+          { "action": "read", "resourceKind": "agent", "scope": "requested" },
+          {
+            "action": "operate",
+            "condition": "authenticated_plugin_discovery",
+            "resourceKind": "secret",
+            "scope": "requested"
+          }
+        ]
+      }
+    },
     "/namespaces/{namespaceId}/agents/{agentId}/revisions": {
       "get": {
         "description": "Requires read permission on the requested Agent. Only AgentRevision resources with individual read permission are returned.",
@@ -5522,6 +7278,17 @@
                           "agentId": {
                             "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                             "type": "string"
+                          },
+                          "backendId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
                           },
                           "compute": {
                             "additionalProperties": false,
@@ -5662,17 +7429,6 @@
                             "required": ["driver", "plugins"],
                             "type": "object"
                           },
-                          "providerId": {
-                            "anyOf": [
-                              {
-                                "maxLength": 200,
-                                "minLength": 1,
-                                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                                "type": "string"
-                              },
-                              { "type": "null" }
-                            ]
-                          },
                           "repositoryCredentials": {
                             "additionalProperties": false,
                             "properties": {
@@ -5763,7 +7519,7 @@
                           "namespaceId",
                           "agentId",
                           "revision",
-                          "providerId",
+                          "backendId",
                           "configurationId",
                           "configurationKind",
                           "configurationGeneration",
@@ -5887,6 +7643,17 @@
                         "agentId": {
                           "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
+                        },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "compute": {
                           "additionalProperties": false,
@@ -6022,17 +7789,6 @@
                           "required": ["driver", "plugins"],
                           "type": "object"
                         },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryCredentials": {
                           "additionalProperties": false,
                           "properties": {
@@ -6123,7 +7879,7 @@
                         "namespaceId",
                         "agentId",
                         "revision",
-                        "providerId",
+                        "backendId",
                         "configurationId",
                         "configurationKind",
                         "configurationGeneration",
@@ -6423,6 +8179,147 @@
         ]
       }
     },
+    "/namespaces/{namespaceId}/agents/{agentId}/runtime-images": {
+      "get": {
+        "description": "Requires read permission on the requested Agent.",
+        "operationId": "getAgentRuntimeImages",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "images": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "commit": {
+                                "anyOf": [
+                                  { "pattern": "^[a-f0-9]{40}$", "type": "string" },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "container": { "type": "string" },
+                              "image": { "type": "string" },
+                              "imageId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                              "openclawCommit": {
+                                "anyOf": [
+                                  { "pattern": "^[a-f0-9]{40}$", "type": "string" },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "workload": { "type": "string" }
+                            },
+                            "required": [
+                              "workload",
+                              "container",
+                              "image",
+                              "imageId",
+                              "commit",
+                              "openclawCommit"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "status": {
+                          "anyOf": [
+                            { "const": "observed", "type": "string" },
+                            { "const": "undeployed", "type": "string" },
+                            { "const": "unsupported", "type": "string" }
+                          ]
+                        }
+                      },
+                      "required": ["status", "images"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Read observed images and source commits for an Agent's active runtime",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "read", "resourceKind": "agent", "scope": "requested" }
+        ]
+      }
+    },
     "/namespaces/{namespaceId}/agents/{agentId}/stop": {
       "post": {
         "description": "Requires operate permission on the requested Agent.",
@@ -6460,6 +8357,17 @@
                         "activeRevisionId": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
+                        },
+                        "backendId": {
+                          "anyOf": [
+                            {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "configurationId": {
                           "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -6579,17 +8487,6 @@
                           "type": "string"
                         },
                         "plugins": { "$ref": "#/components/schemas/def-4" },
-                        "providerId": {
-                          "anyOf": [
-                            {
-                              "maxLength": 200,
-                              "minLength": 1,
-                              "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                              "type": "string"
-                            },
-                            { "type": "null" }
-                          ]
-                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -6632,7 +8529,7 @@
                         "name",
                         "servicePrincipalId",
                         "configurationId",
-                        "providerId",
+                        "backendId",
                         "harnessAuth",
                         "executionMode",
                         "desiredRuntimeState",
@@ -8931,11 +10828,37 @@
                               "agent": {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "backendId": { "$ref": "#/components/schemas/def-0" },
                                   "executionMode": { "$ref": "#/components/schemas/def-0" },
                                   "harnessAuth": { "$ref": "#/components/schemas/def-0" },
+                                  "initialWorkspaceFiles": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "AGENTS.md": {
+                                        "maxLength": 16384,
+                                        "pattern": "^[^\\u0000]*$",
+                                        "type": "string"
+                                      },
+                                      "IDENTITY.md": {
+                                        "maxLength": 16384,
+                                        "pattern": "^[^\\u0000]*$",
+                                        "type": "string"
+                                      },
+                                      "SOUL.md": {
+                                        "maxLength": 16384,
+                                        "pattern": "^[^\\u0000]*$",
+                                        "type": "string"
+                                      },
+                                      "USER.md": {
+                                        "maxLength": 16384,
+                                        "pattern": "^[^\\u0000]*$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "type": "object"
+                                  },
                                   "name": { "$ref": "#/components/schemas/def-0" },
-                                  "plugins": { "$ref": "#/components/schemas/def-0" },
-                                  "providerId": { "$ref": "#/components/schemas/def-0" }
+                                  "plugins": { "$ref": "#/components/schemas/def-0" }
                                 },
                                 "type": "object"
                               },
@@ -9111,11 +11034,37 @@
                       "agent": {
                         "additionalProperties": false,
                         "properties": {
+                          "backendId": { "$ref": "#/components/schemas/def-0" },
                           "executionMode": { "$ref": "#/components/schemas/def-0" },
                           "harnessAuth": { "$ref": "#/components/schemas/def-0" },
+                          "initialWorkspaceFiles": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "AGENTS.md": {
+                                "maxLength": 16384,
+                                "pattern": "^[^\\u0000]*$",
+                                "type": "string"
+                              },
+                              "IDENTITY.md": {
+                                "maxLength": 16384,
+                                "pattern": "^[^\\u0000]*$",
+                                "type": "string"
+                              },
+                              "SOUL.md": {
+                                "maxLength": 16384,
+                                "pattern": "^[^\\u0000]*$",
+                                "type": "string"
+                              },
+                              "USER.md": {
+                                "maxLength": 16384,
+                                "pattern": "^[^\\u0000]*$",
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
                           "name": { "$ref": "#/components/schemas/def-0" },
-                          "plugins": { "$ref": "#/components/schemas/def-0" },
-                          "providerId": { "$ref": "#/components/schemas/def-0" }
+                          "plugins": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
                       },
@@ -9230,11 +11179,37 @@
                             "agent": {
                               "additionalProperties": false,
                               "properties": {
+                                "backendId": { "$ref": "#/components/schemas/def-0" },
                                 "executionMode": { "$ref": "#/components/schemas/def-0" },
                                 "harnessAuth": { "$ref": "#/components/schemas/def-0" },
+                                "initialWorkspaceFiles": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "AGENTS.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "IDENTITY.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "SOUL.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "USER.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "type": "object"
+                                },
                                 "name": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" },
-                                "providerId": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
@@ -9524,11 +11499,37 @@
                             "agent": {
                               "additionalProperties": false,
                               "properties": {
+                                "backendId": { "$ref": "#/components/schemas/def-0" },
                                 "executionMode": { "$ref": "#/components/schemas/def-0" },
                                 "harnessAuth": { "$ref": "#/components/schemas/def-0" },
+                                "initialWorkspaceFiles": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "AGENTS.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "IDENTITY.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "SOUL.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "USER.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "type": "object"
+                                },
                                 "name": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" },
-                                "providerId": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
@@ -9708,11 +11709,37 @@
                       "agent": {
                         "additionalProperties": false,
                         "properties": {
+                          "backendId": { "$ref": "#/components/schemas/def-0" },
                           "executionMode": { "$ref": "#/components/schemas/def-0" },
                           "harnessAuth": { "$ref": "#/components/schemas/def-0" },
+                          "initialWorkspaceFiles": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "AGENTS.md": {
+                                "maxLength": 16384,
+                                "pattern": "^[^\\u0000]*$",
+                                "type": "string"
+                              },
+                              "IDENTITY.md": {
+                                "maxLength": 16384,
+                                "pattern": "^[^\\u0000]*$",
+                                "type": "string"
+                              },
+                              "SOUL.md": {
+                                "maxLength": 16384,
+                                "pattern": "^[^\\u0000]*$",
+                                "type": "string"
+                              },
+                              "USER.md": {
+                                "maxLength": 16384,
+                                "pattern": "^[^\\u0000]*$",
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
                           "name": { "$ref": "#/components/schemas/def-0" },
-                          "plugins": { "$ref": "#/components/schemas/def-0" },
-                          "providerId": { "$ref": "#/components/schemas/def-0" }
+                          "plugins": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
                       },
@@ -9826,11 +11853,37 @@
                             "agent": {
                               "additionalProperties": false,
                               "properties": {
+                                "backendId": { "$ref": "#/components/schemas/def-0" },
                                 "executionMode": { "$ref": "#/components/schemas/def-0" },
                                 "harnessAuth": { "$ref": "#/components/schemas/def-0" },
+                                "initialWorkspaceFiles": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "AGENTS.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "IDENTITY.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "SOUL.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    },
+                                    "USER.md": {
+                                      "maxLength": 16384,
+                                      "pattern": "^[^\\u0000]*$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "type": "object"
+                                },
                                 "name": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" },
-                                "providerId": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
@@ -10155,7 +12208,7 @@
         "responses": {
           "201": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-8" } }
             },
             "description": "Default Response"
           },
@@ -10322,7 +12375,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-8" } }
             },
             "description": "Default Response"
           },
@@ -10416,7 +12469,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-8" } }
             },
             "description": "Default Response"
           },
@@ -11301,102 +13354,6 @@
         "tags": ["Service accounts"],
         "x-openclaw-permissions": [
           { "action": "update", "resourceKind": "service_account", "scope": "requested" }
-        ]
-      }
-    },
-    "/providers": {
-      "get": {
-        "description": "Requires administer permission on the requested Installation.",
-        "operationId": "listProviders",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "id": {
-                            "maxLength": 200,
-                            "minLength": 1,
-                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
-                            "type": "string"
-                          },
-                          "type": {
-                            "anyOf": [
-                              { "const": "chatgpt", "type": "string" },
-                              { "const": "github", "type": "string" }
-                            ]
-                          }
-                        },
-                        "required": ["id", "type"],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    },
-                    "meta": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "requestId": {
-                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                          "type": "string"
-                        }
-                      },
-                      "required": ["requestId"],
-                      "type": "object"
-                    }
-                  },
-                  "required": ["data", "meta"],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Default Response"
-          },
-          "400": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "401": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "403": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "404": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "500": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          },
-          "503": {
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
-            },
-            "description": "Default Response"
-          }
-        },
-        "summary": "List configured Providers",
-        "tags": ["Providers"],
-        "x-openclaw-permissions": [
-          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
         ]
       }
     }

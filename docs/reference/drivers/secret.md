@@ -16,15 +16,16 @@ Compose without Installation YAML selects no Secret Driver. See
 
 ## Interface
 
-The [shared interface](../../../packages/contracts/src/index.ts) requires all
-four methods; it has no value-read or optional Secret-specific method.
+The [shared interface](../../../packages/contracts/src/index.ts) requires four
+storage and projection methods and optionally supports transient server-side use.
 
-| Method                    | Contract                                                                                                                            |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `create(identity, value)` | Store the value for OCC's `{ id, namespaceId, name }` and return a safe backend reference.                                          |
-| `update(secret, value)`   | Replace the value at the stored, owned backend identity. Returns no value and does not report delivery.                             |
-| `delete(secret)`          | Remove only the backend object belonging to this Secret. Returns no value.                                                          |
-| `resolve(secret)`         | Check live ownership and return only the reference safe to use for projection. Never return the value or substitute another object. |
+| Method                    | Contract                                                                                                                                 |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `create(identity, value)` | Store the value for OCC's `{ id, namespaceId, name }` and return a safe backend reference.                                               |
+| `update(secret, value)`   | Replace the value at the stored, owned backend identity. Returns no value and does not report delivery.                                  |
+| `delete(secret)`          | Remove only the backend object belonging to this Secret. Returns no value.                                                               |
+| `resolve(secret)`         | Check live ownership and return only the reference safe to use for projection. Never return the value or substitute another object.      |
+| `withValue(secret, use)`  | When supported, verify exact ownership and pass the current value to a transient server-side callback. Never expose it as a public read. |
 
 The current `SecretBackendRef` contains `namespaceName`, `name`, `key`, and
 `uid`; these are internal metadata, never caller-selected locations. The public
@@ -43,9 +44,16 @@ also requires the caller to have `operate` on it. Deployment requires both the
 deploying actor and the consuming Agent's ServicePrincipal to have `operate` on
 each Secret; the worker rechecks them before preparing delivery. Namespace
 membership, possession of a reference, and backend permissions grant no OCC
-authority. Cross-Namespace bindings are rejected.
-
-Never expose values in responses, configuration documents, audit, or logs.
+authority. Cross-Namespace bindings are rejected. Plugin discovery using a Secret also
+requires caller `operate` on that exact Secret. Create Agent discovery also
+requires Namespace Agent `create`; it does not require an Agent ServicePrincipal.
+Saved-Agent discovery requires exact Agent `read` and `update`, plus `operate`
+for both the caller and the Agent's ServicePrincipal. OCC derives the `codex_pat`
+source from the Agent rather than accepting a Secret ID from the browser. It
+rechecks those grants and the binding after the backend read, before sending
+the value to the selected Plugin Driver. Never expose values in responses,
+configuration documents, audit, or logs. A running revision may still use an
+older projected value.
 Backend permissions and encryption remain the operator's responsibility. See
 [Secret binding permissions](../configuration/secrets.md) and [authorization](../authorization.md).
 
@@ -64,6 +72,16 @@ Deletion is refused while a Configuration, active revision, or pending
 deployment still references the Secret. Otherwise OCC calls the Driver before
 removing its own record.
 
+For plugin discovery, OCC checks permissions and reads current Secret metadata,
+then calls `withValue` without holding a platform transaction over backend or
+provider I/O. The callback passes the value to the selected PluginDriver and
+does not persist it. Saved-Agent discovery rechecks grants and the binding
+inside the callback before that PluginDriver call. A Driver without this optional
+capability cannot serve Secret-backed discovery. Each request reads the current
+backend value; a concurrent rotation can take effect after an in-flight request
+has already read the prior value. See
+[plugin discovery](plugin.md#selection-and-catalogs).
+
 During deployment admission, the API asks `resolve` to verify that the current
 backend identity still matches OCC's record. The revision pins the Driver ID
 and normalized binding, not the backend locator or secret bytes. The worker
@@ -74,8 +92,9 @@ model API keys go only to the Harness that executes the model.
 
 ## Limits
 
-- No value reads, version history, rollback, credential issuance, or per-access
-  brokering. The supported delivery mechanism is environment projection.
+- No public value reads, version history, rollback, credential issuance, or general
+  per-access broker. Environment projection is the supported workload delivery
+  mechanism; plugin discovery uses the transient server-side callback.
 - Updating a Secret does not restart workloads. Redeploy or restart consumers
   before expecting a new value to appear in their environment.
 - Kubernetes is the only selectable implementation. Arbitrary installed Secret

@@ -10,6 +10,7 @@ from each trace; for commands to run locally, see [Testing](../testing/README.md
 - [Platform startup](../flows/platform-startup.md) and [production startup](../flows/production-startup.md)
 - [Controller worker and durable reconciliation](../flows/controller-worker.md)
 - [Logging](../flows/common-logging.md)
+- [Audit ledger](../flows/audit-ledger.md)
 - [Docker Compose development](../flows/docker-compose-development.md): [stack startup](../flows/docker-compose-development/startup.md) and [Agent execution limits](../flows/docker-compose-development/agent-execution.md)
 
 ## Console, configuration, and Agents
