@@ -79,6 +79,16 @@ through real controls after loading fixture data.
 Pending-read stories use the real client's 15-second timeout; reset them to replay
 loading.
 
+## Return navigation
+
+Use **Pages/Navigation → Return to loaded pages** and **Return to Agent panels**.
+Check search, expanded configuration, native admin access, and Credentials after
+tab changes and browser Back/Forward. Unchanged views keep their loaded controls;
+page returns recheck access before enabling them. Refresh remains explicit.
+**Return access denied** and **Return session expired** must clear retained content.
+These fixtures demonstrate UI behavior; browser regressions exercise real API and
+IAM checks.
+
 ## Agent flows and UI gaps
 
 In **Components → Navigation → Namespace switcher**, use the header selector to

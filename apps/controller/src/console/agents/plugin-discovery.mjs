@@ -102,6 +102,7 @@ export function createPluginDiscovery({
     try {
       const page = await context.request(catalogPath, {
         method: "POST",
+        readOnly: true,
         body: requestBody(cursor ? { cursor } : {}),
       });
       if (!context.isCurrent() || active !== generation) {
@@ -151,6 +152,7 @@ export function createPluginDiscovery({
     try {
       const detail = await context.request(`${catalogPath}/details`, {
         method: "POST",
+        readOnly: true,
         body: requestBody({ pluginId: entry.remoteId }),
       });
       if (

@@ -46,8 +46,10 @@ The console uses a light appearance and OCC-served fonts; no external font
 service is required.
 
 Returning pages retain content during access checks; controls await authorization.
+Unchanged pages and Agent tabs keep their loaded controls and expanded panels.
 Agent detail keeps its mounted editor on refocus while access remains available.
-Refresh rereads saved state. First visits still load. Document-local previews
+Changed data rebuilds the view. Refresh explicitly reloads; first visits still load.
+Document-local views
 are scoped to account, session, route, and Namespace; sign-out, session changes,
 and exit clear them. Failed reads show recovery. Installation-wide Backend
 denial clears all previews.

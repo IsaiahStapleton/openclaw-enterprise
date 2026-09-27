@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
 updated: 2026-09-27
-last_updated_session: 01a0e099-da9d-78f1-8e79-ea4a919edf7d
+last_updated_session: 01a0b1f2-e696-7232-a439-5b668154bcd9
 ---
 
 # Platform console request flow
@@ -124,9 +124,16 @@ these reads. Missing provenance and failures remain explicit. The
 
 `loadPage` advances the request generation and requests `GET /api/auth/session`.
 First loads show loading. Return navigation and Refresh can restore one of at most
-16 document-local previews keyed by route, Namespace, and session owner while reads
-run. Password fields clear before retention. Preview resource controls cannot
-issue operations; the navigation shell remains available.
+16 document-local views keyed by route, Namespace, and session owner while reads
+run. Password fields and their derived discovery state clear before retention.
+Controls stay inert until admission succeeds; navigation remains available.
+
+Completed views retain their DOM, handlers, and draft capture callbacks. On return,
+`loadPage` rereads their GET dependencies and compares data and user identity.
+Unchanged views reactivate without rebuilding panels; changed data rebuilds them.
+Pending reads, read failures, password input, or mutations prevent reuse. Read-only
+catalog and diagnostic POSTs do not invalidate views. Refresh always rebuilds.
+Debug runtime disclosures follow the same validation and retain expanded state.
 
 A changed user or session key clears retained views and drafts before further
 private reads. Missing sessions open login; failed reads offer Retry.
@@ -246,8 +253,11 @@ within that detail view; a direct Workspace files URL does not wait for or start
 those reads. Refresh, revision changes, and successful channel or authentication
 edits use the full page read path.
 
-Each tab render captures its own generation. Late panel reads and form callbacks
-cannot overwrite a newer tab; password values clear while [draft captures](platform-console/agent-editing.md#4-render-draft-revision-or-channels) retain edits. Channel
+Completed tabs retain their DOM and draft capture callbacks within the detail view.
+Returning restores loaded controls and expanded disclosures. Pending or failed
+reads, password values, and mutations invalidate tab reuse. Each tab checks that it
+is mounted before applying a response; late reads cannot overwrite another tab.
+Password values clear while [draft captures](platform-console/agent-editing.md#4-render-draft-revision-or-channels) retain edits. Channel
 Secret saves update the shared draft snapshot used by other tabs and deployment
 preflight. Session expiry still clears the whole private view.
 
@@ -258,7 +268,8 @@ preflight. Session expiry still clears the whole private view.
 Navigation, Namespace changes, and logout invalidate reads; generations reject
 late responses. Refocus coalesces events. Agent detail rechecks access in place,
 preserving controls and saves on success; failures clear the view. Other pages
-retain previews. Drafts keep save baselines and Namespace scopes separate.
+revalidate retained views before reuse. Drafts keep save baselines and Namespace
+scopes separate.
 
 Authorization and dependency failures clear affected content and expose recovery;
 a current protected `401` clears all private state immediately. `pagehide` clears
@@ -323,6 +334,8 @@ refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 19:38: Preserve validated page and tab DOM in accompanying changes. (01a0b1f2-e696-7232-a439-5b668154bcd9 - 0663fa97)
 
 - 2026-09-27 02:30: Use selected PAT Secrets for discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - ec4e9dc517497afe05be63a320542abcf61e8a55)
 

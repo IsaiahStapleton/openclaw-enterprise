@@ -6469,6 +6469,11 @@ test("Agent tabs replace only their content and preserve surrounding panels and 
   assert.equal(await secretElement.evaluate((node) => node.isConnected), false);
   await page.goBack();
   await page.getByLabel("API key Secret").waitFor();
+  assert.equal(
+    await secretElement.evaluate((node) => node.isConnected),
+    true,
+    "Returning to Credentials preserves the loaded controls",
+  );
   assert.equal(new URL(page.url()).searchParams.get("tab"), "credentials");
   await page.goForward();
   await page.getByRole("heading", { name: "Workspace files", exact: true }).waitFor();
