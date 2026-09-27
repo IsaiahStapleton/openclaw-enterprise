@@ -3887,6 +3887,22 @@ test("Agent draft browses the curated catalog without a saved Secret", async (t)
     pathRequests(requests, "POST", catalogPath).map(({ body }) => body),
     [{}],
   );
+  // The shared search UI must use the saved-Agent route without supplying a credential.
+  const searched = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}${catalogPath}` &&
+      response.request().postDataJSON()?.q === "linear",
+  );
+  await dialog.getByLabel("Search plugins", { exact: true }).fill("linear");
+  assert.equal((await searched).status(), 200);
+  await dialog.locator('.plugin-browser[aria-busy="false"]').waitFor();
+  assert.deepEqual(
+    await dialog
+      .locator(".plugin-list-item")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label"))),
+    ["Linear"],
+  );
+  assert.deepEqual(pathRequests(requests, "POST", catalogPath).at(-1).body, { q: "linear" });
   await linear.click();
   await dialog.getByRole("button", { name: "Add Linear", exact: true }).click();
   assert.equal(pathRequests(requests, "GET", `${catalogPath}/capabilities`).length, 1);
@@ -5201,6 +5217,8 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   });
   const detailStarted = Promise.withResolvers();
   const detailRelease = Promise.withResolvers();
+  const searchStarted = Promise.withResolvers();
+  const searchRelease = Promise.withResolvers();
   const hosted = (name, overrides = {}) => ({
     id: `remote-${name}`,
     name,
@@ -5245,6 +5263,26 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     }
     assert.equal(options.headers["ChatGPT-Account-ID"], "account-plugin-test");
     assert.equal(options.headers["OAI-Product-Sku"], "codex");
+    if (url.pathname.endsWith("/plugins/search")) {
+      assert.equal(url.searchParams.get("scope"), "GLOBAL");
+      assert.equal(url.searchParams.get("limit"), "20");
+      const q = url.searchParams.get("q");
+      if (q === "slow") {
+        searchStarted.resolve();
+        await searchRelease.promise;
+        return Response.json({
+          plugins: [hosted("Stale-result")],
+          pagination: { next_page_token: null },
+        });
+      }
+      assert.equal(q, "linear");
+      const cursor = url.searchParams.get("pageToken");
+      assert.ok(cursor === null || cursor === "linear-page-two");
+      return Response.json({
+        plugins: [hosted(cursor ? "Linear-tools" : "Linear")],
+        pagination: { next_page_token: cursor ? null : "linear-page-two" },
+      });
+    }
     if (url.pathname.endsWith("/plugins/list")) {
       assert.equal(url.searchParams.get("scope"), "GLOBAL");
       if (holdList && options.headers.Authorization === "Bearer at-browser-plugin-one") {
@@ -5316,6 +5354,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   });
   t.after(() => releaseList?.());
   t.after(() => detailRelease.resolve());
+  t.after(() => searchRelease.resolve());
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
@@ -5419,16 +5458,37 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await dialog.getByRole("button", { name: "Next page", exact: true }).click();
   await dialog.getByRole("button", { name: "Documents", exact: true }).waitFor();
   assert.equal(await calendar.count(), 0);
-  await dialog.getByRole("button", { name: "Previous page", exact: true }).click();
-  await calendar.waitFor();
-  assert.equal(await dialog.getByRole("button", { name: "Documents", exact: true }).count(), 0);
-  const filter = dialog.getByLabel("Filter this page", { exact: true });
-  await filter.fill("Calendar");
+  const search = dialog.getByLabel("Search plugins", { exact: true });
+  // A new query searches the full catalog, starting without the previous listing cursor.
+  await search.fill("linear");
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
   assert.equal(
-    await dialog.getByRole("button", { name: "Admin-disabled", exact: true }).count(),
-    0,
+    await dialog.getByRole("button", { name: "Previous page", exact: true }).isDisabled(),
+    true,
   );
-  await filter.fill("");
+  await dialog.getByRole("button", { name: "Next page", exact: true }).click();
+  await dialog.getByRole("button", { name: "Linear-tools", exact: true }).waitFor();
+  assert.equal(await search.inputValue(), "linear");
+  await dialog.getByRole("button", { name: "Previous page", exact: true }).click();
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  // A slow older search cannot replace the results of the current query.
+  const staleSearchResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/agents/plugins") && response.request().postDataJSON()?.q === "slow",
+  );
+  await search.fill("slow");
+  await searchStarted.promise;
+  await search.fill("linear");
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  searchRelease.resolve();
+  await staleSearchResponse;
+  assert.equal(await dialog.getByRole("button", { name: "Stale-result", exact: true }).count(), 0);
+  await search.fill("");
+  await calendar.waitFor();
+  assert.equal(
+    await dialog.getByRole("button", { name: "Previous page", exact: true }).isDisabled(),
+    true,
+  );
 
   // Selecting a plugin loads its tools; a rejected upstream body stays private and is retryable.
   await calendar.click();

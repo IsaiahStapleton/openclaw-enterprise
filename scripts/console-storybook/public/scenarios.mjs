@@ -749,7 +749,7 @@ export const scenarios = {
       "Compare the administrator, plan, and unsupported-runtime reasons in the list. Choose each unavailable plugin to see its reason and help link in detail; Add stays disabled.",
       "Available and Configured share a compact sidebar; page controls stay below the scrolling list. Next page and Previous page navigate server pages.",
       "Choose Calendar to load its tools and inspect their IDs beneath the titles, then Add Calendar. Configure its plugin defaults and expand a tool to override them.",
-      "Type create into Filter tools: only Create event remains, and the caret stays after the text. Clear it to restore the other tools. Filter this page matches plugins on the current page.",
+      "Type create into Filter tools: only Create event remains, and the caret stays after the text. Clear it to restore the other tools. Search plugins for Documents before visiting its catalog page, then clear the query.",
       "Click Done and expand Plugin selections JSON: one heading labels a bounded monospace editor. Replacing the dummy token or authentication method clears discovery results and preserves selections.",
     ],
     gap: pluginDiscoveryGap,
@@ -825,7 +825,7 @@ export const scenarios = {
     pluginCapabilities,
     actions: [...pluginDiscoveryForm, click("Next page")],
     description:
-      "Catalog pages use upstream cursors and contain up to 20 plugins. Driver setup guidance persists across pages. Filtering applies to the current page, and Previous page restores the prior catalog page.",
+      "Catalog pages use upstream cursors and contain up to 20 plugins. Search plugins searches the catalog and resets to the first page; Previous page restores the prior page for the same query.",
     gap: pluginDiscoveryGap,
   },
   createPluginsEmpty: {
@@ -937,7 +937,7 @@ export const scenarios = {
       "Browse a fixture catalog in the production plugin modal. Selecting a plugin opens its policies and a collapsed list of tools.",
     steps: [
       "Review the simulated Calendar and Documents logos. Project tracker’s intentionally missing image falls back to its initial. Choose each plugin to check the same logo or fallback in its detail heading.",
-      "Filter this page for Documents, then clear the filter and choose Calendar.",
+      "Search plugins for Documents, then clear the query and choose Calendar.",
       "Click Add Calendar. Its tool defaults remain omitted until you change them.",
       "Choose the default tool availability, approval behavior, and reviewer, or keep the runtime defaults.",
       "Review the Driver-specific policy fields supplied by the capability descriptor.",

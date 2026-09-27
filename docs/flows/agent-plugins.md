@@ -71,7 +71,7 @@ accepts a transient PAT, same-Namespace Secret, or no credential when the Driver
 permits it. OCC checks Namespace Agent `create` and caller Secret `operate` before
 Driver support. Unsupported discovery reads no Secret.
 
-Existing-Agent routes accept only cursors or plugin IDs under active Agent
+Existing-Agent routes accept only queries, cursors, or plugin IDs under active Agent
 `read`/`update`. Curated discovery needs no Secret. Hosted discovery reads bound
 `codex_pat`, requires caller and Agent ServicePrincipal Secret `operate`, then
 rechecks binding and grants inside
@@ -83,11 +83,14 @@ reads may use pre-rotation values. Missing, denied, or unavailable Secrets fail
 before provider discovery. Discovery stores no state or credential.
 
 The [Codex Plugin Driver](../../apps/controller/src/drivers/plugin/index.ts)
-selects hosted or curated discovery. Hosted discovery hydrates identity, pages 20
-GLOBAL entries, and loads tools (`null`: unknown). Curated entries require no
-provider I/O; tools and account access remain unknown. Console permits
+receives `q` through OCC and selects hosted or curated discovery. Hosted discovery
+hydrates identity, searches nonempty queries or lists GLOBAL entries, and preserves
+opaque cursors across 20-entry pages. Console resets cursors on query changes and
+ignores older responses. Tools (`null`: unknown) load on demand. Curated discovery
+filters its bundled catalog without provider I/O; tools and account access remain
+unknown. Console permits
 supported entries after details; unsupported releases stay unavailable.
-Filtering is local; hosted reads are bounded and redirect-free. OCC returns
+Hosted reads are bounded and redirect-free. OCC returns
 `no-store` metadata, rejects credential echoes, and suppresses upstream errors
 and artifacts. Driver links and
 [setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs)

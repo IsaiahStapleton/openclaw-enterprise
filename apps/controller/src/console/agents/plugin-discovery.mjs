@@ -39,11 +39,12 @@ export function createPluginDiscovery({
   const entries = new Map();
   let pageIds = [];
   let cursors = [null];
+  let query = "";
   let pageIndex = 0;
   const fields = createPluginFields({
     input,
     saveHint,
-    onLoadPlugins: (direction) => void loadCatalog(direction),
+    onLoadPlugins: (direction, q) => void loadCatalog(direction, q),
     onLoadTools: (id) => void loadTools(id),
   });
 
@@ -73,9 +74,18 @@ export function createPluginDiscovery({
     update();
   }
 
-  async function loadCatalog(direction = "refresh") {
-    if (!canDiscover() || isPending() || catalog.status === "loading") {
+  async function loadCatalog(direction = "refresh", q = query) {
+    const search = q.trim();
+    const queryChanged = search !== query;
+    if (!canDiscover() || isPending() || (catalog.status === "loading" && !queryChanged)) {
       return;
+    }
+    if (queryChanged) {
+      query = search;
+      cursors = [null];
+      pageIndex = 0;
+      pageIds = [];
+      catalog = { status: "idle", nextCursor: null };
     }
     let nextPageIndex = pageIndex;
     let cursor = cursors[nextPageIndex];
@@ -102,7 +112,10 @@ export function createPluginDiscovery({
     try {
       const page = await context.request(catalogPath, {
         method: "POST",
-        body: requestBody(cursor ? { cursor } : {}),
+        body: requestBody({
+          ...(cursor ? { cursor } : {}),
+          ...(query ? { q: query } : {}),
+        }),
       });
       if (!context.isCurrent() || active !== generation) {
         return;

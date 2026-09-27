@@ -3445,7 +3445,8 @@
                   {
                     "additionalProperties": false,
                     "properties": {
-                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" }
+                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" },
+                      "q": { "maxLength": 1024, "type": "string" }
                     },
                     "type": "object"
                   },
@@ -3459,7 +3460,8 @@
                         "type": "string",
                         "writeOnly": true
                       },
-                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" }
+                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" },
+                      "q": { "maxLength": 1024, "type": "string" }
                     },
                     "required": ["accessToken"],
                     "type": "object"
@@ -3468,6 +3470,7 @@
                     "additionalProperties": false,
                     "properties": {
                       "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" },
+                      "q": { "maxLength": 1024, "type": "string" },
                       "secretRef": {
                         "additionalProperties": false,
                         "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
@@ -3669,7 +3672,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "List available plugins for Agent creation using the selected Driver",
+        "summary": "List or search available plugins for Agent creation using the selected Driver",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "create", "resourceKind": "agent", "scope": "namespace" },
@@ -6655,7 +6658,10 @@
             "application/json": {
               "schema": {
                 "additionalProperties": false,
-                "properties": { "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" } },
+                "properties": {
+                  "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" },
+                  "q": { "maxLength": 1024, "type": "string" }
+                },
                 "type": "object"
               }
             }
@@ -6836,7 +6842,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "List plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants",
+        "summary": "List or search plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "update", "resourceKind": "agent", "scope": "requested" },

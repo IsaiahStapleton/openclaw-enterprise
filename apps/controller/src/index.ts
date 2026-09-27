@@ -2036,6 +2036,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           ? { accessToken: body?.accessToken as string }
           : { secretRef: body.secretRef as SecretReference }),
         ...(body?.cursor === undefined ? {} : { cursor: body.cursor as string }),
+        ...(body?.q === undefined ? {} : { q: body.q as string }),
       });
       reply.header("cache-control", "no-store");
       reply.send({ data: catalog, meta: { requestId: request.id } });
@@ -2070,7 +2071,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         context.actorId,
         namespaceId,
         params.agentId as string,
-        body?.cursor === undefined ? {} : { cursor: body.cursor as string },
+        {
+          ...(body?.cursor === undefined ? {} : { cursor: body.cursor as string }),
+          ...(body?.q === undefined ? {} : { q: body.q as string }),
+        },
       );
       reply.header("cache-control", "no-store");
       reply.send({ data: catalog, meta: { requestId: request.id } });
