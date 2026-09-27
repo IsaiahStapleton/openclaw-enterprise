@@ -73,7 +73,9 @@ migrated `openclaw_k8s_*` database via `OCC_TEST_DATABASE_URL`.
   successful selected install followed by one selected install or authentication
   failure.
 - `OCC_TEST_PLUGIN_DRIVER_REAL=1` only when all scenario-specific environments
-  and databases are prepared.
+  and four separate scenario-specific databases are prepared. The fixture
+  rejects missing URLs and duplicate host, port, and database combinations
+  before provisioning resources; do not use different host aliases for one database.
 
 All native scenarios use Kubernetes. Provide
 `OCC_TEST_KUBERNETES_KUBECONFIG`, `OCC_TEST_KUBERNETES_CONTEXT`,

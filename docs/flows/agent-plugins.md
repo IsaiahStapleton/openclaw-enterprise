@@ -105,9 +105,9 @@ Authorized `GET /installation` exposes the selected Driver's `policyCapabilities
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
-Deployment revalidates Agent selections and Configuration, records the Driver
-identity and policy-only plugin map in AgentRevision, and queues the immutable
-revision. Native app mapping, release metadata, and configuration are resolved later.
+Deployment revalidates selections and Configuration, records the Driver and
+policy-only plugin map in AgentRevision, and queues the revision. Native app
+mapping, release metadata, and configuration are resolved later.
 
 ### 3. Deliver requested state through Compute preparation
 
@@ -115,10 +115,9 @@ revision. Native app mapping, release metadata, and configuration are resolved l
 
 Compute validates the admitted state, Driver, and Harness. Kubernetes projects
 the nonsecret request into the revision workload; Docker uses bounded runtime
-environment delivery. Both follow the existing Compute lifecycle.
+environment delivery.
 
-SSH Compute rejects nonempty plugin maps before host effects; plugin-free
-revisions use the ordinary SSH lifecycle.
+SSH Compute rejects nonempty plugin maps before host effects.
 
 For an initial embedded Kubernetes gateway, preparation applies exact-Agent HTTPS
 egress before installation. For an existing gateway, `prepareRevision` avoids a

@@ -39,6 +39,7 @@ test(
 
     const fixture = await createPluginDriverRealFixture(context, {
       pluginDriverId: "occ-plugin",
+      scenario: "openclaw",
       databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_OPENCLAW_DATABASE_URL,
     });
     const primary = await fixture.createAgent({
@@ -343,6 +344,7 @@ test(
     const fixture = await createPluginDriverRealFixture(context, {
       pluginDriverId: "codex-plugin",
       pluginDriverConfiguration: { catalogSource: "openai-curated" },
+      scenario: "codex_linear",
       databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_CODEX_LINEAR_DATABASE_URL,
       codexCredential: credential,
     });
@@ -446,6 +448,7 @@ test(
     const credential = await readCodexServiceAccountCredential();
     const fixture = await createPluginDriverRealFixture(context, {
       pluginDriverId: "codex-plugin",
+      scenario: "codex_calendar",
       databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL,
       codexCredential: credential,
     });
@@ -703,6 +706,7 @@ test(
     const credential = await readCodexServiceAccountCredential();
     const fixture = await createPluginDriverRealFixture(context, {
       pluginDriverId: "codex-plugin",
+      scenario: "codex_failure",
       databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL,
       codexCredential: credential,
     });
