@@ -322,7 +322,7 @@
         "title": "SecretResponse",
         "type": "object"
       },
-      "def-8": {
+      "def-9": {
         "additionalProperties": false,
         "properties": {
           "data": {
@@ -10131,7 +10131,7 @@
         "responses": {
           "201": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-8" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-9" } }
             },
             "description": "Default Response"
           },
@@ -10298,7 +10298,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-8" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-9" } }
             },
             "description": "Default Response"
           },
