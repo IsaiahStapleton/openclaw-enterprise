@@ -250,6 +250,9 @@
       "path": "tests/integration/plugin-driver-startup.test.mjs"
     },
     {
+      "path": "tests/integration/plugin-driver-real-preflight.test.mjs"
+    },
+    {
       "path": "tests/conformance/repository-transactions.test.mjs"
     },
     {
