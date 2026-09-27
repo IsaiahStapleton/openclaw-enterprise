@@ -20,6 +20,8 @@ import {
   CreateNamespaceBody,
   ProvisionAgentBody,
   CreateSecretBody,
+  CreateCredentialSourceBody,
+  CredentialSourceParams,
   CreateServiceAccountBody,
   CreateServiceAccountCredentialBody,
   DeploymentParams,
@@ -67,6 +69,7 @@ import {
   BackendListResponse,
   RepositoryOptionListResponse,
   SecretListResponse,
+  CredentialSourceListResponse,
   ServiceAccountListResponse,
   ServiceAccountResponse,
   WorkspaceFileResponse,
@@ -75,6 +78,7 @@ import {
 
 const ErrorResponseRef = Type.Ref("ErrorResponse");
 const SecretResponseRef = Type.Ref("SecretResponse");
+const CredentialSourceResponseRef = Type.Ref("CredentialSourceResponse");
 
 const readErrors = {
   400: ErrorResponseRef,
@@ -590,6 +594,71 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       params: SecretParams,
+      response: { 204: Type.Null(), ...mutationErrors },
+    },
+  },
+  {
+    operationId: "createCredentialSource",
+    method: "POST",
+    path: "/namespaces/:namespaceId/credential-sources",
+    action: "openclaw.credential_sources.create",
+    iamAction: "create",
+    resourceKind: "credential_source",
+    authorizationTarget: "namespace_collection",
+    summary: "Register a credential source with the selected Credential Gateway",
+    tags: ["Credential sources"],
+    schema: {
+      querystring: EmptyQuery,
+      params: NamespaceParams,
+      body: CreateCredentialSourceBody,
+      response: { 201: CredentialSourceResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "listCredentialSources",
+    method: "GET",
+    path: "/namespaces/:namespaceId/credential-sources",
+    action: "openclaw.credential_sources.read",
+    iamAction: "read",
+    resourceKind: "credential_source",
+    authorizationTarget: "namespace_collection",
+    summary: "List readable credential sources without revealing credential values",
+    tags: ["Credential sources"],
+    schema: {
+      querystring: EmptyQuery,
+      params: NamespaceParams,
+      response: { 200: CredentialSourceListResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "getCredentialSource",
+    method: "GET",
+    path: "/namespaces/:namespaceId/credential-sources/:credentialSourceId",
+    action: "openclaw.credential_sources.read",
+    iamAction: "read",
+    resourceKind: "credential_source",
+    authorizationTarget: "credential_source",
+    summary: "Get one credential source and its live Credential Gateway status",
+    tags: ["Credential sources"],
+    schema: {
+      querystring: EmptyQuery,
+      params: CredentialSourceParams,
+      response: { 200: CredentialSourceResponseRef, ...readErrors },
+    },
+  },
+  {
+    operationId: "deleteCredentialSource",
+    method: "DELETE",
+    path: "/namespaces/:namespaceId/credential-sources/:credentialSourceId",
+    action: "openclaw.credential_sources.delete",
+    iamAction: "delete",
+    resourceKind: "credential_source",
+    authorizationTarget: "credential_source",
+    summary: "Remove an unreferenced credential source from the Credential Gateway",
+    tags: ["Credential sources"],
+    schema: {
+      querystring: EmptyQuery,
+      params: CredentialSourceParams,
       response: { 204: Type.Null(), ...mutationErrors },
     },
   },

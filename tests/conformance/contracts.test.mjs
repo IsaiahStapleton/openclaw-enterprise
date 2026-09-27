@@ -26,6 +26,7 @@ test("the Driver contract exposes the supported platform capabilities", () => {
     "sandbox",
     "plugin",
     "repo",
+    "credential_gateway",
   ]);
   assert.equal(Object.isFrozen(DRIVER_CAPABILITIES), true);
 
@@ -165,6 +166,7 @@ test("the singleton platform resource model keeps Namespace ownership explicit",
     "secret",
     "agent",
     "agent_revision",
+    "credential_source",
   ]);
   assert.equal(Object.isFrozen(RESOURCE_KINDS), true);
 

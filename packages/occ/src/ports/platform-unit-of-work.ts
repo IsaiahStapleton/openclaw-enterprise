@@ -23,6 +23,7 @@ export function bindPlatformUnitOfWork(
       "hasPresets",
       "hasServiceAccounts",
       "hasSecrets",
+      "hasCredentialSources",
       "transitionNamespaceStatus",
       "markNamespaceDeleted",
     ]),
@@ -47,6 +48,15 @@ export function bindPlatformUnitOfWork(
       "lockSecret",
       "createSecret",
       "deleteSecret",
+      "hasReferences",
+    ]),
+    credentialSources: bindRepository(repositories.credentialSources, lifetime, [
+      "findCredentialSource",
+      "listCredentialSources",
+      "lockCredentialSource",
+      "createCredentialSource",
+      "markCredentialSourceDeleting",
+      "deleteCredentialSource",
       "hasReferences",
     ]),
     serviceAccounts: bindRepository(repositories.serviceAccounts, lifetime, [
