@@ -8,6 +8,11 @@ import {
   ConfigurationId,
   ConfigurationKindSchema,
   ConfigurationValues,
+  CredentialSourceConfig,
+  CredentialSourceId,
+  CredentialSourceReference,
+  CredentialSourceSecrets,
+  CredentialSourceType,
   HarnessExecutionModeSchema,
   HarnessAuthBindingSchema,
   InstallationId,
@@ -297,6 +302,42 @@ export const SecretSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const CredentialSourceStatusSchema = Type.Object(
+  {
+    state: Type.Union([
+      Type.Literal("ready"),
+      Type.Literal("pending"),
+      Type.Literal("failed"),
+      Type.Literal("absent"),
+    ]),
+    reason: Type.Optional(Type.String({ maxLength: 512 })),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Live status reported by the selected Credential Gateway. It never contains credential values.",
+  },
+);
+
+export const CredentialSourceSchema = Type.Object(
+  {
+    id: CredentialSourceId,
+    namespaceId: NamespaceId,
+    name: Name,
+    type: CredentialSourceType,
+    config: CredentialSourceConfig,
+    secrets: CredentialSourceSecrets,
+    state: Type.Union([
+      Type.Literal("registering"),
+      Type.Literal("ready"),
+      Type.Literal("deleting"),
+    ]),
+    ref: CredentialSourceReference,
+    status: Type.Optional(CredentialSourceStatusSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentRuntimeCredentialStatusSchema = Type.Object(
   {
     transportConfigured: Type.Boolean(),
@@ -421,7 +462,7 @@ export const ServiceAccountSchema = Type.Object(
 export const BackendSummarySchema = Type.Object(
   {
     id: BackendId,
-    type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github")]),
+    type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github"), Type.Literal("openshell")]),
   },
   { additionalProperties: false },
 );
@@ -499,6 +540,19 @@ export const SecretResponse = Type.Object(
     $id: "SecretResponse",
     additionalProperties: false,
   },
+);
+
+export const CredentialSourceResponse = Type.Object(
+  { data: CredentialSourceSchema, meta: Meta },
+  {
+    $id: "CredentialSourceResponse",
+    additionalProperties: false,
+  },
+);
+
+export const CredentialSourceListResponse = Type.Object(
+  { data: Type.Array(CredentialSourceSchema), meta: Meta },
+  { additionalProperties: false },
 );
 
 export const SecretListResponse = Type.Object(
@@ -808,6 +862,9 @@ export type NamespaceResponse = Type.Static<typeof NamespaceResponse>;
 export type NamespaceListResponse = Type.Static<typeof NamespaceListResponse>;
 export type ConfigurationResponse = Type.Static<typeof ConfigurationResponse>;
 export type SecretResponse = Type.Static<typeof SecretResponse>;
+export type CredentialSourceWire = Type.Static<typeof CredentialSourceSchema>;
+export type CredentialSourceResponse = Type.Static<typeof CredentialSourceResponse>;
+export type CredentialSourceListResponse = Type.Static<typeof CredentialSourceListResponse>;
 export type SecretListResponse = Type.Static<typeof SecretListResponse>;
 export type ServiceAccountResponse = Type.Static<typeof ServiceAccountResponse>;
 export type ServiceAccountListResponse = Type.Static<typeof ServiceAccountListResponse>;

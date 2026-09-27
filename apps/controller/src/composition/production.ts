@@ -55,6 +55,7 @@ export async function composeProduction(config: ProductionConfig) {
     configurationDriver,
     secretDriver,
     sandboxDriver,
+    credentialGatewayDriver,
     pluginDriver,
     repoDriver,
     createIAMDriver,
@@ -156,6 +157,10 @@ export async function composeProduction(config: ProductionConfig) {
     if (sandboxDriver !== undefined) {
       controller.registerDriver(sandboxDriver);
       controller.selectDriver("sandbox", sandboxDriver.id);
+    }
+    if (credentialGatewayDriver !== undefined) {
+      controller.registerDriver(credentialGatewayDriver);
+      controller.selectDriver("credential_gateway", credentialGatewayDriver.id);
     }
     controller.registerDriver(configurationDriver);
     controller.selectDriver("configuration", configurationDriver.id);

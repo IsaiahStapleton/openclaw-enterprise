@@ -1013,9 +1013,10 @@ async function assertCompletedHistory(db, previous = []) {
   const receipts = await historyReceipts(db.migrator);
   assert.deepEqual(receipts.slice(0, previous.length), previous);
   const providerEntries = manifest.compatibleLineages.providerCompleted.entries;
+  const providerLineage = [...providerEntries, ...manifest.entries.slice(providerEntries.length)];
   const expectedEntries =
-    previous.length === providerEntries.length && receiptsMatchEntries(previous, providerEntries)
-      ? [...providerEntries, manifest.entries.at(-1)]
+    previous.length >= providerEntries.length && receiptsMatchEntries(previous, providerLineage)
+      ? providerLineage
       : manifest.entries;
   assert.deepEqual(
     receipts.map(({ hash, created_at }) => [hash, Number(created_at)]),
@@ -1327,7 +1328,7 @@ async function canonicalData(db) {
   ]) {
     const ignoredColumns =
       table === "agents"
-        ? ["repository_bindings"]
+        ? ["repository_bindings", "harness_auth_credential_source_id"]
         : table === "controller_work"
           ? ["work_kind"]
           : [];
@@ -1386,6 +1387,7 @@ test(
       [29, "workspaceSetup"],
       [30, "agentProvisioning"],
       [31, "backendCompleted"],
+      [32, "backendTerminology"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1618,6 +1620,28 @@ test(
 );
 
 test(
+  "Canonical migration completes a Provider lineage that already applied terminology compatibility",
+  requiresHistoryPostgres,
+  async (context) => {
+    const fixture = await migrationHistoryFixture();
+    const db = await historyDatabase(context, fixture, "providerterminology");
+    await installProviderCompletedHistory(db);
+    // Stock Drizzle applies only entries newer than the last receipt, so this
+    // adds canonical 0031 on top of the retained Provider fingerprints.
+    await installCanonicalPrefix(db, 32);
+    const receipts = await historyReceipts(db.migrator);
+    assert.equal(receipts.length, 32);
+    assert.deepEqual(await runHistoryMigration(db, "production", true), {
+      ok: true,
+      history: "backendTerminology",
+    });
+    assert.deepEqual(await runHistoryMigration(db), { ok: true, history: "backendTerminology" });
+    // Later migrations append to the Provider lineage without rewriting its receipts.
+    await assertCompletedHistory(db, receipts);
+  },
+);
+
+test(
   "Canonical migration refuses ambiguous Provider and Backend data before mutation",
   requiresHistoryPostgres,
   async (context) => {
@@ -1657,6 +1681,7 @@ test(
       [29, "workspaceSetup"],
       [30, "agentProvisioning"],
       [31, "backendCompleted"],
+      [32, "backendTerminology"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });

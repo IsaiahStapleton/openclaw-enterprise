@@ -48,6 +48,7 @@ export const DRIVER_CAPABILITIES = Object.freeze([
   "sandbox",
   "plugin",
   "repo",
+  "credential_gateway",
 ] as const);
 
 export type DriverCapability = (typeof DRIVER_CAPABILITIES)[number];
@@ -77,8 +78,37 @@ export interface GitHubRepositoryCredentialBackendDefinition {
   readonly drivers: { readonly repo: string };
 }
 
+/** Connection settings for one OpenShell gateway deployment; no workspace policy. */
+export interface OpenShellBackendConfiguration {
+  readonly endpoint?: string;
+  readonly scheme?: "http" | "https";
+  /** A dotted name is used as-is; a bare name resolves in each Sandbox namespace. */
+  readonly serviceName?: string;
+  readonly port?: number;
+  readonly auth?:
+    | { readonly mode: "unauthenticated" }
+    | { readonly mode: "bearerTokenFile"; readonly path: string };
+  /** At most 30 s; it bounds how late a timed-out credential registration can land. */
+  readonly requestTimeoutMs?: number;
+  readonly rootCertificatePath?: string;
+  /**
+   * Declares that NetworkPolicy isolates a gateway reached without TLS or bearer authentication.
+   * Required for such transport because credential registration sends resolved values.
+   */
+  readonly insecureTransport?: "network-policy";
+}
+
+export interface OpenShellBackendDefinition {
+  readonly id: string;
+  readonly type: "openshell";
+  readonly configuration: OpenShellBackendConfiguration;
+  readonly drivers: { readonly sandbox: string; readonly credential_gateway: string };
+}
+
 export type BackendDefinition =
-  ChatGPTBackendDefinition | GitHubRepositoryCredentialBackendDefinition;
+  | ChatGPTBackendDefinition
+  | GitHubRepositoryCredentialBackendDefinition
+  | OpenShellBackendDefinition;
 
 export interface BackendSummary {
   readonly id: string;
@@ -119,6 +149,7 @@ export const RESOURCE_KINDS = Object.freeze([
   "secret",
   "agent",
   "agent_revision",
+  "credential_source",
 ] as const);
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
@@ -221,10 +252,64 @@ export interface SecretEnvironmentProjection {
   readonly backendRef: SecretBackendRef;
 }
 
+export interface CredentialSourceReference extends ResourceRef {
+  readonly kind: "credential_source";
+  readonly namespaceId: string;
+}
+
+/** Login modes a Harness can use when its model credential arrives from a source. */
+export type CredentialSourceLoginMode = "api_key";
+
+export interface CredentialSourceFieldSpec {
+  readonly name: string;
+  readonly required: boolean;
+  readonly description?: string;
+}
+
+/** One entry in a Credential Gateway implementation's catalog. */
+export interface CredentialSourceType {
+  readonly type: string;
+  readonly config: readonly CredentialSourceFieldSpec[];
+  readonly secrets: readonly CredentialSourceFieldSpec[];
+  readonly rotation: "none" | "external" | "gateway";
+  readonly harnessAuth?: {
+    readonly modelProvider: string;
+    readonly loginMode: CredentialSourceLoginMode;
+  };
+}
+
+/** `registering` is recorded before the gateway write, so an uncertain outcome stays visible. */
+export type CredentialSourceState = "registering" | "ready" | "deleting";
+
+/** OCC record for a credential held by the selected Credential Gateway; never values. */
+export interface CredentialSource {
+  readonly id: string;
+  readonly namespaceId: string;
+  readonly name: string;
+  readonly type: string;
+  readonly config: Readonly<Record<string, string>>;
+  readonly secrets: Readonly<Record<string, SecretReference>>;
+  readonly driverId: string;
+  readonly state: CredentialSourceState;
+  readonly createdAt: string;
+}
+
+export interface CredentialSourceMetadata {
+  readonly id: string;
+  readonly namespaceId: string;
+  readonly name: string;
+  readonly type: string;
+  readonly config: Readonly<Record<string, string>>;
+  readonly secrets: Readonly<Record<string, SecretReference>>;
+  readonly state: CredentialSourceState;
+  readonly ref: CredentialSourceReference;
+}
+
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
   | { readonly method: "codex_pat"; readonly source: SecretReference }
   | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
+  | { readonly method: "credential_source"; readonly sourceId: string }
   | { readonly method: "runtime" };
 
 /** Private admission metadata. Public APIs expose only HarnessAuthBinding. */
@@ -250,12 +335,22 @@ export type HarnessAuthSnapshot =
         readonly workspaceId: string;
         readonly credentialIssued: boolean;
       };
+    }
+  | {
+      readonly method: "credential_source";
+      readonly sourceId: string;
+      readonly credentialGatewayId: string;
+      readonly sourceType: string;
+      readonly loginMode: CredentialSourceLoginMode;
     };
 
 /** Authoritative delivery references, resolved again at dispatch; never secret values. */
 export type ResolvedHarnessAuth =
   | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" }> & {
       readonly backendRef: SecretBackendRef;
+    })
+  | (Extract<HarnessAuthSnapshot, { method: "credential_source" }> & {
+      readonly source: Readonly<CredentialSource>;
     })
   | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" | "runtime" }>;
 
@@ -268,7 +363,7 @@ export interface ComputeRevisionContext {
 
 export type PluginReviewer = "human" | "auto";
 
-export type PluginApprovalMode = "native" | "prompt" | "approve";
+export type PluginApprovalMode = "provider_default" | "all_actions" | "write_actions" | "none";
 
 export interface PluginDriverIdentity {
   readonly id: string;
@@ -699,6 +794,8 @@ export interface HarnessWorkloadRequirements {
   };
   readonly workspaceMounts: readonly SandboxWorkspaceMount[];
   readonly environment: readonly SandboxEnvironmentVariable[];
+  /** Credential Gateway attachments the paired Sandbox must consume in full. */
+  readonly credentialAttachments: readonly CredentialSourceAttachment[];
   readonly labels: Readonly<Record<string, string>>;
 }
 
@@ -807,7 +904,13 @@ export interface IAMPolicyManagementContext {
 }
 
 export type ManagedIAMResourceKind =
-  "agent" | "agent_revision" | "configuration" | "preset" | "secret" | "service_account";
+  | "agent"
+  | "agent_revision"
+  | "configuration"
+  | "credential_source"
+  | "preset"
+  | "secret"
+  | "service_account";
 
 export interface IAMManagedRoleInput {
   readonly id: string;
@@ -842,6 +945,76 @@ export interface SecretDriver extends Driver {
   resolve(secret: Secret): Promise<SecretBackendRef>;
   /** Verify live ownership and use the current value only within a transient server-side operation. */
   withValue?<T>(secret: Secret, use: (value: string) => Promise<T>): Promise<T>;
+}
+
+export interface CredentialGatewayContext {
+  readonly signal: AbortSignal;
+}
+
+export interface CredentialSourceContext extends CredentialGatewayContext {
+  /** Resolved by Compute: `name` is the runtime placement shared with the paired Sandbox. */
+  readonly namespace: Readonly<Namespace>;
+  readonly source: Readonly<CredentialSource>;
+}
+
+export interface CredentialSourceInput {
+  readonly type: string;
+  readonly config: Readonly<Record<string, string>>;
+  /** Resolved secret values keyed by catalog field; never persisted by OCC. */
+  readonly secrets: Readonly<Record<string, string>>;
+}
+
+export interface CredentialSourceStatus {
+  readonly state: "ready" | "pending" | "failed" | "absent";
+  readonly reason?: string;
+}
+
+export interface CredentialRevisionContext extends CredentialGatewayContext {
+  readonly namespace: Readonly<Namespace>;
+  readonly revision: Readonly<AgentRevision>;
+  readonly sources: readonly Readonly<CredentialSource>[];
+  /** The paired Sandbox's workload, once provisioned; required for attachment status. */
+  readonly sandbox?: SandboxResourceRef;
+}
+
+/** Opaque grant that only the paired SandboxDriver can consume. */
+export interface CredentialSourceAttachment {
+  readonly sourceId: string;
+  readonly ref: string;
+}
+
+export interface CredentialAttachmentStatus {
+  readonly sourceId: string;
+  readonly state: "ready" | "pending" | "withheld" | "failed" | "revoked" | "absent";
+  readonly reason?: string;
+}
+
+/** Holds credential sources and applies them outside the Agent workload. */
+export interface CredentialGatewayDriver extends Driver {
+  readonly capability: "credential_gateway";
+  listSourceTypes(context: CredentialGatewayContext): Promise<readonly CredentialSourceType[]>;
+  registerSource(
+    context: CredentialSourceContext,
+    input: CredentialSourceInput,
+  ): Promise<CredentialSourceStatus>;
+  updateSource(
+    context: CredentialSourceContext,
+    input: CredentialSourceInput,
+  ): Promise<CredentialSourceStatus>;
+  rotateSource(context: CredentialSourceContext): Promise<CredentialSourceStatus>;
+  sourceStatus(context: CredentialSourceContext): Promise<CredentialSourceStatus>;
+  /** Idempotent; an already-absent source counts as removed. */
+  removeSource(context: CredentialSourceContext): Promise<void>;
+  /** Returns exactly one attachment per bound source, or throws. */
+  attachForRevision(
+    context: CredentialRevisionContext,
+  ): Promise<readonly CredentialSourceAttachment[]>;
+  attachmentStatus(
+    context: CredentialRevisionContext,
+  ): Promise<readonly CredentialAttachmentStatus[]>;
+  withdraw(
+    context: CredentialRevisionContext & { readonly sourceId: string },
+  ): Promise<CredentialAttachmentStatus>;
 }
 
 export interface SandboxDriver extends Driver {
@@ -1011,6 +1184,8 @@ export interface ComputeDriver extends Driver {
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
     secretBindings?: SecretBindings,
+    /** Catalog entry for a `credential_source` binding; absent for every other method. */
+    credentialSourceType?: CredentialSourceType,
   ): void;
   /** Discovery availability; deployment must still validate its exact Harness. */
   validateRepositoryCredentialSupport?(sandboxDriverId?: string): void;
@@ -1035,6 +1210,11 @@ export interface ComputeDriver extends Driver {
   getGatewayEndpoint?(revision: AgentRevision): string | undefined;
   ensureNamespace(namespace: Namespace): Promise<NamespaceEnsureResult>;
   deleteNamespace(namespace: Namespace): Promise<NamespaceDeleteResult>;
+  /**
+   * The Namespace as the paired Sandbox and Credential Gateway see it: `name` is this
+   * Compute Driver's runtime placement. Required to register Credential Gateway sources.
+   */
+  resolveSandboxNamespace?(namespace: Readonly<Namespace>): Promise<Readonly<Namespace>>;
   prepareRevision(
     revision: AgentRevision,
     context?: ComputeRevisionContext,
