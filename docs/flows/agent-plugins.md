@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-27
-last_updated_session: 01a0e164-ee0e-7c51-a28f-b1179d5917dd
+last_updated_session: 01a0e176-b1ee-7641-85e8-c167f10c6a66
 ---
 
 # Agent Plugin Deployment Flow
@@ -65,17 +65,17 @@ a PAT, exact Secret reference, or no credential if the Driver permits it.
 `packages/occ/src/index.ts:OpenClawController.discoverAgentPlugins` or
 `discoverAgentPluginDetails`. OCC authorizes Namespace Agent creation and, for a
 Secret, checks Namespace scope and exact `operate` permission before Driver support.
-Unsupported discovery does not read the Secret. Otherwise `SecretDriver.withValue`
-checks backend ownership and supplies its current value without holding a platform
-transaction. Each request reads again; an in-flight request can use a pre-rotation
-value. Missing, denied, and unavailable Secrets fail before provider discovery.
-No discovery state or credential is stored.
+Unsupported discovery never reads the Secret. Otherwise `SecretDriver.withValue`
+checks ownership and supplies its current value without a platform transaction.
+Each request rereads it; an in-flight request can use a pre-rotation value. Missing,
+denied, and unavailable Secrets fail before provider discovery. No discovery state
+or credential is stored.
 
 The [Codex Plugin Driver](../../apps/controller/src/drivers/plugin/index.ts)
 selects its configured catalog. Hosted discovery hydrates identity, pages 20
 GLOBAL entries, and loads tools (`null`: unknown). The hardcoded catalog returns
-Linear without provider I/O or known tools and account access. Console permits
-this marked entry after reading its details. Filtering stays local.
+entries without provider I/O or known tools and account access. Console permits
+supported entries after reading details; unsupported releases remain unavailable.
 Hosted reads are bounded and redirect-free. OCC returns `no-store` metadata,
 rejects results echoing credentials, and suppresses artifacts and upstream errors.
 Driver-owned links and [setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs)
@@ -98,9 +98,8 @@ authentication, and release/tool metadata remain startup checks. Agent mutations
 the reusable Configuration or active runtime. On update, omission preserves the
 map, `{}` clears it, and a nonempty map replaces it.
 
-Authorized `GET /installation` reads expose the selected Driver's
-`policyCapabilities` through `OpenClawController.getInstallation`. This is policy
-capability discovery; it does not list available plugins or tools.
+Authorized `GET /installation` exposes the selected Driver's `policyCapabilities` through
+`OpenClawController.getInstallation`; it does not list plugins or tools.
 
 ### 2. Admit an immutable plugin deployment
 
@@ -292,6 +291,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 06:07: Expanded the curated catalog and marked unsupported releases unavailable. (01a0e176-b1ee-7641-85e8-c167f10c6a66 - eb3d6c4c0b8881e5f7efe17c03cc05357e7c7734)
 
 - 2026-09-27 05:49: Added selected token-free curated catalog discovery and preserved runtime credential checks. (01a0e164-ee0e-7c51-a28f-b1179d5917dd - 7812d81bce78a415b7a47b4e335812304caf98ea)
 

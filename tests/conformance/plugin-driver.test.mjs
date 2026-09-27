@@ -214,7 +214,7 @@ test("OpenClaw tool enablement overrides tool defaults without enabling a disabl
   });
 });
 
-test("Hardcoded OpenAI catalog returns selectable Linear details without provider requests", async (t) => {
+test("Hardcoded OpenAI catalog returns curated details without provider requests", async (t) => {
   const requests = [];
   t.mock.method(globalThis, "fetch", (url) => {
     requests.push(String(url));
@@ -223,14 +223,47 @@ test("Hardcoded OpenAI catalog returns selectable Linear details without provide
   const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
   const page = await driver.discoverCatalog({});
   assert.equal(page.nextCursor, null);
-  assert.equal(page.plugins.length, 1);
-  const [linear] = page.plugins;
+  assert.deepEqual(
+    new Set(page.plugins.map((entry) => entry.name)),
+    new Set([
+      "Linear",
+      "Slack",
+      "GitHub",
+      "Notion",
+      "Figma",
+      "Canva",
+      "Datadog",
+      "Sentry",
+      "Adobe",
+      "Coursera Learning",
+      "Google Contacts",
+    ]),
+  );
+  const linear = page.plugins.find((entry) => entry.id === linearPluginId);
+  assert.ok(linear);
   assert.equal(linear.id, linearPluginId);
   assert.equal(linear.remoteId, "plugin_asdk_app_69a089a326dc8191b32a3f2553f5be2c");
   assert.equal(linear.tools, null);
   assert.equal(linear.selectableWithoutTools, true);
   assert.deepEqual(await driver.getCatalogPlugin({ pluginId: linear.remoteId }), linear);
-  assert.deepEqual(await driver.listCatalog(context("dedicated")), [linear]);
+  const github = page.plugins.find((entry) => entry.name === "GitHub");
+  assert.ok(github);
+  assert.equal(github.remoteId, "plugin_connector_1p_1a69035c238881919c4190932b2df699");
+  assert.deepEqual(await driver.getCatalogPlugin({ pluginId: github.remoteId }), github);
+  // Recorded releases with unsupported components must never be offered for selection.
+  assert.deepEqual(
+    new Set(page.plugins.filter((entry) => entry.available === false).map((entry) => entry.name)),
+    new Set(["Notion", "Figma", "Canva", "Sentry", "Adobe"]),
+  );
+  assert.equal(new Set(page.plugins.map((entry) => entry.remoteId)).size, page.plugins.length);
+  for (const entry of page.plugins) {
+    assert.ok(entry.remoteId);
+    assert.deepEqual(await driver.getCatalogPlugin({ pluginId: entry.remoteId }), entry);
+    if (entry.available === false) {
+      assert.match(entry.unavailableReason, /skills/);
+    }
+  }
+  assert.deepEqual(await driver.listCatalog(context("dedicated")), page.plugins);
   await assert.rejects(driver.discoverCatalog({ cursor: "invalid" }));
   await assert.rejects(driver.getCatalogPlugin({ pluginId: "invalid" }));
   assert.deepEqual(requests, []);

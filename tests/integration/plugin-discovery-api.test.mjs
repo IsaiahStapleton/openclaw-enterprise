@@ -628,6 +628,19 @@ test("Curated discovery admits Linear without provider I/O and saves its selecti
   });
   assert.equal(details.status, 200);
   assert.deepEqual(details.data, linear);
+  const slack = page.data.plugins.find(
+    (entry) => entry.id === "codex-plugin:slack@openai-curated-remote",
+  );
+  assert.ok(slack);
+  const slackDetails = await fixture.request("POST", `${path}/details`, {
+    body: { pluginId: slack.remoteId },
+  });
+  assert.equal(slackDetails.status, 200);
+  assert.deepEqual(slackDetails.data, slack);
+  const notion = page.data.plugins.find(
+    (entry) => entry.id === "codex-plugin:notion@openai-curated-remote",
+  );
+  assert.equal(notion?.available, false);
   assert.equal(
     (await fixture.request("POST", `${path}/details`, { body: { pluginId: "unknown" } })).status,
     503,
@@ -641,7 +654,10 @@ test("Curated discovery admits Linear without provider I/O and saves its selecti
     createHarnessConfiguration("codex", "gpt-5.1"),
     { executionMode: "dedicated" },
   );
-  const plugins = { [linear.id]: { enabled: true, toolDefaults: { reviewer: "auto" } } };
+  const plugins = {
+    [linear.id]: { enabled: true, toolDefaults: { reviewer: "auto" } },
+    [slack.id]: { enabled: true, toolDefaults: { reviewer: "auto" } },
+  };
   const updated = await fixture.updateAgent(namespace.id, agent.id, {
     configurationId: agent.configurationId,
     plugins,

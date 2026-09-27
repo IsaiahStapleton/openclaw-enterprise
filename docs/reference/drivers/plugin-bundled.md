@@ -31,9 +31,12 @@ drivers:
       catalogSource: openai-curated
 ```
 
-The curated catalog currently contains Linear. It provides verified plugin
-identity and presentation metadata, but no tool inventory or account-specific
-availability. Select a plugin and set its default policy; per-tool controls are
+The curated catalog includes Linear, Slack, GitHub, Notion, Figma, Canva,
+Datadog, Sentry, Adobe, Coursera Learning, and Google Contacts. Their recorded
+identities and presentation metadata do not include tool inventory or
+account-specific availability. Notion, Figma, Canva, Sentry, and Adobe are
+unavailable because their recorded releases require unsupported skills or local
+components. Select a plugin and set its default policy; per-tool controls are
 unavailable until the catalog supplies tool details. Startup resolves native
 metadata independently and still requires the Agent's actual authentication and
 provider access. Catalog membership does not grant access or prove execution.

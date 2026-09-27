@@ -81,8 +81,8 @@ or uncertain-outcome form state; follow save recovery below.
 
 For Codex plugins, open **Configure plugins**. With the
 [OpenAI curated catalog](../drivers/plugin-bundled.md#selection-and-catalogs),
-you can browse and select Linear without a discovery token. Its tool inventory
-and account access are unknown. In hosted mode, select **Service Accounts** with
+you can browse and select supported plugins without a discovery token. Their tool
+inventory and account access are unknown. In hosted mode, select **Service Accounts** with
 **Codex** and choose a PAT Secret, or enter a token under **Plugin discovery token
 (optional)**. **Previous page** and **Next page** fetch hosted pages; **Filter this
 page** filters locally. PAT catalog search is unavailable.
