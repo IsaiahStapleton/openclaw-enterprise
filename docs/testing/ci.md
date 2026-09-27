@@ -38,9 +38,7 @@ words are flagged for review and pages above 2,500 fail, except the approved
 generated API, site build, navigation, and links must pass. Run
 `pnpm docs:check-length` for the word-count check alone.
 
-The `checks-baseline` lane checks the actual repository against its
-[dependency policy](repository-boundaries.md) with its checked-in exceptions.
-The policy test also verifies allowed public-root and forbidden HTTP-to-Driver imports.
+The `checks-baseline` lane runs the [dependency policy](repository-boundaries.md).
 
 Suite Audit and the eleven PR lanes start independently on ephemeral runners.
 Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge
@@ -52,8 +50,7 @@ the repository platform fixture in one job; other lanes and the audit use
 pass, including result-artifact accounting. This avoids serial runner allocation
 before test lanes without changing selection or failure handling.
 
-The repository credential platform lane uses Blacksmith and its delivered runtime
-image. It proves HTTP, PostgreSQL, Unix control and credential material inside
+The repository credential platform lane proves HTTP, PostgreSQL, Unix control and credential material inside
 Kubernetes; compatible fixture lanes prove NetworkPolicy enforcement. The images
 packaging lane uses the full tool profile so preparation can derive the reviewed
 Codex seccomp profile in an owned k3d cluster and export
