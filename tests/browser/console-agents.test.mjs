@@ -28,6 +28,8 @@ import {
   detailUrl,
   expectNoText,
   login,
+  setSlackSelection,
+  slackSelectionValue,
   nativeValues,
   newPage,
   nonAuthWriteRequests,
@@ -912,8 +914,11 @@ test("Dedicated repository Agent keeps its bindings through Slack save and the c
   await page.getByRole("button", { name: "Channels", exact: true }).click();
   await page.getByRole("button", { name: "Configure Slack", exact: true }).click();
   await page.getByLabel("Direct-message policy").selectOption("disabled");
-  await page.getByLabel("Slack channel IDs").fill("CREPOSITORY123");
-  await page.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await setSlackSelection(
+    page.getByRole("combobox", { name: "Channels", exact: true }),
+    "CREPOSITORY123",
+  );
+  await page.getByLabel("Who can use the agent in these channels?").selectOption("everyone");
   const savedResponse = page.waitForResponse(
     (result) =>
       result.url().endsWith(`/configurations/${agent.configurationId}`) &&
@@ -1750,18 +1755,27 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   await botSecretDialog.getByLabel("Value", { exact: true }).fill("slack-bot-secret");
   await botSecretDialog.getByRole("button", { name: "Create Secret" }).click();
   await botSecretDialog.waitFor({ state: "hidden" });
-  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await channelDialog
+    .getByLabel("Who can use the agent in these channels?")
+    .selectOption("everyone");
   await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   await channelDialog
     .getByText("Enter at least one Slack channel ID for these access settings.")
     .waitFor();
-  await channelDialog.getByLabel("Slack channel IDs").fill("C0123456789");
-  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").uncheck();
+  await setSlackSelection(
+    channelDialog.getByRole("combobox", { name: "Channels", exact: true }),
+    "C0123456789",
+  );
+  await channelDialog
+    .getByLabel("Who can use the agent in these channels?")
+    .selectOption("selected");
   await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   await channelDialog
-    .getByText("Enter allowed channel user IDs or allow everyone in these channels.")
+    .getByText("Choose specific people or select Everyone in these channels.")
     .waitFor();
-  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await channelDialog
+    .getByLabel("Who can use the agent in these channels?")
+    .selectOption("everyone");
   await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
 
   const provisionResponse = page.waitForResponse(
@@ -1863,8 +1877,13 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
   await page.getByRole("button", { name: "Configure Slack" }).click();
   const channelDialog = page.getByRole("dialog", { name: "Configure Slack" });
   await channelDialog.getByLabel("Direct-message policy").selectOption("disabled");
-  await channelDialog.getByLabel("Slack channel IDs").fill("CUNSUPPORTED123");
-  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await setSlackSelection(
+    channelDialog.getByRole("combobox", { name: "Channels", exact: true }),
+    "CUNSUPPORTED123",
+  );
+  await channelDialog
+    .getByLabel("Who can use the agent in these channels?")
+    .selectOption("everyone");
   await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   const createdResponse = page.waitForResponse(
     (response) =>
@@ -1906,11 +1925,19 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
   await page.goto(detailUrl(fixture, namespace.id, createdAgent.id, "draft", "channels").href);
   await page.getByRole("button", { name: "Edit Slack", exact: true }).click();
   let savedDialog = page.getByRole("dialog", { name: "Edit Slack" });
-  const everyone = savedDialog.getByLabel("Allow everyone in these channels to mention the agent");
-  assert.equal(await everyone.isChecked(), true);
-  assert.equal(await savedDialog.getByLabel("Allowed channel user IDs").isDisabled(), true);
-  await everyone.uncheck();
-  await savedDialog.getByLabel("Allowed channel user IDs").fill("USENDER123");
+  const everyone = savedDialog.getByLabel("Who can use the agent in these channels?");
+  assert.equal(await everyone.inputValue(), "everyone");
+  assert.equal(
+    await savedDialog
+      .getByRole("combobox", { name: "Allowed people in these channels", exact: true })
+      .isVisible(),
+    false,
+  );
+  await everyone.selectOption("selected");
+  await setSlackSelection(
+    savedDialog.getByRole("combobox", { name: "Allowed people in these channels", exact: true }),
+    "USENDER123",
+  );
   const saved = page.waitForResponse(
     (response) =>
       response.request().method() === "PATCH" &&
@@ -1921,12 +1948,15 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
   await page.reload();
   await page.getByRole("button", { name: "Edit Slack", exact: true }).click();
   savedDialog = page.getByRole("dialog", { name: "Edit Slack" });
-  assert.equal(await savedDialog.getByLabel("Allowed channel user IDs").inputValue(), "USENDER123");
   assert.equal(
-    await savedDialog
-      .getByLabel("Allow everyone in these channels to mention the agent")
-      .isDisabled(),
-    true,
+    await slackSelectionValue(
+      savedDialog.getByRole("combobox", { name: "Allowed people in these channels", exact: true }),
+    ),
+    "USENDER123",
+  );
+  assert.equal(
+    await savedDialog.getByLabel("Who can use the agent in these channels?").inputValue(),
+    "selected",
   );
   const savedConfiguration = await fixture.request(
     "GET",
@@ -1947,7 +1977,10 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
   // An empty or wildcard allowlist must not produce a write or broaden channel access.
   await savedDialog.getByLabel("Direct-message policy").selectOption("allowlist");
   for (const invalid of ["", "*"]) {
-    await savedDialog.getByLabel("Allowed DM user IDs").fill(invalid);
+    await setSlackSelection(
+      savedDialog.getByRole("combobox", { name: "Allowed people in direct messages", exact: true }),
+      invalid,
+    );
     requests.length = 0;
     await savedDialog.getByRole("button", { name: "Save configuration", exact: true }).click();
     await savedDialog
@@ -1964,9 +1997,23 @@ test("Dedicated Agent creation uses regular create when provisioning is unsuppor
     await savedDialog.getByLabel("Direct-message policy").selectOption(policy);
     if (policy === "allowlist" || policy === "pairing") {
       if (policy === "pairing") {
-        assert.equal(await savedDialog.getByLabel("Allowed DM user IDs").inputValue(), "");
+        assert.equal(
+          await slackSelectionValue(
+            savedDialog.getByRole("combobox", {
+              name: "Allowed people in direct messages",
+              exact: true,
+            }),
+          ),
+          "",
+        );
       }
-      await savedDialog.getByLabel("Allowed DM user IDs").fill(senders.join(", "));
+      await setSlackSelection(
+        savedDialog.getByRole("combobox", {
+          name: "Allowed people in direct messages",
+          exact: true,
+        }),
+        senders.join(", "),
+      );
     }
     const policySaved = page.waitForResponse(
       (response) =>
@@ -2164,8 +2211,13 @@ test("Dedicated Agent creation reuses separately saved Secret references after p
   await botSecretDialog.getByLabel("Value", { exact: true }).fill("retry-slack-bot-secret");
   await botSecretDialog.getByRole("button", { name: "Create Secret" }).click();
   await botSecretDialog.waitFor({ state: "hidden" });
-  await channelDialog.getByLabel("Slack channel IDs").fill("CRETRY123");
-  await channelDialog.getByLabel("Allow everyone in these channels to mention the agent").check();
+  await setSlackSelection(
+    channelDialog.getByRole("combobox", { name: "Channels", exact: true }),
+    "CRETRY123",
+  );
+  await channelDialog
+    .getByLabel("Who can use the agent in these channels?")
+    .selectOption("everyone");
   await channelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   const firstProvisionResponse = page.waitForResponse(
     (response) =>
@@ -6128,13 +6180,17 @@ for (const [dmPolicy, groupPolicy, enterpriseOrgInstall] of [
       assert.deepEqual(unchanged.data.values.channels.slack, slack);
       await dialog.getByLabel("Direct-message policy").selectOption("disabled");
     }
-    const allowedUsers = dialog.getByLabel("Allowed channel user IDs");
-    const allowEveryone = dialog.getByLabel(
-      "Allow everyone in these channels to mention the agent",
+    const allowedUsers = dialog.getByRole("combobox", {
+      name: "Allowed people in these channels",
+      exact: true,
+    });
+    const allowEveryone = dialog.getByLabel("Who can use the agent in these channels?");
+    assert.equal(await slackSelectionValue(allowedUsers), "UKEEP123");
+    assert.equal(await allowEveryone.inputValue(), "selected");
+    await setSlackSelection(
+      dialog.getByRole("combobox", { name: "Channels", exact: true }),
+      "CKEEP123, CNEW123",
     );
-    assert.equal(await allowedUsers.inputValue(), "UKEEP123");
-    assert.equal(await allowEveryone.isDisabled(), true);
-    await dialog.getByLabel("Slack channel IDs").fill("CKEEP123, CNEW123");
     await dialog.getByLabel("Require a mention", { exact: true }).uncheck();
     const saved = page.waitForResponse(
       (response) =>
@@ -7307,7 +7363,7 @@ test("leaving a no-Preset creation form discards its in-progress state", async (
       await page.getByRole("button", { name: "Configure Slack", exact: true }).click();
       await page
         .getByRole("dialog", { name: "Configure Slack" })
-        .getByLabel("Slack channel IDs")
+        .getByRole("combobox", { name: "Channels", exact: true })
         .fill("C12345");
       await page.goBack();
     } else {
@@ -7335,7 +7391,10 @@ test("leaving a no-Preset creation form discards its in-progress state", async (
       assert.equal(await page.getByRole("dialog", { name: "Configure Slack" }).count(), 0);
       await page.getByRole("button", { name: "Configure Slack", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Configure Slack" });
-      assert.equal(await dialog.getByLabel("Slack channel IDs").inputValue(), "");
+      assert.equal(
+        await slackSelectionValue(dialog.getByRole("combobox", { name: "Channels", exact: true })),
+        "",
+      );
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     }
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -7774,17 +7833,56 @@ test("Slack directory selections show names and save exact channel IDs", async (
   await login(page, fixture, channelsUrl.pathname + channelsUrl.search);
   await page.getByRole("button", { name: "Edit Slack" }).click();
   const channelDialog = page.getByRole("dialog", { name: "Edit Slack" });
+  const channelSearch = channelDialog.getByRole("combobox", { name: "Channels", exact: true });
+  const channelPicker = channelSearch.locator("..").locator("..");
+  await channelPicker.getByText("#existing-room", { exact: true }).waitFor();
+  await channelSearch.fill("general");
+  await channelPicker.getByRole("option", { name: /general.*CGENERAL/ }).waitFor();
+  assert.equal(await slackSelectionValue(channelSearch), "CEXIST123");
+  assert.equal(await page.getByRole("dialog").count(), 1);
+  assert.ok(directoryBodies.some((body) => body.query === "general" && !body.ids));
+  await channelSearch.press("ArrowUp");
+  assert.equal(
+    await channelSearch.getAttribute("aria-activedescendant"),
+    await channelPicker.getByRole("option").last().getAttribute("id"),
+  );
+  await channelSearch.press("Escape");
+  assert.equal(await channelSearch.getAttribute("aria-expanded"), "false");
+  assert.equal(await channelDialog.isVisible(), true);
+  await channelSearch.fill("GENERALX");
+  await channelPicker.getByRole("option", { name: /GENERALX-first.*CUPPER111/ }).waitFor();
+  await channelPicker.getByRole("button", { name: "Next page" }).click();
+  await channelPicker.getByRole("option", { name: /GENERALX.*CUPPER123/ }).click();
+  assert.equal(await slackSelectionValue(channelSearch), "CEXIST123, CUPPER123");
+  assert.ok(directoryBodies.some((body) => body.ids?.[0] === "GENERALX"));
+  assert.ok(directoryBodies.some((body) => body.query === "GENERALX" && !body.ids));
+  assert.ok(
+    directoryBodies.some((body) => body.query === "GENERALX" && body.cursor === "upper-next"),
+  );
+  await channelPicker.getByRole("button", { name: "Remove CUPPER123", exact: true }).click();
+  await channelSearch.fill("CTEST456");
+  await channelPicker.getByRole("option", { name: /release-room.*CTEST456/ }).waitFor();
+  await channelSearch.press("ArrowDown");
+  await channelSearch.press("Enter");
+  assert.equal(await channelSearch.inputValue(), "");
+  assert.equal(await slackSelectionValue(channelSearch), "CEXIST123, CTEST456");
+  // Clearing specific people must not turn channel access into Everyone.
   await channelDialog
-    .locator(".slack-directory-saved-id")
-    .filter({ hasText: "CEXIST123" })
-    .getByText("#existing-room")
-    .waitFor();
-  await channelDialog.getByLabel("Slack channel IDs").fill("general");
+    .getByLabel("Who can use the agent in these channels?")
+    .selectOption("selected");
+  const people = channelDialog.getByRole("combobox", {
+    name: "Allowed people in these channels",
+    exact: true,
+  });
+  await setSlackSelection(people, "UTEST123");
+  await people
+    .locator("..")
+    .locator("..")
+    .getByRole("button", { name: "Remove UTEST123", exact: true })
+    .click();
   await channelDialog.getByRole("button", { name: "Save configuration" }).click();
   await channelDialog
-    .getByText(
-      "Enter exact Slack channel IDs or channel targets, or choose channels from the directory.",
-    )
+    .getByText("Choose specific people or select Everyone in these channels.")
     .waitFor();
   assert.equal(
     pathRequests(
@@ -7794,47 +7892,11 @@ test("Slack directory selections show names and save exact channel IDs", async (
     ).length,
     0,
   );
-  await channelDialog.getByLabel("Slack channel IDs").fill("CEXIST123");
-  await channelDialog.getByLabel("Direct-message policy").selectOption("allowlist");
-  await channelDialog.getByLabel("Allowed DM user IDs").fill("Will");
-  await channelDialog.getByRole("button", { name: "Save configuration" }).click();
   await channelDialog
-    .getByText(
-      "Enter exact allowed DM user IDs or user targets, or choose people from the directory.",
-    )
-    .waitFor();
-  await channelDialog.getByLabel("Allowed DM user IDs").fill("");
-  await channelDialog.getByLabel("Direct-message policy").selectOption("disabled");
-  await channelDialog.getByLabel("Slack channel IDs").fill("CEXIST123");
-  await channelDialog.getByRole("button", { name: "Find Slack channel" }).click();
-  const channelPicker = page.getByRole("dialog", { name: "Find Slack channel" });
-  await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("general");
-  await channelPicker.getByRole("button", { name: "Search" }).click();
-  await channelPicker.getByRole("button", { name: /general.*CGENERAL/ }).waitFor();
-  assert.ok(directoryBodies.some((body) => body.query === "general" && !body.ids));
-  await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("GENERALX");
-  await channelPicker.getByRole("button", { name: "Search" }).click();
-  await channelPicker.getByRole("button", { name: /GENERALX-first.*CUPPER111/ }).waitFor();
-  await channelPicker.getByRole("button", { name: "Next page" }).click();
-  await channelPicker.getByRole("button", { name: /GENERALX.*CUPPER123/ }).click();
-  assert.equal(
-    await channelDialog.getByLabel("Slack channel IDs").inputValue(),
-    "CEXIST123, CUPPER123",
-  );
-  assert.ok(directoryBodies.some((body) => body.ids?.[0] === "GENERALX"));
-  assert.ok(directoryBodies.some((body) => body.query === "GENERALX" && !body.ids));
-  assert.ok(
-    directoryBodies.some((body) => body.query === "GENERALX" && body.cursor === "upper-next"),
-  );
-  await channelDialog.getByLabel("Slack channel IDs").fill("CEXIST123");
-  await channelDialog.getByRole("button", { name: "Find Slack channel" }).click();
-  await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("CTEST456");
-  await channelPicker.getByRole("button", { name: "Search" }).click();
-  await channelPicker.getByRole("button", { name: /release-room.*CTEST456/ }).click();
-  assert.equal(
-    await channelDialog.getByLabel("Slack channel IDs").inputValue(),
-    "CEXIST123, CTEST456",
-  );
+    .getByLabel("Who can use the agent in these channels?")
+    .selectOption("everyone");
+  // Unselected search text is never part of the Configuration save.
+  await channelSearch.fill("unselected search text");
   const savedChannels = page.waitForResponse(
     (response) =>
       response
@@ -7864,8 +7926,7 @@ test("Slack directory selections show names and save exact channel IDs", async (
   await page.getByRole("button", { name: "Edit Slack" }).click();
   await page
     .getByRole("dialog", { name: "Edit Slack" })
-    .locator(".slack-directory-saved-id")
-    .filter({ hasText: "CTEST456" })
+    .locator('.slack-directory-chip[data-value="CTEST456"]')
     .getByText("#release-room")
     .waitFor();
 });
@@ -7945,42 +8006,61 @@ test("Slack editor preserves existing qualified channel and user targets", async
   await page.getByRole("button", { name: "Edit Slack" }).click();
   const dialog = page.getByRole("dialog", { name: "Edit Slack" });
   assert.deepEqual(
-    (await dialog.getByLabel("Slack channel IDs").inputValue()).split(", "),
+    (
+      await slackSelectionValue(dialog.getByRole("combobox", { name: "Channels", exact: true }))
+    ).split(", "),
     channelIds,
   );
   assert.deepEqual(
-    new Set((await dialog.getByLabel("Allowed channel user IDs").inputValue()).split(", ")),
+    new Set(
+      (
+        await slackSelectionValue(
+          dialog.getByRole("combobox", { name: "Allowed people in these channels", exact: true }),
+        )
+      ).split(", "),
+    ),
     new Set(channelUsers),
   );
   assert.deepEqual(
-    (await dialog.getByLabel("Allowed DM user IDs").inputValue()).split(", "),
+    (
+      await slackSelectionValue(
+        dialog.getByRole("combobox", { name: "Allowed people in direct messages", exact: true }),
+      )
+    ).split(", "),
     dmUsers,
   );
-  await dialog.getByRole("button", { name: "Find Slack channel" }).click();
-  await page
-    .getByRole("dialog", { name: "Find Slack channel" })
-    .getByRole("button", { name: /existing-room.*CEXIST123/ })
-    .click();
+  for (const [label, candidate] of [
+    ["Channels", /existing-room.*CEXIST123/],
+    ["Allowed people in these channels", /Alex.*UTEST123/],
+    ["Allowed people in direct messages", /Alex.*UTEST123/],
+  ]) {
+    const search = dialog.getByRole("combobox", { name: label, exact: true });
+    await search.focus();
+    await search.locator("..").locator("..").getByRole("option", { name: candidate }).click();
+  }
+  assert.equal(await dialog.locator('.slack-directory-chip[data-value="CEXIST123"]').count(), 0);
   assert.deepEqual(
-    (await dialog.getByLabel("Slack channel IDs").inputValue()).split(", "),
+    (
+      await slackSelectionValue(dialog.getByRole("combobox", { name: "Channels", exact: true }))
+    ).split(", "),
     channelIds,
   );
-  await dialog.getByRole("button", { name: "Find allowed channel user" }).click();
-  await page
-    .getByRole("dialog", { name: "Find allowed channel user" })
-    .getByRole("button", { name: /Alex.*UTEST123/ })
-    .click();
   assert.deepEqual(
-    new Set((await dialog.getByLabel("Allowed channel user IDs").inputValue()).split(", ")),
+    new Set(
+      (
+        await slackSelectionValue(
+          dialog.getByRole("combobox", { name: "Allowed people in these channels", exact: true }),
+        )
+      ).split(", "),
+    ),
     new Set(channelUsers),
   );
-  await dialog.getByRole("button", { name: "Find allowed DM user" }).click();
-  await page
-    .getByRole("dialog", { name: "Find allowed DM user" })
-    .getByRole("button", { name: /Alex.*UTEST123/ })
-    .click();
   assert.deepEqual(
-    (await dialog.getByLabel("Allowed DM user IDs").inputValue()).split(", "),
+    (
+      await slackSelectionValue(
+        dialog.getByRole("combobox", { name: "Allowed people in direct messages", exact: true }),
+      )
+    ).split(", "),
     dmUsers,
   );
   await dialog.getByLabel("Require a mention").uncheck();

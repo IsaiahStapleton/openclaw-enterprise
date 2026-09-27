@@ -1,7 +1,7 @@
 ---
 created: 2026-09-27
 updated: 2026-09-27
-last_updated_session: 01a0df20-f340-7810-bb59-b1df6c0bbbd3
+last_updated_session: 01a0e49c-a051-7df2-9689-3bc1e0ac51c8
 ---
 
 # Agent Channel Directory Lookup Flow
@@ -21,7 +21,7 @@ actionable error.
   authorized caller posts to the Namespace channel directory route.
 - Assumptions: the caller can create an Agent or update the exact Agent or
   Configuration, and can operate the selected same-Namespace Secret.
-- Source: `apps/controller/src/console/agents/slack-directory.mjs:createSlackDirectoryPicker`,
+- Source: `apps/controller/src/console/agents/slack-directory.mjs:createSlackDirectoryField`,
   `packages/occ/src/index.ts:OpenClawController.lookupChannelDirectory`,
   and `apps/controller/src/drivers/channel/slack.ts:SlackChannelDriver.lookupDirectory`.
 
@@ -75,9 +75,11 @@ An incomplete page cannot establish that a name is absent or unique.
 
 `apps/controller/src/console/channels/slack.mjs:appendFields`
 
-The Console shows each candidate's name, exact ID, and workspace, but inserts
-only an ID into the channel editor. It resolves saved IDs again when the editor
-opens or the selected Secret changes. A denied or failed lookup leaves manual
+The Console searches inline after typing and shows each candidate's name, exact
+ID, and workspace. Selecting a result or confirming pasted IDs adds removable
+chips to the field; search text remains separate from committed IDs. Arrow keys
+and Enter select results, and Escape closes the list. It resolves saved IDs again
+when the editor opens or the selected Secret changes. A denied or failed lookup leaves manual
 exact-ID entry available; no directory result changes the saved Configuration
 until the operator saves the channel edit.
 
@@ -107,6 +109,8 @@ until the operator saves the channel edit.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 21:03: Replace modal lookup with inline search and selected chips. (01a0e49c-a051-7df2-9689-3bc1e0ac51c8 - ab70527a70201544d29b72c60ced7b9133910e92)
 
 - 2026-09-27 08:51: Document production Slack directory proxy selection and egress. (01a0df20-f340-7810-bb59-b1df6c0bbbd3 - 1a2764952c421bfee00ed6892714366292c2741a)
 - 2026-09-27 06:41: Describe authorized Slack directory lookup. (01a0df20-f340-7810-bb59-b1df6c0bbbd3 - 1d7b0b3b4e419cb8e085996be873ec233eeabf6d)

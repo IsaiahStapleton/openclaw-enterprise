@@ -15,8 +15,12 @@ IDs, never names.
 
 For exact-ID searches and saved IDs, the Driver calls [`users.info`](https://docs.slack.dev/reference/methods/users.info/)
 or [`conversations.info`](https://docs.slack.dev/reference/methods/conversations.info/)
-directly. The Console shows returned names transiently beside the saved IDs;
-IDs the bot cannot see remain visible without a name.
+directly. The Console shows selected names as removable chips, with exact IDs
+available on hover. IDs the bot cannot see remain visible without a name.
+Search in the field and choose a result, or paste exact IDs and press Enter.
+Unselected search text is never saved. Channel access explicitly selects
+**Specific people** or **Everyone in these channels**; removing the last person
+does not switch to everyone.
 
 An invalid token, missing scope, rate limit, invalid response, or unavailable
 Slack service produces a safe error without returning the token or upstream

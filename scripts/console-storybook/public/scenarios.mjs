@@ -286,10 +286,7 @@ const createSlackBotSecret = [
   { selector: "#create-slack-secret-slack-bot-token-value", value: "simulated-bot-token" },
   click("Create Secret"),
 ];
-const allowEveryoneInSlackChannels = [
-  { selector: "#slack-allowed-user-ids", value: "" },
-  { selector: "#slack-allow-everyone", click: true },
-];
+const allowEveryoneInSlackChannels = [{ selector: "#slack-channel-access", value: "everyone" }];
 const createWorkspaceFields = [
   ...form,
   { selector: ".launch-advanced summary", click: true },
@@ -310,7 +307,7 @@ const createProvisioningSecrets = [
   { selector: "#slack-dm-policy", value: "disabled" },
   { selector: "#slack-secret-slack-app-token", value: "sec_demo_slack_app_token" },
   ...createSlackBotSecret,
-  { selector: "#slack-channel-ids", value: "CDEMO123" },
+  { selector: "#slack-channel-ids-search", value: "CDEMO123", key: "Enter" },
   ...allowEveryoneInSlackChannels,
   click("Apply channel settings"),
 ];
@@ -334,8 +331,8 @@ const devdayCreateCheckpoint = [
   { selector: devdayRepositorySelector, click: true },
   { selector: "#repository-profile-git-write", click: true },
   click("Edit Slack"),
-  { selector: "#slack-allow-everyone", click: true },
-  { selector: "#slack-allowed-user-ids", value: "UDEMO123" },
+  { selector: "#slack-channel-access", value: "selected" },
+  { selector: "#slack-allowed-user-ids-search", value: "UDEMO123", key: "Enter" },
   { selector: "#slack-secret-slack-app-token", value: "sec_devday_slack_app_token" },
   { selector: "#slack-secret-slack-bot-token", value: "sec_devday_slack_bot_token" },
   click("Apply channel settings"),
@@ -809,7 +806,7 @@ export const scenarios = {
     actions: [
       ...form,
       { selector: 'select[aria-label="Default plugin approvers mode"]', value: "chosen" },
-      click("Find approver for Default plugin approvers"),
+      { selector: '[aria-label="Default plugin approvers people"]', focus: true },
     ],
     description:
       "New Agents inherit OpenClaw's existing approval routing until an operator selects a default. The directory explains that a Slack bot Secret must be selected under Channels before names can be resolved.",
@@ -1208,7 +1205,7 @@ export const scenarios = {
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
       { selector: "#slack-dm-policy", value: "disabled" },
-      { selector: "#slack-channel-ids", value: "CDEMO123" },
+      { selector: "#slack-channel-ids-search", value: "CDEMO123", key: "Enter" },
       click("Apply channel settings"),
     ],
     description:
@@ -1223,7 +1220,7 @@ export const scenarios = {
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
       { selector: "#slack-dm-policy", value: "disabled" },
-      { selector: "#slack-channel-ids", value: "CDEMO123" },
+      { selector: "#slack-channel-ids-search", value: "CDEMO123", key: "Enter" },
       ...allowEveryoneInSlackChannels,
       click("Apply channel settings"),
     ],
@@ -1835,7 +1832,7 @@ export const scenarios = {
       "Calendar explicitly has no Slack approvers, while Create event overrides it with a different user. The UI distinguishes both from inherited lists.",
     steps: [
       "Change Calendar to Inherit Agent default approvers and inspect Plugin selections JSON.",
-      "Open Find approver for Create event tool approvers to choose between duplicate Alex Chen names by exact ID.",
+      "Search Create event tool approvers people to choose between duplicate Alex Chen names by exact ID.",
     ],
     gap: "This is simulated UI and does not prove runtime approval authorization.",
   },
@@ -1848,7 +1845,11 @@ export const scenarios = {
     agentPlugins: JSON.parse(pluginSelections),
     agentPluginApprovers: [],
     pluginCapabilities,
-    actions: [click("Plugins"), click("Find approver for Default plugin approvers")],
+    actions: [
+      click("Plugins"),
+      { selector: 'select[aria-label="Default plugin approvers mode"]', value: "chosen" },
+      { selector: '[aria-label="Default plugin approvers people"]', focus: true },
+    ],
     description:
       "The selected bot Secret resolves names within Demo workspace. Duplicate Alex Chen results show their distinct user IDs; choosing one saves a team-qualified selector.",
     gap: "The fixture simulates directory data; it does not contact Slack or read a real Secret.",
@@ -2168,7 +2169,7 @@ export const scenarios = {
     description:
       "Choose DM access independently of channel senders. Invalid allowlists stay in the drawer without saving.",
     steps: [
-      "Select Allowlist, clear Allowed DM user IDs, and save to inspect the validation error.",
+      "Select Allowlist, remove the selected people, and save to inspect the validation error.",
       "Enter UDIRECT123, save, and reopen Slack to verify the saved selection.",
       'Select Open and save: allowFrom becomes ["*"]. Switch to Allowlist: enter explicit IDs before saving.',
       "Select Disabled for channel-only access; existing channel users and reply overrides stay unchanged.",
@@ -2205,7 +2206,7 @@ export const scenarios = {
     actions: [
       click("Channels"),
       click("Edit Slack"),
-      { selector: "#slack-channel-ids", value: "CNAVIGATION" },
+      { selector: "#slack-channel-ids-search", value: "CNAVIGATION", key: "Enter" },
     ],
     description:
       "An open Slack drawer restores ordinary edits and staged Secret references after browser history navigation.",
@@ -2229,9 +2230,9 @@ export const scenarios = {
     name: "Find Slack channels by name",
     path: `${draft}&tab=channels`,
     slack: true,
-    actions: [click("Edit Slack"), click("Find Slack channel")],
+    actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
     description:
-      "The picker shows the bot's workspace, channel names and exact IDs. Next page reaches more channels. Selecting one appends only its ID to the editable channel list.",
+      "The picker shows the bot's workspace, channel names and exact IDs. Next page reaches more channels. Selecting one adds a removable chip and saves only its ID. Search text stays separate from selections.",
     gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
   },
   slackDirectorySavedNames: {
@@ -2241,7 +2242,7 @@ export const scenarios = {
     slack: true,
     actions: [click("Edit Slack")],
     description:
-      "Saved channel and user IDs are resolved with the selected bot Secret when the editor opens. Names are only display labels; the exact IDs remain visible and are the only values saved.",
+      "Saved channel and user IDs are resolved with the selected bot Secret when the editor opens. Names appear as removable chips. Exact IDs are available on hover and are the only values saved.",
     gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
   },
   slackDirectoryQualifiedNames: {
@@ -2258,7 +2259,7 @@ export const scenarios = {
     slackAllowFrom: ["user:UDEMO123"],
     actions: [click("Edit Slack")],
     description:
-      "Existing workspace-qualified channel and user targets remain editable. Matching names appear beside their exact saved targets; the directory picker still inserts bare IDs.",
+      "Existing workspace-qualified channel and user targets remain editable. Matching names label removable chips, with exact saved targets on hover; the directory picker still inserts bare IDs.",
     gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
   },
   slackDirectoryUsers: {
@@ -2266,7 +2267,7 @@ export const scenarios = {
     name: "Resolve duplicate Slack people",
     path: `${draft}&tab=channels`,
     slack: true,
-    actions: [click("Edit Slack"), click("Find allowed DM user")],
+    actions: [click("Edit Slack"), { selector: "#slack-dm-user-ids-search", focus: true }],
     description:
       "Two people share the same display name. Their handle and exact Slack user IDs identify which one will be saved.",
     gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
@@ -2279,7 +2280,7 @@ export const scenarios = {
     rules: [
       { suffix: "/channel-directory/lookup", method: "POST", bodyHasIds: false, status: 403 },
     ],
-    actions: [click("Edit Slack"), click("Find Slack channel")],
+    actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
     description:
       "A denied lookup keeps manual exact-ID entry available and explains Secret permissions.",
   },
@@ -2289,7 +2290,7 @@ export const scenarios = {
     path: `${draft}&tab=channels`,
     slack: true,
     rules: [{ suffix: "/channel-directory/lookup", method: "POST", bodyHasIds: false, hold: true }],
-    actions: [click("Edit Slack"), click("Find Slack channel")],
+    actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
     description:
       "While lookup is pending, the picker announces loading and disables page navigation.",
   },
@@ -2307,7 +2308,7 @@ export const scenarios = {
         once: true,
       },
     ],
-    actions: [click("Edit Slack"), click("Find Slack channel")],
+    actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
     description:
       "An older directory request is delayed. Search for platform before it returns; the late results must not replace the newer search.",
   },
@@ -2317,7 +2318,7 @@ export const scenarios = {
     path: `${draft}&tab=channels`,
     slack: true,
     slackBindings: "app",
-    actions: [click("Edit Slack"), click("Find Slack channel")],
+    actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
     description: "The picker explains that a Slack bot token Secret must be selected first.",
   },
   slackEveryone: {
@@ -2346,7 +2347,7 @@ export const scenarios = {
     actions: [
       click("Configure Slack"),
       { selector: "#slack-dm-policy", value: "disabled" },
-      { selector: "#slack-channel-ids", value: "CDEMO123" },
+      { selector: "#slack-channel-ids-search", value: "CDEMO123", key: "Enter" },
       click("Save configuration"),
     ],
     description:
@@ -2945,7 +2946,7 @@ export const scenarios = {
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
       { selector: "#slack-dm-policy", value: "disabled" },
-      { selector: "#slack-channel-ids", value: "CDEMO123" },
+      { selector: "#slack-channel-ids-search", value: "CDEMO123", key: "Enter" },
       ...allowEveryoneInSlackChannels,
       { selector: "#slack-secret-slack-app-token", value: "sec_demo_slack_app_token" },
       ...createSlackBotSecret,
@@ -3116,7 +3117,7 @@ export const scenarios = {
     description:
       "Edit saved settings while the current version stays unchanged; deploy a new immutable version.",
     steps: [
-      "Open Edit Slack, add CNEW123 to Slack channel IDs, then Save configuration.",
+      "Open Edit Slack, paste CNEW123 into Channels and press Enter, then Save configuration.",
       "Select View version v1 and open Channels: it still has the original settings.",
       "Select Create new version, then Deploy new version. The saved draft is deployed, not the viewed snapshot.",
       "Refresh deployment and inspect the new version. The prior snapshot remains readable.",
@@ -3139,11 +3140,10 @@ export const scenarios = {
     description:
       "Save channel sender access as everyone, reopen the drawer, and verify the saved setting without changing direct-message access.",
     steps: [
-      "Open Edit Slack. Explicit channel user IDs disable the everyone checkbox.",
-      "Clear Allowed channel user IDs. Allow everyone in these channels becomes available.",
-      "Select Allow everyone in these channels and save the Configuration.",
-      'Reopen Edit Slack. The drawer shows Allow everyone selected for the saved users: ["*"] channel setting.',
-      "Turn everyone off to re-enable ID entry, then enter explicit IDs if you want to restrict channel senders before saving again.",
+      "Open Edit Slack and inspect the Specific people selection and saved people chips.",
+      "Choose Everyone in these channels from the access menu and save the Configuration.",
+      'Reopen Edit Slack. The drawer shows Everyone in these channels for the saved users: ["*"] channel setting.',
+      "Choose Specific people and select users if you want to restrict channel senders before saving again.",
     ],
     gap: "The fixture proves saved Console state and request shape only. Use a live Slack app to prove channel delivery.",
   },

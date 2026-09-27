@@ -165,10 +165,93 @@ export function createSlackNameResolver({
   return { refresh, invalidate };
 }
 
-export function createSlackIdLabels({ context, kind, getSecretId, configurationId, control }) {
-  const ids = element("div", { className: "slack-directory-saved-ids" });
+// The committed control holds IDs; search text never becomes configuration by itself.
+export function createSlackDirectoryField({
+  context,
+  kind,
+  getSecretId,
+  agentId,
+  configurationId,
+  control,
+  label,
+  qualifyUsers = false,
+  lazyNames = false,
+  onWorkspace,
+}) {
+  control.type = "hidden";
+  const search = element("input", {
+    id: `${control.id}-search`,
+    type: "text",
+    role: "combobox",
+    "aria-label": label,
+    "aria-autocomplete": "list",
+    "aria-expanded": "false",
+    "aria-controls": `${control.id}-results`,
+    autocomplete: "off",
+    placeholder:
+      kind === "channels" ? "Search channels or paste IDs…" : "Search people or paste IDs…",
+  });
+  const chips = element("div", { className: "slack-directory-chips" });
+  const nameStatus = element("p", { className: "hint", role: "status" });
+  const workspace = element("p", { className: "hint slack-directory-workspace" });
   const status = element("p", { className: "hint", role: "status" });
+  const errorText = element("p", { className: "error", role: "alert" });
+  const results = element("div", {
+    id: `${control.id}-results`,
+    className: "slack-directory-results",
+    role: "listbox",
+    "aria-label": `${label} results`,
+    "aria-multiselectable": "true",
+  });
+  const addExact = button("Add exact ID", () => {
+    search.focus();
+    commitManual();
+  });
+  const previous = button("Previous page", () => {
+    search.focus();
+    void load(pageIndex - 1);
+  });
+  const next = button("Next page", () => {
+    search.focus();
+    void load(pageIndex + 1);
+  });
+  const pagination = element(
+    "div",
+    { className: "slack-directory-pagination", hidden: true },
+    previous,
+    next,
+  );
+  const panel = element(
+    "div",
+    { className: "slack-directory-panel", hidden: true },
+    addExact,
+    status,
+    errorText,
+    results,
+    pagination,
+  );
+  const field = element(
+    "div",
+    { className: "slack-directory-field" },
+    element("label", { for: search.id }, label),
+    control,
+    element("div", { className: "slack-directory-input" }, chips, search),
+    panel,
+    workspace,
+    nameStatus,
+  );
   let nameState = { names: new Map() };
+  let namesActive = !lazyNames;
+  let boundSecretId = getSecretId();
+  let workspaceIdentity = null;
+  let generation = 0;
+  let timer;
+  let pageIndex = 0;
+  let cursors = [null];
+  let query = "";
+  let nextCursor = null;
+  let searchAsName = false;
+  let activeOption = -1;
   const values = () => [
     ...new Set(
       control.value
@@ -177,194 +260,198 @@ export function createSlackIdLabels({ context, kind, getSecretId, configurationI
         .filter(Boolean),
     ),
   ];
-  const render = () => {
-    const saved = values();
-    ids.replaceChildren(
-      ...saved.map((id) => {
+  const manualValues = () =>
+    search.value
+      .split(/[,\s]+/)
+      .map((id) => id.trim())
+      .filter(Boolean);
+  const validManual = (id) =>
+    qualifyUsers
+      ? /^team:T[A-Z0-9]{1,31}:user:[UW][A-Z0-9]{1,31}$/.test(id)
+      : isSlackConfigTarget(id, kind);
+  const current = (active, secretId) =>
+    !panel.hidden && context.isCurrent() && active === generation && getSecretId() === secretId;
+
+  function updateWorkspace(page) {
+    workspaceIdentity = page.workspaceId;
+    if (nameState.workspaceId && nameState.workspaceId !== page.workspaceId) {
+      nameState = { names: new Map(), workspaceId: page.workspaceId };
+      renderValues();
+    }
+    if (onWorkspace) {
+      onWorkspace(page);
+    } else {
+      workspace.textContent = `Workspace: ${page.workspaceName || page.workspaceId}`;
+      workspace.title = page.workspaceId;
+    }
+  }
+  function close() {
+    clearTimeout(timer);
+    generation += 1;
+    panel.hidden = true;
+    search.setAttribute("aria-expanded", "false");
+    search.removeAttribute("aria-activedescendant");
+    activeOption = -1;
+    nameStatus.hidden = false;
+  }
+  function renderValues() {
+    chips.replaceChildren(
+      ...values().map((id) => {
         const target = directoryTarget(id, kind);
         const candidate =
           target && (!target.teamId || target.teamId === nameState.workspaceId)
             ? nameState.names.get(target.id)
             : null;
+        const name = candidate
+          ? kind === "channels"
+            ? `#${candidate.name}`
+            : candidate.displayName
+              ? `${candidate.displayName} (@${candidate.name})`
+              : `@${candidate.name}`
+          : id;
         return element(
           "span",
-          { className: "slack-directory-saved-id" },
-          candidate
-            ? element(
-                "strong",
-                {},
-                kind === "channels"
-                  ? `#${candidate.name}`
-                  : candidate.displayName || candidate.name,
-              )
-            : null,
-          element("code", {}, id),
+          { className: "slack-directory-chip", "data-value": id, title: id },
+          element("span", {}, name),
+          button("×", () => commit(values().filter((value) => value !== id)), {
+            "aria-label": `Remove ${id}`,
+            disabled: control.disabled,
+          }),
         );
       }),
     );
-    const mismatchedWorkspace = saved.some((value) => {
-      const target = directoryTarget(value, kind);
+    search.disabled = control.disabled;
+    if (control.disabled) {
+      close();
+    }
+    const mismatched = values().some((id) => {
+      const target = directoryTarget(id, kind);
       return target?.teamId && nameState.workspaceId && target.teamId !== nameState.workspaceId;
     });
-    status.textContent = nameState.error
-      ? `${nameState.error} Saved IDs remain available.`
+    nameStatus.textContent = nameState.error
+      ? `${nameState.error} Saved selections are retained.`
       : nameState.loading
-        ? "Resolving saved Slack names…"
-        : nameState.workspaceId
-          ? `Workspace: ${nameState.workspaceName ? `${nameState.workspaceName} · ` : ""}${nameState.workspaceId}${mismatchedWorkspace ? ". Some saved targets belong to another workspace." : ""}`
-          : saved.length && !getSecretId()
-            ? "Select a Slack bot token Secret to show names."
+        ? "Resolving saved names…"
+        : mismatched
+          ? "Some saved selections belong to another workspace."
+          : !getSecretId()
+            ? "Select a Slack bot token Secret to search by name. You can still paste exact IDs."
             : "";
     if (nameState.truncated) {
-      status.textContent += " Only the first 20 IDs are resolved; all IDs remain visible.";
+      nameStatus.textContent += " Names are shown for the first 20 selections.";
     }
-  };
+  }
   const resolver = createSlackNameResolver({
     context,
     kind,
     getSecretId,
+    agentId,
     configurationId,
     onUpdate: (state) => {
       nameState = state;
-      render();
+      if (state.workspaceId) {
+        updateWorkspace(state);
+      }
+      renderValues();
     },
   });
-  const refresh = () =>
-    void resolver.refresh(
-      values()
-        .map((value) => directoryTarget(value, kind)?.id)
-        .filter(Boolean),
-    );
-  control.addEventListener("input", () => resolver.invalidate());
-  control.addEventListener("change", refresh);
-  refresh();
-  const field = element("div", { className: "slack-directory-labels" }, ids, status);
-  field.refreshNames = refresh;
-  return field;
-}
-
-// A lookup uses the staged Secret on each request. A changed binding cannot reuse old pages.
-export function createSlackDirectoryPicker({
-  context,
-  kind,
-  getSecretId,
-  agentId,
-  configurationId,
-  onSelect,
-  onWorkspace,
-  label = kind === "users" ? "Find Slack user" : "Find Slack channel",
-  saveDescription = "Only its Slack ID is saved.",
-}) {
-  const search = element("input", {
-    type: "search",
-    "aria-label": kind === "users" ? "Search Slack people" : "Search Slack channels",
-    placeholder: kind === "users" ? "Name, display name, or user ID" : "Name or channel ID",
-  });
-  const status = element("p", { className: "hint", role: "status" });
-  const errorText = element("p", { className: "error", role: "alert" });
-  const workspace = element("p", { className: "hint" });
-  const results = element("div", { className: "slack-directory-results" });
-  const previous = button("Previous page", () => void load(pageIndex - 1));
-  const next = button("Next page", () => void load(pageIndex + 1));
-  const pagination = element("div", { className: "slack-directory-pagination" }, previous, next);
-  const dialog = element(
-    "dialog",
-    { className: "slack-directory-dialog", "aria-label": label },
-    element(
-      "div",
-      { className: "slack-directory-heading" },
-      element("h3", {}, label),
-      button("Close", () => dialog.close()),
-    ),
-    element("p", { className: "hint" }, `Choose a result by its name and ID. ${saveDescription}`),
-    element(
-      "div",
-      { className: "slack-directory-search" },
-      search,
-      button("Search", () => void startSearch()),
-    ),
-    workspace,
-    status,
-    errorText,
-    results,
-    pagination,
-  );
-  const open = button(label, () => {
-    const secretId = getSecretId();
-    if (!secretId) {
-      status.textContent = "Select a Slack bot token Secret under Channels first.";
-      errorText.textContent = "";
+  function refresh() {
+    if (boundSecretId !== getSecretId()) {
+      boundSecretId = getSecretId();
+      workspaceIdentity = null;
       workspace.textContent = "";
-      results.replaceChildren();
-      pagination.hidden = true;
-      dialog.showModal();
+      onWorkspace?.(null);
+      close();
+    }
+    renderValues();
+    if (namesActive) {
+      void resolver.refresh(
+        values()
+          .map((id) => directoryTarget(id, kind)?.id)
+          .filter(Boolean),
+      );
+    }
+  }
+  function commit(ids) {
+    control.value = [...new Set(ids)].join(", ");
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+    control.dispatchEvent(new Event("change", { bubbles: true }));
+    search.value = "";
+    close();
+  }
+  function commitManual() {
+    const ids = manualValues();
+    if (!ids.length || !ids.every(validManual)) {
+      errorText.textContent = qualifyUsers
+        ? "Enter full Slack selectors such as team:T123:user:U456."
+        : "Choose a search result or paste exact Slack IDs, separated by commas or spaces.";
       return;
     }
-    dialog.showModal();
+    if (
+      qualifyUsers &&
+      boundSecretId === getSecretId() &&
+      workspaceIdentity &&
+      ids.some((id) => directoryTarget(id, kind)?.teamId !== workspaceIdentity)
+    ) {
+      errorText.textContent = `This bot belongs to workspace ${workspaceIdentity}. Enter a user in that workspace.`;
+      return;
+    }
+    commit([...values(), ...ids]);
+  }
+  function selectCandidate(candidate) {
+    const id = qualifyUsers ? `team:${candidate.workspaceId}:user:${candidate.id}` : candidate.id;
+    const selected = values();
     search.focus();
-    void startSearch();
-  });
-  let generation = 0;
-  let pageIndex = 0;
-  let cursors = [null];
-  let query = "";
-  let nextCursor = null;
-  let searchAsName = false;
-  let busy = false;
-  let workspaceIdentity = null;
-  let workspaceSecretId = null;
-
-  dialog.addEventListener("close", () => {
+    commit(
+      selected.some((value) => matchesSlackDirectoryCandidate(value, kind, candidate))
+        ? selected
+        : [...selected, id],
+    );
+  }
+  function prepareSearch() {
+    clearTimeout(timer);
     generation += 1;
-    busy = false;
-    open.focus();
-  });
-  search.addEventListener("input", () => {
-    generation += 1;
-    busy = false;
+    panel.hidden = false;
+    nameStatus.hidden = true;
+    search.setAttribute("aria-expanded", "true");
+    search.removeAttribute("aria-activedescendant");
+    activeOption = -1;
     results.replaceChildren();
     pagination.hidden = true;
-    status.textContent = "Choose Search to find matches for this text.";
     errorText.textContent = "";
-  });
-  search.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void startSearch();
-    }
-  });
-
-  function startSearch() {
-    // An explicit new search supersedes an older in-flight page.
-    generation += 1;
-    busy = false;
+    const ids = manualValues();
+    addExact.hidden = !ids.length || !ids.every(validManual);
+    addExact.textContent =
+      ids.length > 1 ? `Add ${ids.length} exact IDs` : `Add ${ids[0] || "exact ID"}`;
+    status.textContent = getSecretId()
+      ? "Searching Slack directory…"
+      : "Select a Slack bot token Secret to search by name. You can still paste exact IDs.";
     query = search.value.trim();
-    workspaceIdentity = null;
-    workspaceSecretId = null;
-    onWorkspace?.(null, getSecretId());
     cursors = [null];
     pageIndex = 0;
     nextCursor = null;
     searchAsName = false;
+  }
+  function startSearch() {
+    prepareSearch();
     return load(0);
   }
-
   async function load(index) {
     const secretId = getSecretId();
-    if (busy || !secretId || (index > pageIndex && !nextCursor)) {
+    if (!secretId || (index > pageIndex && !nextCursor)) {
       return;
     }
     const cursor = index > pageIndex ? nextCursor : cursors[index];
     const exactTarget = searchAsName ? null : searchTarget(query, kind);
     const active = ++generation;
-    busy = true;
-    status.textContent = "Searching Slack directory…";
-    errorText.textContent = "";
-    workspace.textContent = "";
-    results.replaceChildren();
-    pagination.hidden = true;
+    activeOption = -1;
+    search.removeAttribute("aria-activedescendant");
     previous.disabled = true;
     next.disabled = true;
+    results.replaceChildren();
+    pagination.hidden = true;
+    status.textContent = "Searching Slack directory…";
+    errorText.textContent = "";
     try {
       const requestPage = (selection) =>
         context.request(`${namespacePath(context.namespaceId)}/channel-directory/lookup`, {
@@ -388,84 +475,82 @@ export function createSlackDirectoryPicker({
         query.length >= 8 &&
         isSlackId(query, kind) &&
         page.candidates.length === 0 &&
-        dialog.open &&
-        context.isCurrent() &&
-        active === generation &&
-        getSecretId() === secretId
+        current(active, secretId)
       ) {
         const exactWorkspaceId = page.workspaceId;
         page = await requestPage({ query });
         if (page.workspaceId !== exactWorkspaceId) {
-          status.textContent =
-            "The Slack bot workspace changed during this search. Start a new search.";
+          if (current(active, secretId)) {
+            status.textContent = "The Slack bot workspace changed. Search again.";
+          }
           return;
         }
         searchedAsName = true;
       }
-      if (!dialog.open || !context.isCurrent() || active !== generation) {
+      if (!current(active, secretId)) {
         return;
       }
-      if (getSecretId() !== secretId) {
-        status.textContent = "The selected Slack bot Secret changed. Search again.";
+      if (index > 0 && workspaceIdentity && workspaceIdentity !== page.workspaceId) {
+        status.textContent = "The Slack bot workspace changed. Search again.";
         return;
       }
-      if (
-        workspaceSecretId === secretId &&
-        workspaceIdentity !== null &&
-        workspaceIdentity !== page.workspaceId
-      ) {
-        status.textContent =
-          "The Slack bot workspace changed during this search. Start a new search.";
-        return;
-      }
-      workspaceSecretId = secretId;
-      workspaceIdentity = page.workspaceId;
+      updateWorkspace(page);
       searchAsName = searchedAsName;
-      onWorkspace?.(page.workspaceId, secretId);
       pageIndex = index;
       cursors[index] = cursor;
       nextCursor = page.nextCursor ?? null;
-      workspace.textContent = `Workspace: ${page.workspaceName ? `${page.workspaceName} · ` : ""}${page.workspaceId}`;
       const wrongWorkspace = exactTarget?.teamId && exactTarget.teamId !== page.workspaceId;
       const candidates = page.candidates.filter(
         (candidate) => isSlackId(candidate.id, kind) && !wrongWorkspace,
       );
       results.replaceChildren(
-        ...candidates.map((candidate) =>
-          button(
+        ...candidates.map((candidate, index) => {
+          const selected = values().some((id) =>
+            matchesSlackDirectoryCandidate(id, kind, {
+              ...candidate,
+              workspaceId: page.workspaceId,
+            }),
+          );
+          return button(
             element(
               "span",
               {},
-              element("strong", {}, candidate.displayName || candidate.name),
-              candidate.displayName && candidate.name !== candidate.displayName
-                ? element("span", { className: "hint" }, ` ${candidate.name}`)
+              element(
+                "strong",
+                {},
+                kind === "channels"
+                  ? `#${candidate.name}`
+                  : candidate.displayName || candidate.name,
+              ),
+              kind === "users"
+                ? element("span", { className: "hint" }, `@${candidate.name}`)
                 : null,
               element("code", {}, candidate.id),
+              selected ? element("span", {}, "Selected") : null,
             ),
-            () => {
-              dialog.close();
-              onSelect({
-                ...candidate,
-                workspaceId: page.workspaceId,
-                workspaceName: page.workspaceName,
-              });
+            () => selectCandidate({ ...candidate, workspaceId: page.workspaceId }),
+            {
+              id: `${control.id}-option-${index}`,
+              role: "option",
+              "aria-selected": String(selected),
+              tabindex: "-1",
+              className: "slack-directory-result",
             },
-            { className: "slack-directory-result" },
-          ),
-        ),
+          );
+        }),
       );
       status.textContent = wrongWorkspace
         ? `That ID belongs to workspace ${exactTarget.teamId}; this bot belongs to ${page.workspaceId}.`
         : candidates.length
-          ? `Page ${index + 1} · ${candidates.length} result${candidates.length === 1 ? "" : "s"}${page.complete ? "" : " · more results may be available"}`
+          ? `${candidates.length} result${candidates.length === 1 ? "" : "s"}${page.complete ? "" : " · more results may be available"}`
           : page.complete
-            ? "No matches found. Try another name or exact ID."
+            ? "No matches found. Try another name or paste an exact ID."
             : "No results on this page. More results may be available.";
       pagination.hidden = index === 0 && !nextCursor;
       previous.disabled = index === 0;
       next.disabled = !nextCursor;
     } catch (error) {
-      if (!dialog.open || !context.isCurrent() || active !== generation) {
+      if (!current(active, secretId)) {
         return;
       }
       if (error.status === 401) {
@@ -473,13 +558,66 @@ export function createSlackDirectoryPicker({
         return;
       }
       errorText.textContent = lookupError(error);
-      status.textContent = "Search failed. Retry or use the exact-ID field.";
-    } finally {
-      if (active === generation) {
-        busy = false;
-      }
+      status.textContent = "You can still add an exact ID above.";
     }
   }
-
-  return element("div", { className: "slack-directory-picker" }, open, dialog);
+  search.addEventListener("focus", () => {
+    if (panel.hidden) {
+      void startSearch();
+    }
+  });
+  search.addEventListener("input", () => {
+    prepareSearch();
+    timer = setTimeout(() => {
+      if (field.isConnected && context.isCurrent()) {
+        void load(0);
+      }
+    }, 250);
+  });
+  search.addEventListener("keydown", (event) => {
+    const options = [...results.children];
+    if (!panel.hidden && (event.key === "ArrowDown" || event.key === "ArrowUp") && options.length) {
+      event.preventDefault();
+      activeOption =
+        activeOption < 0
+          ? event.key === "ArrowDown"
+            ? 0
+            : options.length - 1
+          : (activeOption + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+      options.forEach((option, index) => option.classList.toggle("active", index === activeOption));
+      search.setAttribute("aria-activedescendant", options[activeOption].id);
+      options[activeOption].scrollIntoView({ block: "nearest" });
+    } else if (event.key === "Escape" && !panel.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (!panel.hidden && activeOption >= 0 && options[activeOption]) {
+        options[activeOption].click();
+      } else if (manualValues().length && manualValues().every(validManual)) {
+        commitManual();
+      } else {
+        void startSearch();
+      }
+    }
+  });
+  field.addEventListener("focusout", (event) => {
+    if (!field.contains(event.relatedTarget)) {
+      close();
+    }
+  });
+  control.addEventListener("change", refresh);
+  field.refreshValue = refresh;
+  field.refreshNames = () => {
+    namesActive = true;
+    refresh();
+  };
+  field.pauseNames = () => {
+    namesActive = false;
+    resolver.invalidate();
+    close();
+  };
+  refresh();
+  return field;
 }

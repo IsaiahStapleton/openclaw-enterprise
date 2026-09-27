@@ -67,14 +67,17 @@ try {
       }
       await new Promise((resolve) => setTimeout(resolve, 30));
     }
-    if (!node || node.disabled) {
+    if (!node || node.disabled || node.closest("[hidden]")) {
       throw new Error(`Story action unavailable: ${JSON.stringify(action)}`);
+    }
+    if (action.focus) {
+      node.focus();
     }
     if (action.click) {
       node.click();
     }
     if (action.value !== undefined) {
-      if (node.getAttribute("role") === "combobox") {
+      if (node.getAttribute("role") === "combobox" && !node.closest(".slack-directory-field")) {
         node.focus();
         node.value = action.value === "__openclaw_create_secret__" ? "" : action.value;
         node.dispatchEvent(new Event("input", { bubbles: true }));
@@ -111,6 +114,11 @@ try {
       node.value = action.value;
       node.dispatchEvent(new Event("input", { bubbles: true }));
       node.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    if (action.key) {
+      node.dispatchEvent(
+        new KeyboardEvent("keydown", { key: action.key, bubbles: true, cancelable: true }),
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

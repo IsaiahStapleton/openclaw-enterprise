@@ -180,3 +180,27 @@ export function nativeValues(marker, options = {}) {
     },
   };
 }
+
+// Exercise the visible chip control rather than writing its hidden serialized value.
+export async function setSlackSelection(input, value) {
+  const field = input.locator("..").locator("..");
+  const remove = field.locator(".slack-directory-chip button");
+  while (await remove.count()) {
+    await remove.first().click();
+  }
+  await input.fill(value);
+  if (value) {
+    await input.press("Enter");
+  }
+  if ((await input.getAttribute("aria-expanded")) === "true") {
+    await input.press("Escape");
+  }
+}
+
+export async function slackSelectionValue(input) {
+  return input
+    .locator("..")
+    .locator("..")
+    .locator(".slack-directory-chip")
+    .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("title")).join(", "));
+}

@@ -85,27 +85,29 @@ test("Agent plugin approver selectors save inheritance and workspace-qualified u
   const pluginsUrl = detailUrl(fixture, namespace.id, agent.id, "draft", "plugins");
   await login(page, fixture, pluginsUrl.pathname + pluginsUrl.search);
   await page.getByLabel("Default plugin approvers mode").selectOption("chosen");
-  await page.getByRole("button", { name: "Find approver for Default plugin approvers" }).click();
-  const userDialog = page.getByRole("dialog", {
-    name: "Find approver for Default plugin approvers",
+  const people = page.getByRole("combobox", {
+    name: "Default plugin approvers people",
+    exact: true,
   });
-  await userDialog.getByText("Test workspace · TTEST123").waitFor();
-  await userDialog.getByRole("button", { name: "Close" }).click();
-  await page
-    .getByLabel("Default plugin approvers exact Slack selector")
-    .fill("team:TOTHER123:user:UTEST123");
-  await page.getByRole("button", { name: "Add exact selector" }).click();
-  await page
+  const picker = people.locator("..").locator("..");
+  await people.focus();
+  await picker.getByRole("option", { name: /Alex.*UTEST123/ }).waitFor();
+  await people.fill("team:TOTHER123:user:UTEST123");
+  await people.press("Enter");
+  await picker
     .getByText("This bot belongs to workspace TTEST123. Enter a user in that workspace.")
     .waitFor();
-  await page
-    .getByLabel("Default plugin approvers exact Slack selector")
-    .fill("team:TTEST123:user:UTEST999");
-  await page.getByRole("button", { name: "Add exact selector" }).click();
-  await page.getByRole("button", { name: "Remove team:TTEST123:user:UTEST999" }).click();
-  await page.getByRole("button", { name: "Find approver for Default plugin approvers" }).click();
-  await userDialog.getByRole("button", { name: /Alex.*UTEST123/ }).click();
-  assert.equal(await page.getByText("team:TTEST123:user:UTEST123", { exact: true }).count(), 1);
+  await people.fill("team:TTEST123:user:UTEST999");
+  await people.press("Enter");
+  await picker
+    .getByRole("button", { name: "Remove team:TTEST123:user:UTEST999", exact: true })
+    .click();
+  await people.fill("Alex");
+  await picker.getByRole("option", { name: /Alex.*UTEST123/ }).click();
+  assert.equal(
+    await picker.locator('.slack-directory-chip[data-value="team:TTEST123:user:UTEST123"]').count(),
+    1,
+  );
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
   const pluginDialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
   await pluginDialog.getByRole("button", { name: pluginId, exact: true }).click();
@@ -114,9 +116,11 @@ test("Agent plugin approver selectors save inheritance and workspace-qualified u
   await toolRow.locator("summary").click();
   await toolRow.getByLabel(`${toolId} tool approvers mode`).selectOption("chosen");
   await toolRow
-    .getByLabel(`${toolId} tool approvers exact Slack selector`)
+    .getByRole("combobox", { name: `${toolId} tool approvers people`, exact: true })
     .fill("team:TTEST123:user:UTEST123");
-  await toolRow.getByRole("button", { name: "Add exact selector" }).click();
+  await toolRow
+    .getByRole("combobox", { name: `${toolId} tool approvers people`, exact: true })
+    .press("Enter");
   await pluginDialog.getByRole("button", { name: "Done", exact: true }).click();
   const savedApprovers = page.waitForResponse(
     (response) =>
@@ -148,8 +152,7 @@ test("Agent plugin approver selectors save inheritance and workspace-qualified u
 
   await page.goto(`${fixture.origin}${pluginsUrl.pathname}${pluginsUrl.search}`);
   await page
-    .locator(".slack-approver-id")
-    .filter({ hasText: "UTEST123" })
+    .locator('.slack-directory-chip[data-value="team:TTEST123:user:UTEST123"]')
     .getByText("Alex")
     .waitFor();
   assert.ok(
