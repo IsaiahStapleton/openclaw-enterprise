@@ -223,6 +223,7 @@ export function renderCreateAgent(context, draft) {
     renderAgentForm(context, draft.rendered, draft.presetOptions, draft);
     return;
   }
+  context.setDiscardOnExit(false);
   context.setDraftCapture(null);
   context.view.replaceChildren(
     link("← Agents", "agents", context),
@@ -235,7 +236,13 @@ export function renderCreateAgent(context, draft) {
         { className: "muted" },
         "Choose a model, connect repositories, and give your Agent a place to work.",
       ),
-      button("Start without Preset", () => renderAgentForm(context, {}), { className: "primary" }),
+      button(
+        "Start without Preset",
+        () => renderAgentForm(context, {}, {}, { withoutPreset: true }),
+        {
+          className: "primary",
+        },
+      ),
     ),
     element(
       "section",
@@ -254,6 +261,7 @@ export function renderCreateAgent(context, draft) {
 }
 
 function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
+  context.setDiscardOnExit(Boolean(draft.withoutPreset));
   context.drafts.forget("preset");
   const { view, request, namespaceId } = context;
   const agent = rendered.agent ?? {};
@@ -1114,6 +1122,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   }
   manualModel = draft.manualModel ?? manualModel;
   context.setDraftCapture(() => ({
+    withoutPreset: Boolean(draft.withoutPreset),
     rendered,
     presetOptions,
     // Keep raw editor text, including invalid JSON. Password controls are deliberately excluded.

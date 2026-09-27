@@ -509,6 +509,26 @@ select {
   color: inherit;
   background: var(--surface);
 }
+select:not([multiple]):not([size]),
+select:not([multiple])[size="1"] {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 42%, #403c35 42%, #403c35 58%, transparent 58%),
+    linear-gradient(135deg, transparent 42%, #403c35 42%, #403c35 58%, transparent 58%);
+  background-repeat: no-repeat;
+  background-position:
+    right 18px center,
+    right 12px center;
+  background-size: 6px 6px;
+  padding-right: 36px;
+}
+@media (forced-colors: active) {
+  select:not([multiple]):not([size]),
+  select:not([multiple])[size="1"] {
+    appearance: auto;
+    background-image: none;
+  }
+}
 .agent-toolbar {
   display: flex;
   justify-content: space-between;
@@ -552,6 +572,38 @@ select {
   border: 1px solid var(--input-border);
   border-radius: var(--radius);
   padding: 11px 12px;
+}
+.secret-typeahead {
+  position: relative;
+}
+.secret-typeahead-listbox {
+  position: absolute;
+  z-index: 20;
+  inset: calc(100% + 4px) 0 auto;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgb(15 23 42 / 14%);
+}
+.secret-typeahead-listbox [role="option"],
+.secret-typeahead-empty {
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+}
+.secret-typeahead-listbox [role="option"] {
+  cursor: pointer;
+}
+.secret-typeahead-listbox [role="option"][aria-selected="true"],
+.secret-typeahead-listbox [role="option"].secret-typeahead-active {
+  background: var(--accent-subtle);
+}
+.secret-typeahead-create {
+  font-weight: 550;
+}
+.secret-typeahead-empty {
+  color: var(--muted);
 }
 .form-actions {
   display: flex;

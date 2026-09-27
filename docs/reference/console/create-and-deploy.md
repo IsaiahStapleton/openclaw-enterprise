@@ -9,7 +9,7 @@ Secret references; ordinary draft creation also requires permission to grant
 Agent key access. After deployment, [verify this same
 Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
 The [local first-Agent walkthrough](../../guides/first-agent.md) creates a separate
-Agent; it does not verify your Console Agent.
+Agent, not this one.
 
 ## Create an Agent
 
@@ -77,12 +77,12 @@ Presets and edited Configuration JSON retain their settings.
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no
    update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
 
-Before saving, Preset variables and one Agent draft per Namespace survive navigation,
-including Back/Forward. Reopen **Create Agent** to resume edits; reenter new
-credentials because password fields clear on navigation. **Start over** confirms
-discard. Reload, page exit, and sign-out clear local drafts. Once saving begins,
-navigation does not retain partial-save or uncertain-outcome form state; follow
-save recovery below.
+Before saving, Preset variables and forms survive navigation, including Back/Forward;
+passwords clear. Leaving a form started without a Preset discards its unsaved state;
+the next visit shows the initial choices. Saved Agents and Secrets remain. **Start
+over** confirms discard. Reload, page exit, and sign-out clear local drafts. Once
+saving begins, navigation does not retain partial-save or uncertain-outcome form
+state; follow save recovery below.
 
 For Codex plugins, select **Service Accounts** with **Codex**, expand
 **Plugin discovery token (optional)**, enter a token, and open **Configure plugins**. **Previous page** and **Next page** fetch
@@ -115,9 +115,9 @@ and clears token/model. API-key Harness changes preserve both. Credential edits
 preserve model selection. Select or enter a model before saving; the starter list
 does not prove runtime compatibility or provider acceptance.
 
-The optional model-discovery API requires Namespace Agent `create`; it sends
-credentials upstream without saving them and lists Codex models for `codex_pat`.
-Console model selection does not require discovery.
+The optional model-discovery API requires Namespace Agent `create`, sends
+credentials upstream without saving them, and lists Codex models for `codex_pat`.
+Console selection needs no discovery.
 
 Configure Helm `api.modelDiscoveryCidrs` with provider IPv4 `/32` hosts, then
 upgrade. This grants only API Pods TCP 443 egress; Harness rules are unchanged.
@@ -172,7 +172,8 @@ all of them and always submits the chosen level explicitly. The server rechecks
 current Namespace policy when it creates the Agent and again when it admits a
 deployment.
 
-Failed rediscovery retains unsaved repository choices across navigation and retry.
+Failed rediscovery retains unsaved repository choices for retry. Preset forms also
+retain them across navigation.
 **Create Agent** stays blocked until discovery succeeds and filters choices against
 current policy. **Start over** discards selections.
 

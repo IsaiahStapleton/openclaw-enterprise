@@ -124,9 +124,9 @@ Installation YAML.
 Use the [DevDay storyboard](../../scripts/console-storybook/devday-storyboard.md)
 for presenter actions, expected visible states, and fallbacks.
 
-**Choose provider and harness** walks through the OpenAI Codex default, OpenClaw
-selection, Anthropic's OpenClaw-only choice, and switching from an unsaved service account
-token to API-key authentication. Model choices are hardcoded in the Console and
+**Choose provider, harness, and authentication** checks dropdown arrows and walks
+through OpenAI Codex, OpenClaw, Anthropic, and switching an unsaved service
+account token to API-key authentication. Model choices are hardcoded in the Console and
 available before credential entry; **Enter another model ID** covers manual entry.
 These choices do not establish whether a credential can access a model. Execution mode follows the harness. The saved-token
 Preset story shows why its harness is fixed to Codex.
@@ -170,6 +170,9 @@ or Namespaces, and return with Back/Forward. Check empty and invalid text, then
 explicit Cancel or Reload. The Configuration story keeps deployment disabled;
 workspace Save changes only the selected simulated file.
 
+Use **Flows → Restart Agent creation** to enter a no-Preset form, leave it, and
+confirm re-entry shows the initial choices with an empty new form.
+
 Use **Pages/Create Agent → Keep Preset variables** before applying a Preset and
 **Keep an unsaved Preset draft** afterward. Ordinary fields survive while token
 inputs clear. Revisit the Agents list to check its search filter. Existing denied,
@@ -179,20 +182,17 @@ not backend persistence or live gateway proof.
 
 ### Choose and switch revision Secrets
 
-In **Components / Credentials / Slack tokens stored**, inspect all three Secret
-references. Cancel **Create new Secret...** without writing; select an existing
-Secret, then Save. Switching app tokens preserves the bot binding. The API-key
-switch story provides a second model Secret.
+In **Components / Credentials / Slack tokens stored**, inspect references,
+cancel creation, then switch app tokens; the bot binding stays unchanged.
+The API-key switch offers another model Secret.
 
-**Secret list denied** retains bound IDs. **Slack grant denied** preserves the
-saved reference but requires Agent access recovery before deployment.
+**Secret list denied** retains IDs. **Slack grant denied** preserves the
+reference but requires access recovery before deployment.
 
-Review the [bound model Secret](../assets/revision-secret-picker/harness-bound.png),
-[staged Slack switch](../assets/revision-secret-picker/slack-switch.png),
-[creation dialog](../assets/revision-secret-picker/create-secret.png),
-[denied list](../assets/revision-secret-picker/list-denied.png),
-[denied grant](../assets/revision-secret-picker/grant-denied.png), and
-[walkthrough](../assets/revision-secret-picker/walkthrough.mp4) using simulated data.
+In **Components/Channels → Slack Secret menu**, search names/IDs; select with
+arrows and Enter. **Slack create Secret modal** shows Name and masked value.
+In **Slack duplicate Secret name**, rename and retry without reentering the value.
+Browser tests cover controller rejection.
 
 ### Inspect bound Secrets in revisions
 

@@ -1,6 +1,6 @@
 ---
 created: 2026-09-08
-updated: 2026-09-24
+updated: 2026-09-26
 last_updated_session: 01a0d1dd-aa36-7622-9f43-8376f6ff935e
 ---
 
@@ -207,11 +207,15 @@ revision, startup instance, selection keys, and closed warning codes before
 returning readiness and warnings. The status is recomputed after restart; it is
 not a durable record of the first failure.
 
-Dedicated Codex runs separately from its gateway. The gateway blocks each failed
-bridge selection before serving, preventing native bridge activation from
-retrying that plugin during a turn. It must refresh its effective configuration
-when the Agent startup result changes. Missing or untrusted status cannot
-establish readiness. Requested revision selections remain unchanged.
+Dedicated Codex runs separately. Startup symlinks
+`/home/node/.openclaw/plugin-skills` to
+`/home/node/openclaw-runtime-assets/plugin-skills`, preserving relative files
+without gateway state/credentials.
+
+Gateway blocks failed bridge selections before serving and prevents retry during
+turns. It refreshes effective configuration when Agent startup changes;
+untrusted status cannot establish readiness. Requested revision selections remain
+unchanged.
 
 Compute installs the narrow status NetworkPolicies before starting the first
 dedicated gateway that requires plugin status. It creates that gateway only after the
@@ -268,9 +272,9 @@ completed deployment attempt rather than ongoing runtime health.
   `PLUGIN_AUTH_REQUIRED` and the admitted `pluginId`. Confirm the corresponding
   runtime and gateway entries are disabled. Do not infer plugin attribution
   from arbitrary native logs.
-- Prove behavior with a model-chosen plugin call during a normal Agent turn,
-  then disable/remove on a later deployment and verify another Agent is unchanged.
-  Source or fixture tests alone do not establish native runtime compatibility.
+- Prove behavior with a model-chosen plugin call in a normal Agent turn, then
+  disable or remove the plugin and verify another Agent is unchanged. Source or
+  fixture tests are not native runtime proof.
 - Use the opt-in real-runtime lane in [Agent plugin testing](../testing/plugins.md)
   for Kubernetes, database, credential, native-runtime, and historical proof
   details. A skipped native lane is not proof.
@@ -289,6 +293,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-26 21:38: Added Agent skill paths. (c5a050f1-e44a-48c1-9c18-f7661d50623f - 41aae775)
 
 - 2026-09-24 19:44: Added Driver-owned setup and recovery links. (01a0d1dd-aa36-7622-9f43-8376f6ff935e - ef89ded5)
 

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-26
-last_updated_session: authoring-run/33370d63-d3f8-4d66-8ad2-02dab55954e2
+updated: 2026-09-27
+last_updated_session: authoring-run/c1812a3c-f760-4167-80ca-f4a66d8572e4
 ---
 
 # Agent Presets flow
@@ -150,8 +150,12 @@ disabled so the user follows ordinary creation recovery.
 Before resetting the view, Console captures the unsaved form's raw editor text,
 model controls, workspace files, repository selections, and staged Secret
 references. The in-memory map is scoped to the signed-in user and Namespace.
-Returning through navigation or browser history reconstructs the form from that
-copy; capability and repository discovery run again against current access.
+Returning to a Preset form through navigation or browser history reconstructs it
+from that copy; capability and repository discovery run again against current
+access. A form started without a Preset registers for discard on exit. After
+flushing captures, `loadPage` removes its creation and channel snapshots and its
+retained view when navigation leaves creation or changes Namespace. Re-entry
+opens the initial choices; resources already saved through the API remain.
 Invalid JSON survives as text. Password controls and plugin discovery results
 are excluded. Start over removes the copy; session loss, logout, a different
 signed-in user, and page exit clear the map. Starting a save removes its capture
@@ -240,6 +244,8 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-27 00:28: Discard no-Preset creation state when leaving the flow. (authoring-run/c1812a3c-f760-4167-80ca-f4a66d8572e4 - ea187c93468f399b00ebb504fcbbed5ab21ddd8e)
 
 - 2026-09-26 13:34: Trace main-form Secret selection, immediate creation, and metadata-only draft restoration. (authoring-run/33370d63-d3f8-4d66-8ad2-02dab55954e2 - 5b9fa853a23c47d410e3b7338a20ee0509041493)
 

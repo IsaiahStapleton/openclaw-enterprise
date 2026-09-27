@@ -14,6 +14,7 @@ let namespaces = [];
 let namespaceId = null;
 let loggingOut = false;
 let navigateAgentTab = null;
+let discardCreationOnExit = null;
 const drafts = createDraftStore();
 let draftUserId = null;
 const navigation = createNavigation({
@@ -187,6 +188,7 @@ function clearPrivate() {
 }
 
 function clearDrafts() {
+  discardCreationOnExit = null;
   drafts.clear();
   draftUserId = null;
 }
@@ -295,8 +297,20 @@ async function loadPage({ fromNavigation = false } = {}) {
     return;
   }
   const knownPrivateState = session !== null && Object.hasOwn(pages, current.feature);
+  const abandonedCreation =
+    fromNavigation &&
+    discardCreationOnExit &&
+    (!current.creating || current.namespace !== discardCreationOnExit.namespaceId);
+  const previousMountedRouteKey = mountedRouteKey;
   namespaceId = current.namespace;
   const active = resetReads({ retainView: knownPrivateState });
+  if (abandonedCreation) {
+    const creationDrafts = drafts.scope(discardCreationOnExit.namespaceId, "create");
+    creationDrafts.forget("create");
+    creationDrafts.forget("channels");
+    retainedViews.delete(previousMountedRouteKey);
+    discardCreationOnExit = null;
+  }
   let shell = knownPrivateState ? restoreRetainedView(current) : null;
   let retained = shell !== null;
   if (!retained) {
@@ -468,6 +482,9 @@ async function loadPage({ fromNavigation = false } = {}) {
       renderCreateAgent(
         {
           ...agentContext,
+          setDiscardOnExit(discard) {
+            discardCreationOnExit = discard ? { namespaceId } : null;
+          },
           setDraftCapture(capture) {
             agentContext.drafts.forget("create");
             if (capture) {
