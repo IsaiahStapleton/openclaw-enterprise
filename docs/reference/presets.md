@@ -83,7 +83,7 @@ private template is exposed by the public shared-default asset.
 
 ### Standard harness presets
 
-The standard gateway policy is local mode, LAN binding, Control UI disabled, and
+The standard gateway policy is local mode, LAN binding, Control UI enabled, and
 an environment reference to `OPENCLAW_GATEWAY_PASSWORD`. Browser, elevated tools,
 and web fetch are explicitly disabled; web search is enabled. Neither standard
 file explicitly enables Chat Completions.
