@@ -76,8 +76,12 @@ An incomplete page cannot establish that a name is absent or unique.
 `apps/controller/src/console/channels/slack.mjs:appendFields`,
 `apps/controller/src/console/agents/slack-directory.mjs:createSlackDirectoryField`
 
-The Console debounces typing and shows each candidate's name, exact ID, and
-workspace. It buffers the provider's complete returned batch and divides it into
+The Console presents bot-token selection before channel access and explains that
+name lookup needs that token. It debounces typing and shows each candidate's name,
+exact ID, and workspace. The directory result panel overlays the form, following
+the Secret picker pattern in `apps/controller/src/console/console.css`. Closing
+results on focus loss cancels pending searches without moving the clicked control;
+name-status hints retain their layout space while results are open. It buffers the provider's complete returned batch and divides it into
 [display pages](../reference/drivers/slack-channel.md). Previous and Next reuse
 those pages before Next follows the provider cursor. An empty provider page with
 a continuation still offers Next. New input, dismissal, or a changed Secret
@@ -117,6 +121,8 @@ until the operator saves the channel edit.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 23:35: Put credentials first and prevent result dismissal from moving form controls during a click. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - bb11b3974bc7ec80db1dd4cfab4e1a166e386de3)
 
 - 2026-09-27 21:52: Buffer directory results for compact pages and cancel superseded browser searches. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - 1e1628335710f7bcb66e0c3d0d6bdc35b6a0baaf)
 

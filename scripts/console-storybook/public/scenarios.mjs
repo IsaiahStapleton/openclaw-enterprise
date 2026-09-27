@@ -2267,6 +2267,7 @@ export const scenarios = {
     steps: [
       "Use Next page to see design and engineering, then Previous page to restore the first five without another directory request.",
       "Use Next page twice to fetch product and announcements. Type platform and select its result.",
+      "Type another query, then click Save configuration once while results are open. The dropdown closes without moving Save, and only selected channel chips are saved.",
     ],
     gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
   },
