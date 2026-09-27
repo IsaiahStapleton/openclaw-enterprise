@@ -62,7 +62,10 @@ This reader starts native app-server, calls `plugin/list`, and may update its ca
 In hosted mode, Create Agent discovery hydrates entered PAT identity and reads GLOBAL
 plugin-service pages of up to 20 entries, fetching tools on demand. A nonempty
 query uses hosted search; the curated catalog searches its bundled entries.
-Console searches the catalog and resets pagination when the query changes. Requests have
+Console waits 300 ms after the last keystroke before searching and resets pagination
+when the query changes. Enter, page navigation, and explicit loads run immediately.
+Configured-plugin and tool filters remain instant and local. Closing the picker or
+changing its credential cancels pending searches. Requests have
 a 15-second deadline and 4 MiB response limit. Discovery does not read Codex home,
 install plugins, or return download URLs. A same-Namespace Secret reference can supply the PAT; managed ServiceAccount references are unsupported. Plugin details show available website, privacy-policy,
 and terms-of-service links; invalid or non-HTTPS URLs are omitted.

@@ -825,7 +825,12 @@ export const scenarios = {
     pluginCapabilities,
     actions: [...pluginDiscoveryForm, click("Next page")],
     description:
-      "Catalog pages use upstream cursors and contain up to 20 plugins. Search plugins searches the catalog and resets to the first page; Previous page restores the prior page for the same query.",
+      "Catalog pages use upstream cursors and contain up to 20 plugins. Search plugins waits 300 ms after typing, then searches the catalog from its first page. Enter and page navigation run immediately.",
+    steps: [
+      "Type a plugin name quickly and pause. Verify the matching catalog results appear and Previous page is disabled for the new query.",
+      "Change the query and press Enter before pausing; results load immediately. Clear the query to restore the full catalog, then use Next page and Previous page.",
+      "Type a new query and immediately close the dialog. Reopen it to search the retained query. Configured-plugin and tool filters update immediately without catalog requests.",
+    ],
     gap: pluginDiscoveryGap,
   },
   createPluginsEmpty: {

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-27
-last_updated_session: 01a0e176-b1ee-7641-85e8-c167f10c6a66
+last_updated_session: 01a0e4d2-4f51-7780-b0fc-2352cb99078f
 ---
 
 # Agent Plugin Deployment Flow
@@ -66,33 +66,34 @@ graph TD
 
 ### Credential-scoped discovery
 
-[Create Agent discovery](../reference/drivers/plugin.md#selection-and-catalogs)
-accepts transient PATs, same-Namespace Secrets, or no credential if supported.
-OCC checks Namespace Agent `create` and caller Secret `operate` before
-Driver support; unsupported discovery reads no Secret.
+[Create discovery](../reference/drivers/plugin.md#selection-and-catalogs) accepts
+transient PATs, same-Namespace Secrets, or supported credential-free access.
+OCC checks Namespace Agent `create` and caller Secret `operate` before Driver
+support; unsupported discovery reads no Secret.
 
-Existing-Agent routes accept only queries, cursors, or plugin IDs under active Agent
-`read`/`update`. Curated discovery needs no Secret. Hosted discovery reads bound
-`codex_pat`, requires caller and Agent ServicePrincipal Secret `operate`, and
-rechecks binding and grants inside
-[`SecretDriver.withValue`](../reference/drivers/secret.md) before provider I/O.
+Existing-Agent discovery requires active Agent `read`/`update`; inputs are queries,
+cursors, or plugin IDs. Hosted discovery resolves bound `codex_pat` and rechecks
+binding and caller/Agent Secret `operate` inside
+[`SecretDriver.withValue`](../reference/drivers/secret.md). Curated discovery needs
+no Secret. Missing, denied, or unavailable Secrets fail before discovery.
+Nontransactional reads use current values but may precede rotation; discovery
+persists no state or credentials.
 
-Nontransactional Secret reads use current values; in-flight reads may precede
-rotation. Missing, denied, or unavailable Secrets fail before discovery, which
-persists neither state nor credentials.
+The [Codex Driver](../../apps/controller/src/drivers/plugin/index.ts) hydrates
+hosted identity, then searches `q` or lists GLOBAL entries with opaque cursors.
+[Console discovery](../../apps/controller/src/console/agents/plugin-discovery.mjs)
+invalidates responses and aborts requests on input before the
+[search delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+Enter/paging run immediately; closing, configured view, or credential changes cancel
+searches. Request signals retain view cancellation.
+Tools (`null`: unknown) load on demand; supported entries become selectable after
+details. Unsupported releases stay unavailable. Curated catalogs filter bundled
+entries; tools/account access remain unknown.
 
-The [Codex Plugin Driver](../../apps/controller/src/drivers/plugin/index.ts)
-receives `q` through OCC. Hosted discovery hydrates identity, searches nonempty
-queries or lists GLOBAL entries: 20-entry pages, opaque cursors. Console
-resets cursors on query changes, ignores stale responses, and loads tools
-(`null`: unknown) on demand. Curated discovery filters its bundled catalog locally;
-tools and account access remain unknown. Console permits supported
-entries after details; unsupported releases stay unavailable.
-Bounded hosted reads forbid redirects. OCC returns
-`no-store` metadata, rejects credential echoes, and suppresses upstream errors
-and artifacts. Selections exclude Driver links and
-[setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
-Connections remain unverified; HTTPS logos omit referrers and default to initials.
+Bounded hosted reads forbid redirects. OCC returns `no-store` metadata, rejects
+credential echoes, and suppresses upstream errors/artifacts. Selections exclude
+Driver links/setup guidance. Connections remain unverified; HTTPS logos omit
+referrers and default to initials.
 
 ### 1. Validate desired state under exact-Agent authority
 
@@ -296,6 +297,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 21:52: Debounced catalog searches and canceled obsolete requests. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - a599db7e)
 
 - 2026-09-27 06:07: Expanded the curated catalog and marked unsupported releases unavailable. (01a0e176-b1ee-7641-85e8-c167f10c6a66 - eb3d6c4c0b8881e5f7efe17c03cc05357e7c7734)
 

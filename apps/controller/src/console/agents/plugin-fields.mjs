@@ -80,6 +80,7 @@ export function createPluginFields({
   catalog = null,
   capabilities = null,
   onLoadPlugins = null,
+  onCancelDiscovery = null,
   onLoadTools = null,
   saveHint = "Changes are saved when you create the Agent.",
 }) {
@@ -160,12 +161,16 @@ export function createPluginFields({
   );
   dialog.addEventListener("close", () => {
     waitingForCatalog = false;
+    onCancelDiscovery?.();
     configure.focus();
   });
   // A search Enter must not submit a surrounding form.
   dialog.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && event.target.matches('input[type="search"]')) {
       event.preventDefault();
+      if (event.target === search && !configuredOnly) {
+        loadPage("refresh");
+      }
     }
   });
   const json = element(
@@ -194,6 +199,9 @@ export function createPluginFields({
   function showConfigured(value) {
     waitingForCatalog = false;
     configuredOnly = value;
+    if (value) {
+      onCancelDiscovery?.();
+    }
     search.value = value ? "" : availableQuery;
     activeId = null;
     render();
@@ -859,7 +867,7 @@ export function createPluginFields({
       return;
     }
     availableQuery = search.value;
-    loadPage("refresh");
+    loadPage("search");
   });
   render();
   return {

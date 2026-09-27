@@ -5459,9 +5459,25 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await dialog.getByRole("button", { name: "Documents", exact: true }).waitFor();
   assert.equal(await calendar.count(), 0);
   const search = dialog.getByLabel("Search plugins", { exact: true });
-  // A new query searches the full catalog, starting without the previous listing cursor.
+  await page.clock.install({ time: new Date("2026-09-27T12:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-09-27T12:00:01Z"));
+  const catalogRequests = () =>
+    requests.filter((request) => request.path.endsWith("/agents/plugins"));
+  const beforeTyping = catalogRequests().length;
+  // Typing coalesces into one catalog search 300 ms after the last edit, without the old cursor.
+  await search.fill("lin");
+  await page.clock.runFor(200);
   await search.fill("linear");
+  await page.clock.runFor(299);
+  assert.equal(catalogRequests().length, beforeTyping);
+  await page.clock.runFor(1);
   await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  assert.deepEqual(
+    catalogRequests()
+      .slice(beforeTyping)
+      .map((request) => request.body),
+    [{ accessToken: "at-browser-plugin-one", q: "linear" }],
+  );
   assert.equal(
     await dialog.getByRole("button", { name: "Previous page", exact: true }).isDisabled(),
     true,
@@ -5471,20 +5487,30 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   assert.equal(await search.inputValue(), "linear");
   await dialog.getByRole("button", { name: "Previous page", exact: true }).click();
   await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
-  // A slow older search cannot replace the results of the current query.
-  const staleSearchResponse = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/agents/plugins") && response.request().postDataJSON()?.q === "slow",
-  );
+  // An older request is canceled as soon as input changes, including during the debounce window.
+  const staleSearchCanceled = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      request.url().endsWith("/agents/plugins") && request.postDataJSON()?.q === "slow",
+  });
   await search.fill("slow");
+  await page.clock.runFor(300);
   await searchStarted.promise;
   await search.fill("linear");
-  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  await staleSearchCanceled;
   searchRelease.resolve();
-  await staleSearchResponse;
+  const beforeReplacement = catalogRequests().length;
+  await page.clock.runFor(299);
+  assert.equal(catalogRequests().length, beforeReplacement);
   assert.equal(await dialog.getByRole("button", { name: "Stale-result", exact: true }).count(), 0);
+  await page.clock.runFor(1);
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  // Enter bypasses the delay; it also cancels the scheduled request instead of duplicating it.
   await search.fill("");
+  await search.press("Enter");
   await calendar.waitFor();
+  const afterEnter = catalogRequests().length;
+  await page.clock.runFor(300);
+  assert.equal(catalogRequests().length, afterEnter);
   assert.equal(
     await dialog.getByRole("button", { name: "Previous page", exact: true }).isDisabled(),
     true,
@@ -5531,8 +5557,20 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
   await dialog.getByRole("button", { name: "Configured plugins", exact: true }).click();
   await dialog.getByRole("button", { name: "Calendar", exact: true }).waitFor();
+  const beforeLocalFilter = catalogRequests().length;
+  const configuredSearch = dialog.getByLabel("Filter configured plugins", { exact: true });
+  await configuredSearch.fill("missing");
+  assert.equal(await calendar.count(), 0);
+  await configuredSearch.fill("cal");
+  await calendar.waitFor();
+  await page.clock.runFor(300);
+  assert.equal(catalogRequests().length, beforeLocalFilter);
   await dialog.getByRole("button", { name: "Available plugins", exact: true }).click();
+  // Closing the picker drops a scheduled search; reopening explicitly loads the retained query.
+  await search.fill("linear");
   await closePluginDialog();
+  await page.clock.runFor(300);
+  assert.equal(catalogRequests().length, beforeLocalFilter);
   const reminder = page.locator(".plugin-setup-reminder");
   assert.equal(await reminder.isVisible(), true);
   await reminder
@@ -5547,12 +5585,21 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   );
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  await search.fill("");
+  await search.press("Enter");
+  await calendar.waitFor();
 
-  // A credential change fences an older page response while preserving explicit selections.
+  // Closing cancels an older page request before changing credentials; explicit selections survive.
   holdList = true;
+  const stalePageCanceled = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      request.url().endsWith("/agents/plugins") && request.postDataJSON()?.cursor === "page-two",
+  });
   await dialog.getByRole("button", { name: "Next page", exact: true }).click();
   await listPending;
   await closePluginDialog();
+  await stalePageCanceled;
   await token.fill("");
   const clearedSetup = page.locator(".plugin-access-help");
   assert.equal(await clearedSetup.locator("a").count(), 0);
@@ -5563,13 +5610,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await token.fill("at-browser-plugin-two");
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
   await dialog.getByRole("button", { name: "New-account-plugin", exact: true }).waitFor();
-  const staleResponse = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/agents/plugins") &&
-      response.request().postDataJSON().cursor === "page-two",
-  );
   releaseList();
-  await staleResponse;
   await dialog.getByRole("button", { name: "New-account-plugin", exact: true }).waitFor();
   assert.equal(await dialog.getByRole("button", { name: "Documents", exact: true }).count(), 0);
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
