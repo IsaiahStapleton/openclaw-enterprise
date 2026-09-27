@@ -119,6 +119,7 @@ export function createSlackNameResolver({
           `${namespacePath(context.namespaceId)}/channel-directory/lookup`,
           {
             method: "POST",
+            readOnly: true,
             body: {
               secretId,
               kind,
@@ -466,6 +467,7 @@ export function createSlackDirectoryField({
         const requestPage = (selection) =>
           context.request(`${namespacePath(context.namespaceId)}/channel-directory/lookup`, {
             method: "POST",
+            readOnly: true,
             signal,
             body: {
               secretId,

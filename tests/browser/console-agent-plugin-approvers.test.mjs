@@ -142,6 +142,41 @@ test("Agent plugin approver selectors save inheritance and workspace-qualified u
   await page.unroute(sessionPath);
   await page.getByRole("button", { name: "Configure plugins", exact: true }).focus();
   assert.equal(await people.getAttribute("aria-expanded"), "false");
+  const peopleNode = await people.elementHandle();
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await people.waitFor({ state: "detached" });
+  assert.equal(await peopleNode.evaluate((node) => node.isConnected), false);
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  await people.waitFor();
+  assert.equal(await peopleNode.evaluate((node) => node.isConnected), true);
+  assert.equal(await resultNode.evaluate((node) => node.isConnected), true);
+  assert.equal(await people.inputValue(), "Alex");
+  const resolvedSelection = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/channel-directory/lookup`) &&
+      response.request().postDataJSON()?.ids?.includes("UTEST123"),
+  );
+  await people.focus();
+  await result.waitFor();
+  await result.click();
+  await resolvedSelection;
+  await picker
+    .locator('.slack-directory-chip[data-value="team:TTEST123:user:UTEST123"]')
+    .getByText("Alex (@alex)")
+    .waitFor();
+  const selectedPeopleNode = await people.elementHandle();
+  await page.getByRole("button", { name: "Channels", exact: true }).click();
+  await people.waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  await people.waitFor();
+  assert.equal(await selectedPeopleNode.evaluate((node) => node.isConnected), true);
+  assert.equal(
+    await picker.locator('.slack-directory-chip[data-value="team:TTEST123:user:UTEST123"]').count(),
+    1,
+  );
+  await picker
+    .getByRole("button", { name: "Remove team:TTEST123:user:UTEST123", exact: true })
+    .click();
   await people.fill("team:TOTHER123:user:UTEST123");
   await people.press("Enter");
   await picker

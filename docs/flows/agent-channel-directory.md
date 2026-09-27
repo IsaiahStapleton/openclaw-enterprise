@@ -91,9 +91,11 @@ when the editor opens or the selected Secret changes. A denied or failed lookup 
 exact-ID entry available; no directory result changes the saved Configuration
 until the operator saves the channel edit.
 
-On browser refocus, the Console rechecks session and Agent access while keeping
-the mounted Agent view. The picker keeps its open query and results while controls
-are temporarily inert; moving focus to another Console control closes the list.
+When Agent detail performs a browser-refocus access check, it keeps the mounted
+view. The picker keeps its open query and results while controls are temporarily
+inert; moving focus to another Console control closes the list. Read-only
+directory lookups do not invalidate tab retention, so a completed search can
+keep its picker when switching Agent tabs and returning.
 Those results are from the last authorized lookup. A new search rechecks the
 exact edit target and Secret `operate` grant, and denied Agent access removes the
 view.
