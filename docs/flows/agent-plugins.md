@@ -67,35 +67,32 @@ graph TD
 ### Credential-scoped discovery
 
 [Create Agent discovery](../reference/drivers/plugin.md#selection-and-catalogs)
-accepts a transient PAT, same-Namespace Secret, or no credential when the Driver
-permits it. OCC checks Namespace Agent `create` and caller Secret `operate` before
-Driver support. Unsupported discovery reads no Secret.
+accepts transient PATs, same-Namespace Secrets, or no credential if supported.
+OCC checks Namespace Agent `create` and caller Secret `operate` before
+Driver support; unsupported discovery reads no Secret.
 
 Existing-Agent routes accept only queries, cursors, or plugin IDs under active Agent
 `read`/`update`. Curated discovery needs no Secret. Hosted discovery reads bound
-`codex_pat`, requires caller and Agent ServicePrincipal Secret `operate`, then
+`codex_pat`, requires caller and Agent ServicePrincipal Secret `operate`, and
 rechecks binding and grants inside
 [`SecretDriver.withValue`](../reference/drivers/secret.md) before provider I/O.
-Plugin edits use Agent PATCH; admitted revisions stay immutable.
 
-Secret-backed reads use current values without transactions; in-flight
-reads may use pre-rotation values. Missing, denied, or unavailable Secrets fail
-before provider discovery. Discovery stores no state or credential.
+Nontransactional Secret reads use current values; in-flight reads may precede
+rotation. Missing, denied, or unavailable Secrets fail before discovery, which
+persists neither state nor credentials.
 
 The [Codex Plugin Driver](../../apps/controller/src/drivers/plugin/index.ts)
-receives `q` through OCC and selects hosted or curated discovery. Hosted discovery
-hydrates identity, searches nonempty queries or lists GLOBAL entries, and preserves
-opaque cursors across 20-entry pages. Console resets cursors on query changes and
-ignores older responses. Tools (`null`: unknown) load on demand. Curated discovery
-filters its bundled catalog without provider I/O; tools and account access remain
-unknown. Console permits
-supported entries after details; unsupported releases stay unavailable.
-Hosted reads are bounded and redirect-free. OCC returns
+receives `q` through OCC. Hosted discovery hydrates identity, searches nonempty
+queries or lists GLOBAL entries: 20-entry pages, opaque cursors. Console
+resets cursors on query changes, ignores stale responses, and loads tools
+(`null`: unknown) on demand. Curated discovery filters its bundled catalog locally;
+tools and account access remain unknown. Console permits supported
+entries after details; unsupported releases stay unavailable.
+Bounded hosted reads forbid redirects. OCC returns
 `no-store` metadata, rejects credential echoes, and suppresses upstream errors
-and artifacts. Driver links and
-[setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs)
-stay outside selections. App connections remain unverified; HTTPS logos omit
-referrers and fall back to initials.
+and artifacts. Selections exclude Driver links and
+[setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+Connections remain unverified; HTTPS logos omit referrers and default to initials.
 
 ### 1. Validate desired state under exact-Agent authority
 
@@ -103,7 +100,7 @@ referrers and fall back to initials.
 
 HTTP contracts validate input before
 [OpenClawController](../../packages/occ/src/index.ts) checks the exact Namespace
-and Agent. Reads require Agent `read`; create/update stores the `plugins` map.
+and Agent. Reads require Agent `read`; create/PATCH stores the `plugins` map.
 Shared validators check the nested selection shape.
 `OpenClawController.validatePluginPolicies` calls the selected Driver's
 `validatePolicies` before Agent create/update and provisioning writes. Unsupported
