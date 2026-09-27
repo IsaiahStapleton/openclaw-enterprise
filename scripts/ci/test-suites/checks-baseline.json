@@ -1,4 +1,7 @@
 {
+  "env": {
+    "NODE_OPTIONS": "--max-old-space-size=4096"
+  },
   "files": [
     {
       "path": "tests/conformance/audit.test.mjs"
@@ -14,6 +17,9 @@
     },
     {
       "path": "tests/conformance/contracts.test.mjs"
+    },
+    {
+      "path": "tests/conformance/credential-source-occ.test.mjs"
     },
     {
       "path": "tests/conformance/docker-compute.test.mjs"

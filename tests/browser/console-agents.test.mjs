@@ -7,7 +7,10 @@ import test from "node:test";
 
 import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
-import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
+import {
+  CodexPluginDriver,
+  OCCPluginDriver,
+} from "../../apps/controller/src/drivers/plugin/index.ts";
 import {
   WORKSPACE_DEFAULTS,
   WORKSPACE_DEFAULTS_ID,
@@ -450,6 +453,7 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   await createChannelDialog.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "Edit Slack" }).click();
+  await createChannelDialog.getByLabel("Slack channel IDs").fill("CNESTED123");
   await openCreateSecretDialog(createChannelDialog, "Slack bot token");
   const createSecretDialog = page.getByRole("dialog", {
     name: "Create Slack bot token Secret",
@@ -467,12 +471,38 @@ test("Agent creation stores its API key separately, grants exact access, and sav
     await createSecretDialog.getByLabel("Value", { exact: true }).getAttribute("type"),
     "password",
   );
-  await createSecretDialog.getByRole("button", { name: "Cancel" }).click();
+  // Dismissing the topmost dialog discards its token, not the underlying Slack edits.
+  await createSecretDialog.getByLabel("Value", { exact: true }).fill("discarded-secret-value");
+  const secretWritesBeforeDismissal = secretPostRequests(requests, namespace.id).length;
+  const secretBounds = await createSecretDialog.boundingBox();
+  assert.ok(secretBounds);
+  await page.mouse.click(secretBounds.x / 2, secretBounds.y + 8);
+  await createSecretDialog.waitFor({ state: "hidden" });
+  assert.equal(await createChannelDialog.isVisible(), true);
+  assert.equal(
+    await createChannelDialog.getByLabel("Slack channel IDs").inputValue(),
+    "CNESTED123",
+  );
+  assert.equal(await createChannelDialog.getByLabel("Slack bot token").inputValue(), "");
+  assert.equal(secretPostRequests(requests, namespace.id).length, secretWritesBeforeDismissal);
+  await createChannelDialog.getByLabel("Slack channel IDs").fill("");
   await openCreateSecretDialog(createChannelDialog, "Slack bot token");
-  await page
-    .getByRole("dialog", { name: "Create Slack bot token Secret" })
-    .getByLabel("Value", { exact: true })
-    .fill(createdSlackBotSecretValue);
+  assert.equal(await createSecretDialog.getByLabel("Value", { exact: true }).inputValue(), "");
+  await createSecretDialog.getByLabel("Value", { exact: true }).fill(createdSlackBotSecretValue);
+  const secretReached = Promise.withResolvers();
+  const secretRelease = Promise.withResolvers();
+  t.after(() => secretRelease.resolve());
+  // The real Secret write must finish before its dialog can be dismissed.
+  await page.route(`${fixture.origin}/namespaces/${namespace.id}/secrets`, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    secretReached.resolve();
+    await secretRelease.promise;
+    await route.fulfill({ response });
+  });
   const botSecretResponse = page.waitForResponse((response) => {
     if (
       response.url() !== `${fixture.origin}/namespaces/${namespace.id}/secrets` ||
@@ -482,10 +512,15 @@ test("Agent creation stores its API key separately, grants exact access, and sav
     }
     return response.request().postDataJSON()?.name === "Console-created Agent Slack bot token";
   });
-  await page
-    .getByRole("dialog", { name: "Create Slack bot token Secret" })
-    .getByRole("button", { name: "Create Secret" })
-    .click();
+  await createSecretDialog.getByRole("button", { name: "Create Secret" }).click();
+  await secretReached.promise;
+  await page.mouse.click(secretBounds.x / 2, secretBounds.y + 8);
+  assert.equal(await createSecretDialog.isVisible(), true);
+  assert.equal(
+    await createSecretDialog.getByRole("button", { name: "Create Secret" }).isDisabled(),
+    true,
+  );
+  secretRelease.resolve();
   const createdSlackBotSecret = (await (await botSecretResponse).json()).data;
   await createChannelDialog.getByText("Secret binding staged. Save changes to apply it.").waitFor();
   await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
@@ -2707,7 +2742,7 @@ test("Agent creation reuses its saved Secret and Configuration after an Agent cr
     JSON.stringify({
       "codex-plugin:linear@openai-curated-remote": {
         enabled: true,
-        toolDefaults: { approval: "approve" },
+        toolDefaults: { approval: "none" },
       },
     }),
   );
@@ -2744,7 +2779,7 @@ test("Agent creation reuses its saved Secret and Configuration after an Agent cr
   assert.deepEqual(retried.data.plugins, {
     "codex-plugin:linear@openai-curated-remote": {
       enabled: true,
-      toolDefaults: { approval: "approve" },
+      toolDefaults: { approval: "none" },
     },
   });
   for (const request of attempts) {
@@ -3565,7 +3600,9 @@ test("Agent detail saves plugin changes for the next revision without changing a
     resourceId: tokenSecret.id,
   });
   const pluginId = "codex-plugin:linear@openai-curated-remote";
-  const originalPlugins = { [pluginId]: { enabled: true, toolDefaults: { approval: "prompt" } } };
+  const originalPlugins = {
+    [pluginId]: { enabled: true, toolDefaults: { approval: "all_actions" } },
+  };
   await fixture.updateAgent(namespace.id, agent.id, {
     configurationId: agent.configurationId,
     harnessAuth: { method: "codex_pat", source: tokenSecret.ref },
@@ -3704,9 +3741,14 @@ test("Agent detail saves plugin changes for the next revision without changing a
   await dialog.getByRole("button", { name: "Configured plugins", exact: true }).click();
   await dialog.getByRole("button", { name: pluginId, exact: true }).click();
   await dialog.getByLabel(`Enable ${pluginId}`, { exact: true }).uncheck();
-  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  // Like Done, a backdrop dismissal preserves plugin choices in the surrounding draft.
+  const pluginBounds = await dialog.boundingBox();
+  assert.ok(pluginBounds);
+  await page.mouse.click(pluginBounds.x / 2, pluginBounds.y + 8);
+  await dialog.waitFor({ state: "hidden" });
+  await page.locator("button:focus").filter({ hasText: "Configure plugins" }).waitFor();
   const editedPlugins = {
-    [pluginId]: { enabled: false, toolDefaults: { approval: "prompt" } },
+    [pluginId]: { enabled: false, toolDefaults: { approval: "all_actions" } },
     "codex-plugin:calendar@openai-curated-remote": {
       enabled: true,
       tools: { "app_calendar/events%2Flist": { enabled: false } },
@@ -3887,6 +3929,22 @@ test("Agent draft browses the curated catalog without a saved Secret", async (t)
     pathRequests(requests, "POST", catalogPath).map(({ body }) => body),
     [{}],
   );
+  // The shared search UI must use the saved-Agent route without supplying a credential.
+  const searched = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}${catalogPath}` &&
+      response.request().postDataJSON()?.q === "linear",
+  );
+  await dialog.getByLabel("Search plugins", { exact: true }).fill("linear");
+  assert.equal((await searched).status(), 200);
+  await dialog.locator('.plugin-browser[aria-busy="false"]').waitFor();
+  assert.deepEqual(
+    await dialog
+      .locator(".plugin-list-item")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label"))),
+    ["Linear"],
+  );
+  assert.deepEqual(pathRequests(requests, "POST", catalogPath).at(-1).body, { q: "linear" });
   await linear.click();
   await dialog.getByRole("button", { name: "Add Linear", exact: true }).click();
   assert.equal(pathRequests(requests, "GET", `${catalogPath}/capabilities`).length, 1);
@@ -5201,6 +5259,8 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   });
   const detailStarted = Promise.withResolvers();
   const detailRelease = Promise.withResolvers();
+  const searchStarted = Promise.withResolvers();
+  const searchRelease = Promise.withResolvers();
   const hosted = (name, overrides = {}) => ({
     id: `remote-${name}`,
     name,
@@ -5245,6 +5305,26 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     }
     assert.equal(options.headers["ChatGPT-Account-ID"], "account-plugin-test");
     assert.equal(options.headers["OAI-Product-Sku"], "codex");
+    if (url.pathname.endsWith("/plugins/search")) {
+      assert.equal(url.searchParams.get("scope"), "GLOBAL");
+      assert.equal(url.searchParams.get("limit"), "20");
+      const q = url.searchParams.get("q");
+      if (q === "slow") {
+        searchStarted.resolve();
+        await searchRelease.promise;
+        return Response.json({
+          plugins: [hosted("Stale-result")],
+          pagination: { next_page_token: null },
+        });
+      }
+      assert.equal(q, "linear");
+      const cursor = url.searchParams.get("pageToken");
+      assert.ok(cursor === null || cursor === "linear-page-two");
+      return Response.json({
+        plugins: [hosted(cursor ? "Linear-tools" : "Linear")],
+        pagination: { next_page_token: cursor ? null : "linear-page-two" },
+      });
+    }
     if (url.pathname.endsWith("/plugins/list")) {
       assert.equal(url.searchParams.get("scope"), "GLOBAL");
       if (holdList && options.headers.Authorization === "Bearer at-browser-plugin-one") {
@@ -5316,6 +5396,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   });
   t.after(() => releaseList?.());
   t.after(() => detailRelease.resolve());
+  t.after(() => searchRelease.resolve());
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
@@ -5419,16 +5500,63 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await dialog.getByRole("button", { name: "Next page", exact: true }).click();
   await dialog.getByRole("button", { name: "Documents", exact: true }).waitFor();
   assert.equal(await calendar.count(), 0);
-  await dialog.getByRole("button", { name: "Previous page", exact: true }).click();
-  await calendar.waitFor();
-  assert.equal(await dialog.getByRole("button", { name: "Documents", exact: true }).count(), 0);
-  const filter = dialog.getByLabel("Filter this page", { exact: true });
-  await filter.fill("Calendar");
-  assert.equal(
-    await dialog.getByRole("button", { name: "Admin-disabled", exact: true }).count(),
-    0,
+  const search = dialog.getByLabel("Search plugins", { exact: true });
+  await page.clock.install({ time: new Date("2026-09-27T12:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-09-27T12:00:01Z"));
+  const catalogRequests = () =>
+    requests.filter((request) => request.path.endsWith("/agents/plugins"));
+  const beforeTyping = catalogRequests().length;
+  // Typing coalesces into one catalog search 300 ms after the last edit, without the old cursor.
+  await search.fill("lin");
+  await page.clock.runFor(200);
+  await search.fill("linear");
+  await page.clock.runFor(299);
+  assert.equal(catalogRequests().length, beforeTyping);
+  await page.clock.runFor(1);
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  assert.deepEqual(
+    catalogRequests()
+      .slice(beforeTyping)
+      .map((request) => request.body),
+    [{ accessToken: "at-browser-plugin-one", q: "linear" }],
   );
-  await filter.fill("");
+  assert.equal(
+    await dialog.getByRole("button", { name: "Previous page", exact: true }).isDisabled(),
+    true,
+  );
+  await dialog.getByRole("button", { name: "Next page", exact: true }).click();
+  await dialog.getByRole("button", { name: "Linear-tools", exact: true }).waitFor();
+  assert.equal(await search.inputValue(), "linear");
+  await dialog.getByRole("button", { name: "Previous page", exact: true }).click();
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  // An older request is canceled as soon as input changes, including during the debounce window.
+  const staleSearchCanceled = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      request.url().endsWith("/agents/plugins") && request.postDataJSON()?.q === "slow",
+  });
+  await search.fill("slow");
+  await page.clock.runFor(300);
+  await searchStarted.promise;
+  await search.fill("linear");
+  await staleSearchCanceled;
+  searchRelease.resolve();
+  const beforeReplacement = catalogRequests().length;
+  await page.clock.runFor(299);
+  assert.equal(catalogRequests().length, beforeReplacement);
+  assert.equal(await dialog.getByRole("button", { name: "Stale-result", exact: true }).count(), 0);
+  await page.clock.runFor(1);
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  // Enter bypasses the delay; it also cancels the scheduled request instead of duplicating it.
+  await search.fill("");
+  await search.press("Enter");
+  await calendar.waitFor();
+  const afterEnter = catalogRequests().length;
+  await page.clock.runFor(300);
+  assert.equal(catalogRequests().length, afterEnter);
+  assert.equal(
+    await dialog.getByRole("button", { name: "Previous page", exact: true }).isDisabled(),
+    true,
+  );
 
   // Selecting a plugin loads its tools; a rejected upstream body stays private and is retryable.
   await calendar.click();
@@ -5471,8 +5599,20 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
   await dialog.getByRole("button", { name: "Configured plugins", exact: true }).click();
   await dialog.getByRole("button", { name: "Calendar", exact: true }).waitFor();
+  const beforeLocalFilter = catalogRequests().length;
+  const configuredSearch = dialog.getByLabel("Filter configured plugins", { exact: true });
+  await configuredSearch.fill("missing");
+  assert.equal(await calendar.count(), 0);
+  await configuredSearch.fill("cal");
+  await calendar.waitFor();
+  await page.clock.runFor(300);
+  assert.equal(catalogRequests().length, beforeLocalFilter);
   await dialog.getByRole("button", { name: "Available plugins", exact: true }).click();
+  // Closing the picker drops a scheduled search; reopening explicitly loads the retained query.
+  await search.fill("linear");
   await closePluginDialog();
+  await page.clock.runFor(300);
+  assert.equal(catalogRequests().length, beforeLocalFilter);
   const reminder = page.locator(".plugin-setup-reminder");
   assert.equal(await reminder.isVisible(), true);
   await reminder
@@ -5487,12 +5627,21 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   );
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  await dialog.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  await search.fill("");
+  await search.press("Enter");
+  await calendar.waitFor();
 
-  // A credential change fences an older page response while preserving explicit selections.
+  // Closing cancels an older page request before changing credentials; explicit selections survive.
   holdList = true;
+  const stalePageCanceled = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      request.url().endsWith("/agents/plugins") && request.postDataJSON()?.cursor === "page-two",
+  });
   await dialog.getByRole("button", { name: "Next page", exact: true }).click();
   await listPending;
   await closePluginDialog();
+  await stalePageCanceled;
   await token.fill("");
   const clearedSetup = page.locator(".plugin-access-help");
   assert.equal(await clearedSetup.locator("a").count(), 0);
@@ -5503,13 +5652,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await token.fill("at-browser-plugin-two");
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
   await dialog.getByRole("button", { name: "New-account-plugin", exact: true }).waitFor();
-  const staleResponse = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/agents/plugins") &&
-      response.request().postDataJSON().cursor === "page-two",
-  );
   releaseList();
-  await staleResponse;
   await dialog.getByRole("button", { name: "New-account-plugin", exact: true }).waitFor();
   assert.equal(await dialog.getByRole("button", { name: "Documents", exact: true }).count(), 0);
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
@@ -5590,11 +5733,11 @@ test("Agent creation edits Preset plugin policies through the modal and persists
   const plugins = {
     [pluginId]: {
       enabled: false,
-      toolDefaults: { enabled: true, approval: "native", reviewer: "human" },
+      toolDefaults: { enabled: true, approval: "provider_default", reviewer: "human" },
       tools: {
-        "app_knowledge/search": { enabled: false, approval: "native" },
-        "app_knowledge/summarize": { enabled: true, approval: "approve" },
-        "app_knowledge/unknown-tool": { approval: "native" },
+        "app_knowledge/search": { enabled: false, approval: "provider_default" },
+        "app_knowledge/summarize": { enabled: true, approval: "none" },
+        "app_knowledge/unknown-tool": { approval: "provider_default" },
       },
     },
     [removedPluginId]: { enabled: true },
@@ -5639,7 +5782,9 @@ test("Agent creation edits Preset plugin policies through the modal and persists
   await searchTool.locator("summary").click();
   const pluginEnabled = dialog.getByLabel(`Enable ${pluginId}`, { exact: true });
   const toolEnabled = dialog.getByLabel("Enable app_knowledge/search", { exact: true });
-  const toolApproval = dialog.getByLabel("app_knowledge/search approval", { exact: true });
+  const toolApproval = dialog.getByLabel("app_knowledge/search require approval for", {
+    exact: true,
+  });
   const toolToggle = dialog.getByLabel("app_knowledge/search enabled override", { exact: true });
   assert.equal(await toolToggle.isDisabled(), true);
   assert.equal(await toolEnabled.isDisabled(), true);
@@ -5647,7 +5792,7 @@ test("Agent creation edits Preset plugin policies through the modal and persists
   await pluginEnabled.check();
   await dialog.getByLabel(`${pluginId} tools enabled by default`, { exact: true }).selectOption("");
   assert.deepEqual(JSON.parse(await json.inputValue())[pluginId].toolDefaults, {
-    approval: "native",
+    approval: "provider_default",
     reviewer: "human",
   });
   const reviewer = dialog.getByLabel(`${pluginId} default reviewer`, { exact: true });
@@ -5657,33 +5802,38 @@ test("Agent creation edits Preset plugin policies through the modal and persists
   );
   await reviewer.selectOption("");
   assert.deepEqual(JSON.parse(await json.inputValue())[pluginId].toolDefaults, {
-    approval: "native",
+    approval: "provider_default",
   });
   await reviewer.selectOption("auto");
-  await dialog.getByLabel(`${pluginId} default approval`, { exact: true }).selectOption("prompt");
+  const defaultApproval = dialog.getByLabel(`${pluginId} require approval for`, { exact: true });
+  assert.deepEqual(
+    (await optionValues(defaultApproval)).map(({ value }) => value),
+    ["", "provider_default", "all_actions", "write_actions", "none"],
+  );
+  await defaultApproval.selectOption("write_actions");
 
   // Codex advertises plugin-wide reviewers only; tool approval still inherits independently.
   const toolReviewer = dialog.getByLabel("app_knowledge/search reviewer", { exact: true });
   assert.equal(await toolReviewer.count(), 0);
   await searchTool.getByRole("button", { name: "Set reviewer for all tools" }).click();
   assert.equal(await reviewer.evaluate((node) => node === node.ownerDocument.activeElement), true);
-  await toolApproval.selectOption("approve");
+  await toolApproval.selectOption("none");
   await toolEnabled.selectOption("");
   assert.deepEqual(JSON.parse(await json.inputValue())[pluginId].tools["app_knowledge/search"], {
-    approval: "approve",
+    approval: "none",
   });
   // The summary toggle edits only enablement; an omitted override remains visibly inherited.
   await searchTool.locator("summary").click();
   assert.equal(await toolToggle.evaluate((node) => node.indeterminate), true);
   await toolToggle.click();
   assert.deepEqual(JSON.parse(await json.inputValue())[pluginId].tools["app_knowledge/search"], {
-    approval: "approve",
+    approval: "none",
     enabled: true,
   });
   assert.equal(await searchTool.evaluate((node) => node.open), false);
   await toolToggle.click();
   assert.deepEqual(JSON.parse(await json.inputValue())[pluginId].tools["app_knowledge/search"], {
-    approval: "approve",
+    approval: "none",
     enabled: false,
   });
   await searchTool.locator("summary").click();
@@ -5695,14 +5845,16 @@ test("Agent creation edits Preset plugin policies through the modal and persists
     .locator('details.plugin-tool-row[data-tool="app_knowledge/summarize"] > summary')
     .click();
   await dialog.getByLabel("Enable app_knowledge/summarize", { exact: true }).selectOption("");
-  await dialog.getByLabel("app_knowledge/summarize approval", { exact: true }).selectOption("");
+  await dialog
+    .getByLabel("app_knowledge/summarize require approval for", { exact: true })
+    .selectOption("");
   const expected = {
     [pluginId]: {
       enabled: true,
-      toolDefaults: { approval: "prompt", reviewer: "auto" },
+      toolDefaults: { approval: "write_actions", reviewer: "auto" },
       tools: {
         "app_knowledge/search": { enabled: true },
-        "app_knowledge/unknown-tool": { approval: "native" },
+        "app_knowledge/unknown-tool": { approval: "provider_default" },
       },
     },
   };
@@ -5733,6 +5885,72 @@ test("Agent creation edits Preset plugin policies through the modal and persists
   const saved = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${created.id}`);
   assert.equal(saved.status, 200);
   assert.deepEqual(saved.data.plugins, expected);
+});
+
+test("Plugin approval choices explain unsupported provider modes and preserve the draft until corrected", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const driver = new OCCPluginDriver();
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("plugin", driver.id);
+  const namespace = await fixture.createNamespace("Unsupported plugin approvals", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Native plugin Agent",
+    nativeValues("policy"),
+  );
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "plugins");
+  await login(page, fixture, `${url.pathname}${url.search}`);
+  const json = page.locator("#agent-plugins");
+  await page.locator("summary").filter({ hasText: "Plugin selections JSON" }).click();
+  // A copied policy from another provider remains visible so the operator can correct it.
+  const plugins = {
+    "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "write_actions" } },
+  };
+  await json.fill(JSON.stringify(plugins));
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  await dialog.getByRole("button", { name: "Configured plugins", exact: true }).click();
+  await dialog.getByRole("button", { name: "occ-plugin:diffs", exact: true }).click();
+  const approval = dialog.getByLabel("occ-plugin:diffs require approval for", { exact: true });
+  assert.equal(await approval.inputValue(), "write_actions");
+  assert.deepEqual(
+    await approval
+      .locator("option")
+      .evaluateAll((options) => options.map(({ value, disabled }) => [value, disabled])),
+    [
+      ["", false],
+      ["provider_default", false],
+      ["all_actions", true],
+      ["write_actions", true],
+      ["none", false],
+    ],
+  );
+  await dialog
+    .getByText("This plugin provider does not support: Every action, Write actions.", {
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(
+    await approval.locator("option:checked").textContent(),
+    "Write actions (unsupported)",
+  );
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  assert.deepEqual(JSON.parse(await json.inputValue()), plugins);
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  await approval.selectOption("provider_default");
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  const savedResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" && response.url().endsWith(`/agents/${agent.id}`),
+  );
+  await page.getByRole("button", { name: "Save plugin selections", exact: true }).click();
+  assert.equal((await savedResponse).status(), 200);
+  const saved = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
+  assert.deepEqual(saved.data.plugins, {
+    "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "provider_default" } },
+  });
 });
 
 test("API-key Presets keep their credential provider fixed while allowing model and runtime changes", async (t) => {
@@ -5839,7 +6057,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   const plugins = {
     "codex-plugin:linear@openai-curated-remote": {
       enabled: true,
-      toolDefaults: { approval: "approve" },
+      toolDefaults: { approval: "none" },
     },
   };
   const secretBindings = { CHANNEL_TOKEN: { source: secret.ref, delivery: { type: "env" } } };

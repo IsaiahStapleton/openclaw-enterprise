@@ -50,6 +50,7 @@ Stores Agent drafts, their desired runtime state, and the active revision refere
 - `harness_auth`
 - `harness_auth_secret_id`
 - `harness_auth_service_account_id`
+- `harness_auth_credential_source_id`
 - `active_revision_id`
 - `desired_runtime_state`
 - `status`
@@ -114,6 +115,28 @@ Stores Secret metadata and backend references; Secret values are kept by the sel
 - `backend_key`
 - `backend_uid`
 - `created_at`
+
+### `credential_sources`
+
+Stores credential sources registered with the selected Credential Gateway; the gateway holds the values.
+
+- `id`
+- `namespace_id`
+- `name`
+- `type`
+- `config`
+- `driver_id`
+- `state`
+- `created_at`
+
+### `credential_source_secrets`
+
+Links each credential source secret field to the Namespace Secret that supplied it.
+
+- `namespace_id`
+- `credential_source_id`
+- `field`
+- `secret_id`
 
 ### `service_accounts`
 

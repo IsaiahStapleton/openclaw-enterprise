@@ -1,9 +1,10 @@
-import { element, button } from "../dom.mjs";
+import { element, button, dismissOnBackdrop } from "../dom.mjs";
 
 const approvalOptions = [
-  ["native", "Native behavior"],
-  ["prompt", "Ask for approval"],
-  ["approve", "Approve"],
+  ["provider_default", "Provider default"],
+  ["all_actions", "Every action"],
+  ["write_actions", "Write actions"],
+  ["none", "No additional approval"],
 ];
 const reviewerOptions = [
   ["human", "Human"],
@@ -80,20 +81,23 @@ export function createPluginFields({
   catalog = null,
   capabilities = null,
   onLoadPlugins = null,
+  onCancelDiscovery = null,
   onLoadTools = null,
   saveHint = "Changes are saved when you create the Agent.",
 }) {
   let disabled = false;
   let activeId = null;
   let configuredOnly = false;
+  let availableQuery = "";
   let toolQuery = "";
   let waitingForCatalog = false;
   const search = element("input", {
     type: "search",
     id: "plugin-search",
-    placeholder: "Filter this page",
+    placeholder: "Search plugins",
+    maxLength: 1024,
   });
-  const searchLabel = element("label", { for: search.id }, "Filter this page");
+  const searchLabel = element("label", { for: search.id }, "Search plugins");
   const status = element("p", { className: "hint", role: "status" });
   const feedback = element("p", { className: "error", role: "status" });
   const policyStatus = element("p", { className: "hint", role: "status" });
@@ -125,6 +129,7 @@ export function createPluginFields({
     className: "plugin-dialog",
     "aria-labelledby": "plugin-dialog-title",
   });
+  dismissOnBackdrop(dialog);
   const configure = button("Configure plugins", () => {
     if (disabled) {
       return;
@@ -158,12 +163,16 @@ export function createPluginFields({
   );
   dialog.addEventListener("close", () => {
     waitingForCatalog = false;
+    onCancelDiscovery?.();
     configure.focus();
   });
   // A search Enter must not submit a surrounding form.
   dialog.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && event.target.matches('input[type="search"]')) {
       event.preventDefault();
+      if (event.target === search && !configuredOnly) {
+        loadPage("refresh");
+      }
     }
   });
   const json = element(
@@ -186,14 +195,16 @@ export function createPluginFields({
 
   function loadPage(direction) {
     activeId = null;
-    search.value = "";
-    onLoadPlugins?.(direction);
+    onLoadPlugins?.(direction, availableQuery);
   }
 
   function showConfigured(value) {
     waitingForCatalog = false;
     configuredOnly = value;
-    search.value = "";
+    if (value) {
+      onCancelDiscovery?.();
+    }
+    search.value = value ? "" : availableQuery;
     activeId = null;
     render();
   }
@@ -252,7 +263,9 @@ export function createPluginFields({
     const control = element(
       "select",
       { "aria-label": label },
-      ...options.map(([key, text]) => element("option", { value: key }, text)),
+      ...options.map(([key, text, disabled = false]) =>
+        element("option", { value: key, disabled }, disabled ? `${text} (unsupported)` : text),
+      ),
     );
     if (!options.some(([key]) => key === value)) {
       control.append(element("option", { value, disabled: true }, `${value} (unsupported)`));
@@ -261,6 +274,41 @@ export function createPluginFields({
     control.value = value;
     control.addEventListener("change", () => onChange(control.value));
     return element("label", { className: "plugin-control" }, label, control);
+  }
+
+  function approvalSelect(name, value, scope, onChange) {
+    const modes = capabilities?.[scope].approval ?? [];
+    const options = approvalOptions.map(([mode, label]) => [mode, label, !modes.includes(mode)]);
+    const field = select(
+      "Require approval for",
+      value ?? "",
+      [["", scope === "tools" ? "Inherit plugin policy" : "Inherit default policy"], ...options],
+      onChange,
+      modes.length > 0,
+    );
+    field.querySelector("select").setAttribute("aria-label", `${name} require approval for`);
+    return field;
+  }
+
+  function approvalHint(value, scope) {
+    const modes = capabilities?.[scope].approval ?? [];
+    const unsupported = approvalOptions
+      .filter(([mode]) => !modes.includes(mode))
+      .map(([, label]) => label);
+    if (capabilities && unsupported.length) {
+      return element(
+        "p",
+        { className: "hint" },
+        `This plugin provider does not support: ${unsupported.join(", ")}.`,
+      );
+    }
+    return value === "write_actions" && modes.includes(value)
+      ? element(
+          "p",
+          { className: "hint" },
+          "Write actions include creating, changing, or deleting data. Actions without read-only metadata also require approval.",
+        )
+      : null;
   }
 
   function render() {
@@ -279,12 +327,6 @@ export function createPluginFields({
     policyStatus.textContent = capabilities
       ? ""
       : "This installation does not support plugin policy editing. You can browse plugins; existing settings are preserved.";
-    const defaultApprovals = approvalOptions.filter(([mode]) =>
-      capabilities?.toolDefaults.approval.includes(mode),
-    );
-    const toolApprovals = approvalOptions.filter(([mode]) =>
-      capabilities?.tools.approval.includes(mode),
-    );
     const defaultReviewers = reviewerOptions.filter(([mode]) =>
       capabilities?.toolDefaults.reviewer?.includes(mode),
     );
@@ -338,14 +380,14 @@ export function createPluginFields({
       ...(catalog?.setup ? setupContent(catalog.setup) : []),
     );
     summary.textContent = `${count} plugin${count === 1 ? "" : "s"} configured. Select plugins and set their tool policies.`;
-    searchLabel.textContent = configuredOnly ? "Filter configured plugins" : "Filter this page";
+    searchLabel.textContent = configuredOnly ? "Filter configured plugins" : "Search plugins";
     search.placeholder = searchLabel.textContent;
     if (configuredOnly) {
       status.textContent = `${count} configured plugin${count === 1 ? "" : "s"}`;
     }
     browser.setAttribute("aria-busy", String(catalog?.status === "loading"));
     workspace.dataset.showDetails = String(activeId !== null);
-    const query = search.value.trim().toLowerCase();
+    const query = configuredOnly || !onLoadPlugins ? search.value.trim().toLowerCase() : "";
     const candidates = configuredOnly
       ? Object.keys(values ?? {}).map((id) => entries.get(id))
       : (catalog?.entries ?? []);
@@ -489,7 +531,7 @@ export function createPluginFields({
               element(
                 "p",
                 { className: "hint" },
-                "Approval controls when review is required. Reviewer selects who reviews; automatic review may deny a call.",
+                "Approval applies to current and future actions unless a tool overrides it. Reviewer selects who reviews; automatic review may deny a call.",
               ),
               element(
                 "div",
@@ -505,15 +547,12 @@ export function createPluginFields({
                   (value) => writeDefault("enabled", value === "" ? undefined : value === "true"),
                   capabilities?.toolDefaults.enabled === true,
                 ),
-                select(
-                  `${entry.name} default approval`,
-                  defaults.approval ?? "",
-                  [["", "Inherit default policy"], ...defaultApprovals],
-                  (value) => writeDefault("approval", value || undefined),
-                  defaultApprovals.length > 0,
+                approvalSelect(entry.name, defaults.approval, "toolDefaults", (value) =>
+                  writeDefault("approval", value || undefined),
                 ),
                 defaultReviewer,
               ),
+              approvalHint(defaults.approval, "toolDefaults"),
             ),
           );
           const driverFields = [];
@@ -716,12 +755,8 @@ export function createPluginFields({
                 (value) => writeTool("enabled", value === "" ? undefined : value === "true"),
                 capabilities?.tools.enabled === true,
               ),
-              select(
-                `${tool.name} approval`,
-                policy.approval ?? "",
-                [["", "Inherit plugin policy"], ...toolApprovals],
-                (value) => writeTool("approval", value || undefined),
-                toolApprovals.length > 0,
+              approvalSelect(tool.name, policy.approval, "tools", (value) =>
+                writeTool("approval", value || undefined),
               ),
               toolReviewers.length > 0 || policy.reviewer !== undefined
                 ? select(
@@ -737,6 +772,7 @@ export function createPluginFields({
                     )
                   : null,
             ),
+            approvalHint(policy.approval, "tools"),
           );
           const enabledOverride = element("input", {
             type: "checkbox",
@@ -852,7 +888,14 @@ export function createPluginFields({
     }
   }
   input.addEventListener("input", render);
-  search.addEventListener("input", render);
+  search.addEventListener("input", () => {
+    if (configuredOnly || !onLoadPlugins) {
+      render();
+      return;
+    }
+    availableQuery = search.value;
+    loadPage("search");
+  });
   render();
   return {
     section,

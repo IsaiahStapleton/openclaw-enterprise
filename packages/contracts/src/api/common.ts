@@ -8,6 +8,7 @@ export const PresetId = Type.String({ pattern: `^pre_${UUID_V4}$` });
 export const ConfigurationId = Type.String({ pattern: `^cfg_${UUID_V4}$` });
 export const ServiceAccountId = Type.String({ pattern: `^sa_${UUID_V4}$` });
 export const SecretId = Type.String({ pattern: `^sec_${UUID_V4}$` });
+export const CredentialSourceId = Type.String({ pattern: `^cs_${UUID_V4}$` });
 export const IAMRoleId = Type.String({ minLength: 1, maxLength: 200 });
 export const IAMAccessBindingId = Type.String({ minLength: 1, maxLength: 200 });
 export const ConfigurationKindSchema = Type.Literal("agent");
@@ -97,6 +98,11 @@ export const SecretParams = Type.Object(
   { additionalProperties: false },
 );
 
+export const CredentialSourceParams = Type.Object(
+  { namespaceId: NamespaceId, credentialSourceId: CredentialSourceId },
+  { additionalProperties: false },
+);
+
 export const IAMRoleParams = Type.Object(
   { namespaceId: NamespaceId, roleId: IAMRoleId },
   { additionalProperties: false },
@@ -174,7 +180,58 @@ export const HarnessAuthBindingSchema = Type.Union([
     { method: Type.Literal("chatgpt_service_account"), serviceAccountId: ServiceAccountId },
     { additionalProperties: false },
   ),
+  Type.Object(
+    { method: Type.Literal("credential_source"), sourceId: CredentialSourceId },
+    { additionalProperties: false },
+  ),
 ]);
+
+export const CredentialSourceReference = Type.Object(
+  { kind: Type.Literal("credential_source"), namespaceId: NamespaceId, id: CredentialSourceId },
+  {
+    additionalProperties: false,
+    description:
+      'Exact OCC credential source reference. Shape: `{ "kind": "credential_source", "namespaceId": "ns_...", "id": "cs_..." }`.',
+  },
+);
+
+const CredentialSourceFieldName = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[a-z][a-z0-9_]{0,63}$",
+});
+
+export const CredentialSourceType = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[a-z][a-z0-9-]{0,63}$",
+  description: "Source type from the selected Credential Gateway catalog, for example `openai`.",
+});
+
+export const CredentialSourceConfig = Type.Record(
+  CredentialSourceFieldName,
+  Type.String({ minLength: 1, maxLength: 2048 }),
+  {
+    maxProperties: 32,
+    description: "Non-secret source configuration keyed by catalog field name.",
+  },
+);
+
+export const CredentialSourceSecrets = Type.Record(CredentialSourceFieldName, SecretReference, {
+  maxProperties: 16,
+  description:
+    "Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value.",
+});
+
+export const CreateCredentialSourceBody = Type.Object(
+  {
+    name: Name,
+    type: CredentialSourceType,
+    config: Type.Optional(CredentialSourceConfig),
+    secrets: Type.Optional(CredentialSourceSecrets),
+  },
+  { additionalProperties: false },
+);
 
 export const SecretDelivery = Type.Object(
   { type: Type.Literal("env") },
@@ -246,13 +303,17 @@ const PluginDiscoveryAccessToken = Type.String({
 // At most one credential source is accepted; the selected Driver determines whether it is required.
 export const DiscoverAgentPluginsBody = Type.Union([
   Type.Object(
-    { cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })) },
+    {
+      cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
+    },
     { additionalProperties: false },
   ),
   Type.Object(
     {
       accessToken: PluginDiscoveryAccessToken,
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
     { additionalProperties: false },
   ),
@@ -260,6 +321,7 @@ export const DiscoverAgentPluginsBody = Type.Union([
     {
       secretRef: SecretReference,
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
     { additionalProperties: false },
   ),
@@ -284,7 +346,10 @@ export const DiscoverAgentPluginDetailsBody = Type.Union([
 ]);
 
 export const DiscoverSavedAgentPluginsBody = Type.Object(
-  { cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })) },
+  {
+    cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+    q: Type.Optional(Type.String({ maxLength: 1024 })),
+  },
   { additionalProperties: false },
 );
 
@@ -312,12 +377,14 @@ export const ResourceKindSchema = Type.Union([
   Type.Literal("secret"),
   Type.Literal("agent"),
   Type.Literal("agent_revision"),
+  Type.Literal("credential_source"),
 ]);
 
 export const NamespacePolicyResourceKindSchema = Type.Union([
   Type.Literal("agent"),
   Type.Literal("agent_revision"),
   Type.Literal("configuration"),
+  Type.Literal("credential_source"),
   Type.Literal("preset"),
   Type.Literal("secret"),
   Type.Literal("service_account"),
@@ -504,9 +571,10 @@ export const UpdateWorkspaceFileBody = Type.Object(
 export const PluginReviewerSchema = Type.Union([Type.Literal("human"), Type.Literal("auto")]);
 
 export const PluginApprovalModeSchema = Type.Union([
-  Type.Literal("native"),
-  Type.Literal("prompt"),
-  Type.Literal("approve"),
+  Type.Literal("provider_default"),
+  Type.Literal("all_actions"),
+  Type.Literal("write_actions"),
+  Type.Literal("none"),
 ]);
 
 export const ERROR_DETAIL_CODES = Object.freeze([
