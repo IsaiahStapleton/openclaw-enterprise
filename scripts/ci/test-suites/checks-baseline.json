@@ -187,6 +187,9 @@
       "path": "tests/integration/ci-cleanup.test.mjs"
     },
     {
+      "path": "tests/integration/ci-image-reconciliation.test.mjs"
+    },
+    {
       "path": "tests/integration/ci-prepare.test.mjs"
     },
     {
