@@ -92,8 +92,11 @@ test("keeps malformed JSON content and paths out of text and JSON CLI diagnostic
         },
       );
     }
-    if (original === null) await rm(join(root, path));
-    else await write(path, original);
+    if (original === null) {
+      await rm(join(root, path));
+    } else {
+      await write(path, original);
+    }
   }
 });
 

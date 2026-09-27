@@ -9,9 +9,11 @@ export function parseJSON(text, label) {
   try {
     return JSON.parse(text);
   } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error;
-    throw new Error(`Invalid JSON in ${label}.`);
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
   }
+  throw new Error(`Invalid JSON in ${label}.`);
 }
 
 async function walk(directory) {

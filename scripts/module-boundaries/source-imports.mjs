@@ -136,9 +136,13 @@ function assignedSymbols(source, checker) {
     ) {
       return false;
     }
-    if (ts.isIdentifier(node)) return true;
+    if (ts.isIdentifier(node)) {
+      return true;
+    }
     const member = outerExpression(parent);
-    if (ts.isCallExpression(member.parent) && member.parent.expression === member) return false;
+    if (ts.isCallExpression(member.parent) && member.parent.expression === member) {
+      return false;
+    }
     const property = ts.isPropertyAccessExpression(node)
       ? node.name.text
       : ts.isStringLiteralLike(node.argumentExpression)
@@ -213,25 +217,33 @@ function assignedSymbols(source, checker) {
       node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
       node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     ) {
-      if (containsImportMeta(node.left)) importMetaMutable = true;
+      if (containsImportMeta(node.left)) {
+        importMetaMutable = true;
+      }
       assign(node.left, node);
     }
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)
     ) {
-      if (containsImportMeta(node.operand)) importMetaMutable = true;
+      if (containsImportMeta(node.operand)) {
+        importMetaMutable = true;
+      }
       assign(node.operand, node);
     }
     if (ts.isDeleteExpression(node)) {
-      if (containsImportMeta(node.expression)) importMetaMutable = true;
+      if (containsImportMeta(node.expression)) {
+        importMetaMutable = true;
+      }
       assign(node.expression, node);
     }
     if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
       !ts.isVariableDeclarationList(node.initializer)
     ) {
-      if (containsImportMeta(node.initializer)) importMetaMutable = true;
+      if (containsImportMeta(node.initializer)) {
+        importMetaMutable = true;
+      }
       assign(node.initializer, node);
     }
     ts.forEachChild(node, visit);

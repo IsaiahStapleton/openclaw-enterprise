@@ -19,7 +19,9 @@ export function unwrap(node) {
 }
 
 export function outerExpression(node) {
-  while (node.parent && unwrap(node.parent) === node) node = node.parent;
+  while (node.parent && unwrap(node.parent) === node) {
+    node = node.parent;
+  }
   return node;
 }
 
@@ -50,9 +52,13 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
   function markMutable(module) {
     mutableModules.add(module);
     // The node:url module exposes the same constructor as the global URL.
-    if (module === "node:url") mutableGlobalURL = true;
+    if (module === "node:url") {
+      mutableGlobalURL = true;
+    }
     // Node module helpers share the CommonJS loader implementation.
-    if (module === "node:module") mutableCommonjsModule = true;
+    if (module === "node:module") {
+      mutableCommonjsModule = true;
+    }
   }
   const moduleValue = (name) =>
     ["module", "url", "path"].includes(name?.replace(/^node:/, ""))
