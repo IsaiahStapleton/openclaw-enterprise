@@ -6,7 +6,6 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
-import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import {
   WORKSPACE_DEFAULTS,
@@ -25,6 +24,7 @@ import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import {
   accessBindingPostRequests,
+  apiRequests,
   detailUrl,
   expectNoText,
   login,
@@ -37,26 +37,12 @@ import {
   secretPostRequests,
   selectSecret,
 } from "./console-agents-browser-helpers.mjs";
+import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
 
 const STARTER_CONTROL_UI = {
   enabled: true,
   allowedOrigins: ["http://127.0.0.1:18789", "http://localhost:18789"],
 };
-
-function apiRequests(page, origin) {
-  const requests = [];
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (url.origin === origin) {
-      let body;
-      try {
-        body = request.postDataJSON();
-      } catch {}
-      requests.push({ method: request.method(), path: `${url.pathname}${url.search}`, body });
-    }
-  });
-  return requests;
-}
 
 async function openCreateSecretDialog(scope, label, options = {}) {
   const field = scope.getByLabel(label, { exact: true });
@@ -184,28 +170,6 @@ function configurationPatchRequests(requests, namespaceId, configurationId) {
     "PATCH",
     `/namespaces/${namespaceId}/configurations/${encodeURIComponent(configurationId)}`,
   );
-}
-
-async function createRuntimeAuthFixture(t, namespaceName) {
-  const computeDriver = new SshComputeDriver({
-    ssh: { identityFile: "/tmp/ssh-test-key", knownHostsFile: "/tmp/ssh-test-hosts" },
-    hosts: { runtime: { address: "127.0.0.1", user: "root" } },
-    runtime: {
-      nodePath: "/usr/bin/node",
-      openclawPath: "/opt/openclaw/index.js",
-      user: "openclaw",
-      root: "/tmp/ssh-runtime-test",
-    },
-    network: { gatewayPortRange: { start: 18800, end: 18899 } },
-  });
-  const state = new InMemoryPlatformState();
-  const fixture = await createConsoleAppFixture(t, { computeDriver, state });
-  await fixture.bootstrap();
-  const namespace = await fixture.createNamespace(namespaceName);
-  await state.transact((unit) =>
-    unit.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
-  );
-  return { fixture, namespace, state };
 }
 
 async function optionValues(locator) {
