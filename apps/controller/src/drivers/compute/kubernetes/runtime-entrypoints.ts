@@ -1241,7 +1241,7 @@ function probeOpenClawAuthenticationFailureCode() {
 `;
 
 const WORKSPACE_ASSET_HELPERS = String.raw`
-const { cpSync, existsSync, lstatSync, readdirSync } = require("node:fs");
+const { cpSync, existsSync, lstatSync, readdirSync, symlinkSync } = require("node:fs");
 const runtimeAssetsDirectory = "/home/node/openclaw-runtime-assets";
 
 function clearDirectoryContents(directory) {
@@ -1273,6 +1273,12 @@ function publishImageTree(source, destination, required) {
 function initializeRuntimeAssets() {
   publishImageTree("/app/skills", runtimeAssetsDirectory + "/bundled-skills", true);
   publishImageTree("/app/plugin-skills", runtimeAssetsDirectory + "/plugin-skills", false);
+}
+
+function publishAgentPluginSkillPath() {
+  mkdirSync("/home/node/.openclaw", { recursive: true });
+  rmSync("/home/node/.openclaw/plugin-skills", { recursive: true, force: true });
+  symlinkSync(runtimeAssetsDirectory + "/plugin-skills", "/home/node/.openclaw/plugin-skills", "dir");
 }
 
 `;
@@ -1673,6 +1679,7 @@ const setupCode = process.env.OPENCLAW_NODE_SETUP_CODE;
 if (!state || !setupCode) throw new Error("The workspace node is not provisioned.");
 mkdirSync(state, { recursive: true });
 initializeRuntimeAssets();
+publishAgentPluginSkillPath();
 const configPath = join(state, "openclaw.json");
 writeFileSync(configPath, JSON.stringify({
   agents: { defaults: JSON.parse(process.env.OPENCLAW_WORKSPACE_BOOTSTRAP || "{}") },

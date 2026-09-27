@@ -145,6 +145,7 @@ export async function createConsoleAppFixture(t, options = {}) {
   let controller;
   const appOptions = {
     metrics: options.metrics,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     workspaceFilesAccess: options.workspaceFilesAccess,
     auth,
     iamDriver,

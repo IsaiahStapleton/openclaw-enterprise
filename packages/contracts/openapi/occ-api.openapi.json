@@ -3317,7 +3317,7 @@
     },
     "/namespaces/{namespaceId}/agents/plugins": {
       "post": {
-        "description": "Requires create permission for Agent resources in the requested Namespace.",
+        "description": "Requires create permission for Agent resources in the requested Namespace. Requires operate permission on the exact same-Namespace Secret when a Secret reference is supplied.",
         "operationId": "discoverAgentPlugins",
         "parameters": [
           {
@@ -3334,19 +3334,48 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "accessToken": {
-                    "maxLength": 16384,
-                    "minLength": 1,
-                    "pattern": "\\S",
-                    "type": "string",
-                    "writeOnly": true
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accessToken": {
+                        "maxLength": 16384,
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" }
+                    },
+                    "required": ["accessToken"],
+                    "type": "object"
                   },
-                  "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" }
-                },
-                "required": ["accessToken"],
-                "type": "object"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" },
+                      "secretRef": {
+                        "additionalProperties": false,
+                        "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                        "properties": {
+                          "id": {
+                            "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          },
+                          "kind": { "const": "secret", "type": "string" },
+                          "namespaceId": {
+                            "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "namespaceId", "id"],
+                        "type": "object"
+                      }
+                    },
+                    "required": ["secretRef"],
+                    "type": "object"
+                  }
+                ]
               }
             }
           },
@@ -3525,16 +3554,22 @@
             "description": "Default Response"
           }
         },
-        "summary": "List available plugins for Agent creation without storing the supplied credential",
+        "summary": "List available plugins for Agent creation using a transient credential or Secret reference",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
-          { "action": "create", "resourceKind": "agent", "scope": "namespace" }
+          { "action": "create", "resourceKind": "agent", "scope": "namespace" },
+          {
+            "action": "operate",
+            "condition": "selected_secret",
+            "resourceKind": "secret",
+            "scope": "request_body"
+          }
         ]
       }
     },
     "/namespaces/{namespaceId}/agents/plugins/details": {
       "post": {
-        "description": "Requires create permission for Agent resources in the requested Namespace.",
+        "description": "Requires create permission for Agent resources in the requested Namespace. Requires operate permission on the exact same-Namespace Secret when a Secret reference is supplied.",
         "operationId": "discoverAgentPluginDetails",
         "parameters": [
           {
@@ -3551,19 +3586,48 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "accessToken": {
-                    "maxLength": 16384,
-                    "minLength": 1,
-                    "pattern": "\\S",
-                    "type": "string",
-                    "writeOnly": true
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accessToken": {
+                        "maxLength": 16384,
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "pluginId": { "maxLength": 256, "minLength": 1, "type": "string" }
+                    },
+                    "required": ["accessToken", "pluginId"],
+                    "type": "object"
                   },
-                  "pluginId": { "maxLength": 256, "minLength": 1, "type": "string" }
-                },
-                "required": ["accessToken", "pluginId"],
-                "type": "object"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pluginId": { "maxLength": 256, "minLength": 1, "type": "string" },
+                      "secretRef": {
+                        "additionalProperties": false,
+                        "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                        "properties": {
+                          "id": {
+                            "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          },
+                          "kind": { "const": "secret", "type": "string" },
+                          "namespaceId": {
+                            "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "namespaceId", "id"],
+                        "type": "object"
+                      }
+                    },
+                    "required": ["secretRef", "pluginId"],
+                    "type": "object"
+                  }
+                ]
               }
             }
           },
@@ -3711,10 +3775,16 @@
             "description": "Default Response"
           }
         },
-        "summary": "Read available plugin tools without storing the supplied credential",
+        "summary": "Read available plugin tools using a transient credential or Secret reference",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
-          { "action": "create", "resourceKind": "agent", "scope": "namespace" }
+          { "action": "create", "resourceKind": "agent", "scope": "namespace" },
+          {
+            "action": "operate",
+            "condition": "selected_secret",
+            "resourceKind": "secret",
+            "scope": "request_body"
+          }
         ]
       }
     },

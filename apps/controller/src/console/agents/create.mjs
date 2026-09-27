@@ -460,7 +460,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       { className: "hint" },
       passwordAuth
         ? "Stored as a Secret for this Agent. Credentials are never included in Configuration JSON."
-        : "Enter a service account token only to preview available plugins. Agent creation uses the selected Secret above; Secret values are never read back.",
+        : "If no Secret is selected, enter a service account token to preview plugins. Agent creation uses the selected Secret; its value stays on the server.",
     ),
   );
   const pluginDiscoveryTokenDetails = element(
@@ -709,14 +709,22 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     onLoadPlugins: (direction) => void loadPluginCatalog(direction),
     onLoadTools: (id) => void loadPluginTools(id),
   });
+  function discoveryCredential() {
+    if (
+      nativeProvider.value !== "openai" ||
+      harness.value !== "codex" ||
+      (binding?.method ?? authMethod.value) !== "codex_pat"
+    ) {
+      return null;
+    }
+    const secretRef = binding?.source ?? modelCredentialSource;
+    if (secretRef?.kind === "secret") {
+      return { secretRef };
+    }
+    return apiKey.value.trim() ? { accessToken: apiKey.value } : null;
+  }
   function canDiscoverPlugins() {
-    return (
-      !binding &&
-      nativeProvider.value === "openai" &&
-      harness.value === "codex" &&
-      authMethod.value === "codex_pat" &&
-      Boolean(apiKey.value.trim())
-    );
+    return Boolean(discoveryCredential());
   }
   function updatePluginDiscovery() {
     pluginFields.setCatalog({
@@ -729,12 +737,12 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       message:
         pluginCatalog.message ??
         (canDiscoverPlugins()
-          ? "Load plugins available to this service account token. Your plugin selections stay unchanged."
-          : "For discovery, choose Service Accounts with the Codex harness and enter a token under Plugin discovery token (optional). Saved Secret values cannot be read here."),
+          ? "Load plugins available to the selected service account credential. Your plugin selections stay unchanged."
+          : "For discovery, choose Service Accounts with the Codex harness and select a Secret or enter a token under Plugin discovery token (optional)."),
     });
   }
   function resetPluginDiscovery() {
-    // A catalog belongs to the entered credential and harness; late responses cannot restore it.
+    // A catalog belongs to the selected credential and harness; late responses cannot restore it.
     pluginDiscoveryGeneration += 1;
     pluginEntries.clear();
     pluginPageIds = [];
@@ -745,6 +753,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   }
   function pluginDiscoveryError(error) {
     const reason = {
+      FORBIDDEN: "You do not have permission to discover plugins with this credential.",
       PLUGIN_DISCOVERY_CREDENTIALS_REJECTED:
         "The service account token was rejected or cannot access plugins. Check its permissions.",
       PLUGIN_DISCOVERY_RATE_LIMITED: "The plugin service rate limit was reached. Try again later.",
@@ -784,7 +793,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     try {
       const page = await request(`${namespacePath(namespaceId)}/agents/plugins`, {
         method: "POST",
-        body: { accessToken: apiKey.value, ...(cursor ? { cursor } : {}) },
+        body: { ...discoveryCredential(), ...(cursor ? { cursor } : {}) },
       });
       if (!context.isCurrent() || generation !== pluginDiscoveryGeneration) {
         return;
@@ -828,7 +837,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     try {
       const detail = await request(`${namespacePath(namespaceId)}/agents/plugins/details`, {
         method: "POST",
-        body: { accessToken: apiKey.value, pluginId: entry.remoteId },
+        body: { ...discoveryCredential(), pluginId: entry.remoteId },
       });
       if (
         !context.isCurrent() ||

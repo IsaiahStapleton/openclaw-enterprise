@@ -22,7 +22,8 @@ another suite. The test scripts above run `scripts/verify-workspace-boundary.mjs
 before the Node.js test runner.
 
 For test audits, proof selection, diff cleanup, and independent review, see
-[Developer skills](developer-skills.md).
+[Developer skills](developer-skills.md). For source dependency analysis with an
+explicit policy, use the [module boundary analyzer](module-boundaries.md).
 For reusable builders, factory composition, resource ownership, and declarative
 cases, follow [Compose fixtures and readable scenarios](fixtures-and-scenarios.md).
 
