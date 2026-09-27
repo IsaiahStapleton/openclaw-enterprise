@@ -7547,6 +7547,61 @@ test("a default shortcut restored after a pending Preset read discards its form"
   assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
 });
 
+test("invalid Preset application retains chooser edits and preserves the selected origin", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Invalid starter", { ready: true });
+  const presets = await fixture.request("GET", `/namespaces/${namespace.id}/presets`);
+  const starter = presets.data.find((preset) => preset.name === "default-codex");
+  const template = structuredClone(starter.template);
+  template.variables = { mode: { type: "string" } };
+  template.agent.name = "Preset draft";
+  template.agent.executionMode = "{{ vars.mode }}";
+  const updated = await fixture.request(
+    "PATCH",
+    `/namespaces/${namespace.id}/presets/${starter.id}`,
+    { body: { template } },
+  );
+  assert.equal(updated.status, 200);
+
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, `/console/agents?namespace=${namespace.id}`);
+  for (const origin of ["shortcut", "explicit"]) {
+    await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    if (origin === "shortcut") {
+      await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
+    } else {
+      await page.getByLabel("Preset template").selectOption(starter.id);
+    }
+    const mode = page.getByLabel("Variable: mode", { exact: true });
+    await mode.fill("invalid");
+    await page.getByRole("button", { name: "Use Preset", exact: true }).click();
+    await page
+      .getByText("Rendered Preset contains invalid Agent fields or Secret bindings.")
+      .waitFor();
+    await page.getByRole("link", { name: "← Agents" }).click();
+    await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    await mode.waitFor();
+    assert.equal(await mode.inputValue(), "invalid", origin);
+
+    await mode.fill("dedicated");
+    await page.getByRole("button", { name: "Use Preset", exact: true }).click();
+    await page.getByLabel("Agent name", { exact: true }).waitFor();
+    await page.getByRole("link", { name: "← Agents" }).click();
+    await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    if (origin === "shortcut") {
+      await page.getByRole("button", { name: "Start with default Preset", exact: true }).waitFor();
+      assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
+      await page.getByRole("link", { name: "← Agents" }).click();
+    } else {
+      assert.equal(
+        await page.getByLabel("Agent name", { exact: true }).inputValue(),
+        "Preset draft",
+      );
+    }
+  }
+});
+
 test("unsaved Preset drafts retain unfinished edits across navigation until explicit discard", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

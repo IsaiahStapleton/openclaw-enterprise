@@ -230,8 +230,6 @@ export function renderCreateAgent(context, draft) {
 }
 
 function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
-  context.setDiscardOnExit(Boolean(draft.discardOnExit));
-  context.drafts.forget("preset");
   const { view, request, namespaceId } = context;
   const agent = rendered.agent ?? {};
   const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -309,6 +307,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     );
   }
 
+  context.setDiscardOnExit(Boolean(draft.discardOnExit));
+  context.drafts.forget("preset");
   const formId = "create-agent-form";
   const name = element("input", {
     id: "agent-name",
