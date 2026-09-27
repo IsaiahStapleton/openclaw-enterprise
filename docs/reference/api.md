@@ -46,7 +46,7 @@ Each operation lists its supported status codes.
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 3 operations |
 | [Namespaces](#namespaces) | 4 operations |
-| [Agents](#agents) | 23 operations |
+| [Agents](#agents) | 24 operations |
 | [Agent deployments](#agent-deployments) | 2 operations |
 | [Agent revisions](#agent-revisions) | 2 operations |
 | [Configurations](#configurations) | 4 operations |
