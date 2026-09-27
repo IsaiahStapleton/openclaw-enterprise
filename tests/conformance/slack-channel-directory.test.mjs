@@ -6,8 +6,25 @@ import { ChannelDirectoryError } from "../../packages/occ/src/index.ts";
 const token = "xoxb-fixture";
 
 function auth() {
-  return Response.json({ ok: true, team_id: "TWORKSPACE", team: "Fixture Workspace" });
+  return Response.json({
+    ok: true,
+    bot_id: "BBOT123",
+    team_id: "TWORKSPACE",
+    team: "Fixture Workspace",
+  });
 }
+
+test("Slack directory rejects a user token before listing names", async () => {
+  let calls = 0;
+  const driver = new SlackChannelDriver(async () => {
+    calls += 1;
+    return Response.json({ ok: true, team_id: "TWORKSPACE", user_id: "UUSER123" });
+  });
+  await assert.rejects(driver.lookupDirectory({ token, kind: "users" }), {
+    reason: "credentials_rejected",
+  });
+  assert.equal(calls, 1);
+});
 
 test("Slack directory searches paginated user names and qualifies results with workspace identity", async () => {
   const calls = [];

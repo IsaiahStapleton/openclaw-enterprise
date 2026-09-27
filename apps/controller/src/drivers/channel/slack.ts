@@ -153,6 +153,9 @@ export class SlackChannelDriver implements ChannelDriver {
     signal?: AbortSignal,
   ): Promise<ChannelDirectoryResult> {
     const auth = await this.call("auth.test", input.token, new URLSearchParams(), signal);
+    if (!/^B[A-Z0-9]+$/.test(boundedString(auth.bot_id, 32) ?? "")) {
+      throw new ChannelDirectoryError("credentials_rejected");
+    }
     const workspaceId = boundedString(auth.team_id, 32);
     if (!workspaceId || !/^T[A-Z0-9]+$/.test(workspaceId)) {
       throw new ChannelDirectoryError("invalid_response");

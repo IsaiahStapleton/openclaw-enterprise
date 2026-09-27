@@ -5,7 +5,7 @@ name picker. It uses the Agent's selected same-Namespace `SLACK_BOT_TOKEN`
 Secret; the controller does not configure or store another token.
 
 The Driver calls Slack [`auth.test`](https://docs.slack.dev/reference/methods/auth.test/)
-to identify the workspace, then [`users.list`](https://docs.slack.dev/reference/methods/users.list/)
+to require a bot identity and identify its workspace, then [`users.list`](https://docs.slack.dev/reference/methods/users.list/)
 or [`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list/).
 The bot needs `users:read` for people, `channels:read` for public channels, and
 `groups:read` for private channels. Slack returns only resources visible to the

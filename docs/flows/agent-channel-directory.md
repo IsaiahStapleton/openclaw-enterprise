@@ -58,7 +58,7 @@ platform state. A missing or foreign target is rejected before provider I/O.
 The selected SecretDriver invokes `withValue` and verifies backend ownership.
 OCC rechecks grants and Secret backend identity after the read. It passes the
 token only in process to the ChannelDriver. The bundled Slack implementation
-uses `auth.test` for workspace identity and pages through `users.list` or
+requires a bot identity from `auth.test` and pages through `users.list` or
 `conversations.list`. Exact-ID searches and saved IDs use `users.info` or `conversations.info`.
 The response contains bounded candidates and pagination state, never the token.
 An incomplete page cannot establish that a name is absent or unique.

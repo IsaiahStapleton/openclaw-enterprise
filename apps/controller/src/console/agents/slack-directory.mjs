@@ -56,7 +56,7 @@ export function matchesSlackDirectoryCandidate(value, kind, candidate) {
 function lookupError(error) {
   const reason = {
     CHANNEL_DIRECTORY_CREDENTIALS_REJECTED:
-      "Slack rejected this bot token. Check the selected Secret.",
+      "The selected Secret is not a usable Slack bot token. Check the selected Secret.",
     CHANNEL_DIRECTORY_MISSING_SCOPE:
       "The Slack bot token needs users:read for people and channel read scopes for channels.",
     CHANNEL_DIRECTORY_RATE_LIMITED: "Slack rate limited the directory. Try again shortly.",
