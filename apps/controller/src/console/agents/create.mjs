@@ -731,6 +731,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
 
   const plugins = element("textarea", { id: "agent-plugins", rows: "4", spellcheck: "false" });
   plugins.value = JSON.stringify(agent.plugins ?? {}, null, 2);
+  let pluginDiscoveryCredential = null;
   let pluginDiscoveryGeneration = 0;
   let pluginCatalog = { status: "idle", nextCursor: null };
   const pluginEntries = new Map();
@@ -743,6 +744,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     onLoadTools: (id) => void loadPluginTools(id),
   });
   function discoveryCredential() {
+    if (harness.value === "codex" && pluginDiscoveryCredential === "none") {
+      return {};
+    }
     if (
       nativeProvider.value !== "openai" ||
       harness.value !== "codex" ||
@@ -760,18 +764,23 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     return Boolean(discoveryCredential());
   }
   function updatePluginDiscovery() {
+    const canLoad = canDiscoverPlugins();
+    let message =
+      "For discovery, choose Service Accounts with the Codex harness and select a Secret or enter a token under Plugin discovery token (optional).";
+    if (canLoad) {
+      message =
+        pluginDiscoveryCredential === "none"
+          ? "Load the installation's curated plugin catalog. Access and tool availability are checked separately."
+          : "Load plugins available to the selected service account credential. Your plugin selections stay unchanged.";
+    }
     pluginFields.setCatalog({
       ...pluginCatalog,
       entries: pluginPageIds.map((id) => pluginEntries.get(id)),
       knownEntries: [...pluginEntries.values()],
       pageNumber: pluginPageIndex + 1,
       hasPrevious: pluginPageIndex > 0,
-      canLoad: canDiscoverPlugins(),
-      message:
-        pluginCatalog.message ??
-        (canDiscoverPlugins()
-          ? "Load plugins available to the selected service account credential. Your plugin selections stay unchanged."
-          : "For discovery, choose Service Accounts with the Codex harness and select a Secret or enter a token under Plugin discovery token (optional)."),
+      canLoad,
+      message: pluginCatalog.message ?? message,
     });
   }
   function resetPluginDiscovery() {
@@ -879,7 +888,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       ) {
         return;
       }
-      pluginEntries.set(id, { ...entry, ...detail, toolStatus: undefined, toolError: undefined });
+      pluginEntries.set(id, { ...entry, ...detail, toolStatus: "loaded", toolError: undefined });
     } catch (error) {
       if (!context.isCurrent() || generation !== pluginDiscoveryGeneration) {
         return;
@@ -1339,7 +1348,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         : "API key"
       : "Token for plugin discovery";
     modelCredentialField.hidden = Boolean(binding || passwordAuth);
-    pluginDiscoveryTokenDetails.hidden = Boolean(binding || passwordAuth || !usesPat);
+    pluginDiscoveryTokenDetails.hidden = Boolean(
+      binding || passwordAuth || !usesPat || pluginDiscoveryCredential === "none",
+    );
     if (pluginDiscoveryTokenDetails.hidden) {
       pluginDiscoveryTokenDetails.open = false;
     }
@@ -1446,6 +1457,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       if (!context.isCurrent()) {
         return;
       }
+      pluginDiscoveryCredential =
+        installation.capabilities?.pluginDiscovery?.credential ?? "required";
       pluginFields.setCapabilities(installation.capabilities?.pluginPolicies ?? null);
       provisionableExecutionModes.clear();
       for (const executionMode of installation.capabilities?.agentProvisioning?.executionModes ??

@@ -44,8 +44,8 @@
 - [`updateAgent`](../api.md#patch-namespacesnamespaceidagentsagentid): Replace an exact Namespace-owned Agent's editable draft.
 - [`deployAgent`](../api.md#post-namespacesnamespaceidagentsagentiddeploy): Admit an immutable revision from the Agent's saved draft.
 - [`discoverAgentModels`](../api.md#post-namespacesnamespaceidagentsmodels): List provider models for Agent creation without storing the supplied credential.
-- [`discoverAgentPluginDetails`](../api.md#post-namespacesnamespaceidagentspluginsdetails): Read available plugin tools using a transient credential or Secret reference.
-- [`discoverAgentPlugins`](../api.md#post-namespacesnamespaceidagentsplugins): List available plugins for Agent creation using a transient credential or Secret reference.
+- [`discoverAgentPluginDetails`](../api.md#post-namespacesnamespaceidagentspluginsdetails): Read plugin details using the selected Driver.
+- [`discoverAgentPlugins`](../api.md#post-namespacesnamespaceidagentsplugins): List available plugins for Agent creation using the selected Driver.
 - [`retryAgentProvisioning`](../api.md#post-namespacesnamespaceidagentsprovisionworkidretry): Retry failed first-time provisioning for one exact work item.
 - [`stopAgent`](../api.md#post-namespacesnamespaceidagentsagentidstop): Stop one Agent while retaining its revision and persistent state.
 - [`getAgentNativeAdmin`](../api.md#get-namespacesnamespaceidagentsagentidnativeadmin): Resolve native admin UI launch availability for one Agent.

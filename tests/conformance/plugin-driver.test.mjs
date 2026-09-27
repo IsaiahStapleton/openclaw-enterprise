@@ -214,6 +214,61 @@ test("OpenClaw tool enablement overrides tool defaults without enabling a disabl
   });
 });
 
+test("Hardcoded OpenAI catalog returns curated details without provider requests", async (t) => {
+  const requests = [];
+  t.mock.method(globalThis, "fetch", (url) => {
+    requests.push(String(url));
+    throw new Error("Unexpected provider request");
+  });
+  const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
+  const page = await driver.discoverCatalog({});
+  assert.equal(page.nextCursor, null);
+  assert.deepEqual(
+    new Set(page.plugins.map((entry) => entry.name)),
+    new Set([
+      "Linear",
+      "Slack",
+      "GitHub",
+      "Notion",
+      "Figma",
+      "Canva",
+      "Datadog",
+      "Sentry",
+      "Adobe",
+      "Coursera Learning",
+      "Google Contacts",
+    ]),
+  );
+  const linear = page.plugins.find((entry) => entry.id === linearPluginId);
+  assert.ok(linear);
+  assert.equal(linear.id, linearPluginId);
+  assert.equal(linear.remoteId, "plugin_asdk_app_69a089a326dc8191b32a3f2553f5be2c");
+  assert.equal(linear.tools, null);
+  assert.equal(linear.selectableWithoutTools, true);
+  assert.deepEqual(await driver.getCatalogPlugin({ pluginId: linear.remoteId }), linear);
+  const github = page.plugins.find((entry) => entry.name === "GitHub");
+  assert.ok(github);
+  assert.equal(github.remoteId, "plugin_connector_1p_1a69035c238881919c4190932b2df699");
+  assert.deepEqual(await driver.getCatalogPlugin({ pluginId: github.remoteId }), github);
+  // Recorded releases with unsupported components must never be offered for selection.
+  assert.deepEqual(
+    new Set(page.plugins.filter((entry) => entry.available === false).map((entry) => entry.name)),
+    new Set(["Notion", "Figma", "Canva", "Sentry", "Adobe"]),
+  );
+  assert.equal(new Set(page.plugins.map((entry) => entry.remoteId)).size, page.plugins.length);
+  for (const entry of page.plugins) {
+    assert.ok(entry.remoteId);
+    assert.deepEqual(await driver.getCatalogPlugin({ pluginId: entry.remoteId }), entry);
+    if (entry.available === false) {
+      assert.match(entry.unavailableReason, /skills/);
+    }
+  }
+  assert.deepEqual(await driver.listCatalog(context("dedicated")), page.plugins);
+  await assert.rejects(driver.discoverCatalog({ cursor: "invalid" }));
+  await assert.rejects(driver.getCatalogPlugin({ pluginId: "invalid" }));
+  assert.deepEqual(requests, []);
+});
+
 test("Codex curated catalog discovery projects arbitrary marketplace entries", () => {
   const catalog = codexCatalogEntries(codexCatalogFixture());
   assert.deepEqual(
@@ -315,12 +370,34 @@ test("Codex bridge configuration carries repository broker network policy withou
         allowLocalBinding: true,
         readOnlyPaths: [
           "/app/node_modules/openclaw",
+          "/home/node/.openclaw/plugin-skills",
+          "/home/node/openclaw-runtime-assets/plugin-skills",
           "/opt/oce/repository-credentials",
           "/run/oce/repository-credentials",
         ],
         domains: { "github.com": "allow", "git.tenant.svc": "allow" },
       },
     },
+  });
+});
+
+test("Codex bridge configuration grants plugin skill reads without broker policy", () => {
+  const bridgeConfiguration = codexOpenClawConfiguration(codexSelection());
+
+  assert.deepEqual(bridgeConfiguration.plugins.entries.codex.config.appServer, {
+    networkProxy: {
+      readOnlyPaths: [
+        "/app/node_modules/openclaw",
+        "/home/node/.openclaw/plugin-skills",
+        "/home/node/openclaw-runtime-assets/plugin-skills",
+      ],
+    },
+  });
+  assert.deepEqual(bridgeConfiguration.plugins.entries.codex.config.codexPlugins.plugins.linear, {
+    enabled: true,
+    marketplaceName: "openai-curated-remote",
+    pluginName: "linear",
+    allow_destructive_actions: "auto",
   });
 });
 
@@ -482,6 +559,99 @@ test("Codex scoped tools override independent defaults and retain omitted native
     );
   }
   assert.throws(() => codexRuntimeArtifact(selections, codexDetails), /inventory/i);
+});
+
+test("Codex catalog tool policies resolve through owned action metadata to native names", () => {
+  const appId = "catalog-app";
+  const nativeName = "renamed_123.search";
+  const details = [codexDetail("linear", [appId])];
+  const tool = {
+    name: nativeName,
+    _meta: {
+      connector_id: appId,
+      _codex_apps: { resource_uri: "/catalog-app/link_fixture/search" },
+    },
+  };
+  const inventory = [{ name: "codex_apps", tools: { [nativeName]: tool } }];
+  const selections = codexSelection(linearPluginId, {
+    tools: { "catalog-app/search": { enabled: true, approval: "prompt" } },
+  });
+  assert.deepEqual(
+    codexRuntimeArtifact(selections, details, [], inventory).configuration.apps[appId].tools,
+    { [nativeName]: { enabled: true, approval_mode: "prompt" } },
+  );
+
+  // Display prefixes are not identities; missing, malformed or foreign metadata cannot bind them.
+  for (const resourceUri of [
+    undefined,
+    "/other-app/link_fixture/search",
+    "/catalog-app//search",
+    "/catalog-app/link_fixture/search/extra",
+    "catalog-app/link_fixture/search",
+  ]) {
+    const invalid = structuredClone(inventory);
+    invalid[0].tools[nativeName]._meta._codex_apps.resource_uri = resourceUri;
+    assert.throws(
+      () => codexRuntimeArtifact(selections, details, [], invalid),
+      /unknown or unowned tool/,
+    );
+  }
+
+  const ambiguous = structuredClone(inventory);
+  ambiguous[0].tools["another.search"] = { ...tool, name: "another.search" };
+  assert.throws(() => codexRuntimeArtifact(selections, details, [], ambiguous), /ambiguous/);
+  assert.throws(
+    () =>
+      codexRuntimeArtifact(
+        codexSelection(linearPluginId, {
+          tools: {
+            "catalog-app/search": { enabled: true },
+            [appId + "/" + nativeName]: { enabled: false },
+          },
+        }),
+        details,
+        [],
+        inventory,
+      ),
+    /same native tool/,
+  );
+});
+
+test("Codex shared apps accept identical policies using mixed catalog and native IDs", () => {
+  const details = [codexDetail("linear", ["app"]), codexDetail("google-calendar", ["app"])];
+  const inventory = [
+    {
+      name: "codex_apps",
+      tools: Object.fromEntries(
+        ["alpha", "beta"].map((action) => [
+          "prefix." + action,
+          {
+            name: "prefix." + action,
+            _meta: {
+              connector_id: "app",
+              _codex_apps: { resource_uri: "/app/link_fixture/" + action },
+            },
+          },
+        ]),
+      ),
+    },
+  ];
+  // Alias sorting differs, but both plugins request the same native policy.
+  const selections = {
+    ...codexSelection(linearPluginId, {
+      tools: { "app/prefix.alpha": { enabled: true }, "app/beta": { enabled: false } },
+    }),
+    ...codexSelection(calendarPluginId, {
+      tools: { "app/alpha": { enabled: true }, "app/beta": { enabled: false } },
+    }),
+  };
+  assert.deepEqual(
+    codexRuntimeArtifact(selections, details, [], inventory).configuration.apps.app.tools,
+    {
+      "prefix.alpha": { enabled: true },
+      "prefix.beta": { enabled: false },
+    },
+  );
 });
 
 test("Codex destructive defaults project to native config and the hosted-app bridge", () => {
