@@ -25,6 +25,7 @@ export function createPluginDiscovery({
   input,
   accessToken,
   canDiscover,
+  canPrefetch = () => false,
   isPending,
   unavailableMessage,
   saveHint,
@@ -36,6 +37,7 @@ export function createPluginDiscovery({
   createApproverField,
 }) {
   let generation = 0;
+  let prefetched = false;
   let searchTimer = null;
   let requests = new AbortController();
   let catalog = { status: "idle", nextCursor: null };
@@ -59,7 +61,7 @@ export function createPluginDiscovery({
     onLoadTools: (id) => void loadTools(id),
   });
 
-  function update() {
+  function render() {
     const canLoad = canDiscover();
     const statusMessage = canLoad ? availableMessage : unavailableMessage;
     fields.setCatalog({
@@ -72,6 +74,17 @@ export function createPluginDiscovery({
       message:
         catalog.message ?? (typeof statusMessage === "function" ? statusMessage() : statusMessage),
     });
+  }
+
+  function update() {
+    render();
+    if (!prefetched && catalog.status === "idle" && canPrefetch() && canDiscover()) {
+      if (!context.isCurrent() || isPending()) {
+        return;
+      }
+      prefetched = true;
+      scheduleSearch("");
+    }
   }
 
   function invalidateRequests() {
@@ -96,7 +109,7 @@ export function createPluginDiscovery({
       pageIndex = 0;
       catalog = { status: "idle", nextCursor: null, setup: catalog.setup };
     }
-    update();
+    render();
   }
 
   function scheduleSearch(q) {
@@ -109,15 +122,26 @@ export function createPluginDiscovery({
     catalog = { status: "idle", nextCursor: null, setup: catalog.setup };
     if (context.isCurrent() && canDiscover() && !isPending()) {
       catalog.status = "loading";
-      searchTimer = setTimeout(() => void loadCatalog("refresh", query), 300);
+      searchTimer = setTimeout(() => {
+        // Submitting the form can pause discovery before this delayed read starts.
+        if (isPending()) {
+          prefetched = false;
+          cancel();
+          return;
+        }
+        void loadCatalog("refresh", query);
+      }, 300);
     }
-    update();
+    render();
   }
 
   function reset() {
     // A catalog belongs to one entered credential; late responses cannot restore it.
     invalidateRequests();
     entries.clear();
+    prefetched = false;
+    query = "";
+    fields.resetSearch();
     pageIds = [];
     cursors = [null];
     pageIndex = 0;
@@ -162,7 +186,7 @@ export function createPluginDiscovery({
     invalidateRequests();
     const active = generation;
     catalog = { ...catalog, status: "loading" };
-    update();
+    render();
     try {
       const page = await context.request(catalogPath, {
         method: "POST",
@@ -198,7 +222,7 @@ export function createPluginDiscovery({
       };
     } finally {
       if (context.isCurrent() && active === generation) {
-        update();
+        render();
       }
     }
   }
@@ -216,7 +240,7 @@ export function createPluginDiscovery({
     }
     const active = generation;
     entries.set(id, { ...entry, toolStatus: "loading", toolError: undefined });
-    update();
+    render();
     try {
       const detail = await context.request(`${catalogPath}/details`, {
         method: "POST",
@@ -246,11 +270,11 @@ export function createPluginDiscovery({
       });
     } finally {
       if (context.isCurrent() && active === generation) {
-        update();
+        render();
       }
     }
   }
 
-  update();
+  render();
   return { fields, reset, update };
 }

@@ -14,6 +14,9 @@ export const PluginsConfigured = {
 };
 export const PluginsCurated = story("createPluginsCurated");
 export const PluginsDiscovered = story("createPluginsDiscovered");
+export const PluginsPrefetch = story("createPluginsPrefetch");
+export const PluginsSearchLoading = story("createPluginsSearchLoading");
+export const PluginsToolsLoading = story("createPluginsToolsLoading");
 export const PluginsSelectedSecret = story("createPluginsSelectedSecret");
 export const PluginsSelectedSecretDenied = story("createPluginsSelectedSecretDenied");
 export const PluginsTools = story("createPluginsTools");

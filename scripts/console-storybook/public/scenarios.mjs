@@ -686,7 +686,8 @@ export const scenarios = {
       { selector: "#provider-credential-secret", value: "sec_storybook_pat" },
       click("Configure plugins"),
     ],
-    description: "The selected Secret enables discovery without entering a separate token.",
+    description:
+      "Selecting the Secret starts catalog discovery before the picker opens, without entering a separate token.",
     steps: [
       "Choose Calendar to load its details, then click Done and select another Secret to clear the catalog.",
       "Without a selected Secret, the optional token field remains available for a preview.",
@@ -773,6 +774,59 @@ export const scenarios = {
       "Choose Calendar to load its tools and inspect their IDs beneath the titles, then Add Calendar. Configure its plugin defaults and expand a tool to override them.",
       "Type create into Filter tools: only Create event remains, and the caret stays after the text. Clear it to restore the other tools. Search plugins for Documents before visiting its catalog page, then clear the query.",
       "Click Done and expand Plugin selections JSON: one heading labels a bounded monospace editor. Replacing the dummy token or authentication method clears discovery results and preserves selections.",
+    ],
+    gap: pluginDiscoveryGap,
+  },
+  createPluginsPrefetch: {
+    group: "Pages/Create Agent",
+    name: "Preload plugins after entering a service account token",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: pluginDiscoveryForm.slice(0, -1),
+    description:
+      "Entering the dummy service account token starts the first catalog request while Configure plugins stays closed.",
+    steps: [
+      "Open Configure plugins after the background request completes. Calendar appears without another first-page request.",
+      "Close the picker, replace the dummy token, and reopen it. The new credential gets a fresh catalog; previous selections remain.",
+    ],
+    gap: pluginDiscoveryGap,
+  },
+  createPluginsSearchLoading: {
+    group: "Pages/Create Agent",
+    name: "Plugin search loading",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: [
+      ...pluginDiscoveryForm,
+      { selector: 'button[aria-label="Calendar"]', focus: true },
+      { selector: "#plugin-search", value: "Documents", focus: true },
+    ],
+    rules: [{ suffix: "/agents/plugins", method: "POST", skip: 1, hold: true }],
+    description:
+      "Search shows a loading state immediately while waiting for the debounce and held catalog request, without a no-results message.",
+    steps: [
+      "Confirm the search field keeps Documents and its focus while the catalog indicates that results are loading.",
+      "Type another query while loading. The field remains usable and the obsolete search is canceled.",
+      "Close the picker to cancel the request. Reset the story before the simulated request reaches its timeout to capture the pending state again.",
+    ],
+    gap: pluginDiscoveryGap,
+  },
+  createPluginsToolsLoading: {
+    group: "Pages/Create Agent",
+    name: "Plugin tools loading",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: [...pluginDiscoveryForm, { selector: 'button[aria-label="Calendar"]', click: true }],
+    rules: [{ suffix: "/agents/plugins/details", method: "POST", hold: true }],
+    description:
+      "Selecting Calendar shows a pending tool lookup instead of reporting that its tools are unavailable. Add stays disabled until details arrive.",
+    steps: [
+      "Confirm Calendar's detail panel announces loading tools and keeps Add Calendar disabled.",
+      "Compare Load plugin tools for the completed result and Plugin tool discovery failed for a retryable failure.",
+      "Close the picker to cancel the request. Reset the story to review the pending state again.",
     ],
     gap: pluginDiscoveryGap,
   },
@@ -1806,7 +1860,7 @@ export const scenarios = {
     description:
       "Edit Agent-owned plugin selections on the draft while the admitted version keeps its original snapshot.",
     steps: [
-      "Review Calendar's saved policy. The catalog loads from the Agent's saved Service Accounts token.",
+      "The first catalog page loads in the background when the Plugins tab opens, using the saved Service Accounts token. Open Configure plugins to review Calendar's saved policy.",
       "Open Calendar and inspect the tool IDs beneath their titles. Type create into Filter tools, then clear it; filtering should keep the cursor in the search box.",
       "In Configure plugins, change Calendar's tool policy, add Documents from the next page, and select Done.",
       "Select Save plugin selections, then Deploy new version. Compare the new version with the earlier immutable plugin snapshot.",

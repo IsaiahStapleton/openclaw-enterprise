@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-27
-last_updated_session: 01a0e4d2-4f51-7780-b0fc-2352cb99078f
+last_updated_session: 01a0e53a-f2be-7bd1-a9c1-36e827b2ee47
 ---
 
 # Agent Plugin Deployment Flow
@@ -76,19 +76,21 @@ cursors, or plugin IDs. Hosted discovery resolves bound `codex_pat` and rechecks
 binding and caller/Agent Secret `operate` inside
 [`SecretDriver.withValue`](../reference/drivers/secret.md). Curated discovery needs
 no Secret. Missing, denied, or unavailable Secrets fail before discovery.
-Nontransactional reads use current values but may precede rotation; discovery
-persists no state or credentials.
+Nontransactional reads may precede rotation; discovery persists neither state nor
+credentials.
 
 The [Codex Driver](../../apps/controller/src/drivers/plugin/index.ts) hydrates
-hosted identity, then searches `q` or lists GLOBAL entries with opaque cursors.
+hosted identity, searches `q`, and pages GLOBAL entries with opaque cursors.
 [Console discovery](../../apps/controller/src/console/agents/plugin-discovery.mjs)
-invalidates responses and aborts requests on input before the
-[search delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
-Enter/paging run immediately; closing, configured view, or credential changes cancel
-searches. Request signals retain view cancellation.
-Tools (`null`: unknown) load on demand; supported entries become selectable after
-details. Unsupported releases stay unavailable. Curated catalogs filter bundled
-entries; tools/account access remain unknown.
+preloads page one for Create Agent PATs and bound PATs in editable Agent Plugins
+tabs. The picker reuses prefetch; credential changes clear discovery, preserving
+selections. Search marks loading and invalidates old responses before the
+[delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+Enter/paging bypass the delay. Closing, configured view, credential changes, and
+view cancellation abort requests.
+Tools (`null`: unknown) show loading on demand; supported entries become selectable
+afterward. Unsupported releases remain unavailable.
+Curated catalogs filter bundled entries without verifying tools/account access.
 
 Bounded hosted reads forbid redirects. OCC returns `no-store` metadata, rejects
 credential echoes, and suppresses upstream errors/artifacts. Selections exclude
@@ -293,6 +295,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 23:40: Catalog prefetch and loading feedback. (01a0e53a-f2be-7bd1-a9c1-36e827b2ee47 - b38554ac)
 
 - 2026-09-27 21:52: Debounced catalog searches and canceled obsolete requests. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - a599db7e)
 
