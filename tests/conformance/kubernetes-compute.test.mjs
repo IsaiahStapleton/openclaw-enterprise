@@ -2439,6 +2439,29 @@ test("the canonical Kubernetes runtime validates channel proxy configuration", (
   }
 });
 
+test("the canonical Kubernetes runtime validates native OpenClaw session capacity", () => {
+  const runtime = {
+    transportSecretPrefix: "transport",
+    gatewayStorageClassName: "local-path",
+  };
+  for (const nativeOpenClawSessionCapacity of [1, 8, 1024]) {
+    assert.doesNotThrow(() =>
+      createKubernetesComputeDriver(
+        options({ runtime: { ...runtime, nativeOpenClawSessionCapacity } }),
+      ),
+    );
+  }
+  for (const nativeOpenClawSessionCapacity of [0, 1.5, 1025, Number.NaN]) {
+    assert.throws(
+      () =>
+        createKubernetesComputeDriver(
+          options({ runtime: { ...runtime, nativeOpenClawSessionCapacity } }),
+        ),
+      /session capacity must be an integer between 1 and 1024/i,
+    );
+  }
+});
+
 test("dedicated Codex localhost seccomp profile is validated and rendered only on the Agent container", () => {
   const runtime = {
     transportSecretPrefix: "transport",
@@ -2727,7 +2750,12 @@ test("direct service account token is confined to the model container and exact 
 });
 
 test("credential-source authentication renders no model Secret and requires the paired gateway", () => {
-  const sandboxDriver = { id: "sandbox-openshell", capability: "sandbox", facets: ["networking"] };
+  const sandboxDriver = {
+    id: "sandbox-openshell",
+    capability: "sandbox",
+    facets: ["networking", "filesystem", "process"],
+    provisionHarness() {},
+  };
   const credentialGatewayDriver = { id: "credential-gateway", capability: "credential_gateway" };
   const driver = new KubernetesComputeDriver(options(), { sandboxDriver, credentialGatewayDriver });
   const namespace = kubernetesNamespaceName(tenant.id);
@@ -2783,6 +2811,38 @@ test("credential-source authentication renders no model Secret and requires the 
   assert.deepEqual(
     prepared.environment.find(({ name }) => name === "CODEX_LOGIN_MODE"),
     { name: "CODEX_LOGIN_MODE", value: "api_key" },
+  );
+
+  const nativeRevision = {
+    ...revision,
+    harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+    configuration: createHarnessConfiguration("openclaw", "gpt-4o-mini"),
+  };
+  driver.validateHarnessAuth(
+    nativeRevision.harness,
+    snapshot,
+    nativeRevision.configuration,
+    {},
+    sourceType,
+  );
+  const nativePrepared = driver.harnessAuthForRevision(
+    nativeRevision,
+    { harnessAuth: { ...snapshot, source } },
+    namespace,
+  );
+  assert.equal(nativePrepared.credentialSource, source);
+  assert.equal(nativePrepared.loginMode, "api_key");
+  assert.equal(
+    nativePrepared.environment.some((entry) => entry.valueFrom?.secretKeyRef !== undefined),
+    false,
+  );
+  assert.equal(
+    nativePrepared.environment.some(({ name }) => name === "CODEX_LOGIN_MODE"),
+    false,
+  );
+  assert.deepEqual(
+    nativePrepared.environment.find(({ name }) => name === "OPENCLAW_HARNESS_PROVIDER"),
+    { name: "OPENCLAW_HARNESS_PROVIDER", value: "openai" },
   );
 
   // A resolved source must match the frozen snapshot exactly and still be ready.
@@ -2846,6 +2906,7 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
     runtime: {
       transportSecretPrefix: "transport",
       gatewayStorageClassName: "local-path",
+      nativeOpenClawSessionCapacity: 12,
     },
   });
   const sandboxDriver = {
@@ -2996,7 +3057,7 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   assert.equal(worker.args[0].includes("chmodSync(temporary, 0o700)"), true);
   assert.equal(worker.args[0].includes("initializeRuntimeAssets();"), true);
   assert.equal(
-    worker.args[0].includes("const { chmodSync, mkdirSync, rmSync, writeFileSync }"),
+    worker.args[0].includes("const { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync }"),
     true,
   );
   assert.equal(worker.args[0].includes("OPENCLAW_BUNDLED_SKILLS_DIR"), true);
@@ -3004,6 +3065,11 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   assert.equal(
     worker.args[0].includes('agents: { defaults: { workspace: "/home/node/workspace" } }'),
     true,
+  );
+  assert.equal(
+    worker.env.find(({ name }) => name === "OPENCLAW_NATIVE_WORKER_CAPACITY")?.value,
+    "12",
+    "the dedicated native node must receive its configured session capacity.",
   );
   assert.equal(
     gateway.env.find(({ name }) => name === "OPENCLAW_NATIVE_WORKER_PROFILE")?.value,
@@ -4407,6 +4473,8 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
                 entry.value ?? "fixture-model-key",
               ]),
               ["TMPDIR", "/approved-temporary"],
+              ["NODE_EXTRA_CA_CERTS", "/run/openshell/ca.crt"],
+              ["SSL_CERT_FILE", "/run/openshell/ca-bundle.crt"],
             ]),
             on(signal, callback) {
               signals.set(signal, callback);
@@ -4478,6 +4546,8 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         assert.equal(calls.length, 1);
         assert.equal(probeTemplate, "/approved-temporary/openclaw-auth-probe-");
         assert.equal(calls[0].environment.TMPDIR, "/isolated-probe");
+        assert.equal(calls[0].environment.NODE_EXTRA_CA_CERTS, "/run/openshell/ca.crt");
+        assert.equal(calls[0].environment.SSL_CERT_FILE, "/run/openshell/ca-bundle.crt");
         assert.equal(calls[0].args[calls[0].args.indexOf("--probe-provider") + 1], provider);
         assert.equal(calls[0].environment[credentialName], "fixture-model-key");
         assert.equal(

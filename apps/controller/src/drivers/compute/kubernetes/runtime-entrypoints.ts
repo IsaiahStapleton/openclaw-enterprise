@@ -1570,6 +1570,8 @@ function probeOpenClawAuthenticationFailureCode() {
         OPENCLAW_STATE_DIR: directory + "/state",
         OPENCLAW_CONFIG_PATH: configPath,
         NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE,
+        NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
+        SSL_CERT_FILE: process.env.SSL_CERT_FILE,
         [credentialEnvironment]: process.env[credentialEnvironment],
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -2172,7 +2174,7 @@ for (const slot of processes) start(slot);
 
 export const NATIVE_WORKER_ENTRYPOINT = String.raw`
 const { join } = require("node:path");
-const { chmodSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
+const { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const { spawn } = require("node:child_process");
 ${WORKSPACE_ASSET_HELPERS}
 
@@ -2184,12 +2186,16 @@ const inferenceConfigPath = process.env.OPENCLAW_NATIVE_INFERENCE_CONFIG_PATH;
 const state = process.env.OPENCLAW_NODE_STATE_DIR;
 const setupCode = process.env.OPENCLAW_NODE_SETUP_CODE;
 const temporary = process.env.TMPDIR;
+const workerCapacity = Number(process.env.OPENCLAW_NATIVE_WORKER_CAPACITY);
 if (
   !inferenceConfig ||
   !inferenceConfigPath ||
   !state ||
   !setupCode ||
-  !temporary
+  !temporary ||
+  !Number.isSafeInteger(workerCapacity) ||
+  workerCapacity < 1 ||
+  workerCapacity > 1024
 ) {
   throw new Error("Dedicated OpenClaw worker configuration is invalid.");
 }
@@ -2213,7 +2219,7 @@ writeFileSync(workerConfigPath, JSON.stringify({
   nodeHost: {
     workerRuns: {
       enabled: true,
-      capacity: 1,
+      capacity: workerCapacity,
       isolation: "none",
       nativeInferenceConfig: inferenceConfigPath,
     },
@@ -2229,7 +2235,14 @@ const nodeEnv = {
 };
 if (process.env.OPENCLAW_NODE_CA_PEM) {
   const caPath = join(state, "gateway-ca.pem");
-  writeFileSync(caPath, process.env.OPENCLAW_NODE_CA_PEM, { mode: 0o600 });
+  const inheritedCa = process.env.NODE_EXTRA_CA_CERTS
+    ? readFileSync(process.env.NODE_EXTRA_CA_CERTS, "utf8")
+    : "";
+  writeFileSync(
+    caPath,
+    [inheritedCa, process.env.OPENCLAW_NODE_CA_PEM].filter(Boolean).join("\n"),
+    { mode: 0o600 },
+  );
   nodeEnv.NODE_EXTRA_CA_CERTS = caPath;
 }
 const connectTargetPath = join(state, "connect-target");

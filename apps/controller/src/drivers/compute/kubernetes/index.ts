@@ -282,6 +282,7 @@ export interface KubernetesComputeDriverOptions {
   readonly runtime?: {
     readonly transportSecretPrefix: string;
     readonly gatewayStorageClassName: string;
+    readonly nativeOpenClawSessionCapacity?: number;
     readonly nodeSelector?: Readonly<Record<string, string>>;
     readonly gatewayNodeSelector?: Readonly<Record<string, string>>;
     readonly codexSeccompProfile?: string;
@@ -428,10 +429,12 @@ function prepareHarnessAuth(
   } else if (
     resolvedAuth.method === "credential_source" &&
     harness.mode === "dedicated" &&
-    harness.id === "codex"
+    (harness.id === "codex" || harness.id === "openclaw")
   ) {
     // The paired Sandbox supplies the credential environment; no Secret is projected here.
-    environment.push({ name: "CODEX_LOGIN_MODE", value: resolvedAuth.loginMode });
+    if (harness.id === "codex") {
+      environment.push({ name: "CODEX_LOGIN_MODE", value: resolvedAuth.loginMode });
+    }
     return {
       loginMode: resolvedAuth.loginMode,
       environment,
@@ -498,6 +501,7 @@ const AGENT_TRANSPORT_PORT = 18_790;
 const NATIVE_WORKER_INFERENCE_CONFIG_PATH = "/tmp/openclaw-native-inference.json";
 const NATIVE_WORKER_WORKSPACE_ROOT = "/home/node/.openclaw-node/node-host";
 const NATIVE_WORKER_PROFILE = "dedicated-native";
+const DEFAULT_NATIVE_OPENCLAW_SESSION_CAPACITY = 8;
 const NATIVE_WORKER_COMPILE_CACHE = "/home/node/.openclaw-node/.cache/node-compile";
 const AGENT_TRANSPORT_TOKEN_KEY = "app-server-token";
 const GATEWAY_PASSWORD_KEY = "gateway-password";
@@ -1291,6 +1295,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         properties: {
           transportSecretPrefix: { type: "string" },
           gatewayStorageClassName: { type: "string", minLength: 1 },
+          nativeOpenClawSessionCapacity: { type: "integer", minimum: 1, maximum: 1024 },
           nodeSelector: { type: "object", additionalProperties: { type: "string" } },
           gatewayNodeSelector: { type: "object", additionalProperties: { type: "string" } },
           codexSeccompProfile: { type: "string", minLength: 1 },
@@ -1491,6 +1496,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       required(transportSecretPrefix, "Agent transport Secret name prefix");
       required(options.runtime.gatewayStorageClassName, "SQLite-compatible gateway storage class");
+      const nativeOpenClawSessionCapacity = options.runtime.nativeOpenClawSessionCapacity;
+      if (
+        nativeOpenClawSessionCapacity !== undefined &&
+        (!Number.isSafeInteger(nativeOpenClawSessionCapacity) ||
+          nativeOpenClawSessionCapacity < 1 ||
+          nativeOpenClawSessionCapacity > 1024)
+      ) {
+        throw new ConfigurationFailure(
+          "Native OpenClaw session capacity must be an integer between 1 and 1024.",
+        );
+      }
       if (options.runtime.codexSeccompProfile !== undefined) {
         validateCodexSeccompProfile(options.runtime.codexSeccompProfile);
       }
@@ -5762,6 +5778,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
     variables.push(
       { name: "TMPDIR", value: "/tmp/openclaw-native-worker" },
       { name: "NODE_COMPILE_CACHE", value: NATIVE_WORKER_COMPILE_CACHE },
+      // TODO(native-worker-idle-retirement): Configure upstream idle worker
+      // retirement once node hosts expose a supported policy.
+      {
+        name: "OPENCLAW_NATIVE_WORKER_CAPACITY",
+        value: String(
+          this.options.runtime?.nativeOpenClawSessionCapacity ??
+            DEFAULT_NATIVE_OPENCLAW_SESSION_CAPACITY,
+        ),
+      },
     );
     container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
     container.args = [NATIVE_WORKER_ENTRYPOINT];

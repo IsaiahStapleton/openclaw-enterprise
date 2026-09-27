@@ -57,6 +57,10 @@ The OpenShell SandboxDriver owns only the provider sandboxing delegation:
   service. The Driver adds each
   [credential attachment](#credential-attachments) to the Sandbox's providers,
   validates the returned service route, and returns the stable Sandbox reference.
+  The Sandbox
+  belongs to the AgentRevision. Its native OpenClaw node host admits the bounded,
+  configured set of session-owned workers instead of creating another Sandbox
+  for each session.
 - OpenShell's controller creates and owns the provider Harness Pod behind that
   Sandbox.
 - `cleanup` receives the immutable Agent revision during revision retirement and
@@ -231,7 +235,14 @@ inner Codex app-server sandbox:
 This avoids stacking the Codex sandbox inside OpenShell. OpenShell becomes the
 outer containment boundary for the dedicated Harness. Native OpenClaw already
 runs with its inner runtime isolation disabled; the hook preserves its
-configuration unchanged because OpenShell supplies that outer boundary.
+configuration unchanged because OpenShell supplies that outer boundary. Native
+session workers have separate managed workspaces, but they share the Sandbox's
+user, filesystem, process, and network boundary. OpenShell isolates the
+AgentRevision from other workloads; it does not isolate mutually untrusted
+sessions within one Agent. Kubernetes defaults to eight retained native workers
+and accepts an explicit `runtime.nativeOpenClawSessionCapacity` from `1` through
+`1024`. A stopped hosted session releases its slot; idle workers are not
+automatically retired.
 
 ## Credential attachments
 

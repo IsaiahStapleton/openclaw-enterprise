@@ -138,6 +138,16 @@ fails closed across Agent and Namespace boundaries. Brokered credentials,
 workload-bound transport authentication, and restricted model egress remain
 future work.
 
+OpenShell treats the AgentRevision as its containment boundary. It provisions
+one Sandbox for the dedicated Harness, disables nested Codex containment, and
+runs native OpenClaw session workers without an additional inner process
+sandbox. Dedicated Codex sessions share one app server; native OpenClaw admits
+a bounded, configurable set of session-owned workers with separate managed
+workspaces in one node host. Those sessions share the Sandbox's user,
+filesystem, process, and network boundary and therefore must belong to the same
+Agent trust domain. This model does not provide mutual operating-system
+isolation between sessions of one Agent.
+
 ## Related
 
 - [Kubernetes storage and credentials](../drivers/kubernetes-compute/storage-and-credentials.md)

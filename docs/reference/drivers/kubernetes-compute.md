@@ -152,6 +152,8 @@ drivers:
         expirationSeconds: 900
       runtime:
         gatewayStorageClassName: sqlite-block
+        # Maximum retained native OpenClaw session workers per AgentRevision.
+        nativeOpenClawSessionCapacity: 8
         nodeSelector: { oce-role: agents }
         gatewayNodeSelector: { oce-role: control-plane }
         transportSecretPrefix: openclaw-agent-transport
@@ -162,6 +164,14 @@ drivers:
 This example shows only the Compute Driver portion of the Installation
 configuration. See the [complete production Installation example](../../guides/deploy/production-installation.md#configure-the-installation)
 for the other required Drivers and settings.
+
+`runtime.nativeOpenClawSessionCapacity` accepts an integer from `1` through
+`1024` and defaults to `8`. It bounds retained dedicated native OpenClaw session
+workers inside one AgentRevision Sandbox. Stopping a hosted session releases
+its slot; saved session history does not consume capacity. OpenClaw does not
+currently retire an idle paired-node worker automatically, so size the limit
+with the Agent workload's CPU and memory limits instead of treating it as an
+unbounded session-history setting.
 
 ### Authentication
 

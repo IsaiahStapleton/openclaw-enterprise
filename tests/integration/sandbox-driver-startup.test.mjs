@@ -264,6 +264,7 @@ test("OpenShell configures only the selected dedicated Harness runtime", () => {
   const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
     id: "openshell-sandbox",
     implementation: "openshell",
+    backend: backendFor(workspaceGatewayClient()),
   });
   const configuration = {
     agents: { defaults: { model: "openai/gpt-5" } },
@@ -308,7 +309,7 @@ test("OpenShell provisions native OpenClaw without exposing an inbound Harness s
   const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
     id: "openshell-sandbox",
     implementation: "openshell",
-    gatewayClient,
+    backend: backendFor(gatewayClient),
   });
   const context = namespaceContext();
   const revisionId = "rev_00000000-0000-4000-8000-000000000001";
@@ -355,6 +356,7 @@ test("OpenShell provisions native OpenClaw without exposing an inbound Harness s
           readOnly: false,
         },
       ],
+      credentialAttachments: [],
       environment: [{ name: "TMPDIR", value: "/tmp/openclaw-native-worker" }],
       labels,
     },

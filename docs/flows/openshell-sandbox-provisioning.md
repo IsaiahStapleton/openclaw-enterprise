@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: 2026-09-28
-last_updated_session: 01a0e441-02f9-70b2-ad45-0a1a5049954a
+last_updated_session: authoring-run/3d7564e8-24cd-4cb3-9584-efce1cc55bd6
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -22,8 +22,9 @@ provider to the Sandbox, and the supervisor proxy injects the key. The regular
 Agent workflow with stock OpenShell still stops before Sandbox creation because
 `v0.1.0` cannot accept the Secret-backed app-server token or projected workload
 identity. The verification-only compatibility path stages those inputs without
-changing the production fail-closed contract and completes a real model turn
-inside the Sandbox.
+changing the production fail-closed contract and completes successive real
+model turns from two sessions inside one
+AgentRevision Sandbox.
 
 The local Kubernetes development profile installs the pinned Gateway and
 renders the workspace chart into the Installation configuration, in either a
@@ -63,7 +64,7 @@ graph TD
   J --> K["<b>Verify route</b><br/>Protected 401"]
   K --> L["<b>Run model turn</b><br/>Sandbox loopback"]
   V -- "OpenClaw" --> T["<b>Sandbox ready</b><br/>No inbound exposure"]
-  T --> U["<b>Run model turn</b><br/>Outbound enrolled worker"]
+  T --> U["<b>Run two sessions</b><br/>Successive retained workers"]
   J --> M["<b>Wait for Harness</b><br/>Compute readiness"]
   M --> S{"<b>Attachment status</b><br/>All ready?"}
   S -- "failed, withheld, revoked" --> R
@@ -206,21 +207,27 @@ limits the request to the Harness mounts approved by Kubernetes Compute. The
 stock fail-closed path never reaches this Gateway setting, and production does
 not use this compatibility configuration.
 
+OpenShell supplies the provider placeholder and its interception CA paths when
+it starts the Harness. The native OpenClaw authentication probe preserves
+`NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` in its restricted child environment,
+so the broker can terminate TLS and substitute the credential. After the probe,
+the native worker combines the OpenShell CA with the private Gateway enrollment
+CA before starting `connect --ephemeral`; replacing either CA would break model
+egress or the Gateway connection.
+
 ### 4. Call the versioned gateway contract
 
 `apps/controller/src/drivers/sandbox/openshell-gateway-client.ts:createSandbox`
 
-The client sends the stable Sandbox name, labels, annotations, spec, and a
-`workspace_scope` containing the Namespace Workspace. It also sends the
-revision's UUID as `request_id`. Codex includes an unnamed `service_exposures`
-entry for the literal `APP_SERVER_PORT`; OpenShell registers that endpoint
-during Create and returns its URL in `service_urls`. Native OpenClaw supplies no
-service exposure because its enrolled worker connects outbound to the Gateway,
-so the client accepts OpenShell omitting `service_urls`; the Driver still rejects
-an unexpected returned URL. When an exposure was requested, an omitted URL map
-fails closed. Replaying the same Create request returns the same result. A
-Sandbox that predates the replayable Codex request fails explicitly rather than
-receiving a separate post-create mutation.
+The client sends the Sandbox identity, spec, Namespace Workspace scope, and
+revision UUID as `request_id`. Codex requests one unnamed exposure for
+`APP_SERVER_PORT`; OpenShell returns its `service_urls` entry. Native OpenClaw
+requests no exposure because its worker connects outbound, so only that request
+may omit the URL map and must reject an unexpected URL. A replay returns the
+same result. A Sandbox that predates replayable Codex creation fails instead of
+receiving a separate mutation. The verification configuration pins the native
+node to two session slots inside its one AgentRevision Sandbox.
+
 Stock `v0.1.0` still lacks the exact projected identity and volume support
 required by the request, including the immutable plugin-runtime ConfigMap
 mounted by Kubernetes Compute. Any request that reaches
@@ -300,8 +307,9 @@ Kubernetes Compute delete the Kubernetes namespace.
 - `OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
   identifies the current fail-closed boundary.
 - Set `OCC_TEST_OPENSHELL_HARNESS=openclaw` to replace the Codex route and
-  loopback checks with a native worker model turn through its outbound Gateway
-  connection and verification that no inbound Harness service exists.
+  loopback checks with successive native worker model turns from two session
+  keys through one outbound Gateway connection and verification that no inbound
+  Harness service exists.
 
 ## Related docs
 
@@ -317,9 +325,13 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Changelog
 
+- 2026-09-28 00:05: Preserved OpenShell broker CA trust through native authentication and worker startup. (authoring-run/3d7564e8-24cd-4cb3-9584-efce1cc55bd6 - e65d5bf242bbdfd43ae043cf1f87e8cb38a5ca87)
+
 - 2026-09-28 00:34: Restored Compose defaults and explicit Kubernetes-only startup. (01a0e441-02f9-70b2-ad45-0a1a5049954a - 201f31d511464133f06e0526bb5545ed1cb27e25)
 
 - 2026-09-26 14:29: Documented the shared `openshell` Backend, credential-source attachments in Sandbox creation, attachment readiness before activation, and the app-server token as the first remaining stock blocker. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 849b2b24111fe237b12da5be1d4b411d3146cefb)
+- 2026-09-27 15:53: Added configurable native OpenClaw session capacity and proved two sessions inside one AgentRevision Sandbox. (authoring-run/6d50492e-1aaa-4825-bca2-2dae4bfedf6a - 7b8c15e3e51d802eeed05643b33dd377b72eadfa)
+
 - 2026-09-26 18:15: Switched the provider-owned native worker to the environment-managed ephemeral enrollment path and kept its one-use target out of process arguments. (authoring-run/571231c7-098f-4930-ae0f-69d988366d28 - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
 
 - 2026-09-26 11:50: Accepted an omitted OpenShell service URL map only for outbound-only native Harness creation while preserving the required-map failure for exposed services. (authoring-run/571231c7-098f-4930-ae0f-69d988366d28 - ee8c080b578b7cce1787e55ac41eabe112cc2f74)

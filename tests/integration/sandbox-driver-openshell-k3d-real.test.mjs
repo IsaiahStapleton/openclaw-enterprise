@@ -695,12 +695,6 @@ function pluginRuntimeConfigMapName(context) {
   return `plugin-runtime-${hash(context.revision.agentId)}-rev-${hash(context.revision.id)}`;
 }
 
-function secretEnvironment(requirements, name) {
-  const variable = requirements.environment.find((entry) => entry.name === name);
-  assert.ok(variable?.valueFrom?.secretKeyRef, `${name} must come from an exact SecretKeyRef.`);
-  return variable;
-}
-
 function optionalSecretEnvironment(requirements, name) {
   const variable = requirements.environment.find((entry) => entry.name === name);
   if (variable === undefined) {
@@ -1764,8 +1758,8 @@ function createIntegrationSandboxDriverFactory(
             process.stderr.write(
               `OpenShell first provisioning failure for ${context.revision.id}: ${error.message}\n`,
             );
+            provisioningFailures.set(context.revision.id, error);
           }
-          provisioningFailures.set(context.revision.id, error);
           if (bridge !== undefined) {
             await deleteCredentialJob(operatorKubernetes, context, bridge.metadata.name).catch(
               () => undefined,
@@ -1861,7 +1855,7 @@ function withFirstPrepareRevisionFailureDiagnostic(computeDriver) {
                 error.message ===
                 "The OpenShell compatibility proof is waiting for the Gateway node setup projection."
                   ? "OpenShell integration: waiting for the Gateway node setup projection; Compute will retry."
-                  : `OpenShell first Compute prepareRevision failure: ${error.message}`;
+                  : `OpenShell integration: initial Compute prepareRevision retry: ${error.message}`;
               process.stderr.write(`${message}\n`);
             }
             throw error;
@@ -1958,12 +1952,8 @@ async function prepareProductionInstallation(
     cluster: "k3d-openshell-sandboxdriver",
   });
   if (harnessId === "openclaw") {
-    const modelProviderPolicy =
-      configuration.drivers.sandbox.configuration.policy.networkPolicies.find(
-        ({ name }) => name === "model-provider",
-      );
-    assert.ok(modelProviderPolicy, "the OpenShell fixture must define model-provider egress.");
-    modelProviderPolicy.binaries = [{ path: "/usr/local/bin/node" }];
+    configuration.drivers.compute.configuration.runtime.nativeOpenClawSessionCapacity = 2;
+    configuration.drivers.credential_gateway.configuration.binaries = ["/usr/local/bin/node"];
   }
   configuration.drivers.compute.configuration.gatewayRouting = workspaceGateway.routing;
   configuration.drivers.compute.configuration.network.gatewayTrustedProxyCidrs =
@@ -2343,11 +2333,21 @@ async function prepareProductionInstallation(
     return { request, namespaceId, agent: agent.data };
   }
 
-  await waitFor(`OpenShell revision ${deployed.data.id} activation`, async () => {
-    const observed = await request("GET", `/namespaces/${namespaceId}/agents/${agent.data.id}`);
-    assert.equal(observed.status, 200, JSON.stringify(observed.error));
-    return observed.data.activeRevisionId === deployed.data.id ? observed.data : undefined;
-  });
+  try {
+    await waitFor(`OpenShell revision ${deployed.data.id} activation`, async () => {
+      const observed = await request("GET", `/namespaces/${namespaceId}/agents/${agent.data.id}`);
+      assert.equal(observed.status, 200, JSON.stringify(observed.error));
+      return observed.data.activeRevisionId === deployed.data.id ? observed.data : undefined;
+    });
+  } catch (error) {
+    const provisioningFailure = createSandboxDriver.provisioningFailures.get(deployed.data.id);
+    if (provisioningFailure !== undefined) {
+      assert.fail(
+        `${error.message}\nFirst OpenShell provisioning failure: ${provisioningFailure.message}`,
+      );
+    }
+    throw error;
+  }
   await assertWorkerCompleted({
     description: `worker completion for ${deployed.data.id}`,
     events,
@@ -2482,7 +2482,7 @@ async function nativeOpenClawTurnFailureDiagnostic(topology, gatewayPassword) {
   return `\n${sections.join("\n")}`;
 }
 
-async function requestNativeOpenClawTurn(context, topology) {
+async function requestNativeOpenClawTurns(context, topology) {
   const passwordSecret = await resource(
     "secret",
     `gateway-password-${hash(topology.agent.id)}`,
@@ -2494,38 +2494,45 @@ async function requestNativeOpenClawTurn(context, topology) {
     openShellGatewayName(topology.agent.id),
   );
   context.after(() => forwarding.stop());
-  const nonce = `OCC-OPENSHELL-NATIVE-${randomUUID()}`;
-  let response;
-  try {
-    response = await fetch(`${forwarding.url}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${gatewayPassword}`,
-        "content-type": "application/json",
-        "x-openclaw-session-key": `openshell-native-${randomUUID()}`,
-      },
-      body: JSON.stringify({
-        model: "openclaw/default",
-        stream: false,
-        messages: [{ role: "user", content: `Reply with exactly ${nonce}.` }],
-      }),
-      signal: AbortSignal.timeout(180_000),
-    });
-  } catch (error) {
-    const diagnostic = await nativeOpenClawTurnFailureDiagnostic(topology, gatewayPassword);
-    assert.fail(
-      `Native OpenClaw turn request failed: ${error?.message ?? String(error)}${diagnostic}`,
-    );
-  }
-  const body = await response.text();
-  assert.equal(body.includes(process.env.OPENAI_API_KEY), false);
-  assert.equal(body.includes(gatewayPassword), false);
-  const failureDiagnostic =
-    response.status === 200
-      ? ""
-      : await nativeOpenClawTurnFailureDiagnostic(topology, gatewayPassword);
-  assert.equal(response.status, 200, `${body}${failureDiagnostic}`);
-  assert.match(JSON.parse(body).choices?.[0]?.message?.content ?? "", new RegExp(nonce));
+  const requestTurn = async () => {
+    const nonce = `OCC-OPENSHELL-NATIVE-${randomUUID()}`;
+    let response;
+    try {
+      response = await fetch(`${forwarding.url}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${gatewayPassword}`,
+          "content-type": "application/json",
+          "x-openclaw-session-key": `openshell-native-${randomUUID()}`,
+        },
+        body: JSON.stringify({
+          model: "openclaw/default",
+          stream: false,
+          messages: [{ role: "user", content: `Reply with exactly ${nonce}.` }],
+        }),
+        signal: AbortSignal.timeout(180_000),
+      });
+    } catch (error) {
+      const diagnostic = await nativeOpenClawTurnFailureDiagnostic(topology, gatewayPassword);
+      assert.fail(
+        `Native OpenClaw turn request failed: ${error?.message ?? String(error)}${diagnostic}`,
+      );
+    }
+    const body = await response.text();
+    assert.equal(body.includes(process.env.OPENAI_API_KEY), false);
+    assert.equal(body.includes(gatewayPassword), false);
+    const failureDiagnostic =
+      response.status === 200
+        ? ""
+        : await nativeOpenClawTurnFailureDiagnostic(topology, gatewayPassword);
+    assert.equal(response.status, 200, `${body}${failureDiagnostic}`);
+    assert.match(JSON.parse(body).choices?.[0]?.message?.content ?? "", new RegExp(nonce));
+  };
+
+  // The first session's retained worker keeps its slot after the turn. A second session therefore
+  // proves that the same AgentRevision Sandbox admits more than one session-owned worker.
+  await requestTurn();
+  await requestTurn();
 }
 
 async function assertNativeOpenClawWorkspaceFiles(topology) {
@@ -2917,9 +2924,9 @@ test(
           await holdNativeOpenClawDemo(context, topology);
         } else {
           process.stderr.write(
-            "OpenShell integration: starting a real native worker model turn through Gateway.\n",
+            "OpenShell integration: starting successive native worker sessions through Gateway.\n",
           );
-          await requestNativeOpenClawTurn(context, topology);
+          await requestNativeOpenClawTurns(context, topology);
           await assertEmbeddedOpenShellFailsClosed(topology);
         }
         return;

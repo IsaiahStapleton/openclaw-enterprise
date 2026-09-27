@@ -27,6 +27,22 @@ namespace with its own private storage and ServiceAccount. Its Harness stays in
 the data-plane namespace. Embedded OpenClaw remains one untrusted data-plane
 workload; it cannot move independently of its built-in Harness.
 
+Each dedicated AgentRevision owns one Harness. Dedicated Codex sessions share
+its app server. Dedicated native OpenClaw sessions share its node host, which
+admits a configurable number of session-owned worker processes and keeps their
+managed workspaces separate. Kubernetes defaults to eight retained workers;
+additional sessions are refused until a hosted session stops, and active workers
+are not displaced. OpenShell contains the complete AgentRevision, not each session;
+see [Agent runtime isolation](security/runtime-isolation.md#agent-runtime-isolation)
+for the resulting trust boundary.
+
+Dedicated Codex has no separate OCE session-count limit. Independent chats share
+one app server. Active top-level turns use OpenClaw's
+`agents.defaults.maxConcurrent`; absent an explicit Agent setting, OpenClaw
+defaults that turn concurrency to the greater of eight or four times its
+quota-aware available parallelism. That limit bounds active turns, not saved
+session history.
+
 ## Native runtime selection
 
 The selected native model uses a `provider/model` name. Its supported
@@ -100,10 +116,11 @@ projections. The selected Sandbox consumes the same already-rendered workload
 requirements. It does not resolve a second credential source.
 
 A [`credential_source`](credential-sources.md) binding requires a selected
-Credential Gateway, the paired OpenShell Sandbox, dedicated Codex, and a source
-type whose Harness authentication is OpenAI `api_key`. Compute projects no model
-Secret; it sets `CODEX_LOGIN_MODE=api_key` and passes the gateway's attachments
-to the Sandbox. The revision activates only after every attachment is `ready`.
+Credential Gateway, the paired OpenShell Sandbox, a dedicated Codex or native
+OpenClaw Harness, and a source type whose Harness authentication is OpenAI
+`api_key`. Compute projects no model Secret and passes the gateway's attachments
+to the Sandbox. For Codex, it also sets `CODEX_LOGIN_MODE=api_key`. The revision
+activates only after every attachment is `ready`.
 While a Credential Gateway is selected, deployment rejects the Secret-backed and
 account methods with `409`. Other Compute
 implementations reject bindings they do not support. SSH embedded OpenClaw accepts
