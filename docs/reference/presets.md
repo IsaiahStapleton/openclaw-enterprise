@@ -61,10 +61,10 @@ Codex `config.toml` or a reasoning-effort override.
 | [`default-codex`](../../deploy/presets/default-codex.json)                              | Dedicated; choose name, model, and API key or service account token in the form | Local/LAN; Control UI enabled for loopback origins; Chat Completions enabled; browser/web/elevated settings omitted | Guardian WebSocket; `on-request`; `read-only`; reviewer and network proxy omitted                     |
 | [**Standard Codex**](../../deploy/presets/standard-codex.json)                          | Dedicated; name/model variables and masked API key                              | Standard gateway/tool policy below; cached Codex search                                                             | Guardian WebSocket; `on-request`; `workspace-write`; reviewer `user`; limited workspace network proxy |
 | [**Standard OpenClaw**](../../deploy/presets/standard-openclaw.json)                    | Embedded; name/model variables and masked API key                               | Standard gateway/tool policy; web search enabled without the Codex override                                         | None: native OpenClaw, no Codex plugin                                                                |
-| [`SWE Agent` / `devday.json`](../../deploy/presets/devday.json)                         | Dedicated; name/model variables; model defaults to `gpt-6-astra`; `codex_pat`   | Standard Codex settings plus Slack and workspace instructions                                                       | Same as Standard Codex                                                                                |
-| [`Q&A Agent` / `devday-qa.json`](../../deploy/presets/devday-qa.json)                   | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex                                                                                |
-| [`Oncall Agent` / `devday-oncall.json`](../../deploy/presets/devday-oncall.json)        | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex                                                                                |
-| [`Community Agent` / `devday-partners.json`](../../deploy/presets/devday-partners.json) | Same model/auth defaults as SWE Agent                                           | Standard Codex and Slack settings; community instructions; DMs disabled                                             | Same as Standard Codex                                                                                |
+| [`SWE Agent` / `devday.json`](../../deploy/presets/devday.json)                         | Dedicated; name/model variables; model defaults to `gpt-6-astra`; `codex_pat`   | Standard Codex settings plus Slack and workspace instructions                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
+| [`Q&A Agent` / `devday-qa.json`](../../deploy/presets/devday-qa.json)                   | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
+| [`Oncall Agent` / `devday-oncall.json`](../../deploy/presets/devday-oncall.json)        | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
+| [`Community Agent` / `devday-partners.json`](../../deploy/presets/devday-partners.json) | Same model/auth defaults as SWE Agent                                           | Standard Codex and Slack settings; community instructions; DMs disabled                                             | Same as Standard Codex, except `approvalPolicy: never`                                                |
 
 ### Plain console default
 
@@ -111,8 +111,8 @@ limits. A saved template does not prove live Codex policy enforcement.
 
 ## DevDay custom presets
 
-[`SWE Agent`](../../deploy/presets/devday.json) copies
-**Standard Codex** and adds Slack Socket Mode with four prefilled channels.
+[`SWE Agent`](../../deploy/presets/devday.json) is based on
+**Standard Codex**, uses `approvalPolicy: never`, and adds Slack Socket Mode with four prefilled channels.
 It uses the Codex harness with **Service Accounts** authentication (`codex_pat`).
 All four DevDay presets expose only `name` and `model` variables; `model` defaults
 to `gpt-6-astra` and remains editable. After **Use Preset**, choose an existing service account Secret or
