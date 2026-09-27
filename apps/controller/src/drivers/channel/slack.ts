@@ -1,7 +1,7 @@
 import type { ChannelDirectoryResult, ChannelDriver } from "@openclaw-enterprise/contracts";
 import { ChannelDirectoryError } from "@openclaw-enterprise/occ";
 import { isIP } from "node:net";
-import { ProxyAgent } from "undici";
+import { fetch as undiciFetch, ProxyAgent } from "undici";
 
 const SLACK_API = "https://slack.com/api/";
 const PAGE_SIZE = 100;
@@ -100,17 +100,21 @@ export class SlackChannelDriver implements ChannelDriver {
     if (method !== "auth.test") {
       url.search = parameters.toString();
     }
-    let response: Response;
+    let response: Pick<Response, "status" | "ok" | "text">;
     try {
-      response = await this.request(url, {
+      const options = {
         method: method === "auth.test" ? "POST" : "GET",
         headers: { authorization: `Bearer ${token}` },
-        ...(this.proxy === undefined ? {} : { dispatcher: this.proxy }),
         signal:
           signal === undefined
             ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
             : AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
-      });
+      };
+      // Node's built-in fetch does not use an external Undici dispatcher.
+      response =
+        this.proxy === undefined
+          ? await this.request(url, options)
+          : await undiciFetch(url, { ...options, dispatcher: this.proxy });
     } catch {
       throw new ChannelDirectoryError("unavailable");
     }
