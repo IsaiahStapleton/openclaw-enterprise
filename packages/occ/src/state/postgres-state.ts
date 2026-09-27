@@ -358,7 +358,7 @@ const CREDENTIAL_SOURCE_COLUMNS = `cs.id, cs.namespace_id, cs.name, cs.type, cs.
 function credentialSourceFromRow(row: PostgresRow): Readonly<CredentialSource> {
   const namespaceId = text(row, "namespace_id");
   const state = text(row, "state");
-  if (state !== "ready" && state !== "deleting") {
+  if (state !== "registering" && state !== "ready" && state !== "deleting") {
     throw new DependencyUnavailableError("Persisted credential source state is invalid.");
   }
   const config = jsonObject(row.config);
@@ -1959,11 +1959,23 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         return immutableCopy(source);
       },
+      markCredentialSourceReady: async (namespaceId, credentialSourceId) => {
+        const updated = await client.query(
+          `UPDATE occ.credential_sources AS cs SET state = 'ready'
+           FROM occ.namespaces AS n
+           WHERE cs.namespace_id = $1 AND cs.id = $2 AND cs.state = 'registering'
+             AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
+          [namespaceId, credentialSourceId],
+        );
+        return updated.rowCount === 1
+          ? findCredentialSource(namespaceId, credentialSourceId)
+          : undefined;
+      },
       markCredentialSourceDeleting: async (namespaceId, credentialSourceId) => {
         const updated = await client.query(
           `UPDATE occ.credential_sources AS cs SET state = 'deleting'
            FROM occ.namespaces AS n
-           WHERE cs.namespace_id = $1 AND cs.id = $2 AND cs.state = 'ready'
+           WHERE cs.namespace_id = $1 AND cs.id = $2 AND cs.state IN ('registering', 'ready')
              AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
           [namespaceId, credentialSourceId],
         );

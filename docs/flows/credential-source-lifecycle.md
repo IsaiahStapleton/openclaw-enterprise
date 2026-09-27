@@ -36,9 +36,10 @@ graph TD
   A["<b>POST credential source</b><br/>API request"] --> B{"<b>Catalog and grants</b><br/>type, fields, secret:operate"}
   B -- "invalid or denied" --> X["<b>Reject</b><br/>No gateway call"]
   B -- "valid" --> C["<b>Read Secret values</b><br/>SecretDriver.withValue"]
-  C --> D["<b>registerSource</b><br/>Gateway stores copy"]
-  D -- "failed or transaction error" --> Y["<b>removeSource</b><br/>No OCC record"]
-  D -- "ready or pending" --> E["<b>Commit record</b><br/>state ready and audit"]
+  C --> R["<b>Commit record</b><br/>state registering"]
+  R --> D["<b>registerSource</b><br/>Gateway stores copy"]
+  D -- "failed or unknown" --> Y["<b>removeSource</b><br/>Delete record, or keep it deleting"]
+  D -- "ready or pending" --> E["<b>Mark ready</b><br/>with audit"]
   E --> F["<b>Bind to Agent</b><br/>actor operate"]
   F --> G{"<b>deployAgent</b><br/>gateway, Sandbox, both grants"}
   G -- "Secret-backed method" --> Z["<b>409 conflict</b><br/>No env fallback"]
@@ -79,19 +80,28 @@ request with `503`. The values exist only in memory for the next call.
 ### 3. Register with the gateway and commit
 
 `packages/occ/src/index.ts:createCredentialSource`,
+`packages/occ/src/index.ts:abandonCredentialRegistration`,
 `apps/controller/src/drivers/credential-gateway/openshell.ts:registerSource`
 
-OCC creates the record in memory with a new `cs_` ID, the gateway's Driver ID,
-and state `ready`. It asks Compute's `resolveSandboxNamespace` for the
-Namespace's runtime placement, the same name the paired Sandbox receives. It
-registers a rollback that calls `removeSource`, then calls `registerSource` with
-a 30-second timeout. The OpenShell Driver ensures the Workspace's provider
+The same transaction inserts the `credential_sources` row with a new `cs_` ID,
+the gateway's Driver ID, and state `registering`, plus one
+`credential_source_secrets` row per field, then commits. The OpenShell provider
+name derives from that ID, so the record identifies any copy the gateway stores.
+OCC asks Compute's `resolveSandboxNamespace` for the Namespace's runtime
+placement, the same name the paired Sandbox receives, and calls `registerSource`
+with a 30-second timeout. The OpenShell Driver ensures the Workspace's provider
 profile and creates an OCC-labeled provider whose `profile_workspace` is that
-Workspace; a retried
-create adopts only a provider with matching labels. A `failed` or `absent`
-result throws, and the rollback removes any stored copy. Otherwise OCC inserts
-the `credential_sources` row and one `credential_source_secrets` row per field,
-and the HTTP handler appends the mutation audit event in the same transaction.
+Workspace; a retried create adopts only a provider with matching labels.
+
+A thrown call or a `failed` or `absent` result may still have stored a copy, so
+`abandonCredentialRegistration` calls `removeSource`. When removal succeeds it
+deletes the record; when removal fails it moves the record to `deleting`, and a
+later DELETE repeats the removal. On success a second transaction moves the
+record from `registering` to `ready` and appends the handler's mutation audit
+event. If that transaction fails or the process exits, the record stays
+`registering`; admission and binding require `ready`, and DELETE removes the
+copy. If a concurrent DELETE already removed the record, OCC removes the copy
+again and returns `409`.
 
 ### 4. Bind the source to an Agent
 
@@ -137,19 +147,21 @@ next owner is the [OpenShell Sandbox provisioning flow](openshell-sandbox-provis
 
 The first transaction authorizes `delete`, locks the source, and returns `409`
 while an Agent draft, active revision, or pending deployment references it. It
-moves the record to `deleting`; a database trigger prevents a return to
-`ready`. Outside the transaction, OCC calls `removeSource`. The OpenShell Driver
+moves a `registering` or `ready` record to `deleting`; database triggers prevent
+leaving `deleting` and returning to `registering`. Outside the transaction, OCC calls `removeSource`. The OpenShell Driver
 deletes the owned provider, confirms it is gone, and deletes the profile when no
 provider of its type remains. A gateway failure returns `503` and leaves the
 record `deleting` for the caller to retry. A second transaction deletes the
-record, and the handler appends the audit event. Namespace deletion returns
+record and appends the handler's audit event, so a completed deletion is always
+audited; if the append fails, the record stays `deleting` for a retry. Namespace deletion returns
 `NAMESPACE_NOT_EMPTY` while any record remains.
 
 ## Debugging and Verification
 
 - `node --test tests/conformance/credential-source-occ.test.mjs` covers catalog
-  validation, Secret `operate`, registration compensation, deletion refusal and
-  retry, Namespace gating, admission snapshots, and rejection of Secret-backed
+  validation, Secret `operate`, registration compensation, recovery of an
+  uncertain registration, audit commit with the final state change, deletion
+  refusal and retry, Namespace gating, admission snapshots, and rejection of Secret-backed
   methods with a gateway selected. It uses an in-process gateway double, not
   OpenShell.
 - `node --test tests/conformance/openshell-gateway-wire.test.mjs` checks the

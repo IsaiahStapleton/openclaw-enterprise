@@ -327,7 +327,11 @@ export const CredentialSourceSchema = Type.Object(
     type: CredentialSourceType,
     config: CredentialSourceConfig,
     secrets: CredentialSourceSecrets,
-    state: Type.Union([Type.Literal("ready"), Type.Literal("deleting")]),
+    state: Type.Union([
+      Type.Literal("registering"),
+      Type.Literal("ready"),
+      Type.Literal("deleting"),
+    ]),
     ref: CredentialSourceReference,
     status: Type.Optional(CredentialSourceStatusSchema),
   },

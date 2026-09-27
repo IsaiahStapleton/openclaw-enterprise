@@ -389,6 +389,7 @@
               },
               "state": {
                 "anyOf": [
+                  { "const": "registering", "type": "string" },
                   { "const": "ready", "type": "string" },
                   { "const": "deleting", "type": "string" }
                 ]
@@ -9952,6 +9953,7 @@
                           },
                           "state": {
                             "anyOf": [
+                              { "const": "registering", "type": "string" },
                               { "const": "ready", "type": "string" },
                               { "const": "deleting", "type": "string" }
                             ]

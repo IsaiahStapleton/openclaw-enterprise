@@ -2718,7 +2718,7 @@ List readable credential sources without revealing credential values
 | `data[].ref.kind` | `"credential_source"` | Yes | — |
 | `data[].ref.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data[].secrets` | `object<string, object>` | Yes | Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value. |
-| `data[].state` | `"ready" or "deleting"` | Yes | — |
+| `data[].state` | `"registering" or "ready" or "deleting"` | Yes | — |
 | `data[].status` | `object` | No | Live status reported by the selected Credential Gateway. It never contains credential values. |
 | `data[].status.reason` | `string` | No | max length: 512 |
 | `data[].status.state` | `"ready" or "pending" or "failed" or "absent"` | Yes | — |
@@ -2788,7 +2788,7 @@ Register a credential source with the selected Credential Gateway
 | `data.ref.kind` | `"credential_source"` | Yes | — |
 | `data.ref.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.secrets` | `object<string, object>` | Yes | Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value. |
-| `data.state` | `"ready" or "deleting"` | Yes | — |
+| `data.state` | `"registering" or "ready" or "deleting"` | Yes | — |
 | `data.status` | `object` | No | Live status reported by the selected Credential Gateway. It never contains credential values. |
 | `data.status.reason` | `string` | No | max length: 512 |
 | `data.status.state` | `"ready" or "pending" or "failed" or "absent"` | Yes | — |
@@ -2877,7 +2877,7 @@ Get one credential source and its live Credential Gateway status
 | `data.ref.kind` | `"credential_source"` | Yes | — |
 | `data.ref.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.secrets` | `object<string, object>` | Yes | Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value. |
-| `data.state` | `"ready" or "deleting"` | Yes | — |
+| `data.state` | `"registering" or "ready" or "deleting"` | Yes | — |
 | `data.status` | `object` | No | Live status reported by the selected Credential Gateway. It never contains credential values. |
 | `data.status.reason` | `string` | No | max length: 512 |
 | `data.status.state` | `"ready" or "pending" or "failed" or "absent"` | Yes | — |

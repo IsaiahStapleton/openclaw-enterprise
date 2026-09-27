@@ -134,8 +134,8 @@ test("OpenShell client serializes v0.1.0 credential providers, profiles, and att
     },
     CreateProvider(call, callback) {
       requests.providers.push(call.request);
-      const { credentials: _credentials, ...provider } = call.request.provider;
-      callback(null, { provider });
+      // Echo the credential so the assertion below proves the client, not this stub, redacts it.
+      callback(null, { provider: call.request.provider });
     },
     CreateSandbox(call, callback) {
       requests.sandboxes.push(call.request);

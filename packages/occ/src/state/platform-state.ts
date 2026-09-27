@@ -252,7 +252,12 @@ export interface CredentialSourceRepository extends CredentialSourceReadReposito
     credentialSourceId: string,
   ): Promise<Readonly<CredentialSource> | undefined>;
   createCredentialSource(source: CredentialSource): Promise<Readonly<CredentialSource>>;
-  /** Moves a ready source to `deleting`; the record stays until the gateway copy is gone. */
+  /** Moves a registering source to `ready` once the gateway confirms its copy. */
+  markCredentialSourceReady(
+    namespaceId: string,
+    credentialSourceId: string,
+  ): Promise<Readonly<CredentialSource> | undefined>;
+  /** Moves a registering or ready source to `deleting`; the record stays until the gateway copy is gone. */
   markCredentialSourceDeleting(
     namespaceId: string,
     credentialSourceId: string,
@@ -882,7 +887,7 @@ function assertCredentialSource(source: CredentialSource): void {
     source.driverId.length < 1 ||
     source.driverId.length > 200 ||
     source.driverId !== source.driverId.trim() ||
-    (source.state !== "ready" && source.state !== "deleting")
+    (source.state !== "registering" && source.state !== "ready" && source.state !== "deleting")
   ) {
     throw new ScopeViolationError("The credential source is invalid.");
   }
@@ -1410,9 +1415,18 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       snapshot.credentialSources.set(key, saved);
       return immutableCopy(saved);
     },
+    markCredentialSourceReady: async (namespaceId, credentialSourceId) => {
+      const current = await findCredentialSource(namespaceId, credentialSourceId);
+      if (current === undefined || current.state !== "registering") {
+        return undefined;
+      }
+      const saved = immutableCopy({ ...current, state: "ready" as const });
+      snapshot.credentialSources.set(agentKey(namespaceId, credentialSourceId), saved);
+      return immutableCopy(saved);
+    },
     markCredentialSourceDeleting: async (namespaceId, credentialSourceId) => {
       const current = await findCredentialSource(namespaceId, credentialSourceId);
-      if (current === undefined || current.state !== "ready") {
+      if (current === undefined || current.state === "deleting") {
         return undefined;
       }
       const saved = immutableCopy({ ...current, state: "deleting" as const });

@@ -179,6 +179,9 @@ the profile instead.
 - **`credential-source create` returns `503`:** the API cannot reach OpenShell
   Gateway, or no Credential Gateway is selected. Check that `dev-up` finished
   and that the `openshell-gateway` Pod in `oce-system` is running.
+- **A source stays `registering` or `deleting`:** a registration was
+  interrupted or its cleanup failed. Run `./bin/occ credential-source delete`
+  to remove any gateway copy; retry it until it succeeds.
 - **`GATEWAY STATUS` is not `ready`:** read the `reason` from
   `./bin/occ credential-source get "$SOURCE_ID" -o json`.
 - **Deploy returns `409`:** the Agent uses `api_key` or another Secret-backed

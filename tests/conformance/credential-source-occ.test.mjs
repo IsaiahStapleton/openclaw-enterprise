@@ -65,6 +65,10 @@ function createTestCredentialGateway(options = {}) {
         throw options.registerError;
       }
       stored.set(context.source.id, input.secrets);
+      // Models a gateway that stored the copy but whose reply was lost.
+      if (options.replyError !== undefined) {
+        throw options.replyError;
+      }
       return { state: "ready" };
     },
     async updateSource() {
@@ -338,12 +342,66 @@ test("registration requires operate on every referenced Secret before reading it
   assert.equal(gateway.calls.length, 0);
 });
 
+function auditEvent(namespaceId, id, action) {
+  return {
+    id: `aud_${crypto.randomUUID()}`,
+    installationId: installation.id,
+    namespaceId,
+    occurredAt: new Date().toISOString(),
+    kind: "mutation",
+    actorId: administrator,
+    source: "occ",
+    action,
+    resource: { kind: "credential_source", id, namespaceId },
+    outcome: "success",
+  };
+}
+
+async function auditActions(controller) {
+  return (await controller.transact((unit) => unit.audit.list()))
+    .map(({ action }) => action)
+    .filter((action) => action.startsWith("openclaw.credential_sources."));
+}
+
 test("a failed registration leaves no source and compensates a possibly stored copy", async () => {
   const { controller, gateway, makeReady, modelSecret, namespace } = await fixture({
     gateway: { registerError: new Error("gateway unavailable") },
   });
   await makeReady();
   const secret = await modelSecret();
+  await assert.rejects(
+    controller.createCredentialSource(
+      administrator,
+      {
+        namespaceId: namespace.id,
+        name: "openai",
+        type: "openai",
+        secrets: { api_key: secret.ref },
+      },
+      (source) => auditEvent(namespace.id, source.id, "openclaw.credential_sources.create"),
+    ),
+    DependencyUnavailableError,
+  );
+  assert.deepEqual(await controller.listCredentialSources(administrator, namespace.id), []);
+  assert.deepEqual(
+    gateway.calls.map(({ operation }) => operation),
+    ["registerSource", "removeSource"],
+  );
+  // Only a completed registration is audited as a successful mutation.
+  assert.deepEqual(await auditActions(controller), []);
+});
+
+test("an uncertain registration whose cleanup fails stays listed until DELETE removes the copy", async () => {
+  let failRemove = true;
+  const { controller, gateway, makeReady, modelSecret, namespace } = await fixture({
+    gateway: {
+      replyError: new Error("reply lost"),
+      removeError: () => (failRemove ? new Error("gateway unavailable") : undefined),
+    },
+  });
+  await makeReady();
+  const secret = await modelSecret();
+  // The gateway stored a copy but OCC never learned the outcome, and cleanup failed too.
   await assert.rejects(
     controller.createCredentialSource(administrator, {
       namespaceId: namespace.id,
@@ -353,11 +411,47 @@ test("a failed registration leaves no source and compensates a possibly stored c
     }),
     DependencyUnavailableError,
   );
+  const [orphan] = await controller.listCredentialSources(administrator, namespace.id);
+  assert.equal(orphan.state, "deleting");
+  assert.equal(gateway.stored.has(orphan.id), true);
+
+  // The record keeps the provider identity, so an ordinary DELETE retry removes the copy.
+  failRemove = false;
+  await controller.deleteCredentialSource(administrator, namespace.id, orphan.id);
+  assert.equal(gateway.stored.has(orphan.id), false);
   assert.deepEqual(await controller.listCredentialSources(administrator, namespace.id), []);
-  assert.deepEqual(
-    gateway.calls.map(({ operation }) => operation),
-    ["registerSource", "removeSource"],
+});
+
+test("registration and deletion commit their audit events with the final state change", async () => {
+  const { controller, makeReady, modelSecret, namespace } = await fixture();
+  await makeReady();
+  const secret = await modelSecret();
+  const source = await controller.createCredentialSource(
+    administrator,
+    { namespaceId: namespace.id, name: "openai", type: "openai", secrets: { api_key: secret.ref } },
+    (created) => auditEvent(namespace.id, created.id, "openclaw.credential_sources.create"),
   );
+  assert.equal(source.state, "ready");
+  assert.deepEqual(await auditActions(controller), ["openclaw.credential_sources.create"]);
+
+  // An audit that cannot be appended rolls back the removal, so DELETE can be retried.
+  await assert.rejects(
+    controller.deleteCredentialSource(administrator, namespace.id, source.id, () => ({
+      ...auditEvent(namespace.id, source.id, "openclaw.credential_sources.delete"),
+      installationId: "ins_other",
+    })),
+    ScopeViolationError,
+  );
+  const retained = await controller.readCredentialSource(administrator, namespace.id, source.id);
+  assert.equal(retained.state, "deleting");
+  await controller.deleteCredentialSource(administrator, namespace.id, source.id, () =>
+    auditEvent(namespace.id, source.id, "openclaw.credential_sources.delete"),
+  );
+  assert.deepEqual(await auditActions(controller), [
+    "openclaw.credential_sources.create",
+    "openclaw.credential_sources.delete",
+  ]);
+  assert.deepEqual(await controller.listCredentialSources(administrator, namespace.id), []);
 });
 
 test("deletion is refused while referenced, retried while the gateway fails, and gates the Namespace", async () => {
@@ -419,20 +513,35 @@ test("deletion is refused while referenced, retried while the gateway fails, and
   assert.equal(gateway.stored.has(source.id), false);
 });
 
-test("a Namespace with a credential source cannot be deleted", async () => {
-  const { controller, makeReady, modelSecret, namespace } = await fixture();
+test("a credential source, including one being deleted, keeps its Namespace nonempty", async () => {
+  let failRemove = false;
+  const { controller, makeReady, namespace } = await fixture({
+    gateway: { removeError: () => (failRemove ? new Error("gateway unavailable") : undefined) },
+  });
   await makeReady();
-  const secret = await modelSecret();
-  await controller.createCredentialSource(administrator, {
+  // A secretless source is the Namespace's only resource, so only the source guard can refuse.
+  const source = await controller.createCredentialSource(administrator, {
     namespaceId: namespace.id,
-    name: "openai",
-    type: "openai",
-    secrets: { api_key: secret.ref },
+    name: "registry",
+    type: "registry",
+    config: { host: "registry.example.com" },
   });
   await assert.rejects(
     controller.deleteNamespace(administrator, namespace.id),
     NamespaceNotEmptyError,
   );
+  failRemove = true;
+  await assert.rejects(
+    controller.deleteCredentialSource(administrator, namespace.id, source.id),
+    DependencyUnavailableError,
+  );
+  await assert.rejects(
+    controller.deleteNamespace(administrator, namespace.id),
+    NamespaceNotEmptyError,
+  );
+  failRemove = false;
+  await controller.deleteCredentialSource(administrator, namespace.id, source.id);
+  await controller.deleteNamespace(administrator, namespace.id);
 });
 
 test("deploy admission freezes the source and requires the Agent principal to operate it", async () => {

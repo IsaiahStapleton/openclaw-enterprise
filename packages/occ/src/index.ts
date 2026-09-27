@@ -19,6 +19,7 @@ import type {
   CredentialSourceMetadata,
   CredentialSourceStatus,
   CredentialSourceType,
+  AuditEvent,
   Driver,
   DriverCapability,
   HarnessDescriptor,
@@ -2594,36 +2595,42 @@ export class OpenClawController {
     });
   }
 
+  /**
+   * Registration records the source as `registering` before the gateway write, so an uncertain
+   * gateway outcome always leaves a record an operator can list and delete. `audit` builds the
+   * success event, committed with the transition to `ready`.
+   */
   async createCredentialSource(
     principalId: string,
     input: CreateCredentialSourceInput,
+    audit?: (source: Readonly<CredentialSourceMetadata>) => AuditEvent,
   ): Promise<Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>> {
     if (!validName(input.name)) {
       throw new ScopeViolationError("The credential source name is invalid.");
     }
     const config = Object.freeze({ ...(input.config ?? {}) });
     const secretRefs = Object.freeze({ ...(input.secrets ?? {}) });
-    return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
+    const { namespace, gateway, source, values } = await this.mutate(async (state) => {
+      const locked = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "credential_source",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: locked.id,
+        namespaceId: locked.id,
       });
-      if (namespace.status !== "ready") {
+      if (locked.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
-      const gateway = this.credentialGatewayDriver();
-      const type = await this.credentialSourceType(gateway, input.type);
+      const selected = this.credentialGatewayDriver();
+      const type = await this.credentialSourceType(selected, input.type);
       credentialSourceFieldsMatch("config", type.config, config);
       credentialSourceFieldsMatch("secrets", type.secrets, secretRefs);
-      const values: Record<string, string> = {};
+      const read: Record<string, string> = {};
       for (const [field, reference] of Object.entries(secretRefs)) {
-        if (reference.namespaceId !== namespace.id) {
+        if (reference.namespaceId !== locked.id) {
           throw new ScopeViolationError("Credential source Secrets cannot cross Namespaces.");
         }
         await this.authorize(principalId, "operate", reference);
-        const secret = await state.secrets.lockSecret(namespace.id, reference.id);
+        const secret = await state.secrets.lockSecret(locked.id, reference.id);
         if (secret === undefined) {
           throw new ScopeViolationError("The credential source Secret is unavailable.");
         }
@@ -2634,42 +2641,91 @@ export class OpenClawController {
           );
         }
         const withValue = secretDriver.withValue.bind(secretDriver);
-        values[field] = await this.secretOperation(() => withValue(secret, async (value) => value));
+        read[field] = await this.secretOperation(() => withValue(secret, async (value) => value));
       }
-      const source: CredentialSource = Object.freeze({
-        id: this.nextIdentifier("credential_source"),
-        namespaceId: namespace.id,
-        name: input.name,
-        type: type.type,
-        config,
-        secrets: secretRefs,
-        driverId: gateway.id,
-        state: "ready",
-        createdAt: this.timestamp(),
-      });
-      const context = {
-        namespace: await this.credentialNamespace(namespace),
-        source,
-        signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
-      };
-      // An uncertain registration may have stored a copy, so compensate any failed transaction.
-      this.registerRollback(() =>
-        this.credentialGatewayOperation(() =>
-          gateway.removeSource({
-            ...context,
-            signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
-          }),
-        ),
+      const registering = await state.credentialSources.createCredentialSource(
+        Object.freeze({
+          id: this.nextIdentifier("credential_source"),
+          namespaceId: locked.id,
+          name: input.name,
+          type: type.type,
+          config,
+          secrets: secretRefs,
+          driverId: selected.id,
+          state: "registering",
+          createdAt: this.timestamp(),
+        }),
       );
-      const status = await this.credentialGatewayOperation(() =>
-        gateway.registerSource(context, { type: type.type, config, secrets: values }),
+      return { namespace: locked, gateway: selected, source: registering, values: read };
+    });
+    const placed = await this.credentialNamespace(namespace);
+    let status: CredentialSourceStatus;
+    try {
+      status = await this.credentialGatewayOperation(() =>
+        gateway.registerSource(
+          {
+            namespace: placed,
+            source,
+            signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
+          },
+          { type: source.type, config, secrets: values },
+        ),
       );
       if (status.state === "failed" || status.state === "absent") {
         throw new DependencyUnavailableError("The Credential Gateway did not store the source.");
       }
-      await state.credentialSources.createCredentialSource(source);
-      return this.credentialSourceMetadata(source, status);
+    } catch (error) {
+      await this.abandonCredentialRegistration(placed, gateway, source);
+      throw error;
+    }
+    // A commit failure leaves the record `registering`; deleting it removes any stored copy.
+    const ready = await this.mutate(async (state) => {
+      await this.lockNamespace(state, namespace.id);
+      const marked = await state.credentialSources.markCredentialSourceReady(
+        namespace.id,
+        source.id,
+      );
+      if (marked !== undefined && audit !== undefined) {
+        await state.audit.append(audit(this.credentialSourceMetadata(marked)));
+      }
+      return marked;
     });
+    if (ready === undefined) {
+      // A concurrent deletion won; remove the copy this registration may have stored after it.
+      await this.abandonCredentialRegistration(placed, gateway, source);
+      throw new ResourceConflictError("The credential source changed during registration.");
+    }
+    return this.credentialSourceMetadata(ready, status);
+  }
+
+  /** Removes a failed registration's copy, or leaves the record `deleting` for a DELETE retry. */
+  private async abandonCredentialRegistration(
+    namespace: Readonly<Namespace>,
+    gateway: CredentialGatewayDriver,
+    source: Readonly<CredentialSource>,
+  ): Promise<void> {
+    let removed = true;
+    try {
+      await this.credentialGatewayOperation(() =>
+        gateway.removeSource({
+          namespace,
+          source,
+          signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
+        }),
+      );
+    } catch {
+      removed = false;
+    }
+    try {
+      await this.mutate(async (state) => {
+        await this.lockNamespace(state, source.namespaceId);
+        await (removed
+          ? state.credentialSources.deleteCredentialSource(source.namespaceId, source.id)
+          : state.credentialSources.markCredentialSourceDeleting(source.namespaceId, source.id));
+      });
+    } catch {
+      // The record stays visible in its last committed state; DELETE completes the cleanup.
+    }
   }
 
   async readCredentialSource(
@@ -2739,6 +2795,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     credentialSourceId: string,
+    audit?: () => AuditEvent,
   ): Promise<void> {
     const { namespace, source } = await this.mutate(async (state) => {
       const locked = await this.lockNamespace(state, namespaceId);
@@ -2779,10 +2836,14 @@ export class OpenClawController {
         signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
       }),
     );
+    // The success event commits with the final removal, so a completed deletion is always audited.
     await this.mutate(async (state) => {
       await this.lockNamespace(state, namespace.id);
       if (!(await state.credentialSources.deleteCredentialSource(namespace.id, source.id))) {
         throw new ResourceConflictError("The credential source changed during deletion.");
+      }
+      if (audit !== undefined) {
+        await state.audit.append(audit());
       }
     });
   }

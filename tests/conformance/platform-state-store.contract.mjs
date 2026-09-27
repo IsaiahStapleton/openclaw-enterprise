@@ -1374,6 +1374,58 @@ async function verifyCredentialSourceContract(
     );
   });
 
+  // Registration is recorded before the gateway write: a registering source becomes ready
+  // exactly once, may instead move to deleting, and never returns to registering.
+  const registeringSource = {
+    ...namesakeSource,
+    id: identifier("cs"),
+    name: "Registering gateway " + randomUUID(),
+    state: "registering",
+  };
+  const abandonedSource = {
+    ...registeringSource,
+    id: identifier("cs"),
+    name: "Abandoned gateway " + randomUUID(),
+  };
+  await store.transact(async (transaction) => {
+    await transaction.credentialSources.createCredentialSource(registeringSource);
+    await transaction.credentialSources.createCredentialSource(abandonedSource);
+    assert.deepEqual(
+      await transaction.credentialSources.markCredentialSourceReady(
+        accountNamespace.id,
+        registeringSource.id,
+      ),
+      { ...registeringSource, state: "ready" },
+    );
+    assert.equal(
+      await transaction.credentialSources.markCredentialSourceReady(
+        accountNamespace.id,
+        registeringSource.id,
+      ),
+      undefined,
+    );
+    assert.deepEqual(
+      await transaction.credentialSources.markCredentialSourceDeleting(
+        accountNamespace.id,
+        abandonedSource.id,
+      ),
+      { ...abandonedSource, state: "deleting" },
+    );
+    assert.equal(
+      await transaction.credentialSources.markCredentialSourceReady(
+        accountNamespace.id,
+        abandonedSource.id,
+      ),
+      undefined,
+    );
+    for (const { id } of [registeringSource, abandonedSource]) {
+      assert.equal(
+        await transaction.credentialSources.deleteCredentialSource(accountNamespace.id, id),
+        true,
+      );
+    }
+  });
+
   // A registered source keeps its Secret inputs; deleting one would strand the gateway copy.
   await store.transact(async (transaction) => {
     assert.equal(

@@ -480,7 +480,10 @@ export const credentialSources = occSchema.table(
       "credential_sources_driver_id_valid",
       sql`char_length(${table.driverId}) BETWEEN 1 AND 200 AND ${table.driverId} = btrim(${table.driverId})`,
     ),
-    check("credential_sources_state_valid", sql`${table.state} IN ('ready', 'deleting')`),
+    check(
+      "credential_sources_state_valid",
+      sql`${table.state} IN ('registering', 'ready', 'deleting')`,
+    ),
   ],
 );
 

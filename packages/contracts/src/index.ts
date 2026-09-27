@@ -272,7 +272,8 @@ export interface CredentialSourceType {
   };
 }
 
-export type CredentialSourceState = "ready" | "deleting";
+/** `registering` is recorded before the gateway write, so an uncertain outcome stays visible. */
+export type CredentialSourceState = "registering" | "ready" | "deleting";
 
 /** OCC record for a credential held by the selected Credential Gateway; never values. */
 export interface CredentialSource {

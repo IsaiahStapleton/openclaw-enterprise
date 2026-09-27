@@ -16,6 +16,9 @@
       "path": "tests/conformance/contracts.test.mjs"
     },
     {
+      "path": "tests/conformance/credential-source-occ.test.mjs"
+    },
+    {
       "path": "tests/conformance/docker-compute.test.mjs"
     },
     {

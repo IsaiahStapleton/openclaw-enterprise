@@ -50,8 +50,11 @@ The request fields are:
 
 OCC rejects unknown fields and missing required fields before it reads any
 Secret. It reads each value through the Secret Driver, sends the values to the
-gateway, and stores only the Secret references. If registration fails, OCC
-asks the gateway to delete any copy it may have stored and creates no record.
+gateway, and stores only the Secret references. OCC records the source as
+`registering` before the gateway call. If registration fails, OCC asks the
+gateway to delete any copy it may have stored and removes the record. If that
+cleanup also fails, the record stays listed as `deleting`; send DELETE to
+retry the cleanup.
 
 ## Read and list sources
 
@@ -65,7 +68,9 @@ succeeds.
 collection and returns only sources on which the caller has exact `read`. Lists
 do not call the gateway and omit `status`.
 
-The record's `state` is `ready` or `deleting`. A `deleting` source cannot be
+The record's `state` is `registering`, `ready`, or `deleting`. A source left
+`registering` by an interrupted request never becomes usable; delete it to
+remove any gateway copy. A `registering` or `deleting` source cannot be
 bound or deployed.
 
 ## Bind a source to an Agent

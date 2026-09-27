@@ -39,7 +39,7 @@ CREATE TABLE occ.credential_sources (
   CONSTRAINT credential_sources_driver_id_valid CHECK (
     char_length(driver_id) BETWEEN 1 AND 200 AND driver_id = btrim(driver_id)
   ),
-  CONSTRAINT credential_sources_state_valid CHECK (state IN ('ready', 'deleting'))
+  CONSTRAINT credential_sources_state_valid CHECK (state IN ('registering', 'ready', 'deleting'))
 );
 --> statement-breakpoint
 CREATE TRIGGER credential_source_metadata_is_immutable
@@ -51,6 +51,12 @@ FOR EACH ROW EXECUTE FUNCTION occ.reject_row_mutation();
 CREATE TRIGGER credential_source_deletion_is_final
 BEFORE UPDATE OF state ON occ.credential_sources
 FOR EACH ROW WHEN (OLD.state = 'deleting' AND NEW.state IS DISTINCT FROM OLD.state)
+EXECUTE FUNCTION occ.reject_row_mutation();
+--> statement-breakpoint
+-- Registration is recorded before the gateway write; no source returns to registering.
+CREATE TRIGGER credential_source_registration_is_initial
+BEFORE UPDATE OF state ON occ.credential_sources
+FOR EACH ROW WHEN (NEW.state = 'registering' AND OLD.state IS DISTINCT FROM 'registering')
 EXECUTE FUNCTION occ.reject_row_mutation();
 --> statement-breakpoint
 CREATE TABLE occ.credential_source_secrets (
