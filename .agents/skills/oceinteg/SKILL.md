@@ -1,13 +1,13 @@
 ---
 name: oceinteg
-description: Run named OpenClaw Enterprise end-to-end integration scenarios against real Helm installations.
-dependencies: [enterprise-testing]
+description: Run named OpenClaw Enterprise end-to-end integration scenarios against real Helm installations. Use only when explicitly invoked.
 ---
 
 # OCE integration scenarios
 
-Use `oceinteg <scenario>` to execute a named scenario. Follow
-$enterprise-testing for real-runtime prerequisites, evidence, and failure
+Use this skill only when the user explicitly invokes `oceinteg <scenario>` or
+`$oceinteg <scenario>`. Do not activate it for general integration-testing requests.
+Follow $enterprise-testing for real-runtime prerequisites, evidence, and failure
 classification, then read only the selected scenario below.
 
 | Invocation      | Scenario                                                                                                                                                   |
