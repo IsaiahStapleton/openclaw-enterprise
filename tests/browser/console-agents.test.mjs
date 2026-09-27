@@ -7462,6 +7462,91 @@ test("leaving a default starter creation form discards its in-progress state", a
   assert.equal(result.data.name, "Saved Agent");
 });
 
+test("a restored default starter chooser still discards its applied form on exit", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Customized starter", { ready: true });
+  const presets = await fixture.request("GET", `/namespaces/${namespace.id}/presets`);
+  const starter = presets.data.find((preset) => preset.name === "default-codex");
+  const template = structuredClone(starter.template);
+  template.variables = { name: { type: "string" } };
+  template.agent.name = "{{ vars.name }}";
+  const updated = await fixture.request(
+    "PATCH",
+    `/namespaces/${namespace.id}/presets/${starter.id}`,
+    { body: { template } },
+  );
+  assert.equal(updated.status, 200);
+
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
+  await page.getByLabel("Variable: name", { exact: true }).fill("Restored starter");
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  assert.equal(
+    await page.getByLabel("Variable: name", { exact: true }).inputValue(),
+    "Restored starter",
+  );
+  await page.getByRole("button", { name: "Use Preset", exact: true }).click();
+  assert.equal(
+    await page.getByLabel("Agent name", { exact: true }).inputValue(),
+    "Restored starter",
+  );
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
+
+  // Explicit selection of the same Preset retains its form across navigation.
+  await page.getByLabel("Preset template").selectOption(starter.id);
+  await page.getByLabel("Variable: name", { exact: true }).fill("Explicit starter");
+  await page.getByRole("button", { name: "Use Preset", exact: true }).click();
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  assert.equal(
+    await page.getByLabel("Agent name", { exact: true }).inputValue(),
+    "Explicit starter",
+  );
+});
+
+test("a default shortcut restored after a pending Preset read discards its form", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Pending starter", { ready: true });
+  const presets = await fixture.request("GET", `/namespaces/${namespace.id}/presets`);
+  const starter = presets.data.find((preset) => preset.name === "default-codex");
+  const { page } = await newPage(t, fixture);
+  let releaseRead;
+  let markRead;
+  const blocked = new Promise((resolve) => {
+    releaseRead = resolve;
+  });
+  const observed = new Promise((resolve) => {
+    markRead = resolve;
+  });
+  t.after(() => releaseRead());
+  const presetPath = `**/namespaces/${namespace.id}/presets/${starter.id}`;
+  await page.route(presetPath, async (route) => {
+    markRead();
+    await blocked;
+    await route.fallback();
+  });
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
+  await observed;
+  await page.getByRole("link", { name: "← Agents" }).click();
+  releaseRead();
+  await page.unroute(presetPath);
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByRole("button", { name: "Use Preset", exact: true }).click();
+  await page.getByLabel("Agent name", { exact: true }).fill("Pending read draft");
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
+});
+
 test("unsaved Preset drafts retain unfinished edits across navigation until explicit discard", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

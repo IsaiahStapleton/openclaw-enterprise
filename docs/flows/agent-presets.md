@@ -128,7 +128,8 @@ path records mutations and denials without template or variable contents.
 lists only readable Presets, then reads the selected resource once. The
 **Start with default Preset** button uses the listed `default-codex` ID through
 that same exact-resource read. It applies variable-free templates immediately;
-customized variable definitions retain the ordinary chooser. Missing defaults or
+customized variable definitions retain the ordinary chooser. If that chooser is
+restored, it preserves the shortcut origin for the eventual form. Missing defaults or
 failed list/read requests cannot open a hidden hardcoded starter. Other readable
 Presets remain selectable.
 

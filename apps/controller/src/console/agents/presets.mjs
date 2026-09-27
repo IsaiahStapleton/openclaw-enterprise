@@ -51,6 +51,7 @@ export function createPresetFields(context, apply) {
   );
   let defaultId;
   let quickStart = false;
+  let restoringShortcut = false;
   let discardOnExit = false;
   let selected;
   let fields = [];
@@ -59,6 +60,7 @@ export function createPresetFields(context, apply) {
     selector.value
       ? {
           id: selector.value,
+          discardOnExit,
           fields: fields.length
             ? Object.fromEntries(
                 fields.map((field) => [
@@ -237,7 +239,8 @@ export function createPresetFields(context, apply) {
     const selectedId = selector.value;
     const applyDefault = quickStart;
     quickStart = false;
-    discardOnExit = applyDefault;
+    discardOnExit = applyDefault || restoringShortcut;
+    restoringShortcut = false;
     if (retained?.id !== selectedId) {
       retained = undefined;
     }
@@ -427,6 +430,7 @@ export function createPresetFields(context, apply) {
       startDefault.disabled = !defaultId;
       if (retained && presets.some((preset) => preset.id === retained.id)) {
         selector.value = retained.id;
+        restoringShortcut = Boolean(retained.discardOnExit);
         selector.dispatchEvent(new Event("change"));
       }
       if (presets.length === 0) {

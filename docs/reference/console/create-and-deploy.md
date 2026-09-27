@@ -77,9 +77,10 @@ Presets and edited Configuration JSON retain their settings.
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no
    update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
 
-Before saving, Preset variables and forms survive navigation, including Back/Forward;
-passwords clear. Leaving a form started without a Preset discards its unsaved state;
-the next visit shows the initial choices. Saved Agents and Secrets remain. **Start
+Before saving, Preset variables and explicitly selected Preset forms survive
+navigation, including Back/Forward; passwords clear. Leaving a form started with
+the default Preset shortcut discards its unsaved state; the next visit shows the
+initial choices. Saved Agents and Secrets remain. **Start
 over** confirms discard. Reload, page exit, and sign-out clear local drafts. Once
 saving begins, navigation does not retain partial-save or uncertain-outcome form
 state; follow save recovery below.
@@ -171,8 +172,8 @@ all of them and always submits the chosen level explicitly. The server rechecks
 current Namespace policy when it creates the Agent and again when it admits a
 deployment.
 
-Failed rediscovery retains unsaved repository choices for retry. Preset forms also
-retain them across navigation.
+Failed rediscovery retains unsaved repository choices for retry. Explicitly selected
+Preset forms also retain them across navigation.
 **Create Agent** stays blocked until discovery succeeds and filters choices against
 current policy. **Start over** discards selections.
 

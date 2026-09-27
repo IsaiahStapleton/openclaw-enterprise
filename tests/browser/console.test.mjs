@@ -482,10 +482,10 @@ test("console keeps loaded route families visible while return reads refresh", a
   t.after(() => createSessionHold.release());
   await page.goBack();
   await createSessionHold.waitForRelease();
-  // The abandoned no-Preset form must not be shown even as an inert cached preview.
+  // The abandoned default starter form must not appear as an inert cached preview.
   assert.equal(await page.locator("#agent-name").count(), 0);
   createSessionHold.release();
-  await page.getByRole("button", { name: "Start without Preset", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).waitFor();
   await createSessionHold.waitForCompletion();
   await page.unroute(sessionPattern);
   await page.getByLabel("Preset template").waitFor();
