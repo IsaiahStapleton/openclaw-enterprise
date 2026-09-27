@@ -16,7 +16,7 @@ import {
   Name,
   NamespaceId,
   PermissionActionSchema,
-  ProviderId,
+  BackendId,
   RepositoryBindingSelectionSchema,
   RepositoryBindingSelectionsSchema,
   RevisionId,
@@ -29,7 +29,7 @@ import {
   Timestamp,
   WorkspaceFileName,
   PluginApprovalModeSchema,
-  PluginApprovalsReviewerSchema,
+  PluginReviewerSchema,
 } from "./common.ts";
 
 const RuntimeFailureIdentifier = Type.String({
@@ -48,6 +48,71 @@ export const AgentModelListResponse = Type.Object(
   { additionalProperties: false },
 );
 
+const PluginCatalogLinkSchema = Type.Object(
+  { label: Type.String(), url: Type.String() },
+  { additionalProperties: false },
+);
+
+const PluginCatalogEntrySchema = Type.Object(
+  {
+    id: Type.String(),
+    name: Type.String(),
+    remoteId: Type.Optional(Type.String()),
+    logoUrl: Type.Optional(Type.String()),
+    websiteUrl: Type.Optional(Type.String()),
+    privacyPolicyUrl: Type.Optional(Type.String()),
+    termsOfServiceUrl: Type.Optional(Type.String()),
+    description: Type.Optional(Type.String()),
+    available: Type.Optional(Type.Boolean()),
+    unavailableReason: Type.Optional(Type.String()),
+    unavailableHelp: Type.Optional(PluginCatalogLinkSchema),
+    tools: Type.Union([
+      Type.Null(),
+      Type.Array(
+        Type.Object(
+          {
+            id: Type.String(),
+            name: Type.String(),
+            description: Type.Optional(Type.String()),
+            ownerId: Type.String(),
+            available: Type.Optional(Type.Boolean()),
+            unavailableReason: Type.Optional(Type.String()),
+            destructive: Type.Optional(Type.Boolean()),
+            writes: Type.Optional(Type.Boolean()),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentPluginCatalogResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        plugins: Type.Array(PluginCatalogEntrySchema),
+        nextCursor: Type.Union([Type.String(), Type.Null()]),
+        setup: Type.Optional(
+          Type.Object(
+            { message: Type.String(), links: Type.Array(PluginCatalogLinkSchema) },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentPluginDetailsResponse = Type.Object(
+  { data: PluginCatalogEntrySchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 const RuntimeEvidenceTimestamp = Type.String({
   format: "date-time",
   pattern:
@@ -59,6 +124,31 @@ const InstallationCapabilitiesSchema = Type.Object(
     agentProvisioning: Type.Optional(
       Type.Object(
         { executionModes: Type.Array(HarnessExecutionModeSchema, { minItems: 1, maxItems: 2 }) },
+        { additionalProperties: false },
+      ),
+    ),
+    pluginPolicies: Type.Optional(
+      Type.Object(
+        {
+          driver: Type.Ref("PluginDriverIdentity"),
+          toolDefaults: Type.Object(
+            {
+              enabled: Type.Boolean(),
+              approval: Type.Array(PluginApprovalModeSchema),
+              reviewer: Type.Array(PluginReviewerSchema),
+            },
+            { additionalProperties: false },
+          ),
+          tools: Type.Object(
+            {
+              enabled: Type.Boolean(),
+              approval: Type.Array(PluginApprovalModeSchema),
+              reviewer: Type.Array(PluginReviewerSchema),
+            },
+            { additionalProperties: false },
+          ),
+          driverPolicySchema: Type.Record(Type.String(), Type.Unknown()),
+        },
         { additionalProperties: false },
       ),
     ),
@@ -99,7 +189,7 @@ export const AgentSchema = Type.Object(
     name: Name,
     servicePrincipalId: Type.String({ minLength: 1, maxLength: 200 }),
     configurationId: ConfigurationId,
-    providerId: Type.Union([ProviderId, Type.Null()]),
+    backendId: Type.Union([BackendId, Type.Null()]),
     harnessAuth: Type.Union([HarnessAuthBindingSchema, Type.Null()]),
     executionMode: HarnessExecutionModeSchema,
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
@@ -120,30 +210,30 @@ export const PluginDriverIdentitySchema = Type.Object(
 export const PluginToolPolicySchema = Type.Object(
   {
     enabled: Type.Optional(Type.Boolean()),
-    approvalMode: Type.Optional(PluginApprovalModeSchema),
+    approval: Type.Optional(PluginApprovalModeSchema),
+    reviewer: Type.Optional(PluginReviewerSchema),
   },
   { additionalProperties: false, minProperties: 1, $id: "PluginToolPolicy" },
 );
 
 const PluginIdPattern = "^[A-Za-z0-9._~:@-]{1,253}$";
+const PluginToolIdPattern = "^[^\\u0000-\\u0020\\u007f]{1,1024}$";
 const PluginToolPolicyMapSchema = Type.Unsafe({
   type: "object",
   description:
-    "Plugin tool policy map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$.",
-  propertyNames: { pattern: PluginIdPattern },
+    "Tool overrides keyed by exact opaque tool IDs from the selected Plugin Driver catalog.",
+  propertyNames: { pattern: PluginToolIdPattern },
   additionalProperties: false,
   patternProperties: {
-    [PluginIdPattern]: Type.Ref("PluginToolPolicy"),
+    [PluginToolIdPattern]: Type.Ref("PluginToolPolicy"),
   },
 });
 
 export const PluginDesiredSelectionSchema = Type.Object(
   {
     enabled: Type.Boolean(),
-    approvalMode: PluginApprovalModeSchema,
-    approvalsReviewer: Type.Optional(PluginApprovalsReviewerSchema),
-    destructiveActions: Type.Optional(PluginApprovalModeSchema),
-    writes: Type.Optional(PluginApprovalModeSchema),
+    toolDefaults: Type.Optional(Type.Ref("PluginToolPolicy")),
+    driverPolicy: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     tools: Type.Optional(PluginToolPolicyMapSchema),
   },
   { additionalProperties: false, $id: "PluginDesiredSelection" },
@@ -187,6 +277,36 @@ export const SecretSchema = Type.Object(
 export const AgentRuntimeCredentialStatusSchema = Type.Object(
   {
     transportConfigured: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentRuntimeImagesResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        status: Type.Union([
+          Type.Literal("observed"),
+          Type.Literal("undeployed"),
+          Type.Literal("unsupported"),
+        ]),
+        images: Type.Array(
+          Type.Object(
+            {
+              workload: Type.String(),
+              container: Type.String(),
+              image: Type.String(),
+              imageId: Type.Union([Type.String(), Type.Null()]),
+              commit: Type.Union([Type.String({ pattern: "^[a-f0-9]{40}$" }), Type.Null()]),
+              openclawCommit: Type.Union([Type.String({ pattern: "^[a-f0-9]{40}$" }), Type.Null()]),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
   },
   { additionalProperties: false },
 );
@@ -275,9 +395,9 @@ export const ServiceAccountSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ProviderSummarySchema = Type.Object(
+export const BackendSummarySchema = Type.Object(
   {
-    id: ProviderId,
+    id: BackendId,
     type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github")]),
   },
   { additionalProperties: false },
@@ -298,6 +418,40 @@ export const RepositoryOptionSchema = Type.Object(
 
 export const InstallationResponse = Type.Object(
   { data: InstallationSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
+export const InstallationDeploymentInventorySchema = Type.Object(
+  {
+    installationId: InstallationId,
+    namespaces: Type.Array(
+      Type.Object(
+        {
+          id: NamespaceId,
+          status: NamespaceSchema.properties.status,
+          agents: Type.Array(
+            Type.Object(
+              {
+                id: AgentId,
+                status: AgentSchema.properties.status,
+                desiredRuntimeState: AgentSchema.properties.desiredRuntimeState,
+                executionMode: AgentSchema.properties.executionMode,
+                activeRevisionId: Type.Optional(RevisionId),
+                deploymentInProgress: Type.Boolean(),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const InstallationDeploymentInventoryResponse = Type.Object(
+  { data: InstallationDeploymentInventorySchema, meta: Meta },
   { additionalProperties: false },
 );
 
@@ -392,8 +546,8 @@ export const AgentListResponse = Type.Object(
   { additionalProperties: false },
 );
 
-export const ProviderListResponse = Type.Object(
-  { data: Type.Array(ProviderSummarySchema), meta: Meta },
+export const BackendListResponse = Type.Object(
+  { data: Type.Array(BackendSummarySchema), meta: Meta },
   { additionalProperties: false },
 );
 
@@ -424,7 +578,7 @@ export const AgentRevisionSchema = Type.Object(
     namespaceId: NamespaceId,
     agentId: AgentId,
     revision: Type.Integer({ minimum: 1 }),
-    providerId: Type.Union([ProviderId, Type.Null()]),
+    backendId: Type.Union([BackendId, Type.Null()]),
     configurationId: ConfigurationId,
     configurationKind: ConfigurationKindSchema,
     configurationGeneration: ConfigurationGeneration,
@@ -574,11 +728,14 @@ export const WorkspaceFileUpdateResponse = Type.Object(
 );
 
 export type InstallationWire = Type.Static<typeof InstallationSchema>;
+export type InstallationDeploymentInventoryWire = Type.Static<
+  typeof InstallationDeploymentInventorySchema
+>;
 export type NamespaceWire = Type.Static<typeof NamespaceSchema>;
 export type ConfigurationWire = Type.Static<typeof ConfigurationSchema>;
 export type SecretWire = Type.Static<typeof SecretSchema>;
 export type ServiceAccountWire = Type.Static<typeof ServiceAccountSchema>;
-export type ProviderSummaryWire = Type.Static<typeof ProviderSummarySchema>;
+export type BackendSummaryWire = Type.Static<typeof BackendSummarySchema>;
 export type AgentWire = Type.Static<typeof AgentSchema>;
 export type AgentRuntimeCredentialStatusWire = Type.Static<
   typeof AgentRuntimeCredentialStatusSchema
@@ -590,6 +747,9 @@ export type IAMAccessBindingWire = Type.Static<typeof IAMAccessBindingSchema>;
 export type AgentRevisionWire = Type.Static<typeof AgentRevisionSchema>;
 export type AgentDeploymentStatusWire = Type.Static<typeof AgentDeploymentStatusSchema>;
 export type InstallationResponse = Type.Static<typeof InstallationResponse>;
+export type InstallationDeploymentInventoryResponse = Type.Static<
+  typeof InstallationDeploymentInventoryResponse
+>;
 export type NamespaceResponse = Type.Static<typeof NamespaceResponse>;
 export type NamespaceListResponse = Type.Static<typeof NamespaceListResponse>;
 export type ConfigurationResponse = Type.Static<typeof ConfigurationResponse>;
@@ -604,7 +764,7 @@ export type IAMRoleListResponse = Type.Static<typeof IAMRoleListResponse>;
 export type IAMAccessBindingResponse = Type.Static<typeof IAMAccessBindingResponse>;
 export type IAMAccessBindingListResponse = Type.Static<typeof IAMAccessBindingListResponse>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
-export type ProviderListResponse = Type.Static<typeof ProviderListResponse>;
+export type BackendListResponse = Type.Static<typeof BackendListResponse>;
 export type AgentProvisioningResponse = Type.Static<typeof AgentProvisioningResponse>;
 export type AgentProvisioningStatusResponse = Type.Static<typeof AgentProvisioningStatusResponse>;
 export type RepositoryOptionListResponse = Type.Static<typeof RepositoryOptionListResponse>;

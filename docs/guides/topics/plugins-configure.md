@@ -41,7 +41,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const agent = JSON.parse(readFileSync("agent-before-plugins.json", "utf8"));
 const plugins = {
   ...agent.plugins,
-  "occ-plugin:diffs": { enabled: true, approvalMode: "always" },
+  "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "native" } },
 };
 writeFileSync("agent-plugin-update.json",
   JSON.stringify({ configurationId: agent.configurationId, plugins }, null, 2) + "\n");
@@ -51,8 +51,8 @@ occ agent update "$AGENT_ID" --file agent-plugin-update.json --output json
 ```
 
 The returned `plugins` map should contain `occ-plugin:diffs` with `enabled: true`.
-The `always` policy allows supported plugin calls without prompting; the
-Agent's other authorization and sandbox restrictions still apply. The running
+The `native` policy uses Diffs' existing execution behavior, without an added
+approval step. The Agent's authorization and sandbox restrictions still apply. The running
 Agent has not changed yet.
 
 If other people are updating the same Agent, coordinate before submitting:
@@ -70,27 +70,10 @@ export DEPLOYMENT_ID
 
 ## Check the result
 
-The CLI has no deployment-status command. Use the service-key file from your
-CLI setup to query the status API. For a private certificate authority, set
-`NODE_EXTRA_CA_CERTS` to its PEM bundle before running Node.
+Use the same protected CLI connection to read the durable deployment result:
 
 ```bash
-node --input-type=module <<'JS'
-import { readFileSync } from "node:fs";
-const { data: { key } } = JSON.parse(
-  readFileSync(process.env.OCC_SERVICE_KEY_FILE, "utf8"));
-const ids = [process.env.OCC_NAMESPACE, process.env.AGENT_ID, process.env.DEPLOYMENT_ID]
-  .map(encodeURIComponent);
-const path = `/namespaces/${ids[0]}/agents/${ids[1]}/deployments/${ids[2]}`;
-const response = await fetch(new URL(path, process.env.OCC_URL), {
-  headers: { "x-api-key": key }, redirect: "error",
-});
-if (!response.ok) throw new Error(`Deployment lookup returned HTTP ${response.status}`);
-const { data } = await response.json();
-console.log(JSON.stringify({
-  status: data.status, warnings: data.warnings, error: data.error,
-}, null, 2));
-JS
+occ agent deployment-status "$AGENT_ID" "$DEPLOYMENT_ID" --output json
 ```
 
 Repeat the status lookup while the result is `queued` or `running`. A

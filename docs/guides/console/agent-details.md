@@ -82,7 +82,7 @@ Browser Back and Forward restore the selected tab. Leaving a tab clears entered 
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Model**                              | Primary model configured for the Agent.                                                                          |
 | **Execution mode**                     | Embedded runs the harness within the gateway; Dedicated runs it separately.                                      |
-| **Provider**                           | Installation-configured Provider associated with this Agent; model credentials come from Harness authentication. |
+| **Backend (experimental)**             | Installation-configured Backend associated with this Agent; model credentials come from Harness authentication.  |
 | **Harness authentication**             | Saved authentication binding, such as a ChatGPT service account ID. It is not a credential value or login check. |
 | **Created**                            | Creation time of the displayed Configuration or revision.                                                        |
 | **Harness**                            | Revision's harness identifier and integration version. This is not the installed Codex CLI version.              |
@@ -105,7 +105,7 @@ Configuration or Agent association before saving. A stale draft requires reload;
 this preflight cannot prevent another write racing with the save. If the outcome
 is unknown, inspect the saved Configuration through a successful reload before
 saving again. Invalid JSON and failed saves retain the text for correction.
-Provider, execution mode, and Harness authentication are Agent fields, not native
+Backend, execution mode, and Harness authentication are Agent fields, not native
 Configuration JSON. See the [Configuration reference](../../reference/configuration.md).
 
 ## Channels tab
@@ -123,18 +123,18 @@ unavailable.
 
 ### Slack editor
 
-| Control                                                   | Purpose                                                                                                        |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Enable Slack**                                          | Enables Slack in the draft when saved.                                                                         |
-| **Slack channel IDs**                                     | Comma-separated channel IDs, not channel names. Existing properties of retained channels are preserved.        |
-| **Allowed channel user IDs**                              | Comma-separated Slack user IDs allowed to mention the Agent in the selected channels.                          |
-| **Allow everyone in these channels to mention the agent** | Allows any Slack user in the selected channels to mention the Agent. Direct-message access is unchanged.       |
-| **Require a mention**                                     | Applies the mention requirement to the listed channels.                                                        |
-| **Slack app token** / **Slack bot token**                 | Select a readable Secret in this Namespace or **Create new Secret...**. The current binding is selected.       |
-| **Create new Secret...**                                  | Opens a modal with the fixed binding key and a password field for the Secret value.                            |
-| **Open Agent Credentials**                                | Opens Credentials in a new tab, keeping unsaved drawer inputs. Save channel edits before changing credentials. |
-| **Save configuration**                                    | Saves channel settings and selected Secret bindings to the shared draft.                                       |
-| **Cancel** / **Close**                                    | Discards the drawer's unsaved inputs.                                                                          |
+| Control                                                   | Purpose                                                                                                           |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Enable Slack**                                          | Enables Slack in the draft when saved.                                                                            |
+| **Slack channel IDs**                                     | Comma-separated channel IDs, not channel names. Existing properties of retained channels are preserved.           |
+| **Allowed channel user IDs**                              | Comma-separated Slack user IDs allowed to mention the Agent in the selected channels.                             |
+| **Allow everyone in these channels to mention the agent** | Allows any Slack user in the selected channels to mention the Agent. Direct-message access is unchanged.          |
+| **Require a mention**                                     | Applies the mention requirement to the listed channels.                                                           |
+| **Slack app token** / **Slack bot token**                 | Search readable Secrets by name or ID, then select with arrow keys and Enter, or choose **Create new Secret...**. |
+| **Create new Secret...**                                  | Opens a modal with an editable Agent-prefixed Name, the fixed binding key, and a masked Value.                    |
+| **Open Agent Credentials**                                | Opens Credentials in a new tab, keeping unsaved drawer inputs. Save channel edits before changing credentials.    |
+| **Save configuration**                                    | Saves channel settings and selected Secret bindings to the shared draft.                                          |
+| **Cancel** / **Close**                                    | Discards the drawer's unsaved inputs.                                                                             |
 
 Saving preserves existing direct-message and group policies. Channel user IDs do
 not edit `allowFrom`, and **No selected channels** describes the saved channel
@@ -143,7 +143,8 @@ See [Slack setup](../integrations/slack.md) for credentials and policy details.
 
 **Create Secret** stores the value immediately. Cancelling the channel drawer
 discards token selections but does not delete that Namespace Secret. The modal
-never reads an existing value.
+never reads an existing value. If the name already exists in this Namespace,
+correct the Name and retry; both fields remain filled and the existing Secret is unchanged.
 See the [Console reference](../../reference/console.md#inspect-detail-revisions-and-channel-drafts)
 for binding permissions and save behavior. Apply the saved draft with
 **Deploy new revision** before expecting the running Agent to use it.
@@ -158,16 +159,26 @@ the console. Use the operator workflow for those Agents.
 
 **Authentication source** determines how the harness gets model credentials:
 
-| Choice                           | Required input and effect                                                                           |
-| -------------------------------- | --------------------------------------------------------------------------------------------------- |
-| **None**                         | No binding; deployment remains blocked.                                                             |
-| **API key**                      | Existing Namespace Secret ID, not the API key value.                                                |
-| **Service Accounts**             | Existing Namespace Secret ID containing a service account token; available for Dedicated execution. |
-| **Operator-managed credentials** | Credentials configured on the runtime host; OCC does not validate them.                             |
-| **ChatGPT service account**      | Select an already issued account in this Namespace. This selector does not create an account.       |
+| Choice                           | Required input and effect                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **None**                         | No binding; deployment remains blocked.                                                          |
+| **API key**                      | Select a Namespace Secret containing the API key, or create one through the picker.              |
+| **Service Accounts**             | Select a Namespace Secret containing a service account token; available for Dedicated execution. |
+| **Operator-managed credentials** | Credentials configured on the runtime host; OCC does not validate them.                          |
+| **ChatGPT service account**      | Select an already issued account in this Namespace. This selector does not create an account.    |
 
 **Save authentication source** saves the Agent binding for a future deployment.
-The account availability message describes discovery, not model readiness.
+For API keys and Service Accounts tokens, it also grants the Agent access to
+that exact Secret through your authorized Namespace IAM operations. If the
+binding saves but the grant fails, ask a Namespace administrator to confirm
+`secret:operate` for this Agent on that Secret, then use **Retry credential
+access**. The retry checks the saved binding and does not resave it. If the
+binding changed, or the save outcome is unknown, use **Reload authentication source** first.
+Deployment authorization failures remain visible beside **Deploy new revision**;
+check both your deployment permission and the Agent's credential access.
+Changing between **API key** and **Service Accounts** clears the selected Secret
+so a token is not silently reused for another authentication method. The account
+availability message describes discovery, not model readiness.
 See [harness authentication](../../reference/harness-execution.md#harness-authentication).
 
 ### Runtime and Slack credentials
@@ -178,18 +189,17 @@ See [harness authentication](../../reference/harness-execution.md#harness-authen
 | **Slack app token / bot token: Bound/Missing**    | Reports saved Secret references, not whether Slack accepts the tokens.                                                                                                        |
 | **Refresh status**                                | Reloads credential metadata.                                                                                                                                                  |
 | **Provision generated runtime credentials**       | Provisions initial connection credentials for ordinary draft Agents. Locked after the first revision; not a rotation action.                                                  |
-| **Slack app token** / **Slack bot token** inputs  | Bound tokens show a synthetic mask. Focus to replace; leave empty to keep a bound token. Missing tokens need a value.                                                         |
-| **Save channel Secrets**                          | Stores Namespace Secrets, grants the Agent access, and updates Configuration bindings. Deploy explicitly to apply them.                                                       |
+| **Slack app token** / **Slack bot token** pickers | Select a readable Namespace Secret or **Create new Secret...**. Missing tokens need a selected binding.                                                                       |
+| **Save channel Secrets**                          | Saves Configuration Secret bindings, grants the Agent access, and requires an explicit deployment to apply them.                                                              |
 
 Runtime controls apply to managed authentication. Provisioning requires Agent
 `read` and `operate`; saving channel Secrets additionally requires Secret,
 Configuration, and Namespace IAM permissions. These are multiple writes, so a
 failure can leave partial progress. **Outcome unknown** means refresh and inspect
-saved state before retrying. Save requires at least one replacement and a bound
-or entered value for each token. Only entered replacements are written; an
-unchanged bound token stays intact. Existing values are never fetched or
-displayed, and the mask is never submitted. Entered values clear after a save
-attempt; bound fields return to their mask.
+saved state before retrying. Save requires at least one changed selection and a
+bound Secret for each token. Changing the picker switches the referenced Secret;
+it does not overwrite an existing shared Secret value. Existing values are never
+fetched or displayed.
 
 ## Workspace files tab
 

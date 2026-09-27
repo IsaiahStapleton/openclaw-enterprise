@@ -36,7 +36,7 @@ Choose the guide for your cluster:
 - [Standard Kubernetes](deploy/kubernetes.md): prepare an existing Kubernetes
   cluster, storage, networking, and PostgreSQL.
 - [Amazon EKS](deploy/eks.md): prepare AWS managed Kubernetes, node groups,
-  VPC networking, EBS/EFS storage, and optional RDS PostgreSQL.
+  VPC networking, EBS storage, and optional RDS PostgreSQL.
 
 Both paths use the same Helm chart and shared installation procedure. Cluster
 hosting does not select the Agent model provider.
@@ -58,7 +58,7 @@ hosting does not select the Agent model provider.
   for gateway and Agent scheduling.
 - Operator-managed HTTPS access for approved clients; the chart does not create
   TLS or Ingress.
-- Operator-created startup, database, authentication, optional Provider Secrets,
+- Operator-created startup, database, authentication, optional Backend Secrets,
   fresh bootstrap PVC, gateway storage, and exact `/32` egress destinations.
 
 ### Production installation sequence
@@ -76,6 +76,14 @@ Follow these pages in order in the same operator shell:
    Confirm the active revision and require a real model response. The guide
    offers a TUI and an HTTP check using the optional loopback password on
    Kubernetes trusted-proxy gateways.
+
+Before upgrading a retained installation, complete the
+[upgrade migration checklist](deploy/upgrade-checklist.md). Then use
+[production image upgrades](deploy/production-upgrade.md) to release the
+control plane without replacing Agent revisions, or to update Agent runtimes
+and redeploy the running fleet. Runtime releases require an interruption
+window. For a persistent Helm installation on k3d, use
+[local k3d image upgrades](deploy/local-k3d-image-upgrade.md).
 
 For ongoing business operation, use [production handoff](deploy/production-handoff.md)
 to record owners, credential renewal, alert response, and recovery decisions.
