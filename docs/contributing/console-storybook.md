@@ -124,9 +124,9 @@ Installation YAML.
 Use the [DevDay storyboard](../../scripts/console-storybook/devday-storyboard.md)
 for presenter actions, expected visible states, and fallbacks.
 
-**Choose provider and harness** walks through the OpenAI Codex default, OpenClaw
-selection, Anthropic's OpenClaw-only choice, and switching from an unsaved service account
-token to API-key authentication. Model choices are hardcoded in the Console and
+**Choose provider, harness, and authentication** checks dropdown arrows and walks
+through OpenAI Codex, OpenClaw, Anthropic, and switching an unsaved service
+account token to API-key authentication. Model choices are hardcoded in the Console and
 available before credential entry; **Enter another model ID** covers manual entry.
 These choices do not establish whether a credential can access a model. Execution mode follows the harness. The saved-token
 Preset story shows why its harness is fixed to Codex.
