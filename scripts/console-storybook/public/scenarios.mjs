@@ -470,12 +470,27 @@ export const scenarios = {
       },
     ],
     description:
-      "Return navigation and Refresh retain previously loaded content during slow reads. Responses are simulated; this story does not prove backend authorization or persistence.",
+      "Returning to unchanged pages and Agent tabs preserves loaded controls, expanded panels, and edits. Access is rechecked before page controls become active. Refresh explicitly reloads. Simulated API; no backend persistence proof.",
     steps: [
       "Wait for Agents, enter a search, open Create Agent, then return using the Agents breadcrumb. The loaded list and search remain visible while reads are pending.",
       "Visit Namespaces and Settings, then repeat with browser Back and Forward. First visits may load; returning pages retain their content.",
-      "Open an Agent, visit its tabs, return to Agents, and use Back. Check the selected revision and tab. Refocus keeps the Agent detail mounted during access checks; Refresh rereads the page.",
+      "Open an Agent and expand Native configuration. Visit Credentials and Workspace files, then return to Configuration: the disclosure stays expanded. Return to Agents and use Back: native admin access and the selected tab stay loaded through access checks. Refresh explicitly rereads the page.",
       "Switch Namespace to confirm the previous scope's rows disappear. Reset the story to clear retained state.",
+    ],
+  },
+  navigationAgentReturn: {
+    group: "Pages/Navigation",
+    name: "Return to Agent panels",
+    path: revision,
+    deployed: true,
+    nativeAdmin: "unsupported",
+    description:
+      "Agent panels retain loaded controls on tab and page returns. This preview uses simulated API data.",
+    steps: [
+      "Wait for Native admin UI, then open Credentials and return to Configuration. The native access result remains visible.",
+      "Expand View admitted native configuration, visit Workspace files, then return. The disclosure stays expanded.",
+      "Return to Agents and use browser Back. Native admin access and expanded panels remain loaded after admission succeeds.",
+      "Click Refresh access to explicitly check the native endpoint again. Page Refresh reloads all panels.",
     ],
   },
   navigationDenied: {

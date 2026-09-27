@@ -164,6 +164,7 @@ export function createPluginDiscovery({
     try {
       const page = await context.request(catalogPath, {
         method: "POST",
+        readOnly: true,
         signal: requests.signal,
         body: requestBody({
           ...(cursor ? { cursor } : {}),
@@ -217,6 +218,7 @@ export function createPluginDiscovery({
     try {
       const detail = await context.request(`${catalogPath}/details`, {
         method: "POST",
+        readOnly: true,
         signal: requests.signal,
         body: requestBody({ pluginId: entry.remoteId }),
       });
