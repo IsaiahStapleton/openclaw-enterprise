@@ -620,7 +620,9 @@ export function createSlackDirectoryField({
     }
   });
   field.addEventListener("focusout", (event) => {
-    if (!field.contains(event.relatedTarget)) {
+    // Access revalidation makes this view inert before restoring input focus.
+    // Keep the open search through that blur or a browser tab switch.
+    if (!field.contains(event.relatedTarget) && !field.closest("[inert]") && document.hasFocus()) {
       close();
     }
   });

@@ -92,6 +92,56 @@ test("Agent plugin approver selectors save inheritance and workspace-qualified u
   const picker = people.locator("..").locator("..");
   await people.focus();
   await picker.getByRole("option", { name: /Alex.*UTEST123/ }).waitFor();
+  const searched = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/channel-directory/lookup`) &&
+      response.request().postDataJSON()?.query === "Alex",
+  );
+  await people.fill("Alex");
+  await searched;
+  const result = picker.getByRole("option", { name: /Alex.*UTEST123/ });
+  await result.waitFor();
+  const resultNode = await result.elementHandle();
+  const lookupCount = directoryBodies.length;
+  let releaseSession;
+  const sessionGate = new Promise((resolve) => {
+    releaseSession = resolve;
+  });
+  t.after(() => releaseSession());
+  let sessionReached;
+  const sessionHeld = new Promise((resolve) => {
+    sessionReached = resolve;
+  });
+  const sessionPath = `${fixture.origin}/api/auth/session`;
+  await page.route(sessionPath, async (route) => {
+    const response = await route.fetch();
+    sessionReached();
+    await sessionGate;
+    await route.fulfill({ response });
+  });
+
+  // Refocus checks access without discarding an open search or repeating its lookup.
+  await page.evaluate(() => {
+    globalThis.dispatchEvent(new Event("focus"));
+    globalThis.document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await sessionHeld;
+  await page.locator('.content [aria-live="polite"][inert]').waitFor();
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(resolve)),
+      ),
+  );
+  releaseSession();
+  await page.locator('.content [aria-live="polite"]:not([inert])').waitFor();
+  assert.equal(await people.inputValue(), "Alex");
+  assert.equal(await people.getAttribute("aria-expanded"), "true");
+  assert.equal(await resultNode.evaluate((node) => node.isConnected), true);
+  assert.equal(directoryBodies.length, lookupCount);
+  await page.unroute(sessionPath);
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).focus();
+  assert.equal(await people.getAttribute("aria-expanded"), "false");
   await people.fill("team:TOTHER123:user:UTEST123");
   await people.press("Enter");
   await picker
