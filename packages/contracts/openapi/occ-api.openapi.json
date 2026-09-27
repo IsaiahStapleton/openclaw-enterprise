@@ -321,6 +321,122 @@
         "required": ["data", "meta"],
         "title": "SecretResponse",
         "type": "object"
+      },
+      "def-9": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "config": {
+                "additionalProperties": { "maxLength": 2048, "minLength": 1, "type": "string" },
+                "description": "Non-secret source configuration keyed by catalog field name.",
+                "maxProperties": 32,
+                "type": "object"
+              },
+              "id": {
+                "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                "type": "string"
+              },
+              "namespaceId": {
+                "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "ref": {
+                "additionalProperties": false,
+                "description": "Exact OCC credential source reference. Shape: `{ \"kind\": \"credential_source\", \"namespaceId\": \"ns_...\", \"id\": \"cs_...\" }`.",
+                "properties": {
+                  "id": {
+                    "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "kind": { "const": "credential_source", "type": "string" },
+                  "namespaceId": {
+                    "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "namespaceId", "id"],
+                "type": "object"
+              },
+              "secrets": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                  "properties": {
+                    "id": {
+                      "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                      "type": "string"
+                    },
+                    "kind": { "const": "secret", "type": "string" },
+                    "namespaceId": {
+                      "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "namespaceId", "id"],
+                  "type": "object"
+                },
+                "description": "Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value.",
+                "maxProperties": 16,
+                "type": "object"
+              },
+              "state": {
+                "anyOf": [
+                  { "const": "registering", "type": "string" },
+                  { "const": "ready", "type": "string" },
+                  { "const": "deleting", "type": "string" }
+                ]
+              },
+              "status": {
+                "additionalProperties": false,
+                "description": "Live status reported by the selected Credential Gateway. It never contains credential values.",
+                "properties": {
+                  "reason": { "maxLength": 512, "type": "string" },
+                  "state": {
+                    "anyOf": [
+                      { "const": "ready", "type": "string" },
+                      { "const": "pending", "type": "string" },
+                      { "const": "failed", "type": "string" },
+                      { "const": "absent", "type": "string" }
+                    ]
+                  }
+                },
+                "required": ["state"],
+                "type": "object"
+              },
+              "type": {
+                "description": "Source type from the selected Credential Gateway catalog, for example `openai`.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                "type": "string"
+              }
+            },
+            "required": ["id", "namespaceId", "name", "type", "config", "secrets", "state", "ref"],
+            "type": "object"
+          },
+          "meta": {
+            "additionalProperties": false,
+            "properties": {
+              "requestId": {
+                "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["requestId"],
+            "type": "object"
+          }
+        },
+        "required": ["data", "meta"],
+        "title": "CredentialSourceResponse",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1348,7 +1464,8 @@
                           "type": {
                             "anyOf": [
                               { "const": "chatgpt", "type": "string" },
-                              { "const": "github", "type": "string" }
+                              { "const": "github", "type": "string" },
+                              { "const": "openshell", "type": "string" }
                             ]
                           }
                         },
@@ -2656,6 +2773,18 @@
                                     },
                                     "required": ["method", "serviceAccountId"],
                                     "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "method": { "const": "credential_source", "type": "string" },
+                                      "sourceId": {
+                                        "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["method", "sourceId"],
+                                    "type": "object"
                                   }
                                 ]
                               },
@@ -2905,6 +3034,18 @@
                             },
                             "required": ["method", "serviceAccountId"],
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "method": { "const": "credential_source", "type": "string" },
+                              "sourceId": {
+                                "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["method", "sourceId"],
+                            "type": "object"
                           }
                         ]
                       },
@@ -3098,6 +3239,18 @@
                                     }
                                   },
                                   "required": ["method", "serviceAccountId"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "credential_source", "type": "string" },
+                                    "sourceId": {
+                                      "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "sourceId"],
                                   "type": "object"
                                 }
                               ]
@@ -4072,6 +4225,18 @@
                             },
                             "required": ["method", "serviceAccountId"],
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "method": { "const": "credential_source", "type": "string" },
+                              "sourceId": {
+                                "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["method", "sourceId"],
+                            "type": "object"
                           }
                         ]
                       },
@@ -4899,6 +5064,18 @@
                                   },
                                   "required": ["method", "serviceAccountId"],
                                   "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "credential_source", "type": "string" },
+                                    "sourceId": {
+                                      "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "sourceId"],
+                                  "type": "object"
                                 }
                               ]
                             },
@@ -5184,6 +5361,18 @@
                                   },
                                   "required": ["method", "serviceAccountId"],
                                   "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "credential_source", "type": "string" },
+                                    "sourceId": {
+                                      "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "sourceId"],
+                                  "type": "object"
                                 }
                               ]
                             },
@@ -5439,6 +5628,18 @@
                             },
                             "required": ["method", "serviceAccountId"],
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "method": { "const": "credential_source", "type": "string" },
+                              "sourceId": {
+                                "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["method", "sourceId"],
+                            "type": "object"
                           }
                         ]
                       },
@@ -5599,6 +5800,18 @@
                                     }
                                   },
                                   "required": ["method", "serviceAccountId"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "credential_source", "type": "string" },
+                                    "sourceId": {
+                                      "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "sourceId"],
                                   "type": "object"
                                 }
                               ]
@@ -5928,6 +6141,18 @@
                                 }
                               },
                               "required": ["method", "serviceAccountId"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "method": { "const": "credential_source", "type": "string" },
+                                "sourceId": {
+                                  "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["method", "sourceId"],
                               "type": "object"
                             }
                           ]
@@ -7409,6 +7634,18 @@
                                 },
                                 "required": ["method", "serviceAccountId"],
                                 "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "method": { "const": "credential_source", "type": "string" },
+                                  "sourceId": {
+                                    "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["method", "sourceId"],
+                                "type": "object"
                               }
                             ]
                           },
@@ -7768,6 +8005,18 @@
                                 }
                               },
                               "required": ["method", "serviceAccountId"],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "method": { "const": "credential_source", "type": "string" },
+                                "sourceId": {
+                                  "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["method", "sourceId"],
                               "type": "object"
                             }
                           ]
@@ -8465,6 +8714,18 @@
                                     }
                                   },
                                   "required": ["method", "serviceAccountId"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "method": { "const": "credential_source", "type": "string" },
+                                    "sourceId": {
+                                      "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["method", "sourceId"],
                                   "type": "object"
                                 }
                               ]
@@ -9601,6 +9862,490 @@
         ]
       }
     },
+    "/namespaces/{namespaceId}/credential-sources": {
+      "get": {
+        "description": "Requires read permission for CredentialSource resources in the requested Namespace.",
+        "operationId": "listCredentialSources",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "config": {
+                            "additionalProperties": {
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "description": "Non-secret source configuration keyed by catalog field name.",
+                            "maxProperties": 32,
+                            "type": "object"
+                          },
+                          "id": {
+                            "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                            "type": "string"
+                          },
+                          "namespaceId": {
+                            "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "type": "string"
+                          },
+                          "ref": {
+                            "additionalProperties": false,
+                            "description": "Exact OCC credential source reference. Shape: `{ \"kind\": \"credential_source\", \"namespaceId\": \"ns_...\", \"id\": \"cs_...\" }`.",
+                            "properties": {
+                              "id": {
+                                "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              },
+                              "kind": { "const": "credential_source", "type": "string" },
+                              "namespaceId": {
+                                "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["kind", "namespaceId", "id"],
+                            "type": "object"
+                          },
+                          "secrets": {
+                            "additionalProperties": {
+                              "additionalProperties": false,
+                              "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                              "properties": {
+                                "id": {
+                                  "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                  "type": "string"
+                                },
+                                "kind": { "const": "secret", "type": "string" },
+                                "namespaceId": {
+                                  "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "namespaceId", "id"],
+                              "type": "object"
+                            },
+                            "description": "Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value.",
+                            "maxProperties": 16,
+                            "type": "object"
+                          },
+                          "state": {
+                            "anyOf": [
+                              { "const": "registering", "type": "string" },
+                              { "const": "ready", "type": "string" },
+                              { "const": "deleting", "type": "string" }
+                            ]
+                          },
+                          "status": {
+                            "additionalProperties": false,
+                            "description": "Live status reported by the selected Credential Gateway. It never contains credential values.",
+                            "properties": {
+                              "reason": { "maxLength": 512, "type": "string" },
+                              "state": {
+                                "anyOf": [
+                                  { "const": "ready", "type": "string" },
+                                  { "const": "pending", "type": "string" },
+                                  { "const": "failed", "type": "string" },
+                                  { "const": "absent", "type": "string" }
+                                ]
+                              }
+                            },
+                            "required": ["state"],
+                            "type": "object"
+                          },
+                          "type": {
+                            "description": "Source type from the selected Credential Gateway catalog, for example `openai`.",
+                            "maxLength": 64,
+                            "minLength": 1,
+                            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "namespaceId",
+                          "name",
+                          "type",
+                          "config",
+                          "secrets",
+                          "state",
+                          "ref"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List readable credential sources without revealing credential values",
+        "tags": ["Credential sources"],
+        "x-openclaw-permissions": [
+          { "action": "read", "resourceKind": "credential_source", "scope": "namespace" }
+        ]
+      },
+      "post": {
+        "description": "Requires create permission for CredentialSource resources in the requested Namespace.",
+        "operationId": "createCredentialSource",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "config": {
+                    "additionalProperties": { "maxLength": 2048, "minLength": 1, "type": "string" },
+                    "description": "Non-secret source configuration keyed by catalog field name.",
+                    "maxProperties": 32,
+                    "type": "object"
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                    "type": "string"
+                  },
+                  "secrets": {
+                    "additionalProperties": {
+                      "additionalProperties": false,
+                      "description": "Exact OCC Secret reference. Shape: `{ \"kind\": \"secret\", \"namespaceId\": \"ns_...\", \"id\": \"sec_...\" }`.",
+                      "properties": {
+                        "id": {
+                          "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "kind": { "const": "secret", "type": "string" },
+                        "namespaceId": {
+                          "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "namespaceId", "id"],
+                      "type": "object"
+                    },
+                    "description": "Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value.",
+                    "maxProperties": 16,
+                    "type": "object"
+                  },
+                  "type": {
+                    "description": "Source type from the selected Credential Gateway catalog, for example `openai`.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                    "type": "string"
+                  }
+                },
+                "required": ["name", "type"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-9" } }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Register a credential source with the selected Credential Gateway",
+        "tags": ["Credential sources"],
+        "x-openclaw-permissions": [
+          { "action": "create", "resourceKind": "credential_source", "scope": "namespace" }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/credential-sources/{credentialSourceId}": {
+      "delete": {
+        "description": "Requires delete permission on the requested CredentialSource.",
+        "operationId": "deleteCredentialSource",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "credentialSourceId",
+            "required": true,
+            "schema": {
+              "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Default Response" },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Remove an unreferenced credential source from the Credential Gateway",
+        "tags": ["Credential sources"],
+        "x-openclaw-permissions": [
+          { "action": "delete", "resourceKind": "credential_source", "scope": "requested" }
+        ]
+      },
+      "get": {
+        "description": "Requires read permission on the requested CredentialSource.",
+        "operationId": "getCredentialSource",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "credentialSourceId",
+            "required": true,
+            "schema": {
+              "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-9" } }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Get one credential source and its live Credential Gateway status",
+        "tags": ["Credential sources"],
+        "x-openclaw-permissions": [
+          { "action": "read", "resourceKind": "credential_source", "scope": "requested" }
+        ]
+      }
+    },
     "/namespaces/{namespaceId}/iam/access-bindings": {
       "get": {
         "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace.",
@@ -9664,7 +10409,8 @@
                                   { "const": "service_account", "type": "string" },
                                   { "const": "secret", "type": "string" },
                                   { "const": "agent", "type": "string" },
-                                  { "const": "agent_revision", "type": "string" }
+                                  { "const": "agent_revision", "type": "string" },
+                                  { "const": "credential_source", "type": "string" }
                                 ]
                               },
                               "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
@@ -9780,6 +10526,7 @@
                       { "const": "agent", "type": "string" },
                       { "const": "agent_revision", "type": "string" },
                       { "const": "configuration", "type": "string" },
+                      { "const": "credential_source", "type": "string" },
                       { "const": "preset", "type": "string" },
                       { "const": "secret", "type": "string" },
                       { "const": "service_account", "type": "string" }
@@ -9843,7 +10590,8 @@
                                 { "const": "service_account", "type": "string" },
                                 { "const": "secret", "type": "string" },
                                 { "const": "agent", "type": "string" },
-                                { "const": "agent_revision", "type": "string" }
+                                { "const": "agent_revision", "type": "string" },
+                                { "const": "credential_source", "type": "string" }
                               ]
                             },
                             "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
@@ -10120,7 +10868,8 @@
                                 { "const": "service_account", "type": "string" },
                                 { "const": "secret", "type": "string" },
                                 { "const": "agent", "type": "string" },
-                                { "const": "agent_revision", "type": "string" }
+                                { "const": "agent_revision", "type": "string" },
+                                { "const": "credential_source", "type": "string" }
                               ]
                             },
                             "roleId": { "maxLength": 200, "minLength": 1, "type": "string" },
@@ -10270,7 +11019,8 @@
                                     { "const": "service_account", "type": "string" },
                                     { "const": "secret", "type": "string" },
                                     { "const": "agent", "type": "string" },
-                                    { "const": "agent_revision", "type": "string" }
+                                    { "const": "agent_revision", "type": "string" },
+                                    { "const": "credential_source", "type": "string" }
                                   ]
                                 }
                               },
@@ -10396,6 +11146,7 @@
                             { "const": "agent", "type": "string" },
                             { "const": "agent_revision", "type": "string" },
                             { "const": "configuration", "type": "string" },
+                            { "const": "credential_source", "type": "string" },
                             { "const": "preset", "type": "string" },
                             { "const": "secret", "type": "string" },
                             { "const": "service_account", "type": "string" }
@@ -10462,7 +11213,8 @@
                                   { "const": "service_account", "type": "string" },
                                   { "const": "secret", "type": "string" },
                                   { "const": "agent", "type": "string" },
-                                  { "const": "agent_revision", "type": "string" }
+                                  { "const": "agent_revision", "type": "string" },
+                                  { "const": "credential_source", "type": "string" }
                                 ]
                               }
                             },
@@ -10697,7 +11449,8 @@
                                   { "const": "service_account", "type": "string" },
                                   { "const": "secret", "type": "string" },
                                   { "const": "agent", "type": "string" },
-                                  { "const": "agent_revision", "type": "string" }
+                                  { "const": "agent_revision", "type": "string" },
+                                  { "const": "credential_source", "type": "string" }
                                 ]
                               }
                             },
