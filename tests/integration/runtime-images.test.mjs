@@ -37,9 +37,21 @@ test("runtime image fixture", selected, async (t) => {
     directory,
     async (fixture) => {
       const dockerfile = join(directory, "runtime.Dockerfile");
-      const original = await readFile(join(root, "deploy/runtime/Dockerfile"), "utf8");
-      // A nonce makes the base image identity specific to this job's build.
-      await writeFile(dockerfile, `${original}\nLABEL private.fixture.base=${randomUUID()}\n`);
+      const productionDockerfile = await readFile(
+        join(root, "deploy/runtime/Dockerfile"),
+        "utf8",
+      );
+      const runtimeBase = productionDockerfile.match(
+        /^ARG NODE_RUNTIME_BASE_IMAGE=(\S+)$/m,
+      )?.[1];
+      assert.ok(runtimeBase, "production runtime Dockerfile must pin NODE_RUNTIME_BASE_IMAGE");
+      // Images and Packaging already builds and validates the complete production
+      // image. This owned job needs only a real Node image to exercise Docker's
+      // immutable-image behavior and the source-injected metadata endpoint.
+      await writeFile(
+        dockerfile,
+        `FROM ${runtimeBase}\nLABEL private.fixture.base=${randomUUID()}\n`,
+      );
       await fixture.buildRuntimeBase(base, join(directory, "base.iid"), dockerfile, root);
       await t.test(
         "Docker runtime image inspection follows attached images and rejects foreign revisions",
