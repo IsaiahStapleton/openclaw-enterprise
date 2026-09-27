@@ -3228,7 +3228,7 @@ export class OpenClawController {
   async discoverAgentPlugins(
     principalId: string,
     namespaceId: string,
-    input: PluginDiscoveryCredential & { readonly cursor?: string },
+    input: PluginDiscoveryCredential & { readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
@@ -3249,6 +3249,7 @@ export class OpenClawController {
           {
             ...(accessToken === undefined ? {} : { accessToken }),
             ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+            ...(input.q === undefined ? {} : { q: input.q }),
           },
           signal,
         );
@@ -3397,7 +3398,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     agentId: string,
-    input: { readonly cursor?: string },
+    input: { readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     return this.withSavedAgentPluginCredential(principalId, namespaceId, agentId, () => {

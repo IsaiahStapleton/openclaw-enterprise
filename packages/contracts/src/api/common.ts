@@ -303,13 +303,17 @@ const PluginDiscoveryAccessToken = Type.String({
 // At most one credential source is accepted; the selected Driver determines whether it is required.
 export const DiscoverAgentPluginsBody = Type.Union([
   Type.Object(
-    { cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })) },
+    {
+      cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
+    },
     { additionalProperties: false },
   ),
   Type.Object(
     {
       accessToken: PluginDiscoveryAccessToken,
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
     { additionalProperties: false },
   ),
@@ -317,6 +321,7 @@ export const DiscoverAgentPluginsBody = Type.Union([
     {
       secretRef: SecretReference,
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
     { additionalProperties: false },
   ),
@@ -341,7 +346,10 @@ export const DiscoverAgentPluginDetailsBody = Type.Union([
 ]);
 
 export const DiscoverSavedAgentPluginsBody = Type.Object(
-  { cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })) },
+  {
+    cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+    q: Type.Optional(Type.String({ maxLength: 1024 })),
+  },
   { additionalProperties: false },
 );
 

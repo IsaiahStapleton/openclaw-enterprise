@@ -791,7 +791,7 @@ export const occApiRoutes = [
     iamAction: "create",
     resourceKind: "agent",
     authorizationTarget: "namespace_collection",
-    summary: "List available plugins for Agent creation using the selected Driver",
+    summary: "List or search available plugins for Agent creation using the selected Driver",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -857,7 +857,7 @@ export const occApiRoutes = [
     resourceKind: "agent",
     authorizationTarget: "agent",
     summary:
-      "List plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants",
+      "List or search plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
