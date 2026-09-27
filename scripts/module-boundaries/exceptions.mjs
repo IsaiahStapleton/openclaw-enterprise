@@ -1,6 +1,14 @@
 /** Reviewed identities intentionally exclude line numbers and diagnostic wording. */
-export const diagnosticIdentity = ({ rule, from, to, specifier, kind, typeOnly, bindings }) =>
-  JSON.stringify([rule, from, to, specifier, kind, typeOnly, bindings]);
+export const diagnosticIdentity = ({
+  rule,
+  from,
+  to,
+  specifier,
+  kind,
+  typeOnly,
+  bindings,
+  loaderIdentity,
+}) => JSON.stringify([rule, from, to, specifier, kind, typeOnly, bindings, loaderIdentity ?? null]);
 
 export function validateExceptions(exceptions) {
   if (!exceptions || exceptions.version !== 1) {
@@ -19,6 +27,8 @@ export function validateExceptions(exceptions) {
       typeof exception.typeOnly !== "boolean" ||
       !Array.isArray(exception.bindings) ||
       exception.bindings.some((name) => typeof name !== "string") ||
+      (exception.loaderIdentity !== undefined &&
+        !/^loader:sha256:[0-9a-f]{64}$/.test(exception.loaderIdentity)) ||
       ["owner", "removeWhen", "reason"].some((field) => !exception[field].trim())
     ) {
       throw new Error(

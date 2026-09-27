@@ -22,7 +22,27 @@ history.replaceState(
 // Focus the isolated preview before the console registers its focus-refresh handler.
 // Otherwise the first interaction can reset a preselected Preset before it becomes a form.
 window.focus();
-await import("/console/console.mjs");
+if (scenario.component === "plugins") {
+  // Isolated previews pass fixture catalogs and capabilities to the real component.
+  const { createPluginFields } = await import("/console/agents/plugin-fields.mjs");
+  const input = document.createElement("textarea");
+  input.id = "agent-plugins";
+  input.rows = 6;
+  input.spellcheck = false;
+  input.value = scenario.pluginSelections ?? "{}";
+  const fields = createPluginFields({
+    input,
+    catalog: scenario.pluginCatalog ?? null,
+    capabilities: scenario.pluginCapabilities ?? null,
+  });
+  const panel = document.createElement("section");
+  panel.className = "agent-card agent-form";
+  panel.append(fields.section);
+  document.querySelector("#app").append(panel);
+  fields.setDisabled(scenario.disabled ?? false);
+} else {
+  await import("/console/console.mjs");
+}
 
 // Prepare open drawers and validation states by operating the real UI, not editing its markup.
 try {
@@ -47,6 +67,29 @@ try {
       node.click();
     }
     if (action.value !== undefined) {
+      if (node.getAttribute("role") === "combobox") {
+        node.focus();
+        node.value = action.value === "__openclaw_create_secret__" ? "" : action.value;
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        let option;
+        while (Date.now() < deadline) {
+          const menu = document.getElementById(node.getAttribute("aria-controls"));
+          option = [...(menu?.querySelectorAll('[role="option"]') ?? [])].find((item) =>
+            action.value === "__openclaw_create_secret__"
+              ? item.textContent.includes("Create new Secret")
+              : item.textContent.includes(action.value),
+          );
+          if (option) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
+        if (!option) {
+          throw new Error(`Story Secret option unavailable: ${JSON.stringify(action)}`);
+        }
+        option.click();
+        continue;
+      }
       if (node instanceof HTMLSelectElement) {
         while (
           Date.now() < deadline &&

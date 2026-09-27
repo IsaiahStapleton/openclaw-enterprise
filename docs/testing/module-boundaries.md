@@ -49,7 +49,9 @@ imported application code.
 nonempty paths relative to the analyzed tree. Each package directory must have a
 named `package.json`. New source files under the selected roots are discovered
 automatically. The walker excludes `node_modules`, `dist`, `.git`, and symlinked
-directories. It includes JS/TS, JSX/TSX, CommonJS/ESM extensions, and declarations.
+directories. Configured source roots may not contain symlink components. It includes JS/TS, JSX/TSX, CommonJS/ESM extensions, and declarations.
+If the roots select no source files, analysis fails with a configuration error
+and the CLI exits with status 2.
 The root and existing resolver targets use canonical filesystem identities, so a
 root symlink does not change graph membership. Sources excluded from discovery
 remain outside the graph even when an import resolves through a symlink.
@@ -75,11 +77,16 @@ contained runtime cycle. Such a group can include runtime edges but requires an
 erased edge to complete its cycle. `path` and `dependency-anchor` edges locate
 dependencies and never enter cycle analysis. Inline `import { type T }` and
 `export { type T }` retain an empty runtime declaration under Node's native type
-stripping; statement-level `import type` and `export type` are erased.
+stripping. They also create a separate erased edge to the selected declaration,
+including in mixed value/type declarations; an excluded declaration fails closed.
+Statement-level `import type` and `export type` are erased.
 
 `workspaceNamespaces` marks scoped prefixes whose unregistered packages must
 fail. It defaults to an empty array. Other bare package literals are external
-identities, not proof that a package exists or can execute.
+identities, not proof that a package exists or can execute. Node built-ins take
+precedence over same-named workspace packages and remain subject to specifier rules.
+
+Unknown policy and boundary fields are rejected so misspelled rules cannot be silently ignored.
 
 ## Read a report
 
@@ -95,7 +102,9 @@ Exit status `0` means no unaccepted diagnostics, `1` means source, resolution,
 or policy diagnostics, and `2` means invalid arguments, malformed configuration,
 or an unreadable workspace. Diagnostics carry `syntax`, `resolution`, or `policy`
 categories. An unknown recognized load fails resolution; it never silently
-becomes a valid external dependency. Use `--help` for the complete command line.
+becomes a valid external dependency. Unknown expressions use a deterministic
+SHA-256 identity rather than raw source text, preserving exact exception matching.
+Use `--help` for the complete command line.
 
 To call the same analyzer from development tooling, import
 `verifyModuleBoundaries` from `scripts/verify-module-boundaries.mjs` and pass
@@ -127,7 +136,17 @@ Pass `--exceptions exceptions.json` to accept reviewed diagnostic identities:
 ```
 
 Identity includes rule, source, target, specifier, kind, erasure, and sorted
-bindings. Line numbers and wording do not affect it. Runtime-cycle identities
+bindings. A dynamic load with an uncertain loader or path also includes an
+opaque `loaderIdentity` based on its call, lexical provenance, and occurrence.
+Destructured bindings include their enclosing initializer and local dependencies.
+For destructured or parameter bindings, untracked identifiers, local or untracked
+property receivers, or provenance that exceeds the analysis bound, the identity
+also covers the normalized source file. A source edit can therefore require
+another review even if the load itself is unchanged. Copy this field from the
+JSON diagnostic when reviewing an exception. An old exception without that field
+becomes stale and must be reviewed again. A known specifier remains subject to
+specifier boundaries even when its loader is unresolved.
+Line numbers and wording do not affect identity. Runtime-cycle identities
 include the full existing edge set. Duplicate entries are configuration errors;
 unused entries produce `stale-exception` failures. After fixing a dependency,
 remove its exception in the same change.
@@ -140,6 +159,15 @@ anchor selection without executing targets. Registered CommonJS packages without
 `exports` resolve from their registered directory, including `main` and subpaths,
 without requiring a `node_modules` link. Workspace ESM packages still require
 explicit `exports`; legacy ESM package-main resolution is unsupported.
+When an installed or self-referenced package with a registered name is visible
+from the loader, it must be the registered package; a different package produces
+`workspace-package-mismatch`. A dynamic loader with an unknown anchor cannot
+resolve relative or bare package paths, although builtins and absolute paths do
+not depend on the anchor. ESM lookup ignores CommonJS global package paths. A
+type-only reference fails when its selected declaration is outside the source
+graph; it never substitutes a different runtime export.
+The source URL is unknown when `import.meta` is assigned, exposed through an
+alias, or used through another property, because Node permits it to change.
 The compiler's public
 `resolveModuleName` API handles declaration and absent emitted-file source
 mapping. An existing runtime JS file takes precedence over its declaration or
@@ -164,12 +192,17 @@ Node ESM and CommonJS sources even without static import/export syntax.
 scope, including unnamed nested packages. `.cjs`/`.cts` and `.mjs`/`.mts` override the package type.
 It follows initialized `let`/`var` loader
 bindings only when they are not assigned elsewhere in the same source. Assigned
-loader bindings become unknown. Shadowed parameters and local functions do not
-inherit unrelated loader identities. Analysis is bounded to 64 nested nodes;
-arbitrary wrappers, object mutation, computed execution, and control flow are
-outside its scope. Operations around an unresolved `require.resolve` value
-produce an unknown path instead of guessing a target. This development tool is
-not runtime security enforcement.
+loader bindings become unknown. Writes to implicit CommonJS `require`, `module`,
+its loader, `__filename`, or `__dirname` make the affected loader or path unknown.
+The analyzer also stops evaluating modeled helpers when it sees a same-source
+write or exposure of their Node module object, `require.resolve`, or the global
+`URL` constructor. Shadowed parameters and local functions do not inherit
+unrelated loader identities. Analysis is bounded to 64 nested nodes; arbitrary
+wrappers, external or untracked mutation, computed execution, and control flow are
+outside its scope. Such behavior can make a passing result select the wrong
+target. Operations around an unresolved `require.resolve` value produce an
+unknown path instead of guessing a target. This development tool is not runtime
+security enforcement.
 
 ## Verify or troubleshoot the tool
 

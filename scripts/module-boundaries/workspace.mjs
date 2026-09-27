@@ -1,8 +1,20 @@
-import { readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 
 export const sourceExtension = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 export const slash = (value) => value.replaceAll("\\", "/");
+
+// Do not expose JSON parser snippets, which can include source contents or paths.
+export function parseJSON(text, label) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
+  }
+  throw new Error(`Invalid JSON in ${label}.`);
+}
 
 async function walk(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -31,7 +43,10 @@ export async function readWorkspace(root, policy) {
         directory,
         (async () => {
           try {
-            const manifest = JSON.parse(await readFile(resolve(directory, "package.json"), "utf8"));
+            const manifest = parseJSON(
+              await readFile(resolve(directory, "package.json"), "utf8"),
+              "package manifest",
+            );
             return manifest.type === "module" ? "module" : "commonjs";
           } catch (error) {
             if (error.code !== "ENOENT") {
@@ -45,11 +60,20 @@ export async function readWorkspace(root, policy) {
     }
     return packageTypes.get(directory);
   }
-  const paths = [
-    ...new Set(
-      (await Promise.all(policy.sourceRoots.map((path) => walk(resolve(root, path))))).flat(),
-    ),
-  ].sort();
+  async function sourceRoot(path) {
+    let current = root;
+    for (const part of path.split("/")) {
+      current = resolve(current, part);
+      if ((await lstat(current)).isSymbolicLink()) {
+        throw new Error("Source roots cannot traverse symbolic links.");
+      }
+    }
+    return walk(current);
+  }
+  const paths = [...new Set((await Promise.all(policy.sourceRoots.map(sourceRoot))).flat())].sort();
+  if (paths.length === 0) {
+    throw new Error("No source files selected by the module-boundary policy.");
+  }
   const files = await Promise.all(
     paths.map(async (absolutePath) =>
       Object.freeze({
@@ -62,7 +86,10 @@ export async function readWorkspace(root, policy) {
   );
   const packages = await Promise.all(
     policy.packages.map(async (path) => {
-      const manifest = JSON.parse(await readFile(resolve(root, path, "package.json"), "utf8"));
+      const manifest = parseJSON(
+        await readFile(resolve(root, path, "package.json"), "utf8"),
+        "package manifest",
+      );
       if (!manifest || typeof manifest.name !== "string" || !manifest.name.trim()) {
         throw new Error(`Missing package name: ${path}`);
       }
