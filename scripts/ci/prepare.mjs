@@ -1727,6 +1727,15 @@ async function prepareLane({ lane, statePath }) {
     case "postgres-application":
       await ensurePostgresServer(resolvedStatePath, state);
       break;
+    case "runtime-image-fixture":
+      // The test builds this unique tag on the job's engine and owns its
+      // lifecycle. Do not register it with generic force-removal cleanup.
+      env.OCC_TEST_RUNTIME_IMAGE = `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}/runtime:local`;
+      env.OCC_RUNTIME_IMAGE_RECEIPT = join(
+        dirname(resolvedStatePath),
+        "runtime-image-fixture-receipt.json",
+      );
+      break;
     case "images-packaging":
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await commandAvailable(process.env.OCC_YQ_BIN ?? "yq", ["--version"]);
