@@ -166,22 +166,7 @@ function dockerGatewayConfigurationDocument(configuration: OpenClawConfiguration
     );
   }
 
-  if (auth.password === undefined) {
-    return {
-      configuration: {
-        ...configuration,
-        gateway: {
-          ...gateway,
-          auth: {
-            ...auth,
-            mode: "password",
-            password: GATEWAY_PASSWORD_REFERENCE,
-          },
-        },
-      },
-      requiresManagedPassword: true,
-    };
-  }
+  const useDefaultPassword = auth.password === undefined;
   return {
     configuration: {
       ...configuration,
@@ -190,10 +175,11 @@ function dockerGatewayConfigurationDocument(configuration: OpenClawConfiguration
         auth: {
           ...auth,
           mode: "password",
+          ...(useDefaultPassword ? { password: GATEWAY_PASSWORD_REFERENCE } : {}),
         },
       },
     },
-    requiresManagedPassword: passwordReference === GATEWAY_PASSWORD_ENV,
+    requiresManagedPassword: useDefaultPassword || passwordReference === GATEWAY_PASSWORD_ENV,
   };
 }
 

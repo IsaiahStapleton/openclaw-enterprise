@@ -98,7 +98,7 @@ async function expectNoText(page, pattern) {
 }
 
 function secretOptionLabel(secret) {
-  return `${secret.name} · ${secret.id}`;
+  return secret.name;
 }
 
 async function selectSecret(scope, label, secret, options = {}) {

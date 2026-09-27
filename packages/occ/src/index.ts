@@ -408,6 +408,10 @@ function validName(value: unknown): value is string {
   return isNonEmptyString(value) && value.length <= 200;
 }
 
+type PluginDiscoveryCredential =
+  | { readonly accessToken: string; readonly secretRef?: never }
+  | { readonly accessToken?: never; readonly secretRef: SecretReference };
+
 function capability(value: unknown): value is DriverCapability {
   return typeof value === "string" && DRIVER_CAPABILITIES.some((candidate) => candidate === value);
 }
@@ -2821,47 +2825,113 @@ export class OpenClawController {
   async discoverAgentPlugins(
     principalId: string,
     namespaceId: string,
-    input: { readonly accessToken: string; readonly cursor?: string },
+    input: PluginDiscoveryCredential & { readonly cursor?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
     await this.read((state) => this.exactNamespace(state, namespaceId));
-    const driver = this.pluginDriver();
-    if (!driver.discoverCatalog) {
-      throw new NotImplementedError("agent_plugins.discovery", "Plugin discovery is unavailable.");
-    }
-    // The credential belongs to this request; provider I/O must not hold a platform transaction.
-    try {
-      return await driver.discoverCatalog(input, signal);
-    } catch (error) {
-      throw new PluginDiscoveryError(
-        error instanceof PluginDiscoveryError ? error.reason : "unavailable",
-      );
-    }
+    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, () => {
+      const driver = this.pluginDriver();
+      if (!driver.discoverCatalog) {
+        throw new NotImplementedError(
+          "agent_plugins.discovery",
+          "Plugin discovery is unavailable.",
+        );
+      }
+      return (accessToken) =>
+        driver.discoverCatalog!(
+          { accessToken, ...(input.cursor === undefined ? {} : { cursor: input.cursor }) },
+          signal,
+        );
+    });
   }
 
   async discoverAgentPluginDetails(
     principalId: string,
     namespaceId: string,
-    input: { readonly accessToken: string; readonly pluginId: string },
+    input: PluginDiscoveryCredential & { readonly pluginId: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
     await this.read((state) => this.exactNamespace(state, namespaceId));
-    const driver = this.pluginDriver();
-    if (!driver.getCatalogPlugin) {
-      throw new NotImplementedError(
-        "agent_plugins.discovery",
-        "Plugin tool discovery is unavailable.",
-      );
+    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, () => {
+      const driver = this.pluginDriver();
+      if (!driver.getCatalogPlugin) {
+        throw new NotImplementedError(
+          "agent_plugins.discovery",
+          "Plugin tool discovery is unavailable.",
+        );
+      }
+      return (accessToken) =>
+        driver.getCatalogPlugin!({ accessToken, pluginId: input.pluginId }, signal);
+    });
+  }
+
+  private async withPluginDiscoveryCredential<T>(
+    principalId: string,
+    namespaceId: string,
+    credential: PluginDiscoveryCredential,
+    prepareDiscovery: () => (accessToken: string) => Promise<T>,
+  ): Promise<T> {
+    const source = credential.secretRef;
+    if (source !== undefined) {
+      if (source.kind !== "secret" || source.namespaceId !== namespaceId) {
+        throw new ScopeViolationError("Secret references cannot cross Namespaces.");
+      }
+      await this.authorize(principalId, "operate", source);
     }
-    try {
-      return await driver.getCatalogPlugin(input, signal);
-    } catch (error) {
-      throw new PluginDiscoveryError(
-        error instanceof PluginDiscoveryError ? error.reason : "unavailable",
-      );
+    // Do not reveal Driver support before authorization or read a value for unsupported discovery.
+    const discover = prepareDiscovery();
+    // Keep both upstream errors and accidentally echoed credential material out of responses.
+    const invoke = async (
+      accessToken: string,
+    ): Promise<{ value: T } | { error: PluginDiscoveryError }> => {
+      try {
+        const value = await discover(accessToken);
+        const serialized = JSON.stringify(value);
+        const encodedToken = JSON.stringify(accessToken).slice(1, -1);
+        if (
+          encodedToken.length === 0 ||
+          serialized === undefined ||
+          serialized.includes(encodedToken)
+        ) {
+          throw new PluginDiscoveryError("invalid_response");
+        }
+        return { value };
+      } catch (error) {
+        return {
+          error: new PluginDiscoveryError(
+            error instanceof PluginDiscoveryError ? error.reason : "unavailable",
+          ),
+        };
+      }
+    };
+
+    let outcome: { value: T } | { error: PluginDiscoveryError };
+    if (credential.accessToken !== undefined) {
+      outcome = await invoke(credential.accessToken);
+    } else {
+      const source = credential.secretRef;
+      const secret = await this.read(async (state) => {
+        const found = await state.secrets.findSecret(namespaceId, source.id);
+        if (!found) {
+          throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
+        }
+        return found;
+      });
+      const driver = this.secretDriver(secret.driverId);
+      if (!driver.withValue) {
+        throw new DependencyUnavailableError(
+          "The selected Secret Driver cannot use credentials for discovery.",
+        );
+      }
+      // No platform transaction is held over backend or provider I/O; each request reads the current value.
+      outcome = await this.secretOperation(() => driver.withValue!(secret, invoke));
     }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    return outcome.value;
   }
 
   async createAgent(principalId: string, input: CreateAgentInput): Promise<Readonly<Agent>> {

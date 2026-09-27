@@ -725,8 +725,8 @@ Get an exact Installation-owned Namespace
 | [`GET /namespaces/{namespaceId}/agents`](#get-namespacesnamespaceidagents) | List authorized Agents in one exact Namespace |
 | [`POST /namespaces/{namespaceId}/agents`](#post-namespacesnamespaceidagents) | Create a Namespace-owned Agent |
 | [`POST /namespaces/{namespaceId}/agents/models`](#post-namespacesnamespaceidagentsmodels) | List provider models for Agent creation without storing the supplied credential |
-| [`POST /namespaces/{namespaceId}/agents/plugins`](#post-namespacesnamespaceidagentsplugins) | List available plugins for Agent creation without storing the supplied credential |
-| [`POST /namespaces/{namespaceId}/agents/plugins/details`](#post-namespacesnamespaceidagentspluginsdetails) | Read available plugin tools without storing the supplied credential |
+| [`POST /namespaces/{namespaceId}/agents/plugins`](#post-namespacesnamespaceidagentsplugins) | List available plugins for Agent creation using a transient credential or Secret reference |
+| [`POST /namespaces/{namespaceId}/agents/plugins/details`](#post-namespacesnamespaceidagentspluginsdetails) | Read available plugin tools using a transient credential or Secret reference |
 | [`POST /namespaces/{namespaceId}/agents/provision`](#post-namespacesnamespaceidagentsprovision) | Create a new Agent and queue first-time provisioning |
 | [`GET /namespaces/{namespaceId}/agents/provision/{workId}`](#get-namespacesnamespaceidagentsprovisionworkid) | Get first-time provisioning status for one exact work item |
 | [`POST /namespaces/{namespaceId}/agents/provision/{workId}/retry`](#post-namespacesnamespaceidagentsprovisionworkidretry) | Retry failed first-time provisioning for one exact work item |
@@ -949,15 +949,16 @@ List provider models for Agent creation without storing the supplied credential
 
 <span id="post-namespacesnamespaceidagentsplugins"></span>
 
-List available plugins for Agent creation without storing the supplied credential
+List available plugins for Agent creation using a transient credential or Secret reference
 
 **Operation ID:** `discoverAgentPlugins`
 
-**Permissions:** Requires create permission for Agent resources in the requested Namespace.
+**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires operate permission on the exact same-Namespace Secret when a Secret reference is supplied.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
 | `create` | `agent` | `namespace` |
+| `operate` | `secret` | `request_body` |
 
 ##### Parameters
 
@@ -971,10 +972,7 @@ List available plugins for Agent creation without storing the supplied credentia
 
 **Content type:** `application/json`
 
-| Field | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `accessToken` | `string` | Yes | min length: 1; max length: 16384; pattern: `\S` |
-| `cursor` | `string` | No | min length: 1; max length: 8192 |
+Schema: `object or object`.
 
 ##### Responses
 
@@ -1026,15 +1024,16 @@ List available plugins for Agent creation without storing the supplied credentia
 
 <span id="post-namespacesnamespaceidagentspluginsdetails"></span>
 
-Read available plugin tools without storing the supplied credential
+Read available plugin tools using a transient credential or Secret reference
 
 **Operation ID:** `discoverAgentPluginDetails`
 
-**Permissions:** Requires create permission for Agent resources in the requested Namespace.
+**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires operate permission on the exact same-Namespace Secret when a Secret reference is supplied.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
 | `create` | `agent` | `namespace` |
+| `operate` | `secret` | `request_body` |
 
 ##### Parameters
 
@@ -1048,10 +1047,7 @@ Read available plugin tools without storing the supplied credential
 
 **Content type:** `application/json`
 
-| Field | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `accessToken` | `string` | Yes | min length: 1; max length: 16384; pattern: `\S` |
-| `pluginId` | `string` | Yes | min length: 1; max length: 256 |
+Schema: `object or object`.
 
 ##### Responses
 

@@ -112,6 +112,20 @@ runs:
       if: always()
       shell: bash
       run: node scripts/ci/cleanup.mjs --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json"
+    - name: Export image cleanup reconciliation
+      id: image_reconciliation
+      if: always() && inputs.lane == 'images-packaging'
+      shell: bash
+      run: node scripts/ci/export-image-reconciliation.mjs "$RUNNER_TEMP/state/${{ inputs.lane }}.json" "$RUNNER_TEMP/image-reconciliation"
+    - name: Retain image cleanup reconciliation
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      if: always() && inputs.lane == 'images-packaging' && steps.image_reconciliation.outcome == 'success'
+      with:
+        name: image-reconciliation-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image-reconciliation/images-${{ github.run_id }}-${{ github.run_attempt }}.json
+        overwrite: false
+        if-no-files-found: error
+        retention-days: 7
     - name: Upload cluster setup diagnostics
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       if: always() && startsWith(inputs.lane, 'k3d-fixture-')
