@@ -85,9 +85,16 @@ configuration. The interface has no initializer or destructor.
    unknown types, unknown fields, and missing required fields fail before any
    gateway call. Compute's `resolveSandboxNamespace` supplies the Namespace's
    runtime placement, which the gateway shares with the paired Sandbox. The API
-   reads each Secret value, calls `registerSource`, and commits
-   the record in the same transaction. If the transaction fails, OCC calls
-   `removeSource` to delete any copy the gateway may have stored.
+   reads each Secret value and commits the record as `registering`, then calls
+   `registerSource` outside the transaction. A second transaction moves the
+   record to `ready` with its audit event. If `registerSource` returns `failed` or
+   `absent`, OCC calls `removeSource` and deletes the record. If it throws, a
+   create may still land, so OCC calls `removeSource` but keeps the record
+   `deleting`. OCC finalizes a deletion only 70 seconds after `createdAt`, and a
+   Driver must finish every effect of an aborted registration within 30 seconds
+   of the abort. A record left `registering` or `deleting` is never usable, and
+   the caller retries DELETE to remove any gateway copy. See
+   [credential sources](../credential-sources.md#register-a-source).
 2. **Admission.** `deployAgent` freezes `{ method, sourceId,
 credentialGatewayId, sourceType, loginMode }` in the revision. The source must
    be `ready`, and its type must declare `harnessAuth`. A Sandbox must be

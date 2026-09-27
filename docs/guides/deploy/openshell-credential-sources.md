@@ -170,7 +170,9 @@ wait until `agent get` returns `404`, then delete the source and its Secret:
 ./bin/occ secret delete "$(jq -r .secrets.api_key.id credential-source.json)"
 ```
 
-Deleting the source also removes the gateway's copy. To discard the whole
+Deleting the source also removes the gateway's copy. Within about a minute of
+registration, `credential-source delete` returns `503` and keeps the source as
+`deleting`; run it again after that window. To discard the whole
 environment, [stop and clean up](local-kubernetes-development.md#stop-and-clean-up)
 the profile instead.
 

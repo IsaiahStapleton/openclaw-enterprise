@@ -416,6 +416,12 @@ type DriverFor<Capability extends DriverCapability> = DriverByCapability[Capabil
 
 /** Bounds each synchronous Credential Gateway call made while serving an API request. */
 const CREDENTIAL_GATEWAY_TIMEOUT_MS = 30_000;
+/**
+ * A Credential Gateway must finish any effect of an aborted registration within
+ * CREDENTIAL_GATEWAY_TIMEOUT_MS after the abort. Until this long after `createdAt`, an absent
+ * gateway copy does not prove that no late create is still in flight, so the record is kept.
+ */
+const CREDENTIAL_REGISTRATION_FENCE_MS = 2 * CREDENTIAL_GATEWAY_TIMEOUT_MS + 10_000;
 
 const COMPUTE_LIFECYCLE_PHASES = [
   "afterNamespacePrepared",
@@ -2660,6 +2666,8 @@ export class OpenClawController {
     });
     const placed = await this.credentialNamespace(namespace);
     let status: CredentialSourceStatus;
+    // A returned result means every gateway effect of this attempt has finished; a throw does not.
+    let terminal = false;
     try {
       status = await this.credentialGatewayOperation(() =>
         gateway.registerSource(
@@ -2671,11 +2679,12 @@ export class OpenClawController {
           { type: source.type, config, secrets: values },
         ),
       );
+      terminal = true;
       if (status.state === "failed" || status.state === "absent") {
         throw new DependencyUnavailableError("The Credential Gateway did not store the source.");
       }
     } catch (error) {
-      await this.abandonCredentialRegistration(placed, gateway, source);
+      await this.abandonCredentialRegistration(placed, gateway, source, terminal);
       throw error;
     }
     // A commit failure leaves the record `registering`; deleting it removes any stored copy.
@@ -2692,17 +2701,22 @@ export class OpenClawController {
     });
     if (ready === undefined) {
       // A concurrent deletion won; remove the copy this registration may have stored after it.
-      await this.abandonCredentialRegistration(placed, gateway, source);
+      await this.abandonCredentialRegistration(placed, gateway, source, true);
       throw new ResourceConflictError("The credential source changed during registration.");
     }
     return this.credentialSourceMetadata(ready, status);
   }
 
-  /** Removes a failed registration's copy, or leaves the record `deleting` for a DELETE retry. */
+  /**
+   * Removes a failed registration's copy. The record is deleted only when the attempt is
+   * terminal and removal succeeded; otherwise it stays `deleting` so DELETE can repeat removal
+   * after any late gateway create.
+   */
   private async abandonCredentialRegistration(
     namespace: Readonly<Namespace>,
     gateway: CredentialGatewayDriver,
     source: Readonly<CredentialSource>,
+    terminal: boolean,
   ): Promise<void> {
     let removed = true;
     try {
@@ -2719,7 +2733,7 @@ export class OpenClawController {
     try {
       await this.mutate(async (state) => {
         await this.lockNamespace(state, source.namespaceId);
-        await (removed
+        await (removed && terminal
           ? state.credentialSources.deleteCredentialSource(source.namespaceId, source.id)
           : state.credentialSources.markCredentialSourceDeleting(source.namespaceId, source.id));
       });
@@ -2836,6 +2850,11 @@ export class OpenClawController {
         signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
       }),
     );
+    if (this.clock().getTime() < Date.parse(source.createdAt) + CREDENTIAL_REGISTRATION_FENCE_MS) {
+      throw new DependencyUnavailableError(
+        "The credential source registration may still be completing; retry the deletion shortly.",
+      );
+    }
     // The success event commits with the final removal, so a completed deletion is always audited.
     await this.mutate(async (state) => {
       await this.lockNamespace(state, namespace.id);

@@ -93,10 +93,11 @@ with a 30-second timeout. The OpenShell Driver ensures the Workspace's provider
 profile and creates an OCC-labeled provider whose `profile_workspace` is that
 Workspace; a retried create adopts only a provider with matching labels.
 
-A thrown call or a `failed` or `absent` result may still have stored a copy, so
-`abandonCredentialRegistration` calls `removeSource`. When removal succeeds it
-deletes the record; when removal fails it moves the record to `deleting`, and a
-later DELETE repeats the removal. On success a second transaction moves the
+A `failed` or `absent` result is terminal: `abandonCredentialRegistration` calls
+`removeSource` and deletes the record, or moves it to `deleting` when removal
+fails. A thrown call is not terminal, because a timed-out create may still land
+after cleanup. OCC calls `removeSource` but always keeps the record `deleting`,
+so a later DELETE repeats the removal. On success a second transaction moves the
 record from `registering` to `ready` and appends the handler's mutation audit
 event. If that transaction fails or the process exits, the record stays
 `registering`; admission and binding require `ready`, and DELETE removes the
@@ -151,7 +152,11 @@ moves a `registering` or `ready` record to `deleting`; database triggers prevent
 leaving `deleting` and returning to `registering`. Outside the transaction, OCC calls `removeSource`. The OpenShell Driver
 deletes the owned provider, confirms it is gone, and deletes the profile when no
 provider of its type remains. A gateway failure returns `503` and leaves the
-record `deleting` for the caller to retry. A second transaction deletes the
+record `deleting` for the caller to retry. Until
+`CREDENTIAL_REGISTRATION_FENCE_MS` (70 seconds) after `createdAt`, OCC keeps the
+record and returns `503` even after a successful removal: a Driver finishes an
+aborted registration's effects within 30 seconds of the abort, and the Backend
+caps each gateway call's deadline at 30 seconds. A second transaction deletes the
 record and appends the handler's audit event, so a completed deletion is always
 audited; if the append fails, the record stays `deleting` for a retry. Namespace deletion returns
 `NAMESPACE_NOT_EMPTY` while any record remains.

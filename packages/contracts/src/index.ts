@@ -88,8 +88,14 @@ export interface OpenShellBackendConfiguration {
   readonly auth?:
     | { readonly mode: "unauthenticated" }
     | { readonly mode: "bearerTokenFile"; readonly path: string };
+  /** At most 30 s; it bounds how late a timed-out credential registration can land. */
   readonly requestTimeoutMs?: number;
   readonly rootCertificatePath?: string;
+  /**
+   * Declares that NetworkPolicy isolates a gateway reached without TLS or bearer authentication.
+   * Required for such transport because credential registration sends resolved values.
+   */
+  readonly insecureTransport?: "network-policy";
 }
 
 export interface OpenShellBackendDefinition {

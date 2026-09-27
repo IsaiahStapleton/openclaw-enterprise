@@ -47,7 +47,11 @@ function productionInstallation(adminKeyPath) {
       {
         id: "openshell",
         type: "openshell",
-        configuration: { endpoint: "127.0.0.1:9", auth: { mode: "unauthenticated" } },
+        configuration: {
+          endpoint: "127.0.0.1:9",
+          auth: { mode: "unauthenticated" },
+          insecureTransport: "network-policy",
+        },
         drivers: { sandbox: "sandbox-openshell", credential_gateway: "openshell-credentials" },
       },
     ],

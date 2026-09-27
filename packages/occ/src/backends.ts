@@ -158,6 +158,9 @@ function validGatewayEndpoint(value: unknown): boolean {
   }
 }
 
+/** Upper bound for one OpenShell RPC deadline; it bounds late credential-provider creates. */
+export const OPENSHELL_MAX_REQUEST_TIMEOUT_MS = 30_000;
+
 function validateOpenShellBackend(
   id: string,
   configuration: Readonly<Record<string, unknown>>,
@@ -171,6 +174,7 @@ function validateOpenShellBackend(
     "auth",
     "requestTimeoutMs",
     "rootCertificatePath",
+    "insecureTransport",
   ];
   for (const key of Object.keys(configuration)) {
     if (!allowed.includes(key)) {
@@ -199,11 +203,17 @@ function validateOpenShellBackend(
   ) {
     throw new ScopeViolationError(path(id, "configuration.port") + " is invalid.");
   }
+  // Credential registration fences late gateway creates by this bound; see the OCC core.
   if (
     requestTimeoutMs !== undefined &&
-    (!Number.isSafeInteger(requestTimeoutMs) || (requestTimeoutMs as number) < 1)
+    (!Number.isSafeInteger(requestTimeoutMs) ||
+      (requestTimeoutMs as number) < 1000 ||
+      (requestTimeoutMs as number) > OPENSHELL_MAX_REQUEST_TIMEOUT_MS)
   ) {
-    throw new ScopeViolationError(path(id, "configuration.requestTimeoutMs") + " is invalid.");
+    throw new ScopeViolationError(
+      path(id, "configuration.requestTimeoutMs") +
+        ` must be between 1000 and ${OPENSHELL_MAX_REQUEST_TIMEOUT_MS} ms.`,
+    );
   }
   if (
     rootCertificatePath !== undefined &&
@@ -235,6 +245,30 @@ function validateOpenShellBackend(
       );
     }
   }
+  // Registration sends resolved credentials to the gateway. Plain or unauthenticated transport
+  // requires an explicit statement that NetworkPolicy isolates the gateway inside the cluster.
+  const insecureTransport = configuration.insecureTransport;
+  if (insecureTransport !== undefined && insecureTransport !== "network-policy") {
+    throw new ScopeViolationError(
+      path(id, "configuration.insecureTransport") + " must be network-policy.",
+    );
+  }
+  const tls =
+    endpoint === undefined
+      ? (scheme ?? (rootCertificatePath === undefined ? "http" : "https")) === "https"
+      : (endpoint as string).startsWith("https://");
+  const protectedTransport = tls && auth?.mode === "bearerTokenFile";
+  if (!protectedTransport && insecureTransport === undefined) {
+    throw new ScopeViolationError(
+      path(id, "configuration") +
+        " requires TLS with bearerTokenFile authentication, or insecureTransport: network-policy.",
+    );
+  }
+  if (protectedTransport && insecureTransport !== undefined) {
+    throw new ScopeViolationError(
+      path(id, "configuration.insecureTransport") + " is only for unprotected transport.",
+    );
+  }
   for (const key of Object.keys(drivers)) {
     if (key !== "sandbox" && key !== "credential_gateway") {
       throw new ScopeViolationError(path(id, `drivers.${key}`) + " is unsupported.");
@@ -258,6 +292,7 @@ function validateOpenShellBackend(
       ...(rootCertificatePath === undefined
         ? {}
         : { rootCertificatePath: rootCertificatePath as string }),
+      ...(insecureTransport === undefined ? {} : { insecureTransport }),
     },
     drivers: { sandbox: drivers.sandbox, credential_gateway: drivers.credential_gateway },
   });

@@ -31,7 +31,11 @@ function sandboxInstallation() {
     {
       id: "openshell",
       type: "openshell",
-      configuration: { serviceName: "openshell-gateway", port: 50051 },
+      configuration: {
+        serviceName: "openshell-gateway",
+        port: 50051,
+        insecureTransport: "network-policy",
+      },
       drivers: { sandbox: "openshell-sandbox", credential_gateway: "openshell-credentials" },
     },
   ];
@@ -219,6 +223,41 @@ test("startup rejects an OpenShell Backend whose members are not both selected",
     }),
     /OpenShell gateway option endpoint belongs to the openshell Backend/,
   );
+});
+
+test("startup requires protected OpenShell transport or an explicit NetworkPolicy boundary", async (t) => {
+  const load = async (configuration) =>
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+    });
+  // Credential registration sends resolved values, so plain or unauthenticated transport
+  // must be declared rather than accepted by default.
+  const undeclared = sandboxInstallation();
+  delete undeclared.backend[0].configuration.insecureTransport;
+  await assert.rejects(
+    load(undeclared),
+    /requires TLS with bearerTokenFile authentication, or insecureTransport: network-policy/,
+  );
+  // TLS alone is not enough; the gateway must also authenticate OCC.
+  const tlsOnly = sandboxInstallation();
+  tlsOnly.backend[0].configuration = { endpoint: "https://openshell-gateway.openshell.svc:8080" };
+  await assert.rejects(load(tlsOnly), /requires TLS with bearerTokenFile authentication/);
+
+  const protectedTransport = sandboxInstallation();
+  protectedTransport.backend[0].configuration = {
+    endpoint: "https://openshell-gateway.openshell.svc:8080",
+    auth: { mode: "bearerTokenFile", path: "/etc/openclaw/openshell/token" },
+  };
+  await load(protectedTransport);
+  // The declaration is only for unprotected transport, so it cannot mask a protected setup.
+  protectedTransport.backend[0].configuration.insecureTransport = "network-policy";
+  await assert.rejects(load(protectedTransport), /insecureTransport is only for unprotected/);
+
+  // Every gateway call's deadline stays within the registration fence.
+  const slow = sandboxInstallation();
+  slow.backend[0].configuration.requestTimeoutMs = 60_000;
+  await assert.rejects(load(slow), /requestTimeoutMs must be between 1000 and 30000 ms/);
 });
 
 test("OpenShell Namespace lifecycle creates, adopts, and deletes its exact operator Workspace", async () => {

@@ -140,8 +140,14 @@ Its closed `configuration` accepts:
   `rootCertificatePath` is set.
 - `auth`: `{ mode: unauthenticated }` or `{ mode: bearerTokenFile, path }` with
   an absolute path.
-- `requestTimeoutMs`: a positive integer.
+- `requestTimeoutMs`: the per-call deadline, from 1000 to 30000 ms. The bound
+  limits how late a timed-out credential registration can land.
 - `rootCertificatePath`: an absolute path to the gateway CA.
+- `insecureTransport: network-policy`: required when the connection lacks TLS or
+  bearer-token authentication, and rejected otherwise. It declares that
+  NetworkPolicy restricts the gateway to the OCE API, worker, and OpenShell
+  supervisors. Credential registration sends resolved values over this
+  connection, and OCC cannot verify the NetworkPolicy itself.
 
 Either `endpoint` or `serviceName` is required. Both `drivers.sandbox` and
 `drivers.credential_gateway` are required and must match the selected bundled

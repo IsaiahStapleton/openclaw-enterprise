@@ -249,9 +249,11 @@ func openShellBackendConfiguration(s *developmentState) map[string]any {
 		endpoint = fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", openShellGatewayService, s.PlatformNamespace)
 	}
 	return map[string]any{
-		"id":            "openshell",
-		"type":          "openshell",
-		"configuration": map[string]any{"endpoint": endpoint},
+		"id":   "openshell",
+		"type": "openshell",
+		// The development gateway is unauthenticated plain HTTP; the profile's NetworkPolicies
+		// admit only the OCE API, worker, and OpenShell supervisors.
+		"configuration": map[string]any{"endpoint": endpoint, "insecureTransport": "network-policy"},
 		"drivers":       map[string]string{"sandbox": openShellSandboxID, "credential_gateway": openShellCredentialGatewayID},
 	}
 }

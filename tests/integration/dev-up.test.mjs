@@ -1005,7 +1005,10 @@ test("Kubernetes dev-up can keep the OCC control plane in Compose with OpenShell
     {
       id: "openshell",
       type: "openshell",
-      configuration: { endpoint: "http://k3d-occ-dev-owned-server-0:30051" },
+      configuration: {
+        endpoint: "http://k3d-occ-dev-owned-server-0:30051",
+        insecureTransport: "network-policy",
+      },
       drivers: {
         sandbox: "sandbox-openshell-development",
         credential_gateway: "credential-gateway-openshell-development",

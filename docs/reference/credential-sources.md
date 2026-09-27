@@ -51,10 +51,10 @@ The request fields are:
 OCC rejects unknown fields and missing required fields before it reads any
 Secret. It reads each value through the Secret Driver, sends the values to the
 gateway, and stores only the Secret references. OCC records the source as
-`registering` before the gateway call. If registration fails, OCC asks the
-gateway to delete any copy it may have stored and removes the record. If that
-cleanup also fails, the record stays listed as `deleting`; send DELETE to
-retry the cleanup.
+`registering` before the gateway call. If the gateway rejects the registration,
+OCC deletes any copy and the record. If the call fails without an answer, such as
+on a timeout, a copy may still appear later, so the record stays listed as
+`deleting`; send DELETE to remove it.
 
 ## Read and list sources
 
@@ -104,6 +104,9 @@ requires exact `delete` and returns `204`:
 - It marks the record `deleting` before it asks the gateway to remove its copy.
   A gateway failure returns `503` and leaves the record `deleting`. Send the same
   request again; an already-removed copy counts as deleted.
+- Within 70 seconds of registration, deletion removes the copy but returns `503`
+  and keeps the record, because a timed-out registration could still create a
+  copy. Retry after that window.
 
 While a source exists, including one in `deleting`, its Namespace cannot be
 deleted, and its referenced Secrets cannot be deleted.

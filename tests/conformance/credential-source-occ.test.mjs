@@ -31,12 +31,18 @@ const installation = Object.freeze({
 function createTestCredentialGateway(options = {}) {
   const calls = [];
   const stored = new Map();
+  const lateCreates = [];
   return {
     id: "credential-gateway-test",
     capability: "credential_gateway",
     implementation: "test-recording-gateway",
     calls,
     stored,
+    completeLateCreates() {
+      for (const create of lateCreates.splice(0)) {
+        create();
+      }
+    },
     async listSourceTypes() {
       return [
         {
@@ -63,6 +69,14 @@ function createTestCredentialGateway(options = {}) {
       });
       if (options.registerError !== undefined) {
         throw options.registerError;
+      }
+      if (options.registerStatus !== undefined) {
+        return options.registerStatus;
+      }
+      // Models a timed-out create that the gateway applies only after OCC's cleanup ran.
+      if (options.lateCreate === true) {
+        lateCreates.push(() => stored.set(context.source.id, input.secrets));
+        throw new Error("registration timed out");
       }
       stored.set(context.source.id, input.secrets);
       // Models a gateway that stored the copy but whose reply was lost.
@@ -178,7 +192,15 @@ async function fixture(options = {}) {
     { loadNativeIAMState: async () => iamState },
     { id: "credential-source-iam" },
   );
-  const controller = new OpenClawController(installation, { state: new InMemoryPlatformState() });
+  let now = Date.parse("2026-09-27T12:00:00.000Z");
+  const controller = new OpenClawController(installation, {
+    state: new InMemoryPlatformState(),
+    now: () => new Date(now),
+  });
+  // Deletion is final only once no timed-out registration could still create a gateway copy.
+  function passRegistrationFence() {
+    now += 71_000;
+  }
   const secretDriver = createTestSecretDriver();
   const gateway = createTestCredentialGateway(options.gateway);
   // Compute owns runtime placement; the gateway must see the same name as the paired Sandbox.
@@ -261,6 +283,7 @@ async function fixture(options = {}) {
     makeReady,
     modelSecret,
     namespace,
+    passRegistrationFence,
     secretDriver,
   };
 }
@@ -363,9 +386,9 @@ async function auditActions(controller) {
     .filter((action) => action.startsWith("openclaw.credential_sources."));
 }
 
-test("a failed registration leaves no source and compensates a possibly stored copy", async () => {
+test("a definitive registration failure removes the gateway copy and the record", async () => {
   const { controller, gateway, makeReady, modelSecret, namespace } = await fixture({
-    gateway: { registerError: new Error("gateway unavailable") },
+    gateway: { registerStatus: { state: "failed", reason: "rejected" } },
   });
   await makeReady();
   const secret = await modelSecret();
@@ -382,6 +405,7 @@ test("a failed registration leaves no source and compensates a possibly stored c
     ),
     DependencyUnavailableError,
   );
+  // The gateway answered, so no create is still in flight and the record can go at once.
   assert.deepEqual(await controller.listCredentialSources(administrator, namespace.id), []);
   assert.deepEqual(
     gateway.calls.map(({ operation }) => operation),
@@ -391,14 +415,51 @@ test("a failed registration leaves no source and compensates a possibly stored c
   assert.deepEqual(await auditActions(controller), []);
 });
 
+test("a timed-out registration keeps its record until a late gateway create is removed", async () => {
+  const { controller, gateway, makeReady, modelSecret, namespace, passRegistrationFence } =
+    await fixture({ gateway: { lateCreate: true } });
+  await makeReady();
+  const secret = await modelSecret();
+  await assert.rejects(
+    controller.createCredentialSource(administrator, {
+      namespaceId: namespace.id,
+      name: "openai",
+      type: "openai",
+      secrets: { api_key: secret.ref },
+    }),
+    DependencyUnavailableError,
+  );
+  // Cleanup found no copy, but the outcome was unknown, so OCC keeps the cleanup handle.
+  const [orphan] = await controller.listCredentialSources(administrator, namespace.id);
+  assert.equal(orphan.state, "deleting");
+  assert.equal(gateway.stored.has(orphan.id), false);
+  gateway.completeLateCreates();
+  assert.equal(gateway.stored.has(orphan.id), true);
+
+  // Within the fence, DELETE removes the copy but keeps the record for a later retry.
+  await assert.rejects(
+    controller.deleteCredentialSource(administrator, namespace.id, orphan.id),
+    DependencyUnavailableError,
+  );
+  assert.equal(gateway.stored.has(orphan.id), false);
+  assert.equal(
+    (await controller.readCredentialSource(administrator, namespace.id, orphan.id)).state,
+    "deleting",
+  );
+  passRegistrationFence();
+  await controller.deleteCredentialSource(administrator, namespace.id, orphan.id);
+  assert.deepEqual(await controller.listCredentialSources(administrator, namespace.id), []);
+});
+
 test("an uncertain registration whose cleanup fails stays listed until DELETE removes the copy", async () => {
   let failRemove = true;
-  const { controller, gateway, makeReady, modelSecret, namespace } = await fixture({
-    gateway: {
-      replyError: new Error("reply lost"),
-      removeError: () => (failRemove ? new Error("gateway unavailable") : undefined),
-    },
-  });
+  const { controller, gateway, makeReady, modelSecret, namespace, passRegistrationFence } =
+    await fixture({
+      gateway: {
+        replyError: new Error("reply lost"),
+        removeError: () => (failRemove ? new Error("gateway unavailable") : undefined),
+      },
+    });
   await makeReady();
   const secret = await modelSecret();
   // The gateway stored a copy but OCC never learned the outcome, and cleanup failed too.
@@ -417,13 +478,14 @@ test("an uncertain registration whose cleanup fails stays listed until DELETE re
 
   // The record keeps the provider identity, so an ordinary DELETE retry removes the copy.
   failRemove = false;
+  passRegistrationFence();
   await controller.deleteCredentialSource(administrator, namespace.id, orphan.id);
   assert.equal(gateway.stored.has(orphan.id), false);
   assert.deepEqual(await controller.listCredentialSources(administrator, namespace.id), []);
 });
 
 test("registration and deletion commit their audit events with the final state change", async () => {
-  const { controller, makeReady, modelSecret, namespace } = await fixture();
+  const { controller, makeReady, modelSecret, namespace, passRegistrationFence } = await fixture();
   await makeReady();
   const secret = await modelSecret();
   const source = await controller.createCredentialSource(
@@ -433,6 +495,7 @@ test("registration and deletion commit their audit events with the final state c
   );
   assert.equal(source.state, "ready");
   assert.deepEqual(await auditActions(controller), ["openclaw.credential_sources.create"]);
+  passRegistrationFence();
 
   // An audit that cannot be appended rolls back the removal, so DELETE can be retried.
   await assert.rejects(
@@ -456,7 +519,15 @@ test("registration and deletion commit their audit events with the final state c
 
 test("deletion is refused while referenced, retried while the gateway fails, and gates the Namespace", async () => {
   let failRemove = false;
-  const { controller, dedicatedAgent, gateway, makeReady, modelSecret, namespace } = await fixture({
+  const {
+    controller,
+    dedicatedAgent,
+    gateway,
+    makeReady,
+    modelSecret,
+    namespace,
+    passRegistrationFence,
+  } = await fixture({
     gateway: { removeError: () => (failRemove ? new Error("gateway unavailable") : undefined) },
   });
   await makeReady();
@@ -508,6 +579,7 @@ test("deletion is refused while referenced, retried while the gateway fails, and
   );
 
   failRemove = false;
+  passRegistrationFence();
   await controller.deleteCredentialSource(administrator, namespace.id, source.id);
   assert.deepEqual(await controller.listCredentialSources(administrator, namespace.id), []);
   assert.equal(gateway.stored.has(source.id), false);
@@ -515,7 +587,7 @@ test("deletion is refused while referenced, retried while the gateway fails, and
 
 test("a credential source, including one being deleted, keeps its Namespace nonempty", async () => {
   let failRemove = false;
-  const { controller, makeReady, namespace } = await fixture({
+  const { controller, makeReady, namespace, passRegistrationFence } = await fixture({
     gateway: { removeError: () => (failRemove ? new Error("gateway unavailable") : undefined) },
   });
   await makeReady();
@@ -540,6 +612,7 @@ test("a credential source, including one being deleted, keeps its Namespace none
     NamespaceNotEmptyError,
   );
   failRemove = false;
+  passRegistrationFence();
   await controller.deleteCredentialSource(administrator, namespace.id, source.id);
   await controller.deleteNamespace(administrator, namespace.id);
 });

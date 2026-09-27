@@ -613,7 +613,29 @@ test(
     // A referenced Secret cannot be deleted while its source exists; deleting the source
     // removes the gateway copy, after which the Secret is unreferenced again.
     await assert.rejects(cli("secret", "delete", secret.id), /409|RESOURCE_CONFLICT/);
-    await cli("credential-source", "delete", source.id);
+    // Right after registration, DELETE removes the copy but keeps the record: a timed-out
+    // registration could still create a copy, so OCC finalizes only after its fence window.
+    await assert.rejects(
+      cli("credential-source", "delete", source.id),
+      /503|DEPENDENCY_UNAVAILABLE/,
+    );
+    assert.equal(
+      (await cli("credential-source", "get", source.id)).state,
+      "deleting",
+      "an early deletion must keep the cleanup record",
+    );
+    const fenceDeadline = Date.now() + 120_000;
+    for (;;) {
+      try {
+        await cli("credential-source", "delete", source.id);
+        break;
+      } catch (error) {
+        if (Date.now() > fenceDeadline || !/503|DEPENDENCY_UNAVAILABLE/.test(String(error))) {
+          throw error;
+        }
+        await delay(5_000);
+      }
+    }
     assert.equal(
       await gateway.getProvider(
         createdPhysicalNamespace,
