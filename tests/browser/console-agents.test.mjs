@@ -7773,15 +7773,20 @@ test("Slack directory selections show names and save exact channel IDs", async (
     async (route) => {
       const body = route.request().postDataJSON();
       directoryBodies.push(body);
+      const firstUppercasePage = body.query === "GENERALX" && !body.cursor;
       const candidates =
         body.kind === "users"
           ? [{ id: "UTEST123", name: "alex", displayName: "Alex" }]
-          : [
-              { id: "CEXIST123", name: "existing-room" },
-              { id: "CTEST456", name: "release-room" },
-              { id: "CGENERAL", name: "general" },
-              { id: "CUPPER123", name: "GENERALX" },
-            ];
+          : body.query === "GENERALX"
+            ? firstUppercasePage
+              ? [{ id: "CUPPER111", name: "GENERALX-first" }]
+              : [{ id: "CUPPER123", name: "GENERALX" }]
+            : [
+                { id: "CEXIST123", name: "existing-room" },
+                { id: "CTEST456", name: "release-room" },
+                { id: "CGENERAL", name: "general" },
+                { id: "CUPPER123", name: "GENERALX" },
+              ];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -7792,7 +7797,8 @@ test("Slack directory selections show names and save exact channel IDs", async (
             candidates: body.ids
               ? candidates.filter((candidate) => body.ids.includes(candidate.id))
               : candidates,
-            complete: true,
+            complete: !firstUppercasePage,
+            ...(firstUppercasePage ? { nextCursor: "upper-next" } : {}),
           },
           meta: { requestId: "req_test_slack_directory" },
         }),
@@ -7809,7 +7815,7 @@ test("Slack directory selections show names and save exact channel IDs", async (
     .filter({ hasText: "CEXIST123" })
     .getByText("#existing-room")
     .waitFor();
-  await channelDialog.getByLabel("Slack channel IDs").fill("#release-room");
+  await channelDialog.getByLabel("Slack channel IDs").fill("general");
   await channelDialog.getByRole("button", { name: "Save configuration" }).click();
   await channelDialog
     .getByText(
@@ -7825,6 +7831,17 @@ test("Slack directory selections show names and save exact channel IDs", async (
     0,
   );
   await channelDialog.getByLabel("Slack channel IDs").fill("CEXIST123");
+  await channelDialog.getByLabel("Direct-message policy").selectOption("allowlist");
+  await channelDialog.getByLabel("Allowed DM user IDs").fill("Will");
+  await channelDialog.getByRole("button", { name: "Save configuration" }).click();
+  await channelDialog
+    .getByText(
+      "Enter exact allowed DM user IDs or user targets, or choose people from the directory.",
+    )
+    .waitFor();
+  await channelDialog.getByLabel("Allowed DM user IDs").fill("");
+  await channelDialog.getByLabel("Direct-message policy").selectOption("disabled");
+  await channelDialog.getByLabel("Slack channel IDs").fill("CEXIST123");
   await channelDialog.getByRole("button", { name: "Find Slack channel" }).click();
   const channelPicker = page.getByRole("dialog", { name: "Find Slack channel" });
   await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("general");
@@ -7833,9 +7850,20 @@ test("Slack directory selections show names and save exact channel IDs", async (
   assert.ok(directoryBodies.some((body) => body.query === "general" && !body.ids));
   await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("GENERALX");
   await channelPicker.getByRole("button", { name: "Search" }).click();
-  await channelPicker.getByRole("button", { name: /GENERALX.*CUPPER123/ }).waitFor();
+  await channelPicker.getByRole("button", { name: /GENERALX-first.*CUPPER111/ }).waitFor();
+  await channelPicker.getByRole("button", { name: "Next page" }).click();
+  await channelPicker.getByRole("button", { name: /GENERALX.*CUPPER123/ }).click();
+  assert.equal(
+    await channelDialog.getByLabel("Slack channel IDs").inputValue(),
+    "CEXIST123, CUPPER123",
+  );
   assert.ok(directoryBodies.some((body) => body.ids?.[0] === "GENERALX"));
   assert.ok(directoryBodies.some((body) => body.query === "GENERALX" && !body.ids));
+  assert.ok(
+    directoryBodies.some((body) => body.query === "GENERALX" && body.cursor === "upper-next"),
+  );
+  await channelDialog.getByLabel("Slack channel IDs").fill("CEXIST123");
+  await channelDialog.getByRole("button", { name: "Find Slack channel" }).click();
   await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("CTEST456");
   await channelPicker.getByRole("button", { name: "Search" }).click();
   await channelPicker.getByRole("button", { name: /release-room.*CTEST456/ }).click();

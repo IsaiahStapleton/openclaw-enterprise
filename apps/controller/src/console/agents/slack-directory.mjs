@@ -10,16 +10,16 @@ export function isSlackId(value, kind) {
 }
 
 export function isSlackConfigTarget(value, kind) {
-  const qualified = /^team:(T[A-Z0-9]+):(user|channel):([A-Z][A-Z0-9]+)$/i.exec(value);
+  const qualified = /^team:(T[A-Z0-9]+):(user|channel):([A-Z][A-Z0-9]+)$/.exec(value);
   if (qualified) {
     return (
-      qualified[2].toLowerCase() === (kind === "users" ? "user" : "channel") &&
-      (kind === "users" ? /^[BUW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i).test(qualified[3])
+      qualified[2] === (kind === "users" ? "user" : "channel") &&
+      (kind === "users" ? /^[BUW][A-Z0-9]+$/ : /^[CDG][A-Z0-9]+$/).test(qualified[3])
     );
   }
   return kind === "users"
-    ? /^(?:(?:user|slack):)?[BUW][A-Z0-9]+$/i.test(value) || /^<@[BUW][A-Z0-9]+>$/i.test(value)
-    : /^(?:channel:)?[CDG][A-Z0-9]+$/i.test(value);
+    ? /^(?:(?:user|slack):)?[BUW][A-Z0-9]+$/.test(value) || /^<@[BUW][A-Z0-9]+>$/.test(value)
+    : /^(?:channel:)?[CDG][A-Z0-9]+$/.test(value);
 }
 
 function directoryTarget(value, kind) {
@@ -306,6 +306,7 @@ export function createSlackDirectoryPicker({
   let cursors = [null];
   let query = "";
   let nextCursor = null;
+  let searchAsName = false;
   let busy = false;
   let workspaceIdentity = null;
   let workspaceSecretId = null;
@@ -341,6 +342,7 @@ export function createSlackDirectoryPicker({
     cursors = [null];
     pageIndex = 0;
     nextCursor = null;
+    searchAsName = false;
     return load(0);
   }
 
@@ -350,7 +352,7 @@ export function createSlackDirectoryPicker({
       return;
     }
     const cursor = index > pageIndex ? nextCursor : cursors[index];
-    const exactTarget = searchTarget(query, kind);
+    const exactTarget = searchAsName ? null : searchTarget(query, kind);
     const active = ++generation;
     busy = true;
     status.textContent = "Searching Slack directory…";
@@ -372,6 +374,7 @@ export function createSlackDirectoryPicker({
             ...(configurationId ? { configurationId } : {}),
           },
         });
+      let searchedAsName = exactTarget === null;
       let page = await requestPage(
         exactTarget
           ? { ids: [exactTarget.id] }
@@ -394,6 +397,7 @@ export function createSlackDirectoryPicker({
             "The Slack bot workspace changed during this search. Start a new search.";
           return;
         }
+        searchedAsName = true;
       }
       if (!dialog.open || !context.isCurrent() || active !== generation) {
         return;
@@ -413,6 +417,7 @@ export function createSlackDirectoryPicker({
       }
       workspaceSecretId = secretId;
       workspaceIdentity = page.workspaceId;
+      searchAsName = searchedAsName;
       onWorkspace?.(page.workspaceId, secretId);
       pageIndex = index;
       cursors[index] = cursor;
