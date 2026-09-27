@@ -16,12 +16,14 @@ import type {
   WorkspaceSetup,
   AgentRevision,
   AuditEvent,
+  CredentialSource,
   Group,
   GroupMembership,
   Identity,
   Installation,
   Namespace,
   PluginDesiredState,
+  PluginApprovers,
   Preset,
   Permission,
   Principal,
@@ -35,10 +37,12 @@ import type {
 import {
   harnessAuthBindingFromSnapshot,
   normalizePluginDesiredState,
+  normalizePluginApprovers,
   normalizeHarnessAuthBinding,
   normalizeSecretBindings,
   RESOURCE_KINDS as PLATFORM_RESOURCE_KINDS,
   validPluginRevisionState,
+  validPluginApprovers,
 } from "@openclaw-enterprise/contracts";
 import { immutableCopy } from "@openclaw-enterprise/utils";
 import {
@@ -52,6 +56,7 @@ import type {
   AgentRevisionRepository,
   ConfigurationOwnership,
   ConfigurationRepository,
+  CredentialSourceRepository,
   InstallationRepository,
   IAMPolicyRepository,
   NamespaceRepository,
@@ -209,6 +214,17 @@ function normalizedPlugins(plugins?: PluginDesiredState): PluginDesiredState | u
   return normalizePluginDesiredState(plugins, invalidPluginState);
 }
 
+function normalizedPluginApprovers(approvers?: PluginApprovers): PluginApprovers | undefined {
+  return normalizePluginApprovers(approvers, invalidPluginState);
+}
+
+function pluginApproversFromJson(value: unknown): PluginApprovers | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  return normalizePluginApprovers(value, invalidPersistedPluginState);
+}
+
 function pluginStateFromJson(value: unknown): PluginDesiredState | undefined {
   if (value === null || value === undefined) {
     return undefined;
@@ -274,6 +290,7 @@ function presetFromRow(row: PostgresRow): Readonly<Preset> {
 function agentFromRow(row: PostgresRow): Readonly<Agent> {
   const activeRevisionId = optionalText(row, "active_revision_id");
   const repositoryBindings = repositoryBindingsFromJson(row.repository_bindings);
+  const pluginApprovers = pluginApproversFromJson(row.plugin_approvers);
   let harnessAuth: Agent["harnessAuth"];
   try {
     harnessAuth = normalizeHarnessAuthBinding(row.harness_auth);
@@ -295,6 +312,7 @@ function agentFromRow(row: PostgresRow): Readonly<Agent> {
     ...(row.plugins === null || row.plugins === undefined
       ? {}
       : { plugins: pluginStateFromJson(row.plugins)! }),
+    ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
     ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
     servicePrincipalId: text(row, "service_principal_id"),
     harnessAuth,
@@ -346,6 +364,46 @@ function secretFromRow(row: PostgresRow): Readonly<Secret> {
   });
 }
 
+const CREDENTIAL_SOURCE_COLUMNS = `cs.id, cs.namespace_id, cs.name, cs.type, cs.config,
+  cs.driver_id, cs.state, cs.created_at,
+  COALESCE((
+    SELECT jsonb_object_agg(css.field, css.secret_id)
+    FROM occ.credential_source_secrets AS css
+    WHERE css.credential_source_id = cs.id
+  ), '{}'::jsonb) AS secret_ids`;
+
+function credentialSourceFromRow(row: PostgresRow): Readonly<CredentialSource> {
+  const namespaceId = text(row, "namespace_id");
+  const state = text(row, "state");
+  if (state !== "registering" && state !== "ready" && state !== "deleting") {
+    throw new DependencyUnavailableError("Persisted credential source state is invalid.");
+  }
+  const config = jsonObject(row.config);
+  const secretIds = jsonObject(row.secret_ids);
+  if (
+    Object.values(config).some((value) => typeof value !== "string") ||
+    Object.values(secretIds).some((value) => typeof value !== "string")
+  ) {
+    throw new DependencyUnavailableError("Persisted credential source metadata is invalid.");
+  }
+  return immutableCopy({
+    id: text(row, "id"),
+    namespaceId,
+    name: text(row, "name"),
+    type: text(row, "type"),
+    config: config as Record<string, string>,
+    secrets: Object.fromEntries(
+      Object.entries(secretIds as Record<string, string>).map(([field, id]) => [
+        field,
+        { kind: "secret" as const, namespaceId, id },
+      ]),
+    ),
+    driverId: text(row, "driver_id"),
+    state,
+    createdAt: timestamp(row, "created_at"),
+  });
+}
+
 function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
   const rawNumber = row.revision_number;
   const revision = typeof rawNumber === "string" ? Number(rawNumber) : rawNumber;
@@ -364,6 +422,7 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
     secret_driver_id?: AgentRevision["secretDriverId"];
     secret_bindings?: AgentRevision["secretBindings"];
     plugins?: AgentRevision["plugins"];
+    plugin_approvers?: AgentRevision["pluginApprovers"];
     repository_credentials?: AgentRevision["repositoryCredentials"];
   };
   if (
@@ -380,6 +439,9 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
       : secretBindingsFromJson(admitted.secret_bindings, text(row, "namespace_id"));
   if (!validPluginRevisionState(admitted.plugins)) {
     throw new DependencyUnavailableError("Persisted AgentRevision plugin state is invalid.");
+  }
+  if (!validPluginApprovers(admitted.plugin_approvers)) {
+    throw new DependencyUnavailableError("Persisted AgentRevision plugin approvers are invalid.");
   }
   if (
     admitted.repository_credentials !== undefined &&
@@ -409,6 +471,9 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
       : { secretDriverId: admitted.secret_driver_id }),
     ...(secretBindings === undefined ? {} : { secretBindings }),
     ...(admitted.plugins === undefined ? {} : { plugins: admitted.plugins }),
+    ...(admitted.plugin_approvers === undefined
+      ? {}
+      : { pluginApprovers: admitted.plugin_approvers }),
     ...(admitted.repository_credentials === undefined
       ? {}
       : { repositoryCredentials: admitted.repository_credentials }),
@@ -1509,6 +1574,17 @@ export class PostgresPlatformState implements PlatformStateStore {
         )[0];
         return found?.present === true;
       },
+      hasCredentialSources: async (namespaceId) => {
+        const found = rows(
+          (
+            await client.query(
+              "SELECT EXISTS (SELECT 1 FROM occ.credential_sources WHERE namespace_id = $1) AS present",
+              [namespaceId],
+            )
+          ).rows,
+        )[0];
+        return found?.present === true;
+      },
       transitionNamespaceStatus: async (namespaceId, expected, next) => {
         await this.requireInitialized(context);
         const expectedStatuses = Array.isArray(expected) ? expected : [expected];
@@ -1848,6 +1924,9 @@ export class PostgresPlatformState implements PlatformStateStore {
           (
             await client.query(
               `SELECT EXISTS (
+                 SELECT 1 FROM occ.credential_source_secrets
+                 WHERE namespace_id = $1 AND secret_id = $2
+               ) OR EXISTS (
                  SELECT 1
                  FROM occ.configurations AS c,
                       jsonb_each(COALESCE(c.secret_bindings, '{}'::jsonb)) AS binding(env, value)
@@ -1940,6 +2019,172 @@ export class PostgresPlatformState implements PlatformStateStore {
         ).rows,
       )[0];
       return found === undefined ? undefined : serviceAccountFromRow(found);
+    };
+
+    const findCredentialSource = async (
+      namespaceId: string,
+      credentialSourceId: string,
+      lock = false,
+    ): Promise<Readonly<CredentialSource> | undefined> => {
+      const found = rows(
+        (
+          await client.query(
+            `SELECT ${CREDENTIAL_SOURCE_COLUMNS}
+             FROM occ.credential_sources AS cs
+             JOIN occ.namespaces AS n ON n.id = cs.namespace_id AND n.deleted_at IS NULL
+             WHERE cs.namespace_id = $1 AND cs.id = $2${lock ? " FOR UPDATE OF cs" : ""}`,
+            [namespaceId, credentialSourceId],
+          )
+        ).rows,
+      )[0];
+      return found === undefined ? undefined : credentialSourceFromRow(found);
+    };
+
+    const credentialSources: CredentialSourceRepository = {
+      findCredentialSource,
+      listCredentialSources: async (namespaceId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                `SELECT ${CREDENTIAL_SOURCE_COLUMNS}
+                 FROM occ.credential_sources AS cs
+                 JOIN occ.namespaces AS n ON n.id = cs.namespace_id AND n.deleted_at IS NULL
+                 WHERE cs.namespace_id = $1
+                 ORDER BY cs.created_at, cs.id`,
+                [namespaceId],
+              )
+            ).rows,
+          ).map(credentialSourceFromRow),
+        ),
+      lockCredentialSource: async (namespaceId, credentialSourceId) =>
+        findCredentialSource(namespaceId, credentialSourceId, true),
+      createCredentialSource: async (source) => {
+        await this.requireInitialized(context);
+        const namespace = await namespaces.lockNamespace(source.namespaceId);
+        if (
+          namespace === undefined ||
+          (namespace.status !== "provisioning" && namespace.status !== "ready")
+        ) {
+          throw new ScopeViolationError(
+            "The credential source belongs to an unavailable Namespace.",
+          );
+        }
+        const secretInputs = Object.entries(source.secrets);
+        // Only the Secret ID is stored; the row's Namespace makes every input same-Namespace.
+        if (
+          secretInputs.some(
+            ([, reference]) =>
+              reference.kind !== "secret" || reference.namespaceId !== source.namespaceId,
+          )
+        ) {
+          throw new ScopeViolationError(
+            "Credential source Secret inputs must reference exact Secrets.",
+          );
+        }
+        await client.query(
+          `INSERT INTO occ.credential_sources
+           (id, namespace_id, name, type, config, driver_id, state, created_at)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
+          [
+            source.id,
+            source.namespaceId,
+            source.name,
+            source.type,
+            JSON.stringify(source.config),
+            source.driverId,
+            source.state,
+            source.createdAt,
+          ],
+        );
+        if (secretInputs.length > 0) {
+          await client.query(
+            `INSERT INTO occ.credential_source_secrets
+             (namespace_id, credential_source_id, field, secret_id)
+             SELECT $1, $2, input.field, input.secret_id
+             FROM unnest($3::text[], $4::text[]) AS input(field, secret_id)`,
+            [
+              source.namespaceId,
+              source.id,
+              secretInputs.map(([field]) => field),
+              secretInputs.map(([, reference]) => reference.id),
+            ],
+          );
+        }
+        return immutableCopy(source);
+      },
+      markCredentialSourceReady: async (namespaceId, credentialSourceId) => {
+        const updated = await client.query(
+          `UPDATE occ.credential_sources AS cs SET state = 'ready'
+           FROM occ.namespaces AS n
+           WHERE cs.namespace_id = $1 AND cs.id = $2 AND cs.state = 'registering'
+             AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
+          [namespaceId, credentialSourceId],
+        );
+        return updated.rowCount === 1
+          ? findCredentialSource(namespaceId, credentialSourceId)
+          : undefined;
+      },
+      markCredentialSourceDeleting: async (namespaceId, credentialSourceId) => {
+        const updated = await client.query(
+          `UPDATE occ.credential_sources AS cs SET state = 'deleting'
+           FROM occ.namespaces AS n
+           WHERE cs.namespace_id = $1 AND cs.id = $2 AND cs.state IN ('registering', 'ready')
+             AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
+          [namespaceId, credentialSourceId],
+        );
+        return updated.rowCount === 1
+          ? findCredentialSource(namespaceId, credentialSourceId)
+          : undefined;
+      },
+      hasReferences: async (namespaceId, credentialSourceId) => {
+        if ((await findCredentialSource(namespaceId, credentialSourceId)) === undefined) {
+          return false;
+        }
+        const found = rows(
+          (
+            await client.query(
+              `SELECT EXISTS (
+                 SELECT 1 FROM occ.agents
+                 WHERE namespace_id = $1 AND harness_auth_credential_source_id = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.agents AS a
+                 JOIN occ.agent_revisions AS r ON r.namespace_id = a.namespace_id
+                   AND r.agent_id = a.id AND r.id = a.active_revision_id
+                 WHERE a.namespace_id = $1
+                   AND r.admitted_spec #>> '{harness_auth,method}' = 'credential_source'
+                   AND r.admitted_spec #>> '{harness_auth,sourceId}' = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.controller_work AS w
+                 JOIN occ.agent_revisions AS r ON r.namespace_id = w.namespace_id
+                   AND r.agent_id = w.agent_id AND r.id = w.revision_id
+                 WHERE w.namespace_id = $1 AND w.state IN ('queued', 'claimed')
+                   AND r.admitted_spec #>> '{harness_auth,method}' = 'credential_source'
+                   AND r.admitted_spec #>> '{harness_auth,sourceId}' = $2
+               ) AS present`,
+              [namespaceId, credentialSourceId],
+            )
+          ).rows,
+        )[0];
+        return found?.present === true;
+      },
+      deleteCredentialSource: async (namespaceId, credentialSourceId) => {
+        if ((await findCredentialSource(namespaceId, credentialSourceId)) === undefined) {
+          return false;
+        }
+        if (await credentialSources.hasReferences(namespaceId, credentialSourceId)) {
+          throw new ScopeViolationError(
+            "The credential source is referenced by active platform state.",
+          );
+        }
+        const deleted = await client.query(
+          `DELETE FROM occ.credential_sources AS cs USING occ.namespaces AS n
+           WHERE cs.namespace_id = $1 AND cs.id = $2
+             AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
+          [namespaceId, credentialSourceId],
+        );
+        return deleted.rowCount === 1;
+      },
     };
 
     const serviceAccounts: ServiceAccountRepository = {
@@ -2081,7 +2326,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         (
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                    a.backend_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                    a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
                     a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
              FROM occ.agents AS a
              JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
@@ -2164,7 +2409,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           (
             await client.query(
               `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                      a.backend_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                      a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
                       a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
@@ -2193,21 +2438,24 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         await validateSecretBindingsAvailable(agent.namespaceId, configuration.secretBindings);
         await assertHarnessAuthAvailable(
-          { secrets, serviceAccounts },
+          { secrets, serviceAccounts, credentialSources },
           agent.namespaceId,
           agent.harnessAuth,
         );
         const plugins = normalizedPlugins(agent.plugins);
+        const pluginApprovers = normalizedPluginApprovers(agent.pluginApprovers);
         const repositoryBindings =
           agent.repositoryBindings?.length === 0 ? undefined : agent.repositoryBindings;
         const {
           plugins: _providedPlugins,
+          pluginApprovers: _providedPluginApprovers,
           repositoryBindings: _providedRepositoryBindings,
           ...withoutPlugins
         } = agent;
         const saved = immutableCopy({
           ...withoutPlugins,
           ...(plugins === undefined ? {} : { plugins }),
+          ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
           ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
           desiredRuntimeState: "stopped" as const,
           status: "active" as const,
@@ -2216,8 +2464,8 @@ export class PostgresPlatformState implements PlatformStateStore {
           `INSERT INTO occ.agents
            (id, namespace_id, name, configuration_id, backend_id, execution_mode,
              service_principal_id, harness_auth, active_revision_id, created_at, plugins,
-             repository_bindings)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb)`,
+             plugin_approvers, repository_bindings)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb)`,
           [
             saved.id,
             saved.namespaceId,
@@ -2230,6 +2478,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             saved.activeRevisionId ?? null,
             saved.createdAt,
             plugins === undefined ? null : JSON.stringify(plugins),
+            pluginApprovers === undefined ? null : JSON.stringify(pluginApprovers),
             repositoryBindings === undefined ? null : JSON.stringify(repositoryBindings),
           ],
         );
@@ -2249,9 +2498,14 @@ export class PostgresPlatformState implements PlatformStateStore {
         backendId,
         plugins,
         repositoryBindings,
+        pluginApprovers,
       ) => {
         if (harnessAuth !== undefined) {
-          await assertHarnessAuthAvailable({ secrets, serviceAccounts }, namespaceId, harnessAuth);
+          await assertHarnessAuthAvailable(
+            { secrets, serviceAccounts, credentialSources },
+            namespaceId,
+            harnessAuth,
+          );
         }
         const configuration = await configurations.findConfiguration(namespaceId, configurationId);
         if (configuration === undefined) {
@@ -2259,6 +2513,8 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         await validateSecretBindingsAvailable(namespaceId, configuration.secretBindings);
         const nextPlugins = plugins === undefined ? undefined : normalizedPlugins(plugins);
+        const nextPluginApprovers =
+          pluginApprovers == null ? undefined : normalizedPluginApprovers(pluginApprovers);
         const nextRepositoryBindings =
           repositoryBindings?.length === 0 ? undefined : repositoryBindings;
         const updated = rows(
@@ -2269,12 +2525,13 @@ export class PostgresPlatformState implements PlatformStateStore {
                    harness_auth = CASE WHEN $5::boolean THEN $6::jsonb ELSE a.harness_auth END,
                    backend_id = CASE WHEN $7::boolean THEN $8::text ELSE a.backend_id END,
                    plugins = CASE WHEN $9::boolean THEN $10::jsonb ELSE a.plugins END,
-                   repository_bindings = CASE WHEN $11::boolean THEN $12::jsonb ELSE a.repository_bindings END
+                   plugin_approvers = CASE WHEN $11::boolean THEN $12::jsonb ELSE a.plugin_approvers END,
+                   repository_bindings = CASE WHEN $13::boolean THEN $14::jsonb ELSE a.repository_bindings END
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                  RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.backend_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                          a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
                           a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [
                 namespaceId,
@@ -2287,6 +2544,8 @@ export class PostgresPlatformState implements PlatformStateStore {
                 backendId ?? null,
                 plugins !== undefined,
                 nextPlugins === undefined ? null : JSON.stringify(nextPlugins),
+                pluginApprovers !== undefined,
+                nextPluginApprovers === undefined ? null : JSON.stringify(nextPluginApprovers),
                 repositoryBindings !== undefined,
                 nextRepositoryBindings === undefined
                   ? null
@@ -2312,7 +2571,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                 AND a.active_revision_id IS NOT DISTINCT FROM $3::text
                   AND n.id = a.namespace_id AND n.deleted_at IS NULL
                   RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.backend_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                          a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
                           a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId ?? null, candidateRevisionId],
             )
@@ -2329,7 +2588,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                WHERE a.namespace_id = $1 AND a.id = $2 AND a.active_revision_id = $3
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.backend_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId],
             )
@@ -2348,7 +2607,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                  AND a.desired_runtime_state = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.backend_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedStates, next],
             )
@@ -2370,7 +2629,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                  AND a.status = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.backend_id, a.plugins, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedStatuses, next],
             )
@@ -2426,7 +2685,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           );
         }
         await assertHarnessAuthAvailable(
-          { secrets, serviceAccounts },
+          { secrets, serviceAccounts, credentialSources },
           revision.namespaceId,
           harnessAuthBindingFromSnapshot(revision.harnessAuth),
         );
@@ -2446,6 +2705,9 @@ export class PostgresPlatformState implements PlatformStateStore {
         await validateSecretBindingsAvailable(revision.namespaceId, secretBindings);
         if (!validPluginRevisionState(revision.plugins)) {
           throw new ScopeViolationError("The AgentRevision plugin state is invalid.");
+        }
+        if (!validPluginApprovers(revision.pluginApprovers)) {
+          throw new ScopeViolationError("The AgentRevision plugin approvers are invalid.");
         }
         await client.query(
           `INSERT INTO occ.agent_revisions
@@ -2472,6 +2734,9 @@ export class PostgresPlatformState implements PlatformStateStore {
                 : { secret_driver_id: revision.secretDriverId }),
               ...(secretBindings === undefined ? {} : { secret_bindings: secretBindings }),
               ...(revision.plugins === undefined ? {} : { plugins: revision.plugins }),
+              ...(revision.pluginApprovers === undefined
+                ? {}
+                : { plugin_approvers: revision.pluginApprovers }),
               ...(revision.repositoryCredentials === undefined
                 ? {}
                 : { repository_credentials: revision.repositoryCredentials }),
@@ -2530,6 +2795,8 @@ export class PostgresPlatformState implements PlatformStateStore {
           "SELECT 1 FROM occ.configurations WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         preset: "SELECT 1 FROM occ.presets WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         secret: "SELECT 1 FROM occ.secrets WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
+        credential_source:
+          "SELECT 1 FROM occ.credential_sources WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         service_account:
           "SELECT 1 FROM occ.service_accounts WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
       };
@@ -2691,6 +2958,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       configurations,
       presets,
       secrets,
+      credentialSources,
       serviceAccounts,
       agents,
       workspaceSetups,
