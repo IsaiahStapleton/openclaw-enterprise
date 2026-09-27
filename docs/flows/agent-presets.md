@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-26
-last_updated_session: codex/01a0df07-06ad-7ef3-8cb9-3e4cbf7beac6
+updated: 2026-09-27
+last_updated_session: authoring-run/048d8546-acd0-4d1a-8231-61c9d9ccb9dc
 ---
 
 # Agent Presets flow
@@ -165,8 +165,12 @@ disabled so the user follows ordinary creation recovery.
 Before resetting the view, Console captures the unsaved form's raw editor text,
 model controls, workspace files, repository selections, and staged Secret
 references. The in-memory map is scoped to the signed-in user and Namespace.
-Returning through navigation or browser history reconstructs the form from that
-copy; capability and repository discovery run again against current access.
+Returning to an explicitly selected Preset form through navigation or browser history reconstructs it
+from that copy; capability and repository discovery run again against current
+access. A form started through the default Preset shortcut registers for discard on exit. After
+flushing captures, `loadPage` removes its creation and channel snapshots and its
+retained view when navigation leaves creation or changes Namespace. Re-entry
+opens the initial choices; resources already saved through the API remain.
 Invalid JSON survives as text. Password controls and plugin discovery results
 are excluded. Start over removes the copy; session loss, logout, a different
 signed-in user, and page exit clear the map. Starting a save removes its capture
@@ -255,6 +259,10 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-27 01:09: Preserve exit discard for the default Preset shortcut and retain explicitly selected Preset drafts. (authoring-run/048d8546-acd0-4d1a-8231-61c9d9ccb9dc - 7d0da53a8f092b0e2533464424dcb9c7fe15b139)
+
+- 2026-09-27 00:28: Discard no-Preset creation state when leaving the flow. (authoring-run/c1812a3c-f760-4167-80ca-f4a66d8572e4 - ea187c93468f399b00ebb504fcbbed5ab21ddd8e)
 
 - 2026-09-26 18:52: Load the plain console starter from the installed default-codex Preset and share its shipped configuration base (codex/01a0df07-06ad-7ef3-8cb9-3e4cbf7beac6 - e4a807e785e1a242e27200c8e8396f58136cbbc6)
 

@@ -51,6 +51,7 @@ export function createPresetFields(context, apply) {
   );
   let defaultId;
   let quickStart = false;
+  let discardOnExit = false;
   let selected;
   let fields = [];
   let loadVersion = 0;
@@ -208,7 +209,7 @@ export function createPresetFields(context, apply) {
         };
       }
       const applied = renderPresetTemplate(renderTemplate, values);
-      apply(applied, { modelSecret: secretSelection });
+      apply(applied, { modelSecret: secretSelection }, { discardOnExit });
       for (const field of fields) {
         if (field.definition.type === "password") {
           field.input.value = "";
@@ -236,6 +237,7 @@ export function createPresetFields(context, apply) {
     const selectedId = selector.value;
     const applyDefault = quickStart;
     quickStart = false;
+    discardOnExit = applyDefault;
     if (retained?.id !== selectedId) {
       retained = undefined;
     }
