@@ -209,11 +209,15 @@ After configuration verification, the runtime exposes private startup status.
 Kubernetes Compute validates workload, revision, startup instance, selection keys,
 and warning codes before returning readiness. Status is recomputed on restart.
 
-Dedicated Codex runs separately from its gateway. The gateway blocks each failed
-bridge selection before serving, preventing native bridge activation from
-retrying that plugin during a turn. It must refresh its effective configuration
-when the Agent startup result changes. Missing or untrusted status cannot
-establish readiness. Requested revision selections remain unchanged.
+Dedicated Codex runs separately. Startup symlinks
+`/home/node/.openclaw/plugin-skills` to
+`/home/node/openclaw-runtime-assets/plugin-skills`, preserving relative files
+without gateway state/credentials.
+
+Gateway blocks failed bridge selections before serving and prevents retry during
+turns. It refreshes effective configuration when Agent startup changes;
+untrusted status cannot establish readiness. Requested revision selections remain
+unchanged.
 
 Compute installs status NetworkPolicies before the first dedicated gateway and
 creates it only when the Agent and plugin status are ready and its Service selects
@@ -267,9 +271,9 @@ completed deployment attempt rather than ongoing runtime health.
   `PLUGIN_AUTH_REQUIRED` and the admitted `pluginId`. Confirm the corresponding
   runtime and gateway entries are disabled. Do not infer plugin attribution
   from arbitrary native logs.
-- Prove behavior with a model-chosen plugin call during a normal Agent turn,
-  then disable/remove on a later deployment and verify another Agent is unchanged.
-  Source or fixture tests alone do not establish native runtime compatibility.
+- Prove behavior with a model-chosen plugin call in a normal Agent turn, then
+  disable or remove the plugin and verify another Agent is unchanged. Source or
+  fixture tests are not native runtime proof.
 - Use the opt-in real-runtime lane in [Agent plugin testing](../testing/plugins.md)
   for Kubernetes, database, credential, native-runtime, and historical proof
   details. A skipped native lane is not proof.
@@ -292,6 +296,8 @@ completed deployment attempt rather than ongoing runtime health.
 - 2026-09-27 02:41: Authorize the selected Secret before reporting unsupported plugin discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - 36cb6d6a4a515ad7328eb596b3da174f262f6d18)
 
 - 2026-09-27 02:08: Added exact-Secret-authorized transient plugin discovery and current-value reads. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - 41aae7750e33b8739efc5f7c6a0ebd160f42f711)
+
+- 2026-09-26 21:38: Added Agent skill paths. (c5a050f1-e44a-48c1-9c18-f7661d50623f - 41aae775)
 
 - 2026-09-24 19:44: Added Driver-owned setup and recovery links. (01a0d1dd-aa36-7622-9f43-8376f6ff935e - ef89ded5)
 
