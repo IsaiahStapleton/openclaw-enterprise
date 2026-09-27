@@ -170,7 +170,7 @@ COPY scripts/build-runtime-assets.mjs /tmp/build-runtime-assets.mjs
 RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw /home/node/.codex/generated_images \
   && chown node:node /home/node/.codex /home/node/.codex/generated_images \
   && chmod 700 /home/node/.codex /home/node/.codex/generated_images \
-  && cp -R node_modules/openclaw/dist/extensions/slack/skills/slack ./plugin-skills/slack \
+  && cp -R node_modules/openclaw/dist/extensions/slack/skills/. ./plugin-skills/ \
   && ln -s node_modules/openclaw/openclaw.mjs ./openclaw.mjs \
   && ln -s node_modules/openclaw/dist ./dist \
   && cp -R node_modules/openclaw/skills ./skills \
@@ -181,6 +181,7 @@ RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw
   && test -d /app/skills \
   && test ! -L /app/skills \
   && test -d /app/plugin-skills/slack \
+  && test -f /app/plugin-skills/block-kit/references/official-block-kit.md \
   && test "$(stat -c '%U:%G:%a' /home/node/.codex)" = "node:node:700" \
   && test "$(stat -c '%U:%G:%a' /home/node/.codex/generated_images)" = "node:node:700" \
   && node /app/openclaw.mjs --version \
