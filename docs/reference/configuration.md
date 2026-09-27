@@ -60,7 +60,9 @@ observability:
 fragment. Unknown fields fail startup. The API exposes the URL only after an
 Installation `administer` check; the console hides the link when unset or
 unauthorized. The destination handles its own authentication. This setting does
-not select an OpenTelemetry exporter or embed a dashboard.
+not select an OpenTelemetry exporter or embed a dashboard. Compose development
+can use this block alone with its default Drivers; mount the same file into API
+and worker containers.
 
 ## Create, read, update, and delete
 

@@ -38,15 +38,14 @@ Set up models during Agent creation; the [experimental Backends](backends.md)
 tab is hidden. Namespace rows are read-only.
 
 A configured [observability URL](configuration.md#installation-startup-configuration)
-appears as an admin-only **Observability** link. The destination authenticates independently.
+appears as an admin-only **Metrics** link with an external-link icon. The destination authenticates independently.
 
 | Page       | Scope and permission                                                     |
 | ---------- | ------------------------------------------------------------------------ |
 | Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |
 | Namespaces | Installation-wide collection filtered by exact Namespace `read`.         |
 
-The console uses a light appearance and OCC-served fonts; no external font
-service is required.
+The console uses a light appearance and OCC-served fonts.
 
 Returning pages retain content during access checks; controls await authorization.
 Agent detail keeps its mounted editor on refocus while access remains available.

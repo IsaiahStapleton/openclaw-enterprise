@@ -54,6 +54,7 @@ export interface StartupConfigurationSnapshot {
   readonly configuration?: ConfigurationRecord;
   readonly configurationPath?: string;
   readonly logging: LoggingConfiguration;
+  readonly observability?: { readonly url: string };
 }
 
 export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
@@ -189,10 +190,12 @@ export async function loadStartupConfigurationSnapshot(options: {
   const startup = await startupConfiguration(options, options.mode === "production");
   const { configuration } = startup;
   const logging = operationalLoggingConfiguration(configuration?.logging);
+  const observability = observabilityConfiguration(configuration?.observability);
   return Object.freeze({
     ...(configuration === undefined ? {} : { configuration }),
     ...(startup.path === undefined ? {} : { configurationPath: startup.path }),
     logging,
+    ...(observability === undefined ? {} : { observability }),
   });
 }
 

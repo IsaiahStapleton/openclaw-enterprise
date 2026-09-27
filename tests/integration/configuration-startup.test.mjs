@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import pg from "pg";
-import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
+import {
+  loadInstallationConfiguration,
+  loadStartupConfigurationSnapshot,
+} from "../../apps/controller/src/composition/installation-config.ts";
 import { DEVELOPMENT_HARNESS_DESCRIPTOR } from "../../apps/controller/src/composition/production-harness.ts";
 import {
   kubernetesNamespaceName,
@@ -62,6 +65,22 @@ test("Installation startup validates the optional external observability URL", a
       /observability\.url/,
     );
   }
+});
+
+test("development accepts a Metrics URL with its default Compose Drivers", async (t) => {
+  const url = "https://metrics.example.test/d/operations";
+  const path = await fixture(t, { observability: { url } });
+  const environment = { OCC_CONFIG_PATH: path };
+  const snapshot = await loadStartupConfigurationSnapshot({ mode: "development", environment });
+  assert.equal(snapshot.observability.url, url);
+  assert.equal(
+    await loadInstallationConfiguration({
+      mode: "development",
+      environment,
+      startupConfiguration: snapshot,
+    }),
+    undefined,
+  );
 });
 
 function chatgptInstallation() {

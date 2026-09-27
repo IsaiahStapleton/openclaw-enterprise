@@ -47,6 +47,7 @@ export interface PostgresDevelopmentConfig {
   readonly poolMax?: number;
   readonly logger?: OccLogger;
   readonly logging?: LoggingConfiguration;
+  readonly observabilityUrl?: string;
   readonly trustedDevelopmentBridgeCidr?: string;
   readonly trustedDevelopmentForwarderCidr?: string;
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
@@ -209,9 +210,11 @@ export async function composePostgresDevelopment(
       ...(drivers === undefined
         ? {}
         : { backendSummaries: backendSummariesFromDefinitions(drivers.installation.backend) }),
-      ...(drivers?.installation.observability === undefined
+      ...(config.observabilityUrl === undefined && drivers?.installation.observability === undefined
         ? {}
-        : { observabilityUrl: drivers.installation.observability.url }),
+        : {
+            observabilityUrl: config.observabilityUrl ?? drivers?.installation.observability?.url,
+          }),
       auth,
       ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,

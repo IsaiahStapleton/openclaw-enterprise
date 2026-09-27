@@ -339,17 +339,18 @@ test("console shows the external observability link only to Installation adminis
   });
   const { page } = await newPage(t, fixture);
   await login(page, fixture);
-  const link = page.getByRole("link", { name: "Observability" });
+  const link = page.getByRole("link", { name: "Metrics" });
   await link.waitFor();
   assert.equal(await link.getAttribute("href"), url);
   assert.equal(await link.getAttribute("target"), "_blank");
   assert.equal(await link.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(await link.locator("svg.external-link-icon[aria-hidden='true']").count(), 1);
 
   await openShellMenu(page);
   await page.getByRole("menuitem", { name: "Logout" }).click();
   await login(page, { ...fixture, credentials: limited.credentials });
   await page.getByRole("heading", { name: "Agents" }).waitFor();
-  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  assert.equal(await page.getByRole("link", { name: "Metrics" }).count(), 0);
 });
 
 test("console ignores stale collection successes and errors while switching Namespaces", async (t) => {

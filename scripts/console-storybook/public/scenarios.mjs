@@ -521,16 +521,16 @@ export const scenarios = {
   },
   observabilityLink: {
     group: "Components/Navigation",
-    name: "Admin observability link",
+    name: "Admin Metrics link",
     observabilityUrl: "https://metrics.example.test/d/operations",
     description:
-      "Installation administrators see an external observability link that opens in a new tab.",
+      "Installation administrators see Metrics with an external-link icon; it opens in a new tab.",
   },
   observabilityDenied: {
     group: "Components/Navigation",
-    name: "Observability access denied",
+    name: "Metrics access denied",
     observabilityDenied: true,
-    description: "Namespace-only access keeps the external observability link out of navigation.",
+    description: "Namespace-only access keeps Metrics out of navigation.",
   },
   agentsEmpty: {
     group: "Pages/Agents",

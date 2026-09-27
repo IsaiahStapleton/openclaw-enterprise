@@ -284,6 +284,12 @@ p {
   width: 20px;
   text-align: center;
 }
+.external-link-icon {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  flex: none;
+}
 .account {
   margin-top: auto;
   position: relative;

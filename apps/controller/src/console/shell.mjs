@@ -71,6 +71,25 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
   let drawerControls = null;
   let namespaceSelect = null;
 
+  function externalLinkIcon() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "external-link-icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute(
+      "d",
+      "M15 3h6v6m0-6L10 14m11-1v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6",
+    );
+    svg.append(path);
+    return svg;
+  }
+
   function publicPanel(title, description, actionLabel, action) {
     app.replaceChildren(
       element(
@@ -240,7 +259,8 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
             rel: "noopener noreferrer",
           },
           element("span", { className: "nav-icon", "aria-hidden": "true" }, "◉"),
-          "Observability",
+          "Metrics",
+          externalLinkIcon(),
         ),
       );
     }

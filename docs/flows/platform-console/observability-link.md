@@ -42,14 +42,15 @@ graph TD
 accepts an optional closed `observability` block in trusted Installation YAML.
 It rejects malformed URLs, unsupported schemes, credentials, fragments, and
 unknown fields. Production and configured PostgreSQL development pass the
-validated URL to `createFastifyApp`. Changing it requires API restart; it is
+validated URL to `createFastifyApp`. Compose development also accepts an
+observability-only YAML with its default Drivers. Changing it requires API restart; it is
 not persisted as an Installation resource or used as an OTLP export target.
 
 ### 2. Resolve the browser link
 
 `loadPage` reads `GET /observability` with the Namespace collection after the session check. `apps/controller/src/index.ts:perform` calls `requireInstallationAdmin`, which authorizes the exact Installation through the selected IAM Driver and records denial evidence. An allowed response contains the startup URL or `null`. Denial or an unavailable optional read leaves the link hidden. A session `401` clears private console state.
 
-`apps/controller/src/console/shell.mjs:renderShell` adds **Observability** only for a returned URL. It opens a separate tab with `noopener noreferrer`; the browser does not send the OCC session to the destination. The external service authenticates the user independently.
+`apps/controller/src/console/shell.mjs:renderShell` adds **Metrics** with an external-link icon only for a returned URL. It opens a separate tab with `noopener noreferrer`; the browser does not send the OCC session to the destination. The external service authenticates the user independently.
 
 ## Debugging and Verification
 
