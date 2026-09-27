@@ -230,6 +230,74 @@ test("Plugin discovery reports unsupported selected Drivers without attempting r
   assert.deepEqual(fixture.calls, []);
 });
 
+test("Unsupported discovery still authorizes the exact selected Secret before capability errors", async (t) => {
+  const fixture = await createFixture(t, { supported: false });
+  const secret = await fixture.createSecret(fixture.namespace.id, "selected-pat", accessToken);
+  const account = await fixture.createAccountWithPolicy(
+    "unsupported-discovery-creator",
+    (principal) => {
+      fixture.policy.roles.push({
+        id: "unsupported-discovery-agent-create",
+        namespaceId: fixture.namespace.id,
+        permissions: [{ action: "create", resourceKind: "agent" }],
+      });
+      fixture.policy.bindings.push({
+        id: "unsupported-discovery-agent-create-binding",
+        namespaceId: fixture.namespace.id,
+        subjectKind: "identity",
+        subjectId: principal.id,
+        roleId: "unsupported-discovery-agent-create",
+      });
+    },
+  );
+  const session = await fixture.signIn(account.credentials);
+  // An unsupported PluginDriver must never ask the Secret backend for the value.
+  fixture.secretDriver.withValue = async () => {
+    throw new Error("Unexpected Secret value read");
+  };
+  for (const [suffix, extra] of [
+    ["", {}],
+    ["/details", { pluginId: remoteId }],
+  ]) {
+    const denied = await fixture.request("POST", `${fixture.path}${suffix}`, {
+      session,
+      body: { secretRef: secret.ref, ...extra },
+    });
+    assert.equal(denied.status, 403);
+    assert.deepEqual(fixture.auditSink.events.at(-1).authorization, {
+      principalId: account.principal.id,
+      action: "operate",
+      resource: secret.ref,
+    });
+    assert.equal(fixture.auditSink.events.at(-1).kind, "authorization_denial");
+  }
+  fixture.policy.roles.push({
+    id: "unsupported-discovery-secret-operator",
+    namespaceId: fixture.namespace.id,
+    permissions: [{ action: "operate", resourceKind: "secret" }],
+  });
+  fixture.policy.bindings.push({
+    id: "unsupported-discovery-secret-binding",
+    namespaceId: fixture.namespace.id,
+    subjectKind: "identity",
+    subjectId: account.principal.id,
+    roleId: "unsupported-discovery-secret-operator",
+    resourceKind: "secret",
+    resourceId: secret.id,
+  });
+  for (const [suffix, extra] of [
+    ["", {}],
+    ["/details", { pluginId: remoteId }],
+  ]) {
+    const unsupported = await fixture.request("POST", `${fixture.path}${suffix}`, {
+      session,
+      body: { secretRef: secret.ref, ...extra },
+    });
+    assert.equal(unsupported.status, 501);
+    assert.equal(unsupported.body.error.code, "NOT_IMPLEMENTED");
+  }
+});
+
 test("Plugin discovery uses an authorized same-Namespace Secret for catalog and details", async (t) => {
   const fixture = await createFixture(t);
   const stored = await fixture.request("POST", `/namespaces/${fixture.namespace.id}/secrets`, {

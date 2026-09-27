@@ -2830,16 +2830,20 @@ export class OpenClawController {
   ): Promise<PluginCatalogPage> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
     await this.read((state) => this.exactNamespace(state, namespaceId));
-    const driver = this.pluginDriver();
-    if (!driver.discoverCatalog) {
-      throw new NotImplementedError("agent_plugins.discovery", "Plugin discovery is unavailable.");
-    }
-    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, (accessToken) =>
-      driver.discoverCatalog!(
-        { accessToken, ...(input.cursor === undefined ? {} : { cursor: input.cursor }) },
-        signal,
-      ),
-    );
+    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, () => {
+      const driver = this.pluginDriver();
+      if (!driver.discoverCatalog) {
+        throw new NotImplementedError(
+          "agent_plugins.discovery",
+          "Plugin discovery is unavailable.",
+        );
+      }
+      return (accessToken) =>
+        driver.discoverCatalog!(
+          { accessToken, ...(input.cursor === undefined ? {} : { cursor: input.cursor }) },
+          signal,
+        );
+    });
   }
 
   async discoverAgentPluginDetails(
@@ -2850,24 +2854,34 @@ export class OpenClawController {
   ): Promise<PluginCatalogEntry> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
     await this.read((state) => this.exactNamespace(state, namespaceId));
-    const driver = this.pluginDriver();
-    if (!driver.getCatalogPlugin) {
-      throw new NotImplementedError(
-        "agent_plugins.discovery",
-        "Plugin tool discovery is unavailable.",
-      );
-    }
-    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, (accessToken) =>
-      driver.getCatalogPlugin!({ accessToken, pluginId: input.pluginId }, signal),
-    );
+    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, () => {
+      const driver = this.pluginDriver();
+      if (!driver.getCatalogPlugin) {
+        throw new NotImplementedError(
+          "agent_plugins.discovery",
+          "Plugin tool discovery is unavailable.",
+        );
+      }
+      return (accessToken) =>
+        driver.getCatalogPlugin!({ accessToken, pluginId: input.pluginId }, signal);
+    });
   }
 
   private async withPluginDiscoveryCredential<T>(
     principalId: string,
     namespaceId: string,
     credential: PluginDiscoveryCredential,
-    discover: (accessToken: string) => Promise<T>,
+    prepareDiscovery: () => (accessToken: string) => Promise<T>,
   ): Promise<T> {
+    const source = credential.secretRef;
+    if (source !== undefined) {
+      if (source.kind !== "secret" || source.namespaceId !== namespaceId) {
+        throw new ScopeViolationError("Secret references cannot cross Namespaces.");
+      }
+      await this.authorize(principalId, "operate", source);
+    }
+    // Do not reveal Driver support before authorization or read a value for unsupported discovery.
+    const discover = prepareDiscovery();
     // Keep both upstream errors and accidentally echoed credential material out of responses.
     const invoke = async (
       accessToken: string,
@@ -2898,10 +2912,6 @@ export class OpenClawController {
       outcome = await invoke(credential.accessToken);
     } else {
       const source = credential.secretRef;
-      if (source.kind !== "secret" || source.namespaceId !== namespaceId) {
-        throw new ScopeViolationError("Secret references cannot cross Namespaces.");
-      }
-      await this.authorize(principalId, "operate", source);
       const secret = await this.read(async (state) => {
         const found = await state.secrets.findSecret(namespaceId, source.id);
         if (!found) {

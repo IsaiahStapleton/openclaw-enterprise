@@ -32,8 +32,11 @@ before runtime cutover finishes; the Harness owns tool invocation and approvals.
 graph TD
   D0["Request discovery"] --> D1["Authorize Agent create"]
   D1 -->|Secret reference| D2["Authorize exact Secret operate"]
-  D2 --> D3["Read owned current value"]
-  D1 -->|transient token| D4["Call selected PluginDriver"]
+  D2 --> D6["Check PluginDriver support"]
+  D1 -->|transient token| D6
+  D6 -->|unsupported| D7["Return unavailable capability"]
+  D6 -->|Secret reference| D3["Read owned current value"]
+  D6 -->|transient token| D4["Call selected PluginDriver"]
   D3 --> D4
   D4 --> D5["Return safe catalog metadata"]
   A["Authorize and validate policy"] -->|valid| S["Save Agent selections"]
@@ -61,9 +64,11 @@ The [discovery routes](../reference/drivers/plugin.md#selection-and-catalogs) ac
 an ephemeral PAT or an exact Secret reference. `apps/controller/src/index.ts:createFastifyApp`
 passes the selected source to `packages/occ/src/index.ts:OpenClawController.discoverAgentPlugins`
 or `discoverAgentPluginDetails`. OCC authorizes Namespace Agent creation. For a
-reference, it rejects cross-Namespace scope, authorizes `operate` on the exact
-Secret, and reads its metadata. The selected `SecretDriver.withValue` verifies
-backend ownership and passes its current value to the selected PluginDriver.
+reference, it rejects cross-Namespace scope and authorizes `operate` on the exact
+Secret before checking PluginDriver support. Unsupported discovery returns without
+reading a Secret value. Otherwise OCC reads its metadata, and the selected
+`SecretDriver.withValue` verifies backend ownership and passes its current value
+to the selected PluginDriver.
 No platform transaction is held during backend or provider I/O. Each request
 reads again, so rotation affects later requests; an already-started request can
 use the value it read before rotation. Missing, denied, and unavailable Secrets
@@ -81,20 +86,17 @@ HTTPS logos use no referrers and fall back to initials.
 
 `apps/controller/src/index.ts:createFastifyApp`
 
-HTTP route contracts validate input shape before
+HTTP contracts validate input before
 [OpenClawController](../../packages/occ/src/index.ts) checks the exact Namespace
-and Agent. Agent reads use Agent `read`; Agent create/update stores
-the `plugins` map through the ordinary Agent mutation path. Shared contract
-validators check the canonical nested selection shape at OCC boundaries.
+and Agent. Reads require Agent `read`; create/update stores the `plugins` map.
+Shared validators check the nested selection shape.
 `OpenClawController.validatePluginPolicies` calls the selected Driver's
 `validatePolicies` before Agent create/update and provisioning writes. Unsupported
 controls, reviewer scopes, and combinations return `400 INVALID_REQUEST`;
 a missing selected Driver returns `501 NOT_IMPLEMENTED`. Validation is static: native app mapping,
-authentication, and release/tool metadata remain startup checks. A successful
-Agent mutation stores Agent-owned desired
-state and appends audit evidence in the same transaction. It does not modify
+authentication, and release/tool metadata remain startup checks. Agent mutations store desired state and audit evidence atomically without changing
 the reusable Configuration or active runtime. On update, omission preserves the
-existing map, `{}` clears it, and any supplied nonempty map replaces it completely.
+map, `{}` clears it, and a nonempty map replaces it.
 
 Authorized `GET /installation` reads expose the selected Driver's
 `policyCapabilities` through `OpenClawController.getInstallation`. This is policy
@@ -104,10 +106,9 @@ capability discovery; it does not list available plugins or tools.
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
-Deployment reads the Agent selections and Configuration, revalidates policy, and
-records the Driver identity and policy-only plugin map in AgentRevision. Native
-app mapping, release metadata, and rendered configuration are resolved later.
-The reconciliation queue receives the immutable revision.
+Deployment revalidates Agent selections and Configuration, records the Driver
+identity and policy-only plugin map in AgentRevision, and queues the immutable
+revision. Native app mapping, release metadata, and configuration are resolved later.
 
 ### 3. Deliver requested state through Compute preparation
 
@@ -117,9 +118,8 @@ Compute validates the admitted state, Driver, and Harness. Kubernetes projects
 the nonsecret request into the revision workload; Docker uses bounded runtime
 environment delivery. Both follow the existing Compute lifecycle.
 
-SSH Compute is a fail-closed exception in this release: any nonempty requested
-plugin map is rejected before SSH host effects. Plugin-free SSH revisions
-continue to use the ordinary SSH lifecycle.
+SSH Compute rejects nonempty plugin maps before host effects; plugin-free
+revisions use the ordinary SSH lifecycle.
 
 For an initial embedded Kubernetes gateway, preparation applies exact-Agent HTTPS
 egress before installation. For an existing gateway, `prepareRevision` avoids a
@@ -288,6 +288,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 02:41: Authorize the selected Secret before reporting unsupported plugin discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - 36cb6d6a4a515ad7328eb596b3da174f262f6d18)
 
 - 2026-09-27 02:08: Added exact-Secret-authorized transient plugin discovery and current-value reads. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - 41aae7750e33b8739efc5f7c6a0ebd160f42f711)
 
