@@ -419,7 +419,11 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   await createChannelDialog.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "Edit Slack" }).click();
-  await createChannelDialog.getByLabel("Slack channel IDs").fill("CNESTED123");
+  const nestedChannelIds = createChannelDialog.getByRole("combobox", {
+    name: "Channels",
+    exact: true,
+  });
+  await setSlackSelection(nestedChannelIds, "CNESTED123");
   await openCreateSecretDialog(createChannelDialog, "Slack bot token");
   const createSecretDialog = page.getByRole("dialog", {
     name: "Create Slack bot token Secret",
@@ -445,13 +449,10 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await page.mouse.click(secretBounds.x / 2, secretBounds.y + 8);
   await createSecretDialog.waitFor({ state: "hidden" });
   assert.equal(await createChannelDialog.isVisible(), true);
-  assert.equal(
-    await createChannelDialog.getByLabel("Slack channel IDs").inputValue(),
-    "CNESTED123",
-  );
+  assert.equal(await slackSelectionValue(nestedChannelIds), "CNESTED123");
   assert.equal(await createChannelDialog.getByLabel("Slack bot token").inputValue(), "");
   assert.equal(secretPostRequests(requests, namespace.id).length, secretWritesBeforeDismissal);
-  await createChannelDialog.getByLabel("Slack channel IDs").fill("");
+  await setSlackSelection(nestedChannelIds, "");
   await openCreateSecretDialog(createChannelDialog, "Slack bot token");
   assert.equal(await createSecretDialog.getByLabel("Value", { exact: true }).inputValue(), "");
   await createSecretDialog.getByLabel("Value", { exact: true }).fill(createdSlackBotSecretValue);
