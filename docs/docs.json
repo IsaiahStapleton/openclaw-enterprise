@@ -291,6 +291,15 @@
                     ]
                   },
                   {
+                    "group": "Channels",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/slack-channel",
+                        "label": "Slack Directory"
+                      }
+                    ]
+                  },
+                  {
                     "group": "Plugins",
                     "pages": [
                       {
@@ -616,6 +625,10 @@
                     "group": "Driver Contracts",
                     "pages": [
                       {
+                        "page": "reference/drivers/channel",
+                        "label": "Channel"
+                      },
+                      {
                         "page": "reference/drivers/compute",
                         "label": "Compute"
                       },
@@ -775,6 +788,7 @@
               "flows/openshell-sandbox-provisioning",
               "flows/driver-plugin-loading",
               "flows/agent-plugins",
+              "flows/agent-channel-directory",
               "flows/agent-provisioning",
               "flows/agent-native-admin",
               "flows/kubernetes-existing-namespace-placement",

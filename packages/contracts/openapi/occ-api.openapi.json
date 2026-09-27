@@ -108,7 +108,12 @@
                   { "const": "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED", "type": "string" },
                   { "const": "PLUGIN_DISCOVERY_RATE_LIMITED", "type": "string" },
                   { "const": "PLUGIN_DISCOVERY_UNAVAILABLE", "type": "string" },
-                  { "const": "PLUGIN_DISCOVERY_INVALID_RESPONSE", "type": "string" }
+                  { "const": "PLUGIN_DISCOVERY_INVALID_RESPONSE", "type": "string" },
+                  { "const": "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED", "type": "string" },
+                  { "const": "CHANNEL_DIRECTORY_MISSING_SCOPE", "type": "string" },
+                  { "const": "CHANNEL_DIRECTORY_RATE_LIMITED", "type": "string" },
+                  { "const": "CHANNEL_DIRECTORY_INVALID_RESPONSE", "type": "string" },
+                  { "const": "CHANNEL_DIRECTORY_UNAVAILABLE", "type": "string" }
                 ]
               },
               "details": {
@@ -8862,6 +8867,355 @@
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "operate", "resourceKind": "agent", "scope": "requested" }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/channel-directory/lookup": {
+      "post": {
+        "description": "Requires operate permission on the exact Secret named by secretId. Without an edit target, requires Agent create permission in the Namespace. With agentId, requires update permission on that exact Agent. With configurationId, requires update permission on that exact Configuration.",
+        "operationId": "lookupChannelDirectory",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cursor": {
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000]*$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "anyOf": [
+                          { "const": "users", "type": "string" },
+                          { "const": "channels", "type": "string" }
+                        ]
+                      },
+                      "query": { "maxLength": 200, "pattern": "^[^\\u0000]*$", "type": "string" },
+                      "secretId": {
+                        "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["secretId", "kind"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agentId": {
+                        "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      },
+                      "cursor": {
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000]*$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "anyOf": [
+                          { "const": "users", "type": "string" },
+                          { "const": "channels", "type": "string" }
+                        ]
+                      },
+                      "query": { "maxLength": 200, "pattern": "^[^\\u0000]*$", "type": "string" },
+                      "secretId": {
+                        "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["secretId", "kind", "agentId"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "configurationId": {
+                        "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      },
+                      "cursor": {
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000]*$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "anyOf": [
+                          { "const": "users", "type": "string" },
+                          { "const": "channels", "type": "string" }
+                        ]
+                      },
+                      "query": { "maxLength": 200, "pattern": "^[^\\u0000]*$", "type": "string" },
+                      "secretId": {
+                        "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["secretId", "kind", "configurationId"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ids": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string"
+                        },
+                        "maxItems": 20,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "kind": {
+                        "anyOf": [
+                          { "const": "users", "type": "string" },
+                          { "const": "channels", "type": "string" }
+                        ]
+                      },
+                      "secretId": {
+                        "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["secretId", "kind", "ids"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agentId": {
+                        "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      },
+                      "ids": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string"
+                        },
+                        "maxItems": 20,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "kind": {
+                        "anyOf": [
+                          { "const": "users", "type": "string" },
+                          { "const": "channels", "type": "string" }
+                        ]
+                      },
+                      "secretId": {
+                        "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["secretId", "kind", "ids", "agentId"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "configurationId": {
+                        "pattern": "^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      },
+                      "ids": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string"
+                        },
+                        "maxItems": 20,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "kind": {
+                        "anyOf": [
+                          { "const": "users", "type": "string" },
+                          { "const": "channels", "type": "string" }
+                        ]
+                      },
+                      "secretId": {
+                        "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["secretId", "kind", "ids", "configurationId"],
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "candidates": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "displayName": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "id": { "maxLength": 200, "minLength": 1, "type": "string" },
+                              "name": { "maxLength": 200, "minLength": 1, "type": "string" }
+                            },
+                            "required": ["id", "name"],
+                            "type": "object"
+                          },
+                          "maxItems": 100,
+                          "type": "array"
+                        },
+                        "complete": { "type": "boolean" },
+                        "nextCursor": { "maxLength": 2048, "minLength": 1, "type": "string" },
+                        "workspaceId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                        "workspaceName": { "maxLength": 200, "minLength": 1, "type": "string" }
+                      },
+                      "required": ["workspaceId", "candidates", "complete"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "413": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "415": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "429": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "501": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Search a channel directory using an authorized Namespace Secret",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          {
+            "action": "operate",
+            "condition": "directory_lookup",
+            "resourceKind": "secret",
+            "scope": "request_body"
+          },
+          {
+            "action": "create",
+            "condition": "directory_lookup",
+            "resourceKind": "agent",
+            "scope": "namespace"
+          },
+          {
+            "action": "update",
+            "condition": "directory_lookup",
+            "resourceKind": "agent",
+            "scope": "request_body"
+          },
+          {
+            "action": "update",
+            "condition": "directory_lookup",
+            "resourceKind": "configuration",
+            "scope": "request_body"
+          }
         ]
       }
     },

@@ -51,6 +51,7 @@ Sandbox packages in trusted YAML in either mode.
 | Capability        | Shared contract                                                 | Selection boundary                                                                                   |
 | ----------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `configuration`   | [ConfigurationDriver](configuration.md)                         | Required in Installation YAML; bundled Kubernetes or installed package.                              |
+| `channel`         | [ChannelDriver](channel.md)                                     | Controller-selected bundled Slack directory Driver; no Installation YAML selector.                   |
 | `iam`             | [IAMDriver](iam.md)                                             | Required in Installation YAML; bundled native IAM or installed package.                              |
 | `compute`         | [ComputeDriver](compute.md)                                     | Required in Installation YAML; bundled Kubernetes, bundled SSH, or installed package.                |
 | `secret`          | [SecretDriver](secret.md)                                       | Required in trusted Installation YAML, including SSH; bundled Kubernetes only.                       |

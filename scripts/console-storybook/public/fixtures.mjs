@@ -42,7 +42,8 @@ function configurationValues(scenario) {
       groupPolicy: scenario.slackPolicy === "open" ? "open" : "allowlist",
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
-      allowFrom: scenario.slackPolicy === "open" ? ["*"] : ["UDEMO123"],
+      allowFrom:
+        scenario.slackAllowFrom ?? (scenario.slackPolicy === "open" ? ["*"] : ["UDEMO123"]),
       channels: slackChannels(scenario),
     };
   }
@@ -354,6 +355,7 @@ export function installFixture(scenario, evidence) {
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     const path = url.pathname;
     const method = options.method ?? "GET";
+    const body = options.body ? JSON.parse(options.body) : {};
     evidence.requests.push({ method, path });
     for (const rule of rules) {
       if (
@@ -361,7 +363,8 @@ export function installFixture(scenario, evidence) {
         (rule.method ?? "GET") !== method ||
         (rule.path && rule.path !== path) ||
         (rule.prefix && !path.startsWith(rule.prefix)) ||
-        (rule.suffix && !path.endsWith(rule.suffix))
+        (rule.suffix && !path.endsWith(rule.suffix)) ||
+        (rule.bodyHasIds !== undefined && rule.bodyHasIds !== Array.isArray(body.ids))
       ) {
         continue;
       }
@@ -403,7 +406,6 @@ export function installFixture(scenario, evidence) {
         return error(rule.status, rule.code);
       }
     }
-    const body = options.body ? JSON.parse(options.body) : {};
     if (path === "/api/auth/session") {
       return response(signedIn ? session : null);
     }
@@ -476,6 +478,49 @@ export function installFixture(scenario, evidence) {
       if (resource === "agents/plugins/details" && method === "POST" && scenario.pluginDiscovery) {
         const entry = scenario.pluginDiscovery.details[body.pluginId];
         return entry ? response(entry) : error(503, "PLUGIN_DISCOVERY_UNAVAILABLE");
+      }
+      if (resource === "channel-directory/lookup" && method === "POST") {
+        if (!secrets.has(body.secretId) || !["users", "channels"].includes(body.kind)) {
+          return error(400);
+        }
+        const candidates =
+          body.kind === "users"
+            ? [
+                { id: "UDEMO123", name: "alex.chen", displayName: "Alex Chen" },
+                { id: "UDEMO124", name: "alex.ops", displayName: "Alex Chen" },
+                { id: "WDEMO125", name: "sam.rivers", displayName: "Sam Rivers" },
+              ]
+            : [
+                { id: "CDEMO123", name: "general" },
+                { id: "GDEMO124", name: "incident-private" },
+                { id: "CDEMO125", name: "platform" },
+              ];
+        const query = (body.query ?? "").toLowerCase();
+        const matches = candidates.filter((candidate) =>
+          body.ids
+            ? body.ids.includes(candidate.id)
+            : [candidate.id, candidate.name, candidate.displayName ?? ""].some((value) =>
+                value.toLowerCase().includes(query),
+              ),
+        );
+        const offset = body.cursor === "page-2" ? 2 : 0;
+        if (body.cursor && body.cursor !== "page-2") {
+          return error(400);
+        }
+        const nextCursor = !body.ids && matches.length > offset + 2 ? "page-2" : undefined;
+        evidence.directoryResponses.push({
+          kind: body.kind,
+          query: body.query ?? "",
+          cursor: body.cursor ?? null,
+          ids: body.ids ?? null,
+        });
+        return response({
+          workspaceId: "TDEMO123",
+          workspaceName: "Demo workspace",
+          candidates: body.ids ? matches : matches.slice(offset, offset + 2),
+          ...(nextCursor ? { nextCursor } : {}),
+          complete: !nextCursor,
+        });
       }
       if (resource === "configurations" && method === "POST") {
         const saved = {

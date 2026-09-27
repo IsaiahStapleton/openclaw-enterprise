@@ -6,7 +6,14 @@ const scenario = scenarios[id];
 if (!scenario) {
   throw new Error(`Unknown console story: ${id}`);
 }
-const evidence = { id, requests: [], unhandled: [], ready: false, error: null };
+const evidence = {
+  id,
+  requests: [],
+  directoryResponses: [],
+  unhandled: [],
+  ready: false,
+  error: null,
+};
 window.__consoleStory = evidence;
 installFixture(scenario, evidence);
 // Simulated build metadata; deployed images bake this meta tag into their HTML.

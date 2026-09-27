@@ -244,6 +244,9 @@
       "path": "tests/conformance/plugin-driver.test.mjs"
     },
     {
+      "path": "tests/conformance/slack-channel-directory.test.mjs"
+    },
+    {
       "path": "tests/conformance/hosted-plugin-discovery.test.mjs"
     },
     {

@@ -1300,6 +1300,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           namespaceId,
           request,
           agentName: agent.name,
+          configurationId: snapshot.id,
           secretBindings: snapshot.secretBindings,
           isCurrent: context.isCurrent,
           onExpired: context.onExpired,

@@ -47,6 +47,7 @@ export const DRIVER_CAPABILITIES = Object.freeze([
   "secret",
   "sandbox",
   "plugin",
+  "channel",
   "repo",
 ] as const);
 
@@ -883,6 +884,34 @@ export interface PluginDriver extends Driver {
     input: { readonly accessToken?: string; readonly pluginId: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry>;
+}
+
+export interface ChannelDirectoryLookupInput {
+  readonly token: string;
+  readonly kind: "users" | "channels";
+  readonly query?: string;
+  readonly cursor?: string;
+  readonly ids?: readonly string[];
+}
+
+export interface ChannelDirectoryResult {
+  readonly workspaceId: string;
+  readonly workspaceName?: string;
+  readonly candidates: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly displayName?: string;
+  }[];
+  readonly nextCursor?: string;
+  readonly complete: boolean;
+}
+
+export interface ChannelDriver extends Driver {
+  readonly capability: "channel";
+  lookupDirectory(
+    input: ChannelDirectoryLookupInput,
+    signal?: AbortSignal,
+  ): Promise<ChannelDirectoryResult>;
 }
 
 export type NamespaceLifecycleFailure = "retryable" | "permanent";

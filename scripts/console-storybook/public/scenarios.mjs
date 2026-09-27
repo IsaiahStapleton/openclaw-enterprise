@@ -2140,6 +2140,102 @@ export const scenarios = {
     description:
       "Edit channels, users, mention requirement, and enabled state. Token references remain fixed; token values belong in Credentials.",
   },
+  slackDirectoryChannels: {
+    group: "Components/Channels",
+    name: "Find Slack channels by name",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    actions: [click("Edit Slack"), click("Find Slack channel")],
+    description:
+      "The picker shows the bot's workspace, channel names and exact IDs. Next page reaches more channels. Selecting one appends only its ID to the editable channel list.",
+    gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
+  },
+  slackDirectorySavedNames: {
+    group: "Components/Channels",
+    name: "Saved Slack IDs show current names",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    actions: [click("Edit Slack")],
+    description:
+      "Saved channel and user IDs are resolved with the selected bot Secret when the editor opens. Names are only display labels; the exact IDs remain visible and are the only values saved.",
+    gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
+  },
+  slackDirectoryQualifiedNames: {
+    group: "Components/Channels",
+    name: "Qualified Slack targets keep names and IDs",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    slackChannels: {
+      "team:TDEMO123:channel:CDEMO123": {
+        requireMention: true,
+        users: ["team:TDEMO123:user:UDEMO123"],
+      },
+    },
+    slackAllowFrom: ["user:UDEMO123"],
+    actions: [click("Edit Slack")],
+    description:
+      "Existing workspace-qualified channel and user targets remain editable. Matching names appear beside their exact saved targets; the directory picker still inserts bare IDs.",
+    gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
+  },
+  slackDirectoryUsers: {
+    group: "Components/Channels",
+    name: "Resolve duplicate Slack people",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    actions: [click("Edit Slack"), click("Find allowed DM user")],
+    description:
+      "Two people share the same display name. Their handle and exact Slack user IDs identify which one will be saved.",
+    gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
+  },
+  slackDirectoryDenied: {
+    group: "Components/Channels",
+    name: "Slack directory access denied",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    rules: [
+      { suffix: "/channel-directory/lookup", method: "POST", bodyHasIds: false, status: 403 },
+    ],
+    actions: [click("Edit Slack"), click("Find Slack channel")],
+    description:
+      "A denied lookup keeps manual exact-ID entry available and explains Secret permissions.",
+  },
+  slackDirectoryLoading: {
+    group: "Components/Channels",
+    name: "Slack directory loading",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    rules: [{ suffix: "/channel-directory/lookup", method: "POST", bodyHasIds: false, hold: true }],
+    actions: [click("Edit Slack"), click("Find Slack channel")],
+    description:
+      "While lookup is pending, the picker announces loading and disables page navigation.",
+  },
+  slackDirectorySearchRace: {
+    group: "Components/Channels",
+    name: "New search supersedes pending results",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    rules: [
+      {
+        suffix: "/channel-directory/lookup",
+        method: "POST",
+        bodyHasIds: false,
+        delayMs: 500,
+        once: true,
+      },
+    ],
+    actions: [click("Edit Slack"), click("Find Slack channel")],
+    description:
+      "An older directory request is delayed. Search for platform before it returns; the late results must not replace the newer search.",
+  },
+  slackDirectoryMissingSecret: {
+    group: "Components/Channels",
+    name: "Slack directory needs a bot Secret",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    slackBindings: "app",
+    actions: [click("Edit Slack"), click("Find Slack channel")],
+    description: "The picker explains that a Slack bot token Secret must be selected first.",
+  },
   slackEveryone: {
     group: "Components/Channels",
     name: "Slack everyone in channels",

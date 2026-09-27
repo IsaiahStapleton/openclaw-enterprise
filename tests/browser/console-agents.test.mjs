@@ -7737,3 +7737,268 @@ test("Secret summaries retain revision bindings and distinguish unreadable metad
   await page.getByRole("button", { name: "Configuration", exact: true }).click();
   await page.getByRole("link", { name: "Draft model", exact: true }).waitFor();
 });
+
+test("Slack directory selections show names and save exact channel IDs", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Slack directory picker", { ready: true });
+  const appSecret = await fixture.createSecret(namespace.id, "Slack app token", "xapp-test-secret");
+  const botSecret = await fixture.createSecret(namespace.id, "Slack bot token", "xoxb-test-secret");
+  const slack = {
+    enabled: true,
+    mode: "socket",
+    appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+    botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+    dmPolicy: "disabled",
+    channels: { CEXIST123: { requireMention: true, users: ["*"] } },
+  };
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Slack Directory Agent",
+    nativeValues("slack-directory", { harnessId: "codex", channels: { slack } }),
+    {
+      executionMode: "dedicated",
+      secretBindings: {
+        SLACK_APP_TOKEN: { source: appSecret.ref, delivery: { type: "env" } },
+        SLACK_BOT_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
+      },
+    },
+  );
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const directoryBodies = [];
+  // The browser test owns Console selection and saved API state; only provider directory data is simulated.
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/channel-directory/lookup`,
+    async (route) => {
+      const body = route.request().postDataJSON();
+      directoryBodies.push(body);
+      const candidates =
+        body.kind === "users"
+          ? [{ id: "UTEST123", name: "alex", displayName: "Alex" }]
+          : [
+              { id: "CEXIST123", name: "existing-room" },
+              { id: "CTEST456", name: "release-room" },
+            ];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            workspaceId: "TTEST123",
+            workspaceName: "Test workspace",
+            candidates: body.ids
+              ? candidates.filter((candidate) => body.ids.includes(candidate.id))
+              : candidates,
+            complete: true,
+          },
+          meta: { requestId: "req_test_slack_directory" },
+        }),
+      });
+    },
+  );
+
+  const channelsUrl = detailUrl(fixture, namespace.id, agent.id, "draft", "channels");
+  await login(page, fixture, channelsUrl.pathname + channelsUrl.search);
+  await page.getByRole("button", { name: "Edit Slack" }).click();
+  const channelDialog = page.getByRole("dialog", { name: "Edit Slack" });
+  await channelDialog
+    .locator(".slack-directory-saved-id")
+    .filter({ hasText: "CEXIST123" })
+    .getByText("#existing-room")
+    .waitFor();
+  await channelDialog.getByLabel("Slack channel IDs").fill("#release-room");
+  await channelDialog.getByRole("button", { name: "Save configuration" }).click();
+  await channelDialog
+    .getByText(
+      "Enter exact Slack channel IDs or channel targets, or choose channels from the directory.",
+    )
+    .waitFor();
+  assert.equal(
+    pathRequests(
+      requests,
+      "PATCH",
+      `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+    ).length,
+    0,
+  );
+  await channelDialog.getByLabel("Slack channel IDs").fill("CEXIST123");
+  await channelDialog.getByRole("button", { name: "Find Slack channel" }).click();
+  const channelPicker = page.getByRole("dialog", { name: "Find Slack channel" });
+  await channelPicker.getByRole("searchbox", { name: "Search Slack channels" }).fill("CTEST456");
+  await channelPicker.getByRole("button", { name: "Search" }).click();
+  await channelPicker.getByRole("button", { name: /release-room.*CTEST456/ }).click();
+  assert.equal(
+    await channelDialog.getByLabel("Slack channel IDs").inputValue(),
+    "CEXIST123, CTEST456",
+  );
+  const savedChannels = page.waitForResponse(
+    (response) =>
+      response
+        .url()
+        .endsWith(`/namespaces/${namespace.id}/configurations/${agent.configurationId}`) &&
+      response.request().method() === "PATCH",
+  );
+  await channelDialog.getByRole("button", { name: "Save configuration" }).click();
+  assert.equal((await savedChannels).status(), 200);
+  const configuration = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.deepEqual(Object.keys(configuration.data.values.channels.slack.channels), [
+    "CEXIST123",
+    "CTEST456",
+  ]);
+  assert.ok(
+    directoryBodies.some(
+      (body) =>
+        body.secretId === botSecret.id &&
+        body.kind === "channels" &&
+        body.configurationId === agent.configurationId &&
+        body.ids?.[0] === "CTEST456",
+    ),
+  );
+  await page.getByRole("button", { name: "Edit Slack" }).click();
+  await page
+    .getByRole("dialog", { name: "Edit Slack" })
+    .locator(".slack-directory-saved-id")
+    .filter({ hasText: "CTEST456" })
+    .getByText("#release-room")
+    .waitFor();
+});
+
+test("Slack editor preserves existing qualified channel and user targets", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Qualified Slack targets", { ready: true });
+  const appSecret = await fixture.createSecret(
+    namespace.id,
+    "Qualified Slack app token",
+    "xapp-qualified",
+  );
+  const botSecret = await fixture.createSecret(
+    namespace.id,
+    "Qualified Slack bot token",
+    "xoxb-qualified",
+  );
+  const channelUsers = [
+    "team:TTEST123:user:UTEST123",
+    "user:UTEST124",
+    "slack:UTEST125",
+    "@legacy-sender",
+  ];
+  const dmUsers = ["user:UTEST123", "slack:UTEST124", "team:TTEST123:user:UTEST125", "@legacy-dm"];
+  const channelIds = ["team:TTEST123:channel:CEXIST123", "channel:GEXIST456", "#legacy-room"];
+  const slack = {
+    enabled: true,
+    mode: "socket",
+    appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+    botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+    dmPolicy: "allowlist",
+    allowFrom: dmUsers,
+    channels: Object.fromEntries(
+      channelIds.map((id) => [id, { requireMention: true, users: channelUsers }]),
+    ),
+  };
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Qualified Slack Agent",
+    nativeValues("qualified-slack", { harnessId: "codex", channels: { slack } }),
+    {
+      executionMode: "dedicated",
+      secretBindings: {
+        SLACK_APP_TOKEN: { source: appSecret.ref, delivery: { type: "env" } },
+        SLACK_BOT_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
+      },
+    },
+  );
+  const { page } = await newPage(t, fixture);
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/channel-directory/lookup`,
+    async (route) => {
+      const body = route.request().postDataJSON();
+      const candidates =
+        body.kind === "channels"
+          ? [{ id: "CEXIST123", name: "existing-room" }]
+          : [{ id: "UTEST123", name: "alex", displayName: "Alex" }];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            workspaceId: "TTEST123",
+            candidates: body.ids
+              ? candidates.filter((candidate) => body.ids.includes(candidate.id))
+              : candidates,
+            complete: true,
+          },
+          meta: { requestId: "req_qualified_slack" },
+        }),
+      });
+    },
+  );
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "channels");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("button", { name: "Edit Slack" }).click();
+  const dialog = page.getByRole("dialog", { name: "Edit Slack" });
+  assert.deepEqual(
+    (await dialog.getByLabel("Slack channel IDs").inputValue()).split(", "),
+    channelIds,
+  );
+  assert.deepEqual(
+    new Set((await dialog.getByLabel("Allowed channel user IDs").inputValue()).split(", ")),
+    new Set(channelUsers),
+  );
+  assert.deepEqual(
+    (await dialog.getByLabel("Allowed DM user IDs").inputValue()).split(", "),
+    dmUsers,
+  );
+  await dialog.getByRole("button", { name: "Find Slack channel" }).click();
+  await page
+    .getByRole("dialog", { name: "Find Slack channel" })
+    .getByRole("button", { name: /existing-room.*CEXIST123/ })
+    .click();
+  assert.deepEqual(
+    (await dialog.getByLabel("Slack channel IDs").inputValue()).split(", "),
+    channelIds,
+  );
+  await dialog.getByRole("button", { name: "Find allowed channel user" }).click();
+  await page
+    .getByRole("dialog", { name: "Find allowed channel user" })
+    .getByRole("button", { name: /Alex.*UTEST123/ })
+    .click();
+  assert.deepEqual(
+    new Set((await dialog.getByLabel("Allowed channel user IDs").inputValue()).split(", ")),
+    new Set(channelUsers),
+  );
+  await dialog.getByRole("button", { name: "Find allowed DM user" }).click();
+  await page
+    .getByRole("dialog", { name: "Find allowed DM user" })
+    .getByRole("button", { name: /Alex.*UTEST123/ })
+    .click();
+  assert.deepEqual(
+    (await dialog.getByLabel("Allowed DM user IDs").inputValue()).split(", "),
+    dmUsers,
+  );
+  await dialog.getByLabel("Require a mention").uncheck();
+  const saved = page.waitForResponse(
+    (response) =>
+      response
+        .url()
+        .endsWith(`/namespaces/${namespace.id}/configurations/${agent.configurationId}`) &&
+      response.request().method() === "PATCH",
+  );
+  await dialog.getByRole("button", { name: "Save configuration" }).click();
+  assert.equal((await saved).status(), 200);
+  const configuration = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  const persisted = configuration.data.values.channels.slack;
+  assert.deepEqual(Object.keys(persisted.channels), channelIds);
+  for (const entry of Object.values(persisted.channels)) {
+    assert.deepEqual(new Set(entry.users), new Set(channelUsers));
+    assert.equal(entry.requireMention, false);
+  }
+  assert.deepEqual(persisted.allowFrom, dmUsers);
+});

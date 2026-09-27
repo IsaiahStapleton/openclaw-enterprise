@@ -1,6 +1,12 @@
 import { element } from "../dom.mjs";
 import { SLACK_SECRET_BINDINGS, secretIdForBinding } from "../agents/credentials.mjs";
 import {
+  createSlackDirectoryPicker,
+  createSlackIdLabels,
+  isSlackConfigTarget,
+  matchesSlackDirectoryCandidate,
+} from "../agents/slack-directory.mjs";
+import {
   createSecretReferenceField,
   sameNamespaceSecretHref,
   secretBinding,
@@ -25,6 +31,7 @@ const STANDARD_REFS = {
 };
 
 const DM_POLICIES = ["pairing", "allowlist", "open", "disabled"];
+const originalTargets = new WeakMap();
 
 function channelUsers(channel) {
   const users = uniqueList(channel?.users ?? []);
@@ -247,13 +254,16 @@ async function bindSecret(binding, context, secret) {
   };
 }
 
-function credentialReferenceField(binding, context = {}) {
+function credentialReferenceField(binding, context = {}, onSelected) {
   const picker = createSecretReferenceField({
     context,
     id: `slack-secret-${binding.key.toLowerCase().replaceAll("_", "-")}`,
     label: binding.label,
     getCurrentSource: () => activeSecretBinding(binding, context)?.source,
-    onSecretSelected: (secret) => bindSecret(binding, context, secret),
+    onSecretSelected: async (secret) => {
+      await bindSecret(binding, context, secret);
+      onSelected?.(binding.key);
+    },
     createSecretName: () => modalSecretName(binding, context),
     createDialogTitle: `Create ${binding.label} Secret`,
     createFixedKey: {
@@ -282,8 +292,49 @@ function appendFields(body, config, context) {
   const channelIds = Object.keys(config.channels ?? {});
   const firstChannel = Object.values(config.channels ?? {})[0];
   const users = channelUsers(firstChannel);
+  originalTargets.set(body, {
+    channels: new Set(channelIds),
+    users: new Set(users),
+    dmUsers: new Set(config.allowFrom ?? []),
+  });
   const mention = firstChannel?.requireMention ?? config.requireMention ?? true;
   const allowedUsers = input("slack-allowed-user-ids", users.join(", "));
+  const getSecretId = () => {
+    const source = activeSecretBindings(context).SLACK_BOT_TOKEN?.source;
+    return source?.kind === "secret" && source.namespaceId === context.namespaceId
+      ? source.id
+      : null;
+  };
+  const addId = (kind, control, candidate) => {
+    const ids = uniqueList(control.value.split(","));
+    if (!ids.some((id) => matchesSlackDirectoryCandidate(id, kind, candidate))) {
+      control.value = [...ids, candidate.id].join(", ");
+      control.dispatchEvent(new Event("input", { bubbles: true }));
+      control.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  };
+  const channelInput = input("slack-channel-ids", channelIds.join(", "));
+  const picker = (kind, control, label) =>
+    createSlackDirectoryPicker({
+      context,
+      kind,
+      label,
+      getSecretId,
+      configurationId: context.configurationId,
+      onSelect: (candidate) => addId(kind, control, candidate),
+    });
+  const channelPicker = picker("channels", channelInput, "Find Slack channel");
+  const allowedUsersPicker = picker("users", allowedUsers, "Find allowed channel user");
+  const labels = (kind, control) =>
+    createSlackIdLabels({
+      context,
+      kind,
+      getSecretId,
+      configurationId: context.configurationId,
+      control,
+    });
+  const channelLabels = labels("channels", channelInput);
+  const allowedUsersLabels = labels("users", allowedUsers);
   const everyoneField = checkbox(
     "slack-allow-everyone",
     "Allow everyone in these channels to mention the agent",
@@ -292,6 +343,7 @@ function appendFields(body, config, context) {
   const everyone = everyoneField.querySelector("input");
   const updateAccessControls = () => {
     allowedUsers.disabled = everyone.checked;
+    allowedUsersPicker.hidden = everyone.checked;
     everyone.disabled = uniqueList(allowedUsers.value.split(",")).length > 0;
   };
   allowedUsers.addEventListener("input", updateAccessControls);
@@ -314,8 +366,11 @@ function appendFields(body, config, context) {
     config.enterpriseOrgInstall === true && config.dm?.enabled !== false,
   );
   const dmUsers = input("slack-dm-user-ids", (config.allowFrom ?? []).join(", "));
+  const dmUsersPicker = picker("users", dmUsers, "Find allowed DM user");
+  const dmUsersLabels = labels("users", dmUsers);
   const updateDmControls = () => {
     dmUsers.disabled = dmPolicy.value === "open" || dmPolicy.value === "disabled";
+    dmUsersPicker.hidden = dmUsers.disabled;
   };
   dmPolicy.addEventListener("change", () => {
     // Leaving open access must require an explicit sender choice for an allowlist.
@@ -334,15 +389,27 @@ function appendFields(body, config, context) {
       { className: "hint" },
       "Choose channel access and direct-message access separately.",
     ),
-    field(
-      "Slack channel IDs",
-      input("slack-channel-ids", channelIds.join(", ")),
-      "Comma-separated channel IDs; existing per-channel properties are preserved.",
+    element(
+      "div",
+      { className: "slack-directory-id-field" },
+      field(
+        "Slack channel IDs",
+        channelInput,
+        "Choose channels by name or enter exact channel IDs. Existing per-channel properties are preserved.",
+      ),
+      channelLabels,
+      channelPicker,
     ),
-    field(
-      "Allowed channel user IDs",
-      allowedUsers,
-      "Comma-separated Slack user IDs allowed in these channels. Clear the IDs to choose everyone. Direct-message access is unchanged.",
+    element(
+      "div",
+      { className: "slack-directory-id-field" },
+      field(
+        "Allowed channel user IDs",
+        allowedUsers,
+        "Choose people by name or enter exact user IDs. Clear the IDs to choose everyone. Direct-message access is unchanged.",
+      ),
+      allowedUsersLabels,
+      allowedUsersPicker,
     ),
     everyoneField,
     element(
@@ -357,10 +424,16 @@ function appendFields(body, config, context) {
       dmPolicy,
       "Open allows anyone to send direct messages. Disabled is recommended for organization-wide installs.",
     ),
-    field(
-      "Allowed DM user IDs",
-      dmUsers,
-      "Comma-separated Slack user IDs. Required for Allowlist; optional preapproved senders for Pairing. These IDs do not change channel access.",
+    element(
+      "div",
+      { className: "slack-directory-id-field" },
+      field(
+        "Allowed DM user IDs",
+        dmUsers,
+        "Choose people by name or enter exact user IDs. Required for Allowlist; optional preapproved senders for Pairing. These IDs do not change channel access.",
+      ),
+      dmUsersLabels,
+      dmUsersPicker,
     ),
     ...(config.enterpriseOrgInstall === true
       ? [
@@ -386,7 +459,15 @@ function appendFields(body, config, context) {
       { className: "hint" },
       "Slack channels use fixed environment names. Secret links show metadata only, never token values.",
     ),
-    ...SLACK_SECRET_BINDINGS.map((binding) => credentialReferenceField(binding, context)),
+    ...SLACK_SECRET_BINDINGS.map((binding) =>
+      credentialReferenceField(binding, context, (key) => {
+        if (key === "SLACK_BOT_TOKEN") {
+          for (const labels of [channelLabels, allowedUsersLabels, dmUsersLabels]) {
+            labels.refreshNames();
+          }
+        }
+      }),
+    ),
     credentialNavigation(context),
   );
 }
@@ -410,6 +491,7 @@ export const slack = {
   secretBindings: SLACK_SECRET_BINDINGS,
   support: supportSlack,
   validate(body) {
+    const existing = originalTargets.get(body);
     const ids = uniqueList(body.querySelector("#slack-channel-ids").value.split(","));
     const users = uniqueList(body.querySelector("#slack-allowed-user-ids").value.split(","));
     const allowEveryone = body.querySelector("#slack-allow-everyone").checked;
@@ -425,6 +507,12 @@ export const slack = {
     if (ids.length > 0 && users.length === 0 && !allowEveryone) {
       return "Enter allowed channel user IDs or allow everyone in these channels.";
     }
+    if (ids.some((id) => !isSlackConfigTarget(id, "channels") && !existing?.channels.has(id))) {
+      return "Enter exact Slack channel IDs or channel targets, or choose channels from the directory.";
+    }
+    if (users.some((id) => !isSlackConfigTarget(id, "users") && !existing?.users.has(id))) {
+      return "Enter exact Slack user IDs or user targets, or choose people from the directory.";
+    }
     const dmPolicy = body.querySelector("#slack-dm-policy");
     const dmUsers = uniqueList(body.querySelector("#slack-dm-user-ids").value.split(","));
     if (
@@ -435,6 +523,13 @@ export const slack = {
     }
     if (dmPolicy.value === "allowlist" && (dmUsers.length === 0 || dmUsers.includes("*"))) {
       return "Enter specific allowed DM user IDs, or choose a different direct-message policy.";
+    }
+    if (
+      dmUsers.some(
+        (id) => id !== "*" && !isSlackConfigTarget(id, "users") && !existing?.dmUsers.has(id),
+      )
+    ) {
+      return "Enter exact allowed DM user IDs or user targets, or choose people from the directory.";
     }
     return null;
   },

@@ -1114,6 +1114,82 @@ summary:focus-visible {
 .plugin-fields {
   margin-block: 1.5rem;
 }
+.slack-directory-picker[hidden],
+.slack-directory-pagination[hidden] {
+  display: none;
+}
+.slack-directory-saved-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.slack-directory-saved-id {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-width: 100%;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface-muted);
+  border-radius: 6px;
+}
+.slack-directory-saved-id code {
+  overflow-wrap: anywhere;
+}
+
+.slack-directory-id-field {
+  display: grid;
+  gap: 0.5rem;
+}
+.slack-directory-labels .hint {
+  margin: 0;
+  min-height: 1.25rem;
+}
+.slack-directory-dialog {
+  width: min(38rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.slack-directory-dialog::backdrop {
+  background: var(--overlay);
+}
+.slack-directory-heading,
+.slack-directory-search,
+.slack-directory-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.slack-directory-heading h3 {
+  margin: 0;
+}
+.slack-directory-search input {
+  flex: 1;
+  min-width: 0;
+}
+.slack-directory-results {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 18rem;
+  overflow: auto;
+}
+.slack-directory-result {
+  width: 100%;
+  text-align: left;
+}
+.slack-directory-result span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.slack-directory-result code {
+  margin-left: auto;
+}
 .plugin-dialog {
   width: min(72rem, calc(100vw - 2rem));
   height: min(52rem, calc(100dvh - 2rem));

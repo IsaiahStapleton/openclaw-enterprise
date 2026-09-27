@@ -114,6 +114,33 @@ export const AgentPluginDetailsResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChannelDirectoryLookupResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        workspaceId: Type.String({ minLength: 1, maxLength: 200 }),
+        workspaceName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+        candidates: Type.Array(
+          Type.Object(
+            {
+              id: Type.String({ minLength: 1, maxLength: 200 }),
+              name: Type.String({ minLength: 1, maxLength: 200 }),
+              displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+            },
+            { additionalProperties: false },
+          ),
+          { maxItems: 100 },
+        ),
+        nextCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
+        complete: Type.Boolean(),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
 const RuntimeEvidenceTimestamp = Type.String({
   format: "date-time",
   pattern:

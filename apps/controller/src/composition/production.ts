@@ -11,6 +11,7 @@ import {
 } from "@openclaw-enterprise/occ";
 import { createPostgresControllerAuth } from "../auth/index.ts";
 import { createFastifyApp } from "../index.ts";
+import { SlackChannelDriver } from "../drivers/channel/slack.ts";
 import type {
   InstallationRuntimeDrivers,
   ServiceAccountDriverFactory,
@@ -153,6 +154,9 @@ export async function composeProduction(config: ProductionConfig) {
     controller.selectDriver("compute", computeDriver.id);
     controller.registerDriver(secretDriver);
     controller.selectDriver("secret", secretDriver.id);
+    const channelDriver = new SlackChannelDriver();
+    controller.registerDriver(channelDriver);
+    controller.selectDriver("channel", channelDriver.id);
     if (sandboxDriver !== undefined) {
       controller.registerDriver(sandboxDriver);
       controller.selectDriver("sandbox", sandboxDriver.id);

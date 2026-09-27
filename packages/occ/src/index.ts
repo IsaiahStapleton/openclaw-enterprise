@@ -36,6 +36,9 @@ import type {
   PluginCatalogEntry,
   PluginCatalogPage,
   PluginDriver,
+  ChannelDriver,
+  ChannelDirectoryResult,
+  ChannelDirectoryLookupInput,
   PluginRevisionState,
   BackendDefinition,
   BackendRef,
@@ -87,6 +90,7 @@ import {
   DriverSelectionError,
   ModelDiscoveryError,
   PluginDiscoveryError,
+  ChannelDirectoryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
@@ -151,6 +155,7 @@ export {
   DriverSelectionError,
   ModelDiscoveryError,
   PluginDiscoveryError,
+  ChannelDirectoryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
@@ -296,6 +301,16 @@ export interface UpdateAgentInput {
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
 }
 
+export interface LookupChannelDirectoryInput {
+  readonly secretId: string;
+  readonly kind: ChannelDirectoryLookupInput["kind"];
+  readonly query?: string;
+  readonly cursor?: string;
+  readonly ids?: readonly string[];
+  readonly agentId?: string;
+  readonly configurationId?: string;
+}
+
 export interface CreateServiceAccountInput {
   readonly namespaceId: string;
   readonly name: string;
@@ -395,6 +410,7 @@ type DriverByCapability = {
   sandbox: SandboxDriver;
   compute: ComputeDriver;
   plugin: PluginDriver;
+  channel: ChannelDriver;
   repo: RepoDriver;
 };
 type DriverFor<Capability extends DriverCapability> = DriverByCapability[Capability];
@@ -487,6 +503,9 @@ function driverHasCapabilityContract(driver: Driver): boolean {
   }
   if (driver.capability === "plugin") {
     return typeof candidate.listCatalog === "function";
+  }
+  if (driver.capability === "channel") {
+    return typeof candidate.lookupDirectory === "function";
   }
   if (driver.capability === "repo") {
     return (
@@ -798,6 +817,63 @@ function normalizeAgentPlugins(
   plugins: PluginDesiredState | undefined,
 ): PluginDesiredState | undefined {
   return normalizePluginDesiredState(plugins, invalidPluginRequest);
+}
+
+function sameSecretBackend(left: Secret, right: Secret): boolean {
+  return (
+    left.id === right.id &&
+    left.namespaceId === right.namespaceId &&
+    left.driverId === right.driverId &&
+    left.backendRef.uid === right.backendRef.uid &&
+    left.backendRef.name === right.backendRef.name &&
+    left.backendRef.namespaceName === right.backendRef.namespaceName &&
+    left.backendRef.key === right.backendRef.key
+  );
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validChannelDirectoryResult(value: unknown): value is ChannelDirectoryResult {
+  const result = asRecord(value);
+  const bounded = (candidate: unknown, maxLength: number): candidate is string =>
+    typeof candidate === "string" &&
+    candidate.length > 0 &&
+    candidate.length <= maxLength &&
+    !hasControlCharacters(candidate);
+  if (
+    result === undefined ||
+    !bounded(result.workspaceId, 200) ||
+    (result.workspaceName !== undefined && !bounded(result.workspaceName, 200)) ||
+    !Array.isArray(result.candidates) ||
+    result.candidates.length > 100 ||
+    (result.nextCursor !== undefined && !bounded(result.nextCursor, 2048)) ||
+    typeof result.complete !== "boolean"
+  ) {
+    return false;
+  }
+  const ids = new Set<string>();
+  for (const candidate of result.candidates) {
+    const entry = asRecord(candidate);
+    if (
+      entry === undefined ||
+      !bounded(entry.id, 200) ||
+      !bounded(entry.name, 200) ||
+      (entry.displayName !== undefined && !bounded(entry.displayName, 200)) ||
+      ids.has(entry.id)
+    ) {
+      return false;
+    }
+    ids.add(entry.id);
+  }
+  return true;
 }
 
 export class OpenClawController {
@@ -2921,6 +2997,189 @@ export class OpenClawController {
           signal,
         );
       };
+    });
+  }
+
+  async lookupChannelDirectory(
+    principalId: string,
+    namespaceId: string,
+    input: LookupChannelDirectoryInput,
+    signal?: AbortSignal,
+  ): Promise<ChannelDirectoryResult> {
+    const ids = input.ids;
+    const bounded = (value: unknown, max: number, allowEmpty = false): value is string =>
+      typeof value === "string" &&
+      (allowEmpty || value.length > 0) &&
+      value.length <= max &&
+      !value.includes("\u0000");
+    if (
+      !bounded(input.secretId, 200) ||
+      (input.kind !== "users" && input.kind !== "channels") ||
+      (input.query !== undefined && !bounded(input.query, 200, true)) ||
+      (input.cursor !== undefined && !bounded(input.cursor, 2048)) ||
+      (ids !== undefined &&
+        (!Array.isArray(ids) ||
+          ids.length === 0 ||
+          ids.length > 20 ||
+          ids.some(
+            (id) =>
+              typeof id !== "string" ||
+              id.length === 0 ||
+              id.length > 200 ||
+              hasControlCharacters(id),
+          ) ||
+          new Set(ids).size !== ids.length ||
+          input.query !== undefined ||
+          input.cursor !== undefined)) ||
+      (input.agentId !== undefined && !bounded(input.agentId, 200)) ||
+      (input.configurationId !== undefined && !bounded(input.configurationId, 200)) ||
+      (input.agentId !== undefined && input.configurationId !== undefined)
+    ) {
+      throw new ScopeViolationError("The channel directory lookup input is invalid.");
+    }
+    const first = await this.channelDirectorySecret(principalId, namespaceId, input);
+    let driver: ChannelDriver;
+    try {
+      driver = this.selectedDriver("channel");
+    } catch {
+      throw new NotImplementedError(
+        "channel_directory.lookup",
+        "Channel directory lookup is unavailable.",
+      );
+    }
+    if (!first.driver.withValue) {
+      throw new DependencyUnavailableError(
+        "The selected Secret Driver cannot use credentials for directory lookup.",
+      );
+    }
+    const outcome = await this.secretOperation(() =>
+      first.driver.withValue!(first.secret, async (token) => {
+        if (!isNonEmptyString(token)) {
+          return { error: new ChannelDirectoryError("invalid_response") };
+        }
+        try {
+          // Recheck the exact target grant and Secret identity after backend I/O.
+          const current = await this.channelDirectorySecret(principalId, namespaceId, input);
+          if (!sameSecretBackend(first.secret, current.secret)) {
+            return {
+              validationError: new ResourceConflictError(
+                "The channel directory credential changed. Refresh and retry.",
+              ),
+            };
+          }
+        } catch (error) {
+          return { validationError: error };
+        }
+        try {
+          const result = await driver.lookupDirectory(
+            {
+              token,
+              kind: input.kind,
+              ...(input.query === undefined ? {} : { query: input.query }),
+              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+              ...(ids === undefined ? {} : { ids }),
+            },
+            signal,
+          );
+          if (
+            !validChannelDirectoryResult(result) ||
+            (ids !== undefined &&
+              (!result.complete ||
+                result.nextCursor !== undefined ||
+                result.candidates.some((candidate) => !ids.includes(candidate.id))))
+          ) {
+            return { error: new ChannelDirectoryError("invalid_response") };
+          }
+          const safeResult = {
+            workspaceId: result.workspaceId,
+            ...(result.workspaceName === undefined ? {} : { workspaceName: result.workspaceName }),
+            candidates: result.candidates.map((candidate) => ({
+              id: candidate.id,
+              name: candidate.name,
+              ...(candidate.displayName === undefined
+                ? {}
+                : { displayName: candidate.displayName }),
+            })),
+            ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }),
+            complete: result.complete,
+          };
+          if (JSON.stringify(safeResult).includes(JSON.stringify(token).slice(1, -1))) {
+            return { error: new ChannelDirectoryError("invalid_response") };
+          }
+          return { value: immutableCopy(safeResult) };
+        } catch (error) {
+          return {
+            error: new ChannelDirectoryError(
+              error instanceof ChannelDirectoryError ? error.reason : "unavailable",
+            ),
+          };
+        }
+      }),
+    );
+    if ("validationError" in outcome) {
+      throw outcome.validationError;
+    }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  }
+
+  private async channelDirectorySecret(
+    principalId: string,
+    namespaceId: string,
+    input: LookupChannelDirectoryInput,
+  ): Promise<{ readonly secret: Readonly<Secret>; readonly driver: SecretDriver }> {
+    if (input.agentId !== undefined) {
+      await this.authorize(principalId, "update", {
+        kind: "agent",
+        id: input.agentId,
+        namespaceId,
+      });
+    } else if (input.configurationId !== undefined) {
+      await this.authorize(principalId, "update", {
+        kind: "configuration",
+        id: input.configurationId,
+        namespaceId,
+      });
+    } else {
+      await this.authorize(principalId, "create", {
+        kind: "agent",
+        id: namespaceId,
+        namespaceId,
+      });
+    }
+    await this.authorize(principalId, "operate", {
+      kind: "secret",
+      id: input.secretId,
+      namespaceId,
+    });
+    return this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      if (input.agentId !== undefined) {
+        const agent = await state.agents.findAgent(namespace.id, input.agentId);
+        if (agent === undefined) {
+          throw new ScopeViolationError("The Agent does not belong to the exact Namespace.");
+        }
+        if (agent.status !== "active") {
+          throw new AgentDeletingError();
+        }
+      } else if (input.configurationId !== undefined) {
+        const configuration = await state.configurations.findConfiguration(
+          namespace.id,
+          input.configurationId,
+        );
+        if (configuration?.kind !== "agent") {
+          throw new ScopeViolationError(
+            "The Configuration does not belong to the exact Namespace.",
+          );
+        }
+      }
+      const secret = await state.secrets.findSecret(namespace.id, input.secretId);
+      if (secret === undefined) {
+        throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
+      }
+      return { secret, driver: this.secretDriver(secret.driverId) };
     });
   }
 
