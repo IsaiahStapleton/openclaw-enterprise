@@ -23,6 +23,7 @@ import {
   normalizeInitialWorkspaceFiles,
   type InitialWorkspaceFiles,
   ErrorResponse,
+  AgentDeploymentDiagnosticsResponse,
   AgentRuntimeCredentialResponse,
   JsonValue,
   PluginDesiredSelectionSchema,
@@ -51,6 +52,7 @@ import {
   type ResourceRef,
   type SandboxDriver,
   type SecretDriver,
+  type SecretReference,
   type UpdateWorkspaceFileBody,
   type WorkspaceFileName,
 } from "@openclaw-enterprise/contracts";
@@ -191,6 +193,7 @@ interface RequiredPermission {
     | "associated_service_account"
     | "existing_namespace"
     | "bound_secret"
+    | "selected_secret"
     | "iam_binding_target"
     | "provisioning_work";
 }
@@ -439,6 +442,21 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     ];
   }
 
+  if (
+    operation.operationId === "discoverAgentPlugins" ||
+    operation.operationId === "discoverAgentPluginDetails"
+  ) {
+    return [
+      { ...permission, scope: "namespace" },
+      {
+        action: "operate",
+        resourceKind: "secret",
+        scope: "request_body",
+        condition: "selected_secret",
+      },
+    ];
+  }
+
   if (operation.operationId === "createSecret" || operation.operationId === "listSecrets") {
     return [{ ...permission, scope: "namespace" }];
   }
@@ -560,6 +578,14 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     ];
   }
 
+  if (operation.operationId === "diagnoseAgentDeployment") {
+    return [
+      { action: "operate", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent_revision", scope: "requested" },
+    ];
+  }
+
   switch (operation.authorizationTarget) {
     case "namespace_collection":
       return [{ ...permission, scope: "namespace" }];
@@ -609,6 +635,9 @@ function permissionDescription(
       }
       if (condition === "existing_namespace") {
         return `Requires ${action} permission on the ${name} when selecting an existing Kubernetes namespace.`;
+      }
+      if (condition === "selected_secret") {
+        return `Requires ${action} permission on the exact same-Namespace ${name} when a Secret reference is supplied.`;
       }
       if (condition === "bound_secret") {
         if (operation?.operationId === "provisionAgent") {
@@ -1958,7 +1987,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     if (operation.operationId === "discoverAgentPlugins") {
       const catalog = await controller.discoverAgentPlugins(context.actorId, namespaceId, {
-        accessToken: body?.accessToken as string,
+        ...(body?.secretRef === undefined
+          ? { accessToken: body?.accessToken as string }
+          : { secretRef: body.secretRef as SecretReference }),
         ...(body?.cursor === undefined ? {} : { cursor: body.cursor as string }),
       });
       reply.header("cache-control", "no-store");
@@ -1968,7 +1999,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     if (operation.operationId === "discoverAgentPluginDetails") {
       const plugin = await controller.discoverAgentPluginDetails(context.actorId, namespaceId, {
-        accessToken: body?.accessToken as string,
+        ...(body?.secretRef === undefined
+          ? { accessToken: body?.accessToken as string }
+          : { secretRef: body.secretRef as SecretReference }),
         pluginId: body?.pluginId as string,
       });
       reply.header("cache-control", "no-store");
@@ -2594,6 +2627,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (operation.operationId === "diagnoseAgentDeployment") {
+      const diagnostics = await controller.diagnoseAgentDeployment(
+        context.actorId,
+        namespaceId,
+        agentId,
+        params.deploymentId as string,
+      );
+      reply.send({ data: diagnostics, meta: { requestId: request.id } });
+      return;
+    }
+
     throw failure(404, "NOT_FOUND", "The requested platform resource was not found.");
   }
 
@@ -3177,6 +3221,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   void app.register(async (routes) => {
     routes.addSchema(ErrorResponse);
+    routes.addSchema(AgentDeploymentDiagnosticsResponse);
     routes.addSchema(AgentRuntimeCredentialResponse);
     routes.addSchema(SecretResponse);
     routes.route({

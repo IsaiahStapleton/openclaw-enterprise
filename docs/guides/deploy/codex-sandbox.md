@@ -7,6 +7,16 @@ Use a reviewed node-local seccomp profile when the container runtime's
 container; [security](../../reference/security.md#pod-and-container-hardening) defines
 the remaining containment requirements.
 
+This guide covers syscall containment. Codex network proxy policy is a separate
+boundary. Repository-bound Codex consumers use stock Codex `0.156.0` with
+`allow_local_binding = true`, `mode = "full"`, and the exact broker hostname
+allowed. These settings permit local binding, disable Codex's additional
+private-address guard, and allow every HTTP method at otherwise allowed
+destinations. Explicit denies and the remaining
+[network boundaries](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking)
+still apply. A working seccomp profile, an operator shell, or a Ready Pod does
+not prove repository access through Codex tools.
+
 Profile installation belongs to your node provisioning process. OCE does not
 install host files, change node sysctls, or provide a privileged installer
 DaemonSet. Review this syscall-policy change before applying it, and use a
@@ -142,10 +152,12 @@ native tool events and resulting files: a model's prose or an approved
 `require_escalated` command does not prove this path.
 
 Verify repository access separately through genuine native Git reads using the
-Agent's existing repository credentials. Record the repository, command result,
-runtime digest, profile hash, and absence of escalated execution without logging
-tokens or credential-helper output. Preserve histories and persistent workspace
-data. Keep network-policy and repository-authentication failures separate from
+Agent's existing repository credentials. For dedicated Codex, start that proof
+from the Agent interface so Git runs through Codex's tool execution path. Record
+the repository, command result, runtime digest, profile hash, and absence of
+escalated execution without logging tokens or credential-helper output. Preserve
+histories and persistent workspace data. Keep Codex proxy denials,
+NetworkPolicy denials and repository-authentication failures separate from
 sandbox startup failures.
 
 The EKS investigation's isolated same-image probe passed workspace writes and

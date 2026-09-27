@@ -16,6 +16,12 @@ behavior; this page owns contributor setup, fixture inputs, and proof notes.
 | Controlled status boundary     | `node --test tests/integration/kubernetes-plugin-status-real.test.mjs`                                                                                                                   | Real Kubernetes Compute status transport, workload identity, safe readiness and runtime restart behavior with controlled producers.                             |
 | Native runtime proof           | `node --test tests/integration/plugin-driver-real.test.mjs`                                                                                                                              | Opt-in Kubernetes proof against real OpenClaw or Codex, including continued operation after a selected Codex install/auth failure.                              |
 
+The `plugin-discovery-api` integration exercises the real HTTP and IAM path and
+Codex Plugin Driver with simulated upstream responses and a test Secret Driver.
+The Kubernetes provisioning fixture also exercises selected-PAT discovery using
+the bundled Kubernetes Secret Driver and a real cluster, with simulated upstream
+responses. Neither test verifies the live hosted provider.
+
 Skipped infrastructure or native-runtime cases are not evidence. Record the exact
 commit, selected suite, nonsecret image references, native runtime versions,
 model, pass/fail/skip counts, and relevant sanitized log path for every claimed
@@ -61,19 +67,24 @@ migrated `openclaw_k8s_*` database via `OCC_TEST_DATABASE_URL`.
   Diffs plugin.
 - `OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_REAL=1` for dedicated Codex with Google
   Calendar.
+- `OCC_TEST_PLUGIN_DRIVER_CODEX_LINEAR_REAL=1` for catalog-selected Linear in a
+  normal dedicated Codex Agent turn.
 - `OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_REAL=1` for dedicated Codex with one
   successful selected install followed by one selected install or authentication
   failure.
 - `OCC_TEST_PLUGIN_DRIVER_REAL=1` only when all scenario-specific environments
-  and databases are prepared.
+  and four separate scenario-specific databases are prepared. The fixture
+  rejects missing URLs and duplicate host, port, and database combinations
+  before provisioning resources; do not use different host aliases for one database.
 
 All native scenarios use Kubernetes. Provide
 `OCC_TEST_KUBERNETES_KUBECONFIG`, `OCC_TEST_KUBERNETES_CONTEXT`,
 `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`,
 `OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS`, and a scenario-specific database such as
 `OCC_TEST_PLUGIN_DRIVER_OPENCLAW_DATABASE_URL` or
-`OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL`. The Codex failure scenario
-requires its own distinct `OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL`.
+`OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL`. The Linear and Codex failure scenarios
+require their own distinct `OCC_TEST_PLUGIN_DRIVER_CODEX_LINEAR_DATABASE_URL` and
+`OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL`.
 The OpenClaw scenario also requires `OPENAI_API_KEY` in the process environment
 and a runtime image with `plugins install --no-enable` support. The repository's
 OpenClaw pin lacks that flag; select a compatible runtime before running this
@@ -93,6 +104,13 @@ supported by that Codex path; the current source default is `gpt-6-astra`.
 The Calendar proof also needs `OCC_TEST_CODEX_CALENDAR_TOOL_NAME` and
 `OCC_TEST_CODEX_CALENDAR_RESULT_EXPECT`, and must show a model-chosen
 `list_calendars(max_results:1)` read during a normal Agent turn.
+
+The Linear catalog proof requires that the same authorized account has Linear
+connected. Set `OCC_TEST_CODEX_LINEAR_PROMPT` to a harmless read request,
+`OCC_TEST_CODEX_LINEAR_TOOL_NAME` to its exact transcript tool name, and
+`OCC_TEST_CODEX_LINEAR_RESULT_EXPECT` to evidence in its result. The test
+discovers Linear without a catalog credential, selects it through OCC, deploys
+it, checks the native identity, and verifies the tool call in a normal turn.
 
 The Codex failure proof uses
 `--test-name-pattern 'curated Codex plugin failure'`. It selects plugin A

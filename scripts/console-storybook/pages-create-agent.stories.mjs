@@ -6,13 +6,16 @@ export const CreateStart = { ...story("createStart"), name: "Choose a starting p
 export const CreateForm = { ...story("createForm"), name: "OpenAI with Codex harness" };
 export const PluginsUnavailable = {
   ...story("createPluginsUnavailable"),
-  name: "Plugin discovery needs an entered token",
+  name: "Plugin discovery needs a service account credential",
 };
 export const PluginsConfigured = {
   ...story("createPluginsConfigured"),
   name: "Edit existing plugin policies",
 };
+export const PluginsCurated = story("createPluginsCurated");
 export const PluginsDiscovered = story("createPluginsDiscovered");
+export const PluginsSelectedSecret = story("createPluginsSelectedSecret");
+export const PluginsSelectedSecretDenied = story("createPluginsSelectedSecretDenied");
 export const PluginsTools = story("createPluginsTools");
 export const PluginsPolicies = story("createPluginsPolicies");
 export const PluginsSetupReminder = story("createPluginsSetupReminder");

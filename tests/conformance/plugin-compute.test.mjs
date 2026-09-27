@@ -96,6 +96,26 @@ function readRuntimeStatusFromHandler(handler) {
   return readStatusFromHandler(handler, "/openclaw/runtime/status");
 }
 
+async function readStatusFromHandlerAsync(handler, path) {
+  let body = "";
+  await handler(
+    { method: "GET", url: path, on() {}, off() {} },
+    {
+      writeHead() {},
+      on() {},
+      off() {},
+      end(chunk) {
+        body += chunk;
+      },
+    },
+  );
+  return JSON.parse(body);
+}
+
+async function readRuntimeChannelChecksFromHandler(handler) {
+  return readStatusFromHandlerAsync(handler, "/openclaw/runtime/diagnostics");
+}
+
 const tenant = {
   id: "ns_00000000-0000-4000-8000-000000000016",
   name: "Plugin compute tenant",
@@ -1933,6 +1953,14 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     revisionId: dedicated.id,
     ready: true,
   });
+  const runtimeGatewayPolicyIndex = dedicatedReconciled.findIndex(
+    ({ kind, metadata }) =>
+      kind === "NetworkPolicy" && metadata.name.startsWith("allow-gateway-agent-"),
+  );
+  const runtimeAgentPolicyIndex = dedicatedReconciled.findIndex(
+    ({ kind, metadata }) =>
+      kind === "NetworkPolicy" && metadata.name.startsWith("allow-agent-runtime-"),
+  );
   const statusGatewayPolicyIndex = dedicatedReconciled.findIndex(
     ({ kind, metadata }) =>
       kind === "NetworkPolicy" && metadata.name.startsWith("allow-plugin-status-gateway-"),
@@ -1950,13 +1978,41 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   const dedicatedGatewayDeploymentIndex = dedicatedReconciled.findIndex(
     ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("gateway-"),
   );
+  assert.ok(runtimeGatewayPolicyIndex >= 0);
+  assert.ok(runtimeAgentPolicyIndex >= 0);
   assert.ok(statusGatewayPolicyIndex >= 0);
   assert.ok(statusAgentPolicyIndex >= 0);
   assert.ok(dedicatedAgentServiceIndex >= 0);
   assert.ok(dedicatedGatewayDeploymentIndex >= 0);
+  assert.ok(runtimeGatewayPolicyIndex < dedicatedGatewayDeploymentIndex);
+  assert.ok(runtimeAgentPolicyIndex < dedicatedGatewayDeploymentIndex);
   assert.ok(statusGatewayPolicyIndex < dedicatedGatewayDeploymentIndex);
   assert.ok(statusAgentPolicyIndex < dedicatedGatewayDeploymentIndex);
   assert.ok(dedicatedAgentServiceIndex < dedicatedGatewayDeploymentIndex);
+  assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].metadata.namespace, cp);
+  assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].spec.podSelector.matchLabels, {
+    "openclaw.dev/namespace": dedicated.namespaceId,
+    "openclaw.dev/workload-role": "gateway",
+    "openclaw.dev/agent": dedicated.agentId,
+  });
+  assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].spec.egress[0].ports, [
+    { protocol: "TCP", port: 18790 },
+    { protocol: "TCP", port: 18791 },
+  ]);
+  assert.deepEqual(
+    dedicatedReconciled[runtimeAgentPolicyIndex].metadata.namespace,
+    dedicatedNamespace,
+  );
+  assert.deepEqual(dedicatedReconciled[runtimeAgentPolicyIndex].spec.podSelector.matchLabels, {
+    "openclaw.dev/namespace": dedicated.namespaceId,
+    "openclaw.dev/workload-role": "agent",
+    "openclaw.dev/agent": dedicated.agentId,
+    "openclaw.dev/revision": dedicated.id,
+  });
+  assert.deepEqual(dedicatedReconciled[runtimeAgentPolicyIndex].spec.ingress[0].ports, [
+    { protocol: "TCP", port: 18790 },
+    { protocol: "TCP", port: 18791 },
+  ]);
 });
 
 test("Kubernetes plugin runtime status requires the exact ready Pod report", async (t) => {
@@ -2080,6 +2136,298 @@ test("Kubernetes startup failure evidence requires the exact runtime Pod report"
       path: "openclaw/runtime/status",
     },
   ]);
+});
+
+test("gateway runtime status maps native Slack channel status without provider data", async () => {
+  const revisionId = "revision-plugin-compute-1";
+  let statusHandler;
+  let channelStatus;
+  let channelStatusCalls = 0;
+  let holdChannelStatusResponse = false;
+  let pendingChannelStatusListeners;
+  let childTimeout;
+  const childKillSignals = [];
+  const sandbox = {
+    AbortController,
+    AbortSignal,
+    Buffer,
+    JSON,
+    URL,
+    console: { error() {} },
+    process: {
+      env: {
+        OPENCLAW_AGENT_REVISION_ID: revisionId,
+        OPENCLAW_GATEWAY_PORT: "8080",
+        OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
+        OPENCLAW_RUNTIME_STATUS_PORT: "18791",
+        OPENCLAW_POD_UID: "pod-gateway-status-1",
+      },
+      on() {},
+      exit(code) {
+        throw new Error(`unexpected process exit ${code}`);
+      },
+    },
+    setInterval() {
+      return { unref() {} };
+    },
+    setTimeout(callback, timeoutMs) {
+      if (timeoutMs === 6000) {
+        childTimeout = callback;
+      }
+      return { unref() {} };
+    },
+    clearTimeout() {},
+    require(specifier) {
+      if (specifier === "node:http") {
+        return {
+          createServer(handler) {
+            statusHandler = handler;
+            return { listen() {} };
+          },
+        };
+      }
+      if (specifier === "node:fs") {
+        return {
+          cpSync() {},
+          existsSync() {
+            return false;
+          },
+          lstatSync() {
+            return { isDirectory: () => true };
+          },
+          mkdirSync() {},
+          readFileSync() {
+            throw new Error("unexpected file read");
+          },
+          readdirSync() {
+            return [];
+          },
+          rmSync() {},
+          writeFileSync() {},
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawn(command, args) {
+            if (args?.[1] !== "channels") {
+              return { on() {}, kill() {} };
+            }
+            assert.equal(command, "node");
+            assert.deepEqual(plain(args), [
+              "/app/openclaw.mjs",
+              "channels",
+              "status",
+              "--channel",
+              "slack",
+              "--json",
+              "--probe",
+              "--timeout",
+              "5000",
+            ]);
+            channelStatusCalls += 1;
+            const listeners = {};
+            const child = {
+              stdout: {
+                on(event, listener) {
+                  listeners["stdout:" + event] = listener;
+                },
+              },
+              kill(signal) {
+                childKillSignals.push(signal);
+              },
+              on(event, listener) {
+                listeners[event] = listener;
+              },
+            };
+            if (holdChannelStatusResponse) {
+              pendingChannelStatusListeners = listeners;
+            } else {
+              queueMicrotask(() => {
+                listeners["stdout:data"]?.(Buffer.from(JSON.stringify(channelStatus)));
+                listeners.close?.(0, null);
+              });
+            }
+            return child;
+          },
+        };
+      }
+      return nodeRequire(specifier);
+    },
+  };
+
+  vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
+  await Promise.resolve();
+
+  assert.ok(statusHandler);
+  const ready = await readRuntimeStatusFromHandler(statusHandler);
+  assert.equal(ready.revisionId, revisionId);
+  assert.equal(channelStatusCalls, 0);
+  const assertSlackDiagnostics = async (status, expected, description) => {
+    channelStatus = status;
+    const diagnostics = await readRuntimeChannelChecksFromHandler(statusHandler);
+    assert.deepEqual(
+      diagnostics.checks.map(({ component }) => component),
+      ["gateway", "gateway", "gateway"],
+      `${description} components`,
+    );
+    assert.deepEqual(
+      diagnostics.checks.map(({ check, state, code }) => ({ check, state, code })),
+      expected,
+      description,
+    );
+  };
+
+  await assertSlackDiagnostics(
+    {
+      channels: { slack: { configured: true, connected: true } },
+      channelAccounts: {
+        slack: [{ accountId: "default", configured: true, connected: true, probe: { ok: true } }],
+      },
+      channelDefaultAccountId: { slack: "default" },
+    },
+    [
+      { check: "configuration", state: "succeeded", code: undefined },
+      { check: "authentication", state: "succeeded", code: undefined },
+      { check: "connectivity", state: "succeeded", code: undefined },
+    ],
+    "connected",
+  );
+
+  await assertSlackDiagnostics(
+    { configOnly: true, configuredChannels: [] },
+    [
+      { check: "configuration", state: "failed", code: "NOT_CONFIGURED" },
+      { check: "authentication", state: "unknown", code: undefined },
+      { check: "connectivity", state: "unknown", code: undefined },
+    ],
+    "disabled",
+  );
+
+  await assertSlackDiagnostics(
+    { gatewayReachable: false, configOnly: true, configuredChannels: ["slack"] },
+    [
+      { check: "configuration", state: "succeeded", code: undefined },
+      { check: "authentication", state: "unknown", code: "UNAVAILABLE" },
+      { check: "connectivity", state: "unknown", code: "UNAVAILABLE" },
+    ],
+    "configured but gateway unavailable",
+  );
+
+  for (const error of [
+    "invalid_auth",
+    "An API error occurred: invalid_auth; code: slack_webapi_platform_error; slack error: invalid_auth",
+  ]) {
+    await assertSlackDiagnostics(
+      {
+        channels: { slack: { configured: true } },
+        channelAccounts: {
+          slack: [{ accountId: "default", configured: true, probe: { ok: false, error } }],
+        },
+        channelDefaultAccountId: { slack: "default" },
+      },
+      [
+        { check: "configuration", state: "succeeded", code: undefined },
+        { check: "authentication", state: "failed", code: "AUTHENTICATION_FAILED" },
+        { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      ],
+      `invalid auth ${error}`,
+    );
+  }
+
+  await assertSlackDiagnostics(
+    {
+      channels: { slack: { configured: true, connected: true } },
+      channelAccounts: {
+        slack: [
+          {
+            accountId: "default",
+            configured: true,
+            connected: true,
+            probe: { ok: false, error: "probe timed out after 5000ms" },
+          },
+        ],
+      },
+      channelDefaultAccountId: { slack: "default" },
+    },
+    [
+      { check: "configuration", state: "succeeded", code: undefined },
+      { check: "authentication", state: "unknown", code: "PROBE_FAILED" },
+      { check: "connectivity", state: "succeeded", code: undefined },
+    ],
+    "probe timeout with connected transport",
+  );
+
+  await assertSlackDiagnostics(
+    {
+      channels: { slack: { configured: true, connected: true } },
+      channelAccounts: {
+        slack: [{ accountId: "secondary", configured: true, connected: true, probe: { ok: true } }],
+      },
+      channelDefaultAccountId: { slack: "missing-default" },
+    },
+    [
+      { check: "configuration", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      { check: "authentication", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+    ],
+    "missing default account",
+  );
+
+  await assertSlackDiagnostics(
+    { configOnly: true },
+    [
+      { check: "configuration", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      { check: "authentication", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+      { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
+    ],
+    "malformed config fallback",
+  );
+
+  holdChannelStatusResponse = true;
+  const timedOutRequest = readRuntimeChannelChecksFromHandler(statusHandler);
+  await Promise.resolve();
+  assert.equal(typeof childTimeout, "function");
+  childTimeout();
+  assert.deepEqual(childKillSignals.slice(-1), ["SIGTERM"]);
+  pendingChannelStatusListeners.close?.(null, "SIGTERM");
+  const timedOutDiagnostics = await timedOutRequest;
+  assert.deepEqual(
+    timedOutDiagnostics.checks.map(({ state, code }) => ({ state, code })),
+    Array.from({ length: 3 }, () => ({ state: "unknown", code: "UNAVAILABLE" })),
+  );
+
+  const requestListeners = {};
+  const responseListeners = {};
+  const abortedRequest = statusHandler(
+    {
+      method: "GET",
+      url: "/openclaw/runtime/diagnostics",
+      on(event, listener) {
+        requestListeners[event] = listener;
+      },
+      off() {},
+    },
+    {
+      writeHead() {
+        throw new Error("aborted response must not write headers");
+      },
+      end() {
+        throw new Error("aborted response must not write a body");
+      },
+      on(event, listener) {
+        responseListeners[event] = listener;
+      },
+      off() {},
+    },
+  );
+  await Promise.resolve();
+  assert.ok(pendingChannelStatusListeners);
+  requestListeners.aborted();
+  assert.deepEqual(childKillSignals.slice(-1), ["SIGTERM"]);
+  pendingChannelStatusListeners.close?.(null, "SIGTERM");
+  await abortedRequest;
+  responseListeners.close?.();
+  assert.equal(channelStatusCalls, 10);
 });
 
 test("Codex runtime gates startup and readiness on a successful native authentication turn", async (t) => {
@@ -2543,6 +2891,129 @@ test("Codex gateway supervisor exits when the peer Agent plugin failure set chan
   }
 });
 
+test("Codex gateway supervisor applies broker-only bridge runtime without selected plugins", async () => {
+  const revisionId = "revision-plugin-compute-1";
+  const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() }), {
+    host: "git.oce.svc",
+    domains: { "github.com": "allow", "*.oce.svc": "deny" },
+  });
+  const files = new Map([
+    [
+      "/etc/openclaw/openclaw.json",
+      JSON.stringify({
+        gateway: { port: 8080 },
+        plugins: { entries: { codex: { enabled: true, config: { keep: true } } } },
+      }),
+    ],
+  ]);
+  const intervals = [];
+  let statusHandler;
+  let child;
+  const sandbox = {
+    AbortSignal,
+    Buffer,
+    JSON,
+    URL,
+    console: { error() {} },
+    fetch,
+    process: {
+      env: {
+        APP_SERVER_TOKEN: "base-app-server-token",
+        HOME: "/home/node",
+        OPENCLAW_AGENT_REVISION_ID: revisionId,
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "8080",
+        OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
+        OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
+        OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+        OPENCLAW_POD_UID: "gateway-pod-1",
+      },
+      on() {},
+      exit() {},
+    },
+    setInterval(callback) {
+      intervals.push(callback);
+      return { unref() {} };
+    },
+    setTimeout() {
+      return { unref() {} };
+    },
+    clearTimeout() {},
+    require(specifier) {
+      if (specifier === "node:http") {
+        return {
+          createServer(handler) {
+            statusHandler = handler;
+            return { listen() {} };
+          },
+        };
+      }
+      if (specifier === "node:fs") {
+        return {
+          existsSync(path) {
+            return files.has(path);
+          },
+          mkdirSync() {},
+          readFileSync(path) {
+            if (!files.has(path)) {
+              throw new Error(`Missing mocked file: ${path}`);
+            }
+            return files.get(path);
+          },
+          writeFileSync(path, data) {
+            files.set(path, String(data));
+          },
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawn(command, args) {
+            assert.equal(command, "node");
+            assert.deepEqual(plain(args), ["/app/openclaw.mjs", "gateway", "--port", "8080"]);
+            child = { kill() {}, on() {} };
+            return child;
+          },
+          spawnSync() {
+            throw new Error("broker-only bridge must not run native plugin installers");
+          },
+        };
+      }
+      return nodeRequire(specifier);
+    },
+  };
+
+  vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
+  await waitForCondition("gateway supervisor start", () => child);
+  assert.equal(intervals.length, 0);
+
+  const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+  assert.equal(effective.plugins.entries.codex.config.keep, true);
+  assert.equal(effective.plugins.entries.codex.config.codexPlugins, undefined);
+  assert.deepEqual(effective.plugins.entries.codex.config.appServer.networkProxy, {
+    enabled: true,
+    mode: "full",
+    allowLocalBinding: true,
+    readOnlyPaths: [
+      "/app/node_modules/openclaw",
+      "/home/node/.openclaw/plugin-skills",
+      "/home/node/openclaw-runtime-assets/plugin-skills",
+      "/opt/oce/repository-credentials",
+      "/run/oce/repository-credentials",
+    ],
+    domains: { "github.com": "allow", "*.oce.svc": "deny", "git.oce.svc": "allow" },
+  });
+  const status = readStatusFromHandler(statusHandler);
+  assert.deepEqual(status, {
+    revisionId,
+    container: "gateway",
+    startupId: status.startupId,
+    podUid: "gateway-pod-1",
+    phase: "ready",
+    successfulPluginIds: [],
+    failures: [],
+  });
+});
+
 test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin status auth", async () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
   const candidate = revision({ plugins: codexNoPluginState() });
@@ -2615,6 +3086,128 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
       ["websocket", 18790],
       ["plugin-status", 18791],
     ],
+  );
+});
+
+test("Kubernetes dedicated Codex gateway mounts broker-only runtime without plugin selections", async () => {
+  const driver = createKubernetesComputeDriver(kubernetesOptions());
+  const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() }), {
+    host: "git.oce.svc",
+    domains: {},
+  });
+  const deployment = driver.deployment(
+    "gateway-plugin-compute-rev",
+    {
+      namespaceId: tenant.id,
+      agentId: agent.id,
+      revisionId: "revision-plugin-compute-1",
+    },
+    "oce-plugin-compute",
+    "openclaw-enterprise/gateway-fixture:local",
+    "gateway-plugin-compute",
+    "gateway",
+    {},
+    "info",
+    driver.gatewayConfiguration(revision(), undefined, "oce-plugin-compute"),
+    false,
+    undefined,
+    undefined,
+    [],
+    [],
+    { name: "plugin-runtime-gateway-plugin-compute", runtime },
+  );
+
+  const pod = deployment.spec.template.spec;
+  assert.equal(
+    pod.volumes.some(
+      (volume) => volume.configMap?.name === "plugin-runtime-gateway-plugin-compute",
+    ),
+    true,
+  );
+  const container = pod.containers[0];
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_MANIFEST_ENVIRONMENT),
+    true,
+  );
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_CODEX_CONFIG_ENVIRONMENT),
+    false,
+  );
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT),
+    false,
+  );
+  assert.equal(
+    container.env.some((variable) => variable.name === "OPENCLAW_PLUGIN_STATUS_CONTAINER"),
+    false,
+  );
+});
+
+test("Kubernetes embedded OpenClaw gateway mounts broker-only Codex bridge runtime", async () => {
+  const driver = createKubernetesComputeDriver(kubernetesOptions());
+  const candidate = revision({
+    harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+    plugins: codexNoPluginState(),
+  });
+  const runtime = pluginRuntimeSpecForRevision(candidate, {
+    host: "git.oce.svc",
+    domains: {},
+  });
+  const deployment = driver.deployment(
+    "gateway-plugin-compute-rev",
+    {
+      namespaceId: tenant.id,
+      agentId: agent.id,
+      revisionId: "revision-plugin-compute-1",
+    },
+    "oce-plugin-compute",
+    "openclaw-enterprise/gateway-fixture:local",
+    "gateway-plugin-compute",
+    "gateway",
+    {},
+    "info",
+    driver.gatewayConfiguration(candidate, undefined, "oce-plugin-compute"),
+    true,
+    candidate.servicePrincipalId,
+    driver.harnessAuthForRevision(
+      candidate,
+      {
+        harnessAuth: {
+          ...candidate.harnessAuth,
+          backendRef: {
+            namespaceName: "oce-plugin-compute",
+            name: "plugin-model-key",
+            key: "value",
+            uid: "plugin-model-key-uid",
+          },
+        },
+      },
+      "oce-plugin-compute",
+    ),
+    [],
+    [],
+    { name: "plugin-runtime-gateway-plugin-compute", runtime },
+  );
+
+  const pod = deployment.spec.template.spec;
+  assert.equal(
+    pod.volumes.some(
+      (volume) => volume.configMap?.name === "plugin-runtime-gateway-plugin-compute",
+    ),
+    true,
+  );
+  const container = pod.containers[0];
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_MANIFEST_ENVIRONMENT),
+    true,
+  );
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_CODEX_CONFIG_ENVIRONMENT),
+    false,
+  );
+  assert.equal(
+    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT),
+    false,
   );
 });
 

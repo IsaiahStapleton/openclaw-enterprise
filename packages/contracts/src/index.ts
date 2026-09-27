@@ -88,6 +88,7 @@ export interface BackendSummary {
 export interface InstallationCapabilities {
   readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
   readonly pluginPolicies?: PluginPolicyCapabilities & { readonly driver: PluginDriverIdentity };
+  readonly pluginDiscovery?: { readonly credential: "required" | "none" };
 }
 
 /** Experimental authenticated client shared by related Installation Drivers. */
@@ -333,6 +334,7 @@ export interface PluginCatalogEntry {
   readonly available?: boolean;
   readonly unavailableReason?: string;
   readonly unavailableHelp?: PluginCatalogLink;
+  readonly selectableWithoutTools?: boolean;
   readonly tools: readonly PluginToolCatalogEntry[] | null;
 }
 
@@ -838,6 +840,8 @@ export interface SecretDriver extends Driver {
   delete(secret: Secret): Promise<void>;
   /** Verify live exact ownership and return only safe projection identity. */
   resolve(secret: Secret): Promise<SecretBackendRef>;
+  /** Verify live ownership and use the current value only within a transient server-side operation. */
+  withValue?<T>(secret: Secret, use: (value: string) => Promise<T>): Promise<T>;
 }
 
 export interface SandboxDriver extends Driver {
@@ -869,13 +873,14 @@ export interface PluginDriver extends Driver {
   /** Checks policy support without installing plugins or performing authenticated discovery. */
   validatePolicies(selections: PluginDesiredState): void;
   listCatalog(context: PluginDriverContext): Promise<readonly PluginCatalogEntry[]>;
-  /** Pre-Agent discovery uses a transient credential; neither it nor results are persisted. */
+  /** Pre-Agent discovery defaults to requiring a transient credential. Results are not persisted. */
+  readonly discoveryCredential?: "required" | "none";
   discoverCatalog?(
-    input: { readonly accessToken: string; readonly cursor?: string },
+    input: { readonly accessToken?: string; readonly cursor?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage>;
   getCatalogPlugin?(
-    input: { readonly accessToken: string; readonly pluginId: string },
+    input: { readonly accessToken?: string; readonly pluginId: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry>;
 }
@@ -935,6 +940,26 @@ export type AgentRuntimeCredentialsInput = Readonly<Record<never, never>>;
 
 export interface AgentRuntimeCredentialStatus {
   readonly transportConfigured: boolean;
+}
+
+export type RuntimeDiagnosticState = "succeeded" | "failed" | "unknown";
+
+export interface RuntimeDiagnosticCheck {
+  readonly component: string;
+  readonly check: string;
+  readonly state: RuntimeDiagnosticState;
+  readonly checkedAt: string | null;
+  readonly code?: string;
+}
+
+export interface AgentDeploymentDiagnostics {
+  readonly revisionId: string;
+  readonly observedAt: string;
+  readonly checks: readonly RuntimeDiagnosticCheck[];
+}
+
+export interface ComputeAgentRevisionBinding extends ComputeAgentBinding {
+  readonly revision: Readonly<AgentRevision>;
 }
 
 /** Observed workload image identity; missing provenance must never be inferred from a tag. */
@@ -1001,6 +1026,9 @@ export interface ComputeDriver extends Driver {
     binding: ComputeAgentBinding,
     input: AgentRuntimeCredentialsInput,
   ): Promise<AgentRuntimeCredentialStatus>;
+  diagnoseAgentDeployment?(
+    binding: ComputeAgentRevisionBinding,
+  ): Promise<AgentDeploymentDiagnostics>;
   deleteAgentRuntimeCredentials?(binding: ComputeAgentBinding): Promise<void>;
   getGatewayEndpoint?(revision: AgentRevision): string | undefined;
   ensureNamespace(namespace: Namespace): Promise<NamespaceEnsureResult>;

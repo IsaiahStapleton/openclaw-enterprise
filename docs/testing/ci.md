@@ -26,12 +26,11 @@ node scripts/ci/run-tests.mjs audit
 CI workflows reuse the [run-ci-lane action](../../.github/actions/run-ci-lane/action.yml) for setup, tests, cleanup, and per-job environment isolation.
 
 Compare per-file `wallDurationMs`, preparation `[ci-timing]` phases, and Actions
-step timestamps to find slow setup or tests. Enclosing preparation timings
-already include image archive save/import times.
-k3d imports use file-backed tools mode with a ten-minute deadline.
-Preparation serializes imports that target the same cluster to avoid shared
-importer races, then verifies digest and CRI references on owned
-nodes.
+step timestamps to find slow setup or tests. Preparation timings include image
+archive save/import times. Image imports copy the archive into each owned k3d
+node and run node-local `ctr image import`; k3d `tools-node` can hide per-node
+failures while exiting successfully. Imports targeting one cluster stay
+serialized, then preparation verifies digest and CRI references on owned nodes.
 
 The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible
 words are flagged for review and pages above 2,500 fail, except the approved
@@ -41,15 +40,20 @@ generated API, site build, navigation, and links must pass. Run
 
 Suite Audit and the eleven PR lanes start independently on ephemeral runners.
 Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge
-netfilter support; other lanes and the audit use `blacksmith-8vcpu-ubuntu-2404`.
+netfilter support. The repository credential platform lane uses
+`blacksmith-16vcpu-ubuntu-2404` because it builds the delivered runtime image and
+the repository platform fixture in one job; other lanes and the audit use
+`blacksmith-8vcpu-ubuntu-2404`.
 `CI Required` uses `ubuntu-22.04` and still requires the audit and every lane to
 pass, including result-artifact accounting. This avoids serial runner allocation
 before test lanes without changing selection or failure handling.
 
-The repository credential platform lane uses Blacksmith and its full delivered
-runtime image. Its proof covers HTTP, PostgreSQL, Unix control and credential
-material inside Kubernetes; NetworkPolicy enforcement is proved separately by
-the Kubernetes fixture lanes on the compatible GitHub runner kernel.
+The repository credential platform lane uses Blacksmith and its delivered runtime
+image. It proves HTTP, PostgreSQL, Unix control and credential material inside
+Kubernetes; compatible fixture lanes prove NetworkPolicy enforcement. The images
+packaging lane uses the full tool profile so preparation can derive the reviewed
+Codex seccomp profile in an owned k3d cluster and export
+`OCC_TEST_CODEX_SECCOMP_PROFILE` before the native runtime image smoke tests run.
 
 Full Integration is manual and uses the immutable event commit. All lanes
 require `main` except `k3d-model`, which also accepts an `integration-model`
@@ -81,38 +85,71 @@ container isolation and authorized live proof. CI preparation and suite ownershi
 alone establish no result: inspect executed cases and skips at the exact tested
 commit, including whether a pull-request run tested a merge commit.
 
-The Kubernetes fixture lanes load the runner kernel's bridge netfilter module and enable
-IPv4 bridge packet filtering before cluster creation. This is required for
-K3s to enforce NetworkPolicies on bridged Pod traffic. Failure to enable it
-fails setup; deny-traffic assertions remain required.
+The Kubernetes fixture lanes load bridge netfilter and enable IPv4 bridge
+filtering before cluster creation so K3s enforces NetworkPolicies on bridged Pod
+traffic. Setup fails if this cannot be enabled; deny-traffic assertions remain
+required.
 
-Each Kubernetes fixture lane owns an independent cluster with a server and worker node with shared test-owned
-local-path storage. Preparation registers and verifies the fixture image's digest
-on both nodes and derives the API server's proxy source `/32` from its route to
+Each Kubernetes fixture lane owns an independent server/worker cluster with shared
+test-owned local-path storage. Preparation registers and verifies the fixture
+image's digest on both nodes and derives the API server's proxy source `/32` from its route to
 the worker Pod network. It supplies that address to the
 [plugin status tests](plugins.md#local-and-integration-suites), which exercise
 the private status endpoint across nodes with NetworkPolicy enforcement.
 
-Kubernetes fixture startup logs phase status and elapsed milliseconds, plus host
-CPU/load, memory, disk and pressure snapshots. If cluster creation or its initial
-readiness checks fail, preparation collects bounded node conditions, system Pod
-status and events, and owned node container states and redacted log tails before
-cleanup. Fixture creation disables k3d rollback to retain node logs until
-collection finishes. The workflow then cleans up; local callers must run
-`node scripts/ci/cleanup.mjs --state <state-file>`. Inspect the separate
-`diagnostics-<artifact-prefix>-<lane>` artifact; local runs write
-`<state-file>.diagnostics.json`. Failed diagnostic commands are marked unavailable
-or timed out, and collection does not replace the original failure. Raw kubeconfig,
-environment values and Pod specifications are excluded. These diagnostics explain
-setup failures; they do not establish test coverage.
+Kubernetes fixture startup logs phase timings plus host resource and pressure snapshots. On cluster or readiness failure, preparation collects bounded
+node, system Pod, event and redacted node-container diagnostics before cleanup;
+k3d rollback is disabled long enough to keep those logs. Inspect the
+`diagnostics-<artifact-prefix>-<lane>` artifact or local
+`<state-file>.diagnostics.json`. Failed diagnostic commands are marked unavailable or timed out; collection preserves the original failure. Raw
+kubeconfig, environment values and Pod specs are excluded. Local callers must
+run `node scripts/ci/cleanup.mjs --state <state-file>` after failed prepared
+runs. Diagnostics explain setup failures without establishing coverage.
 
 The `k3d-model`, `gateway-routing`, `slack`, and `k3d-otel` lanes prepare the controller image and workspace routing for dedicated Harness node enrollment. Supply an immutable `NODE_BASE_IMAGE` for the controller build. Preparation supplies the imported controller digest and private routing CA paths; the Slack lane still requires approved runtime images and credentials.
 
-Implementation status: routing, OpenShell, and logging now have concrete CI preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4, and Envoy Gateway v1.6.7 controller manifests and generates a private test CA. OpenShell creates an owned K3s v1.36.4 cluster, installs a matched kubectl, configures the selected RuntimeClass with the cluster's `runc` handler, verifies handler availability with a smoke Pod, installs OpenShell CLI/chart assets, imports gateway and supervisor images, and installs Agent Sandbox resources. Only the disposable CI OpenShell cluster exempts its selected RuntimeClass from Pod Security Admission. Preparation proves that a violating ordinary Pod is rejected in a restricted namespace and that the same Pod is admitted with the selected class. The full OpenShell suite proves provider-owned supervisor enforcement for filesystem, endpoint/L7 network, and process boundaries while preserving the current binary-unaware sidecar policy. Logging preparation owns a real OpenTelemetry Collector backend with JSONL evidence, and `OCC_TEST_OTEL_LOGS_URL` is no longer a required external input. The Collector and Docker-model jobs use the shared [setup-test-docker action](../../.github/actions/setup-test-docker/action.yml) to pin Docker 29.4.0, which supports the production `fluentd-write-timeout` logging option. The action stops the preinstalled daemon on the ephemeral runner, installs Docker 29.4.0 through the SHA-pinned official Docker setup action, and points `/var/run/docker.sock` at the action socket so the CLI, production Compose, and Driver use one daemon. Other jobs keep the runner Docker daemon. Full-suite acceptance remains incomplete until main-only protected hosted execution records every selected lane. See the [delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status) for current proof boundaries and live gaps.
+Implementation status: routing, OpenShell, and logging have concrete CI
+preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4
+and Envoy Gateway v1.6.7 manifests, then generates a private test CA. OpenShell
+creates an owned K3s v1.36.4 cluster, installs a matched kubectl, configures and
+smoke-tests the selected RuntimeClass with the cluster's `runc` handler,
+installs CLI/chart and Agent Sandbox assets, and imports gateway and supervisor
+images. Only that disposable cluster exempts the selected RuntimeClass from Pod
+Security Admission; preparation proves an ordinary violating Pod is rejected and
+the same Pod is admitted with the selected class. The full OpenShell suite
+proves provider-owned supervisor filesystem, endpoint/L7 network, and process
+enforcement while the sidecar policy remains binary-unaware. Logging
+preparation owns a real OpenTelemetry Collector backend with JSONL evidence, so
+`OCC_TEST_OTEL_LOGS_URL` is no longer an external input. The Collector and
+Docker-model jobs use the shared [setup-test-docker action](../../.github/actions/setup-test-docker/action.yml)
+to pin Docker 29.4.0 for the production `fluentd-write-timeout` option. The
+action replaces the preinstalled daemon and shares `/var/run/docker.sock` across
+the CLI, Compose, and Driver; other jobs keep the runner daemon. Full-suite
+acceptance still requires main-only
+protected hosted execution of every selected lane. See the
+[delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status)
+for proof boundaries and live gaps.
 
 Each lane runs whole test files. The runner validates actual Node case results and required names; any skip or TODO fails a selected lane. Missing results, zero cases, failures and cleanup errors also fail. The aggregate checks required job and lane results at the same source commit without repeating case validation. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use the approved event commit and do not promote PR build artifacts.
 
-Prepare infrastructure only on a disposable host or through the reviewed CI helpers. Each run owns its Compose project, file-specific databases, cluster and temporary files. CI writes private cleanup state under `RUNNER_TEMP` and uploads sanitized results and separate JSON diagnostics for bootstrap failures, so hosted-runner cleanup state is unavailable after the job ends. Results include the source commit, case outcomes, cleanup status, and available image digests by role; private registry names and prepared environment values are excluded. Local failures can retain cleanup state while the host and state path still exist. On local Docker Desktop or equivalent VM-backed Docker hosts, run one Kubernetes lane at a time when disk or network pressure has caused measured instability. The GitHub matrix remains parallel; this local guidance is for reproducible operator runs. Model/service tests require the approved credentials and spend policy described in the [implementation specification](../../specs/19-github-actions-test-coverage.md); configuring workflow files does not prove those tests have passed.
+Prepare infrastructure only on a disposable host or through reviewed CI helpers.
+Each run owns its Compose project, databases, cluster and temp files. CI writes
+private cleanup state under `RUNNER_TEMP` and uploads sanitized results plus
+bootstrap diagnostics; hosted-runner cleanup state disappears after the job.
+The images-packaging lane attempts to retain sanitized cleanup records for its
+prepared controller and runtime tags; a planned record does not prove an image
+exists. It does not cover the separate tag created by the runtime-images test.
+Export or upload failure and runner loss can prevent retention. Missing state or
+an empty inventory does not prove cleanup; the tag name is metadata, not
+authentication or authority to delete an image.
+Results include source commit, case outcomes, cleanup status and available image
+digests by role, excluding private registry names and prepared environment
+values. Local failures can retain cleanup state while the host and state path
+exist. On Docker Desktop or similar VM-backed hosts, run one Kubernetes lane at a
+time when measured disk or network pressure has caused instability. Model/service
+tests still require the approved credentials and spend policy in the
+[implementation specification](../../specs/19-github-actions-test-coverage.md).
+The GitHub matrix remains parallel.
 
 See the [execution flow](../flows/github-actions-testing.md) for entrypoints, result accounting, cleanup and failure interpretation. Use the [suite-specific guides](README.md#integration-tests) to reproduce a run locally.
 

@@ -44,6 +44,7 @@ import {
   PresetResponse,
   PresetListResponse,
   AgentDeploymentStatusResponse,
+  AgentDeploymentDiagnosticsResponse,
   AgentProvisioningResponse,
   AgentProvisioningStatusResponse,
   AgentRuntimeCredentialResponse,
@@ -718,7 +719,7 @@ export const occApiRoutes = [
     iamAction: "create",
     resourceKind: "agent",
     authorizationTarget: "namespace_collection",
-    summary: "List available plugins for Agent creation without storing the supplied credential",
+    summary: "List available plugins for Agent creation using the selected Driver",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -740,7 +741,7 @@ export const occApiRoutes = [
     iamAction: "create",
     resourceKind: "agent",
     authorizationTarget: "namespace_collection",
-    summary: "Read available plugin tools without storing the supplied credential",
+    summary: "Read plugin details using the selected Driver",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -1076,6 +1077,22 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: DeploymentParams,
       response: { 200: AgentDeploymentStatusResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "diagnoseAgentDeployment",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/diagnostics",
+    action: "openclaw.agent_deployments.diagnostics.run",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent_deployment_diagnostics",
+    summary: "Run explicit current-runtime diagnostics for one exact Agent revision",
+    tags: ["Agent deployments"],
+    schema: {
+      querystring: EmptyQuery,
+      params: DeploymentParams,
+      response: { 200: AgentDeploymentDiagnosticsResponse, ...mutationErrors },
     },
   },
 ] as const;

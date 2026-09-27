@@ -24,9 +24,7 @@ function sameNamespaceSecret(context, secret) {
 function renderSecretOptions(secrets) {
   return [
     element("option", { value: "" }, "Choose an existing Secret"),
-    ...secrets.map((secret) =>
-      element("option", { value: secret.id }, `${secret.name ?? "Secret"} · ${secret.id}`),
-    ),
+    ...secrets.map((secret) => element("option", { value: secret.id }, secret.name ?? "Secret")),
   ];
 }
 
@@ -398,7 +396,11 @@ export function createPresetFields(context, apply) {
         return;
       }
       selector.append(
-        ...presets.map((preset) => element("option", { value: preset.id }, preset.name)),
+        ...presets
+          .toSorted((left, right) =>
+            left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+          )
+          .map((preset) => element("option", { value: preset.id }, preset.name)),
       );
       selector.disabled = false;
       if (retained && presets.some((preset) => preset.id === retained.id)) {

@@ -18,10 +18,12 @@ export const SlackChannelAccessIncomplete = {
   name: "Slack sender access incomplete",
 };
 export const SlackSecretMenu = { ...story("slackSecretMenu"), name: "Slack Secret menu" };
+export const SlackSecretNameCollision = story("slackSecretNameCollision");
 export const SlackCreateSecretModal = {
   ...story("slackCreateSecretModal"),
   name: "Slack create Secret modal",
 };
+export const SlackDuplicateSecret = story("slackDuplicateSecret");
 export const SlackSecretStaged = {
   ...story("slackSecretStaged"),
   name: "Slack staged Secret binding",

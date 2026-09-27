@@ -1,7 +1,7 @@
 ---
 created: 2026-09-04
-updated: 2026-09-24
-last_updated_session: codex/01a0d502-6efc-7063-a88c-4f1739da163c
+updated: 2026-09-27
+last_updated_session: authoring-run/9266dd42-e257-4e84-b7ac-d6c87ba3ed23
 ---
 
 # GitHub Actions testing flow
@@ -69,7 +69,7 @@ Both workflows call the shared [run-ci-lane action](../../.github/actions/run-ci
 
 Ordinary PR dependency caches may be restored and saved within GitHub's PR merge-ref scope. Main jobs use main-scoped caches. Test results and credential-bearing state are not dependency caches, and protected jobs do not promote PR build artifacts.
 
-The provider job selects the shared `blacksmith-8vcpu-ubuntu-2404` runner for disk headroom during runtime image build and k3d import. The standard Ubuntu runner reached `DiskPressure` and evicted the seccomp probe before it could start. The repository must retain access to this organization runner label. Image preparation uses k3d's direct archive transport; the default tools-container transport reported success without registering the image on Blacksmith. The imported manifest and CRI checks remain required before any test starts.
+The provider job selects the shared `blacksmith-8vcpu-ubuntu-2404` runner for disk headroom during runtime image build and k3d import. The standard Ubuntu runner reached `DiskPressure` and evicted the seccomp probe before it could start. The repository must retain access to this organization runner label. Image preparation copies the saved archive into each owned k3d node and runs node-local `ctr image import`; k3d `tools-node` can log per-node import failures while returning success. The imported manifest and CRI checks remain required before any test starts.
 
 ### 2. Prepare resources under the job owner
 
@@ -89,7 +89,11 @@ Dedicated Codex preparation and the operator's offline profile generator share
 `scripts/lib/codex-seccomp-profile.mjs:deriveCodexBwrapProfile`. Preparation
 requires an actual workspace write and denied write to a container-writable
 outside path before publishing the selected Localhost profile to the live suite.
-Production node provisioning remains outside CI ownership; see
+Native runtime-image tests trust a dynamic Codex Docker seccomp profile only when
+`OPENCLAW_ENTERPRISE_CI_STATE` records the exact prepared
+`cluster.codexDockerSeccompProfile` path and SHA. A self-hashed profile without
+that state is not CI proof; the standalone fallback remains the pinned reviewed
+manual profile. Production node provisioning remains outside CI ownership; see
 [Codex sandbox setup](../guides/deploy/codex-sandbox.md).
 
 ### 3. Execute and account for actual cases
@@ -109,6 +113,15 @@ per lane and workflow run. A job retry replaces that lane's earlier artifact;
 other lanes retain their results. This prevents aggregation from selecting a
 stale failed result after a successful retry. The earlier job logs remain the
 failure record; retain a result separately before retrying when needed.
+
+For `images-packaging`, `scripts/ci/export-image-reconciliation.mjs` attempts
+to retain attempt-specific cleanup records for the two controller and runtime
+tags prepared by the lane. A planned record does not prove an image was created.
+The run-and-attempt component of each tag name is metadata, not authentication
+or permission to delete an image. Missing state is reported as unavailable;
+neither that result nor an empty inventory proves cleanup. The separate tag
+created by the runtime-images test, other resource kinds, and private environment
+values are excluded. Export or upload failure and runner loss can prevent retention.
 
 Fixture bootstrap failures also upload `diagnostics-<artifact-prefix>-<lane>`
 separately from test results. Cleanup removes the cluster and its private state;
@@ -140,6 +153,10 @@ The aggregate runs after success or failure and checks expected job outcomes plu
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 03:44: Retain bounded CI image cleanup evidence. (authoring-run/9266dd42-e257-4e84-b7ac-d6c87ba3ed23 - 3a1acc0db234f8d018593ea3a8b2fd59ad94a4da)
+
+- 2026-09-26: Recorded the PR #445 Images and Packaging failure as a stale native-smoke seccomp hash, rejected the self-hash-only repair, and bound dynamic Docker seccomp profiles to the prepared CI state path/SHA. Local validation covered the helper case (1 pass, 11 image-dependent skips); earlier native image proof remains distinct from the changed harness.
 
 - 2026-09-24 13:09: Document the shared offline seccomp generator and meaningful outside-workspace denial probe in the accompanying changes. (01a0d502-6efc-7063-a88c-4f1739da163c - b4b6a0e0d8700930f21d58b3724c055f8249c486)
 

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type {
   Agent,
   InitialWorkspaceFiles,
+  AgentDeploymentDiagnostics,
   AgentRevision,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
@@ -48,6 +49,7 @@ import type {
   ResourceKind,
   ResourceRef,
   Role,
+  RuntimeDiagnosticCheck,
   SandboxDriver,
   SandboxFacet,
   Secret,
@@ -404,9 +406,30 @@ const COMPUTE_LIFECYCLE_PHASES = [
   "beforeNamespaceDelete",
 ] as const satisfies readonly (keyof ComputeLifecycleHooks)[];
 
+const RUNTIME_DIAGNOSTIC_IDENTIFIER = /^[A-Za-z0-9._~:@-]{1,64}$/u;
+const RUNTIME_DIAGNOSTIC_TIMESTAMP =
+  /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$/u;
+
+function validRuntimeDiagnosticIdentifier(value: unknown): value is string {
+  return typeof value === "string" && RUNTIME_DIAGNOSTIC_IDENTIFIER.test(value);
+}
+
+function validRuntimeDiagnosticTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !RUNTIME_DIAGNOSTIC_TIMESTAMP.test(value)) {
+    return false;
+  }
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
 function validName(value: unknown): value is string {
   return isNonEmptyString(value) && value.length <= 200;
 }
+
+type PluginDiscoveryCredential =
+  | { readonly accessToken: string; readonly secretRef?: never }
+  | { readonly accessToken?: never; readonly secretRef: SecretReference }
+  | { readonly accessToken?: never; readonly secretRef?: never };
 
 function capability(value: unknown): value is DriverCapability {
   return typeof value === "string" && DRIVER_CAPABILITIES.some((candidate) => candidate === value);
@@ -483,6 +506,8 @@ function driverHasCapabilityContract(driver: Driver): boolean {
       typeof candidate.getAgentRuntimeCredentialStatus === "function") &&
     (candidate.provisionAgentRuntimeCredentials === undefined ||
       typeof candidate.provisionAgentRuntimeCredentials === "function") &&
+    (candidate.diagnoseAgentDeployment === undefined ||
+      typeof candidate.diagnoseAgentDeployment === "function") &&
     (candidate.deleteAgentRuntimeCredentials === undefined ||
       typeof candidate.deleteAgentRuntimeCredentials === "function")
   );
@@ -914,6 +939,9 @@ export class OpenClawController {
       ...this.installation,
       capabilities: {
         ...this.installation.capabilities,
+        ...(driver.discoverCatalog && driver.getCatalogPlugin
+          ? { pluginDiscovery: { credential: driver.discoveryCredential ?? "required" } }
+          : {}),
         pluginPolicies: {
           driver: { id: driver.id, implementation: driver.implementation },
           ...driver.policyCapabilities,
@@ -1866,6 +1894,50 @@ export class OpenClawController {
         code,
       });
     }
+  }
+
+  async diagnoseAgentDeployment(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    deploymentId: string,
+  ): Promise<Readonly<AgentDeploymentDiagnostics>> {
+    const revision = await this.getRevision(principalId, namespaceId, agentId, deploymentId);
+    await this.authorize(principalId, "operate", {
+      kind: "agent",
+      id: agentId,
+      namespaceId,
+    });
+    await this.authorize(principalId, "read", {
+      kind: "agent",
+      id: agentId,
+      namespaceId,
+    });
+    const binding = await this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      const agent = await state.agents.findAgent(namespace.id, agentId);
+      if (!agent) {
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      }
+      return { namespace, agent, revision };
+    });
+    const driver = this.diagnosticsComputeDriver();
+    if (
+      driver.id !== revision.compute.id ||
+      driver.implementation !== revision.compute.implementation
+    ) {
+      throw new DependencyUnavailableError("The deployment's Compute Driver is unavailable.");
+    }
+    let diagnostics: AgentDeploymentDiagnostics;
+    try {
+      diagnostics = await driver.diagnoseAgentDeployment!(binding);
+    } catch {
+      // Native Driver failures can contain private runtime or credential details.
+      throw new DependencyUnavailableError("Runtime diagnostics are unavailable.");
+    }
+    return this.deploymentDiagnostics(diagnostics, revision.id);
   }
 
   async getServiceAccount(
@@ -2821,47 +2893,130 @@ export class OpenClawController {
   async discoverAgentPlugins(
     principalId: string,
     namespaceId: string,
-    input: { readonly accessToken: string; readonly cursor?: string },
+    input: PluginDiscoveryCredential & { readonly cursor?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
     await this.read((state) => this.exactNamespace(state, namespaceId));
-    const driver = this.pluginDriver();
-    if (!driver.discoverCatalog) {
-      throw new NotImplementedError("agent_plugins.discovery", "Plugin discovery is unavailable.");
-    }
-    // The credential belongs to this request; provider I/O must not hold a platform transaction.
-    try {
-      return await driver.discoverCatalog(input, signal);
-    } catch (error) {
-      throw new PluginDiscoveryError(
-        error instanceof PluginDiscoveryError ? error.reason : "unavailable",
-      );
-    }
+    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, () => {
+      const driver = this.pluginDriver();
+      if (!driver.discoverCatalog) {
+        throw new NotImplementedError(
+          "agent_plugins.discovery",
+          "Plugin discovery is unavailable.",
+        );
+      }
+      return (accessToken) => {
+        if (accessToken === undefined && driver.discoveryCredential !== "none") {
+          throw new PluginDiscoveryError("credentials_rejected");
+        }
+        return driver.discoverCatalog!(
+          {
+            ...(accessToken === undefined ? {} : { accessToken }),
+            ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+          },
+          signal,
+        );
+      };
+    });
   }
 
   async discoverAgentPluginDetails(
     principalId: string,
     namespaceId: string,
-    input: { readonly accessToken: string; readonly pluginId: string },
+    input: PluginDiscoveryCredential & { readonly pluginId: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
     await this.read((state) => this.exactNamespace(state, namespaceId));
-    const driver = this.pluginDriver();
-    if (!driver.getCatalogPlugin) {
-      throw new NotImplementedError(
-        "agent_plugins.discovery",
-        "Plugin tool discovery is unavailable.",
-      );
+    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, () => {
+      const driver = this.pluginDriver();
+      if (!driver.getCatalogPlugin) {
+        throw new NotImplementedError(
+          "agent_plugins.discovery",
+          "Plugin tool discovery is unavailable.",
+        );
+      }
+      return (accessToken) => {
+        if (accessToken === undefined && driver.discoveryCredential !== "none") {
+          throw new PluginDiscoveryError("credentials_rejected");
+        }
+        return driver.getCatalogPlugin!(
+          { ...(accessToken === undefined ? {} : { accessToken }), pluginId: input.pluginId },
+          signal,
+        );
+      };
+    });
+  }
+
+  private async withPluginDiscoveryCredential<T>(
+    principalId: string,
+    namespaceId: string,
+    credential: PluginDiscoveryCredential,
+    prepareDiscovery: () => (accessToken: string | undefined) => Promise<T>,
+  ): Promise<T> {
+    const source = credential.secretRef;
+    if (source !== undefined) {
+      if (source.kind !== "secret" || source.namespaceId !== namespaceId) {
+        throw new ScopeViolationError("Secret references cannot cross Namespaces.");
+      }
+      await this.authorize(principalId, "operate", source);
     }
-    try {
-      return await driver.getCatalogPlugin(input, signal);
-    } catch (error) {
-      throw new PluginDiscoveryError(
-        error instanceof PluginDiscoveryError ? error.reason : "unavailable",
-      );
+    // Do not reveal Driver support before authorization or read a value for unsupported discovery.
+    const discover = prepareDiscovery();
+    // Keep both upstream errors and accidentally echoed credential material out of responses.
+    const invoke = async (
+      accessToken: string | undefined,
+    ): Promise<{ value: T } | { error: PluginDiscoveryError }> => {
+      try {
+        const value = await discover(accessToken);
+        const serialized = JSON.stringify(value);
+        const encodedToken =
+          accessToken === undefined ? undefined : JSON.stringify(accessToken).slice(1, -1);
+        if (
+          serialized === undefined ||
+          (encodedToken !== undefined &&
+            (encodedToken.length === 0 || serialized.includes(encodedToken)))
+        ) {
+          throw new PluginDiscoveryError("invalid_response");
+        }
+        return { value };
+      } catch (error) {
+        return {
+          error: new PluginDiscoveryError(
+            error instanceof PluginDiscoveryError ? error.reason : "unavailable",
+          ),
+        };
+      }
+    };
+
+    let outcome: { value: T } | { error: PluginDiscoveryError };
+    if (credential.accessToken !== undefined) {
+      outcome = await invoke(credential.accessToken);
+    } else if (credential.secretRef !== undefined) {
+      const source = credential.secretRef;
+      const secret = await this.read(async (state) => {
+        const found = await state.secrets.findSecret(namespaceId, source.id);
+        if (!found) {
+          throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
+        }
+        return found;
+      });
+      const driver = this.secretDriver(secret.driverId);
+      if (!driver.withValue) {
+        throw new DependencyUnavailableError(
+          "The selected Secret Driver cannot use credentials for discovery.",
+        );
+      }
+      // No platform transaction is held over backend or provider I/O; each request reads the current value.
+      outcome = await this.secretOperation(() => driver.withValue!(secret, invoke));
+    } else {
+      outcome = await invoke(undefined);
     }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    return outcome.value;
   }
 
   async createAgent(principalId: string, input: CreateAgentInput): Promise<Readonly<Agent>> {
@@ -4735,6 +4890,57 @@ export class OpenClawController {
     });
   }
 
+  private validRuntimeDiagnosticCheck(value: RuntimeDiagnosticCheck): RuntimeDiagnosticCheck {
+    const state = value?.state;
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Array.isArray(value) ||
+      !validRuntimeDiagnosticIdentifier(value.component) ||
+      !validRuntimeDiagnosticIdentifier(value.check) ||
+      (state !== "succeeded" && state !== "failed" && state !== "unknown") ||
+      (value.checkedAt !== null && !validRuntimeDiagnosticTimestamp(value.checkedAt)) ||
+      (value.code !== undefined && !validRuntimeDiagnosticIdentifier(value.code))
+    ) {
+      throw new DependencyUnavailableError(
+        "The selected compute Driver returned invalid runtime diagnostic evidence.",
+      );
+    }
+    return Object.freeze({
+      component: value.component,
+      check: value.check,
+      state,
+      checkedAt: value.checkedAt,
+      ...(value.code === undefined ? {} : { code: value.code }),
+    });
+  }
+
+  private deploymentDiagnostics(
+    diagnostics: AgentDeploymentDiagnostics,
+    revisionId: string,
+  ): Readonly<AgentDeploymentDiagnostics> {
+    if (
+      typeof diagnostics !== "object" ||
+      diagnostics === null ||
+      Array.isArray(diagnostics) ||
+      diagnostics.revisionId !== revisionId ||
+      !validRuntimeDiagnosticTimestamp(diagnostics.observedAt) ||
+      !Array.isArray(diagnostics.checks) ||
+      diagnostics.checks.length > 32
+    ) {
+      throw new DependencyUnavailableError(
+        "The selected compute Driver returned invalid runtime diagnostics.",
+      );
+    }
+    return Object.freeze({
+      revisionId: diagnostics.revisionId,
+      observedAt: diagnostics.observedAt,
+      checks: Object.freeze(
+        diagnostics.checks.map((check) => this.validRuntimeDiagnosticCheck(check)),
+      ),
+    });
+  }
+
   private secretMetadata(secret: Secret): Readonly<SecretMetadata> {
     return immutableCopy({
       id: secret.id,
@@ -4772,6 +4978,21 @@ export class OpenClawController {
     if (typeof method !== "function") {
       throw new DependencyUnavailableError(
         "The selected compute Driver does not support Agent runtime credentials.",
+      );
+    }
+    return driver;
+  }
+
+  private diagnosticsComputeDriver(): ComputeDriver {
+    let driver: ComputeDriver;
+    try {
+      driver = this.selectedDriver("compute");
+    } catch {
+      throw new DependencyUnavailableError("The selected compute Driver is unavailable.");
+    }
+    if (typeof driver.diagnoseAgentDeployment !== "function") {
+      throw new DependencyUnavailableError(
+        "The selected compute Driver does not support runtime diagnostics.",
       );
     }
     return driver;

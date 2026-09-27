@@ -391,8 +391,16 @@
                     "label": "Control Plane Setup"
                   },
                   {
+                    "page": "guides/deploy/upgrade-checklist",
+                    "label": "Upgrade Checklist"
+                  },
+                  {
                     "page": "guides/deploy/production-upgrade",
                     "label": "Image Upgrades"
+                  },
+                  {
+                    "page": "guides/deploy/local-k3d-image-upgrade",
+                    "label": "Local k3d Upgrades"
                   },
                   {
                     "page": "guides/deploy/kubernetes",
@@ -686,6 +694,10 @@
                         "label": "Local Tests"
                       },
                       {
+                        "page": "testing/module-boundaries",
+                        "label": "Module Boundaries"
+                      },
+                      {
                         "page": "testing/fixtures-and-scenarios",
                         "label": "Fixtures and Scenarios"
                       },
@@ -747,6 +759,7 @@
               "flows/docker-compose-development/agent-execution",
               "flows/common-logging",
               "flows/controller-worker",
+              "flows/agent-deployment-diagnostics",
               "flows/platform-console",
               "flows/platform-console/agent-editing",
               "flows/configuration-driver",

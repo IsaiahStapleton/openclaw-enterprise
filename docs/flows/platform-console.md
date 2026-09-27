@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
-updated: 2026-09-26
-last_updated_session: 01a0db1e-7ab2-7bf1-936b-e71c9d6f9911
+updated: 2026-09-27
+last_updated_session: 01a0e099-da9d-78f1-8e79-ea4a919edf7d
 ---
 
 # Platform console request flow
@@ -45,7 +45,7 @@ graph TD
     E1 --> S1["Select Secret or open creation modal"]
     S1 -->|select| S3["Stage binding until Apply"]
     S3 -->|apply| E1
-    E --> E2["Select new revision or AgentRevision by URL"]
+    E --> E2["Open new version draft or admitted version by URL"]
     E2 --> E3["Save supported channel draft edit"]
     E2 --> E4["Confirm Agent deletion"]
     E2 --> E5["Confirm Agent stop"]
@@ -165,18 +165,16 @@ reset incompatible credentials and model choices. The
 [creation reference](../reference/console/create-and-deploy.md) owns combinations,
 Preset constraints, token handling, permissions, and recovery.
 
-`agents/plugin-fields.mjs:createPluginFields` edits Agent-owned `plugins` through
-`#agent-plugins`, separately from Configuration. Invalid JSON and untouched fields
-survive; clearing overrides restores inheritance. Submission, uncertain outcomes,
-or invalid JSON lock editing. `capabilities.pluginPolicies` gates each policy scope;
-Missing capabilities preserve JSON and disable edits. Unsupported saved reviewers
-remain clearable. Agent submission saves the draft.
+`agents/plugin-fields.mjs:createPluginFields` edits Agent `plugins` separately
+from Configuration. Invalid JSON and untouched fields survive; clearing overrides
+restores inheritance. Submission, uncertain outcomes, or invalid JSON lock editing.
+`capabilities.pluginPolicies` gates policy edits; unsupported reviewers remain clearable.
 
 `create.mjs:loadPluginCatalog` and `loadPluginTools` implement
-[transient PAT discovery](agent-plugins.md#credential-scoped-discovery): upstream
-pagination, local filtering, and tools loaded on selection. Credential, provider,
-and Harness changes clear results and invalidate pending reads. The Driver owns
-upstream access.
+[PAT discovery](agent-plugins.md#credential-scoped-discovery): the selected or
+Preset Secret takes precedence over an entered token. OCC reads the
+Secret server-side. Pagination is upstream; filtering is local. Selecting a plugin loads tools.
+Credential, provider, and Harness changes clear results and invalidate pending reads.
 
 `create.mjs:MODEL_CHOICES` supplies static provider lists before credentials,
 without discovery requests or account verification. Manual entry remains available;
@@ -287,15 +285,16 @@ this client never infers it from a network error.
 
 ## Deploy the new revision
 
-The **New revision** detail view exposes **Deploy new revision**.
+The **Create new version** draft exposes **Deploy new version**.
 **Operator-managed credentials** persist `{ "method": "runtime" }` and bypass
 only the managed runtime-credential metadata gate; OCC does not validate host
-credentials. Deployment rereads the Agent and Configuration, checks their loaded
-association and generation, then sends the existing bodyless
-`POST /namespaces/:namespaceId/agents/:agentId/deploy`. The server retains
-authorization and admission checks. The returned revision opens Workspace files;
-subsequent workspace reads check gateway startup and file availability. An
-uncertain response disables replay until refresh and inspection.
+credentials.
+Deployment rereads the Agent and Configuration, checks association and generation,
+then sends bodyless `POST /namespaces/:namespaceId/agents/:agentId/deploy`.
+The server authorizes and admits the revision. Its read-only details open while
+**Deployment activity** follows the latest visible deployment. Workspace
+reads check gateway and file availability. Uncertain responses require refresh
+and inspection before retry.
 
 ## Debugging and Verification
 
@@ -325,6 +324,8 @@ uncertain response disables replay until refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 02:30: Use selected PAT Secrets for discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - ec4e9dc517497afe05be63a320542abcf61e8a55)
 
 - 2026-09-26 00:37: Link Secret summary metadata flow. (01a0db1e-7ab2-7bf1-936b-e71c9d6f9911 - e387b38cc259ee4a55936ecb848bbce8210bcd68)
 

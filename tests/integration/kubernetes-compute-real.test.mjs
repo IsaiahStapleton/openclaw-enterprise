@@ -22,6 +22,7 @@ import {
   kubernetesConfigurationName,
 } from "../../apps/controller/src/drivers/configuration/kubernetes/index.ts";
 import { KubernetesSecretDriver } from "../../apps/controller/src/drivers/secret/kubernetes/index.ts";
+import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { createGatewayNodeEnrollment } from "../../apps/controller/src/gateway/node-enrollment-client.ts";
 import { authenticatedHeaders, signInToControllerApp } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
@@ -107,7 +108,7 @@ async function waitFor(description, operation, timeoutMs = 120_000) {
   assert.fail(`Timed out waiting for ${description}.`);
 }
 
-function provisioningRequestBody({ modelSecretRef, slackBotSecretRef }) {
+function provisioningRequestBody({ modelSecretRef, slackBotSecretRef, authMethod = "api_key" }) {
   const model = "codex/gpt-6-astra";
   return {
     requestId: `req_${randomUUID()}`,
@@ -133,7 +134,7 @@ function provisioningRequestBody({ modelSecretRef, slackBotSecretRef }) {
       },
     },
     harnessAuth: {
-      method: "api_key",
+      method: authMethod,
       source: modelSecretRef,
     },
   };
@@ -214,7 +215,10 @@ async function createProvisioningApiFixture(context, computeDriver, authenticati
     { id: "secret-kubernetes-provisioning" },
   );
   let worker;
-  const drivers = runtimeDrivers({ computeDriver, configurationDriver, secretDriver });
+  const drivers = {
+    ...runtimeDrivers({ computeDriver, configurationDriver, secretDriver }),
+    pluginDriver: new CodexPluginDriver(),
+  };
   const app = await composePostgresDevelopment(
     {
       mode: "development",
@@ -2014,9 +2018,11 @@ test(
     });
     await fixture.stopWorker();
 
+    const discoveryPat = `at-kubernetes-fixture-${randomUUID()}`;
+    const rotatedPat = `at-kubernetes-rotated-${randomUUID()}`;
     const modelSecret = await fixture.request("POST", `/namespaces/${namespaceOwner.id}/secrets`, {
       name: `Provisioning model key ${randomUUID().slice(0, 8)}`,
-      value: `model-key-${randomUUID()}`,
+      value: discoveryPat,
     });
     assert.equal(modelSecret.status, 201, JSON.stringify(modelSecret.body));
     const slackBotSecret = await fixture.request(
@@ -2029,12 +2035,95 @@ test(
     );
     assert.equal(slackBotSecret.status, 201, JSON.stringify(slackBotSecret.body));
 
+    // Before creating the Agent, use the actual Kubernetes-backed PAT through the
+    // real discovery Driver; only the external provider responses are controlled.
+    const originalFetch = globalThis.fetch;
+    const observedTokens = [];
+    const provider = context.mock.method(globalThis, "fetch", async (url, init) => {
+      const address = String(url);
+      if (
+        !address.startsWith("https://auth.openai.com/") &&
+        !address.startsWith("https://chatgpt.com/backend-api/ps/")
+      ) {
+        return originalFetch(url, init);
+      }
+      observedTokens.push(init.headers.Authorization.slice("Bearer ".length));
+      if (address.includes("/whoami")) {
+        return Response.json({
+          chatgpt_account_id: "fixture-account",
+          chatgpt_account_is_fedramp: false,
+        });
+      }
+      assert.equal(init.headers["ChatGPT-Account-ID"], "fixture-account");
+      const plugin = {
+        id: "fixture-plugin",
+        name: "fixture",
+        scope: "GLOBAL",
+        status: "ENABLED",
+        installation_policy: "AVAILABLE",
+        release: {
+          display_name: "Fixture",
+          interface: {},
+          requires_local_executor: false,
+          app_ids: ["fixture-app"],
+          app_manifest: null,
+          skills: [],
+          mcp_servers: [],
+        },
+      };
+      if (address.includes("plugins/list")) {
+        return Response.json({ plugins: [plugin], pagination: { next_page_token: null } });
+      }
+      if (address.includes("plugins/fixture-plugin")) {
+        return Response.json(plugin);
+      }
+      assert.ok(address.endsWith("apps/batch"));
+      return Response.json({
+        apps: [{ id: "fixture-app", status: "ENABLED", tools: [{ name: "search" }] }],
+      });
+    });
+    const discoveryPath = `/namespaces/${namespaceOwner.id}/agents/plugins`;
+    const catalog = await fixture.request("POST", discoveryPath, {
+      secretRef: modelSecret.data.ref,
+    });
+    assert.equal(catalog.status, 200);
+    assert.equal(catalog.data.plugins[0].remoteId, "fixture-plugin");
+    const detail = await fixture.request("POST", `${discoveryPath}/details`, {
+      secretRef: modelSecret.data.ref,
+      pluginId: "fixture-plugin",
+    });
+    assert.equal(detail.status, 200);
+    assert.equal(detail.data.tools[0].id, "fixture-app/search");
+    assert.ok(observedTokens.length > 0 && observedTokens.every((token) => token === discoveryPat));
+    assert.equal(
+      (
+        await fixture.request(
+          "PATCH",
+          `/namespaces/${namespaceOwner.id}/secrets/${modelSecret.data.id}`,
+          { value: rotatedPat },
+        )
+      ).status,
+      200,
+    );
+    observedTokens.length = 0;
+    assert.equal(
+      (await fixture.request("POST", discoveryPath, { secretRef: modelSecret.data.ref })).status,
+      200,
+    );
+    assert.ok(observedTokens.length > 0 && observedTokens.every((token) => token === rotatedPat));
+    assert.doesNotMatch(
+      JSON.stringify([catalog.body, detail.body]),
+      /at-kubernetes-(fixture|rotated)-/,
+    );
+    provider.mock.restore();
+
     const body = provisioningRequestBody({
       modelSecretRef: modelSecret.data.ref,
       slackBotSecretRef: slackBotSecret.data.ref,
+      authMethod: "codex_pat",
     });
     assert.equal(
-      JSON.stringify(body).includes("model-key-"),
+      JSON.stringify(body).includes(rotatedPat),
       false,
       "provisioning must carry only saved Secret references, not Secret values",
     );
@@ -2213,6 +2302,14 @@ test(
             },
           },
     );
+    const proxyCidrs = process.env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS?.split(",")
+      .map((cidr) => cidr.trim())
+      .filter(Boolean);
+    assert.ok(
+      proxyCidrs?.length,
+      "the real diagnostics route requires the k3d API server Pod proxy source CIDR",
+    );
+    configuration.drivers.compute.configuration.network.pluginStatusProxySourceCidrs = proxyCidrs;
     for (const capability of ["configuration", "secret"]) {
       configuration.drivers[capability].configuration.authentication = {
         mode: "kubeconfig",
@@ -2834,6 +2931,48 @@ test(
         }
       }),
     );
+
+    const deploymentPath = `/namespaces/${namespaceIds[0]}/agents/${first.id}/deployments/${admitted[0].id}`;
+    const persistedBefore = await waitFor("first revision deployment to settle", async () => {
+      const observed = await request("GET", deploymentPath);
+      assert.equal(observed.status, 200, JSON.stringify(observed.error));
+      return observed.data.status === "succeeded" ? observed.data : undefined;
+    });
+    const diagnosticsPath = `${deploymentPath}/diagnostics`;
+    const diagnostics = await request("POST", diagnosticsPath);
+    assert.equal(diagnostics.status, 200, JSON.stringify(diagnostics.error));
+    assert.equal(diagnostics.data.revisionId, admitted[0].id);
+    assert.equal(new Date(diagnostics.data.observedAt).toISOString(), diagnostics.data.observedAt);
+    assert.ok(diagnostics.data.checks.length <= 32);
+    if (runtimeImage === undefined) {
+      assert.deepEqual(
+        diagnostics.data.checks,
+        ["agent", "gateway"].map((component) => ({
+          component,
+          check: "runtime-status",
+          state: "unknown",
+          checkedAt: null,
+          code: "UNAVAILABLE",
+        })),
+        "the fixture image cannot provide current runtime checks",
+      );
+    } else {
+      const gatewayConfiguration = diagnostics.data.checks.find(
+        ({ component, check }) => component === "gateway" && check === "configuration",
+      );
+      assert.ok(gatewayConfiguration, "the real Gateway must answer its native Slack check");
+      assert.equal(
+        new Date(gatewayConfiguration.checkedAt).toISOString(),
+        gatewayConfiguration.checkedAt,
+      );
+    }
+    assert.equal(
+      (await request("POST", diagnosticsPath, undefined, { session: false })).status,
+      401,
+    );
+    const persistedAfter = await request("GET", deploymentPath);
+    assert.equal(persistedAfter.status, 200, JSON.stringify(persistedAfter.error));
+    assert.deepEqual(persistedAfter.data, persistedBefore);
 
     if (runtimeImage !== undefined) {
       const gatewayTarget = kubernetesGatewayNamespaceName(namespaceIds[0]);

@@ -187,6 +187,9 @@
       "path": "tests/integration/ci-cleanup.test.mjs"
     },
     {
+      "path": "tests/integration/ci-image-reconciliation.test.mjs"
+    },
+    {
       "path": "tests/integration/ci-prepare.test.mjs"
     },
     {
@@ -245,6 +248,9 @@
     },
     {
       "path": "tests/integration/plugin-driver-startup.test.mjs"
+    },
+    {
+      "path": "tests/integration/plugin-driver-real-preflight.test.mjs"
     },
     {
       "path": "tests/conformance/repository-transactions.test.mjs"
@@ -335,6 +341,9 @@
       "path": "tests/conformance/repository-credentials-registry.test.mjs"
     },
     {
+      "path": "tests/conformance/repository-client-environment.test.mjs"
+    },
+    {
       "path": "tests/conformance/repository-runtime-material.test.mjs"
     },
     {
@@ -357,6 +366,9 @@
     },
     {
       "path": "tests/integration/runtime-assets.test.mjs"
+    },
+    {
+      "path": "tests/conformance/module-boundaries.test.mjs"
     }
   ]
 }

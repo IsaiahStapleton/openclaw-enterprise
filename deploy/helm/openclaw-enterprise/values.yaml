@@ -72,6 +72,16 @@ backend:
 repositoryCredentials:
   enabled: false
   image: ""
+  # Internal HTTPS Service name. Fresh installs default to git. Upgrades must
+  # set this explicitly to the current Service name until repository sessions
+  # drain, then switch it deliberately to git.
+  serviceName: ""
+  # Kubernetes cluster DNS suffix used to form the broker Service FQDN.
+  clusterDomain: cluster.local
+  # Optional exact Service hostname: <service>.<namespace>.svc or that name
+  # followed by .<clusterDomain>. Empty selects the cluster-qualified name.
+  # Preserve the current hostname during upgrades; it pins TLS and sessions.
+  hostname: ""
   backendId: ""
   # Operator-created immutable, versioned ConfigMap shared by all three consumers.
   registryConfigMapName: ""

@@ -2,14 +2,23 @@ const draft =
   "/console/agents/agt_00000000-0000-4000-8000-000000000001?namespace=ns_00000000-0000-4000-8000-000000000001&revision=draft";
 const revision =
   "/console/agents/agt_00000000-0000-4000-8000-000000000001?namespace=ns_00000000-0000-4000-8000-000000000001&revision=rev_00000000-0000-4000-8000-000000000001";
+const currentVersion =
+  "/console/agents/agt_00000000-0000-4000-8000-000000000001?namespace=ns_00000000-0000-4000-8000-000000000001&revision=rev_00000000-0000-4000-8000-000000000006";
+const candidateVersion =
+  "/console/agents/agt_00000000-0000-4000-8000-000000000001?namespace=ns_00000000-0000-4000-8000-000000000001&revision=rev_00000000-0000-4000-8000-000000000007";
 const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-000000000001";
 const click = (text) => ({ click: text });
 const form = [click("Start without Preset")];
+const createModelSecret = (value) => [
+  { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
+  { selector: "#create-provider-credential-secret-value", value },
+  click("Create Secret"),
+];
 const readyForm = [
   ...form,
   { selector: "#agent-name", value: "Research assistant" },
-  { selector: "#provider-api-key", value: "storybook-model-api-key" },
   { selector: "#agent-model", value: "gpt-5.6-sol" },
+  ...createModelSecret("storybook-model-api-key"),
 ];
 const passwordPresetForm = [
   { selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" },
@@ -19,8 +28,9 @@ const passwordPresetForm = [
   click("Use Preset"),
 ];
 const existingPresetSecret = [
-  { selector: "#agent-preset", value: "pre_devday_codex" },
-  { selector: "#preset-variable-name", value: "SWE assistant" },
+  { selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" },
+  { selector: "#preset-variable-name", value: "Codex assistant" },
+  { selector: "#preset-variable-model", value: "gpt-5.1" },
   { selector: "#preset-variable-modelSecret-secret-source", value: "existing" },
 ];
 const presetSecretsPath = "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets";
@@ -85,6 +95,62 @@ const unavailablePlugins = [
     tools: null,
   },
 ];
+// Names and IDs from plugin-suggestions branch commit eb83563c.
+// Catalog availability and tool details are simulated in this Storybook fixture.
+const codexPluginSuggestions = [
+  { id: "codex-plugin:airtable@openai-curated-remote", name: "Airtable" },
+  { id: "codex-plugin:asana@openai-curated-remote", name: "Asana" },
+  { id: "codex-plugin:box@openai-curated-remote", name: "Box" },
+  { id: "codex-plugin:canva@openai-curated-remote", name: "Canva" },
+  { id: "codex-plugin:datadog@openai-curated-remote", name: "Datadog (Preview)" },
+  { id: "codex-plugin:figma@openai-curated-remote", name: "Figma" },
+  { id: "codex-plugin:github@openai-curated-remote", name: "GitHub" },
+  { id: "codex-plugin:google-contacts@openai-curated-remote", name: "Google Contacts" },
+  { id: "codex-plugin:granola@openai-curated-remote", name: "Granola" },
+  { id: "codex-plugin:hubspot@openai-curated-remote", name: "HubSpot" },
+  { id: "codex-plugin:quickbooks@openai-curated-remote", name: "Intuit QuickBooks" },
+  { id: "codex-plugin:linear@openai-curated-remote", name: "Linear" },
+  { id: "codex-plugin:monday-com@openai-curated-remote", name: "monday.com" },
+  { id: "codex-plugin:notion@openai-curated-remote", name: "Notion" },
+  { id: "codex-plugin:outlook-calendar@openai-curated-remote", name: "Outlook Calendar" },
+  { id: "codex-plugin:outlook-email@openai-curated-remote", name: "Outlook Email" },
+  { id: "codex-plugin:posthog@openai-curated-remote", name: "PostHog" },
+  { id: "codex-plugin:semrush@openai-curated-remote", name: "Semrush" },
+  { id: "codex-plugin:sentry@openai-curated-remote", name: "Sentry" },
+  { id: "codex-plugin:sharepoint@openai-curated-remote", name: "SharePoint" },
+  { id: "codex-plugin:slack@openai-curated-remote", name: "Slack" },
+  { id: "codex-plugin:supabase@openai-curated-remote", name: "Supabase" },
+  { id: "codex-plugin:superhuman@openai-curated-remote", name: "Superhuman Mail" },
+  { id: "codex-plugin:teams@openai-curated-remote", name: "Teams" },
+  { id: "codex-plugin:vercel@openai-curated-remote", name: "Vercel" },
+  { id: "codex-plugin:zoom@openai-curated-remote", name: "Zoom" },
+];
+const linearAppId = "asdk_app_69a089a326dc8191b32a3f2553f5be2c";
+const devdayCuratedEntries = codexPluginSuggestions.map((suggestion) => {
+  const remoteId = suggestion.id.match(/^codex-plugin:([^@]+)@/)?.[1] ?? suggestion.id;
+  return {
+    ...suggestion,
+    remoteId,
+    available: true,
+    tools:
+      suggestion.id === "codex-plugin:linear@openai-curated-remote"
+        ? [
+            {
+              id: `${linearAppId}/create_issue`,
+              name: "Create issue",
+              ownerId: linearAppId,
+              description: "Create a Linear issue with a title, description, and team.",
+            },
+            {
+              id: `${linearAppId}/search_issues`,
+              name: "Search issues",
+              ownerId: linearAppId,
+              description: "Search Linear issues by text and status.",
+            },
+          ]
+        : [],
+  };
+});
 const pluginCatalog = {
   status: "ready",
   setup: pluginSetup,
@@ -181,9 +247,25 @@ const pluginDiscovery = {
   },
   details: Object.fromEntries(pluginCatalog.entries.map((entry) => [entry.remoteId, entry])),
 };
+const devdayPluginCatalog = {
+  status: "ready",
+  setup: pluginSetup,
+  entries: [...devdayCuratedEntries, pluginCatalog.entries[0]],
+};
+const devdayPluginDiscovery = {
+  pages: {
+    initial: {
+      plugins: devdayPluginCatalog.entries.map((entry) => ({ ...entry, tools: null })),
+      nextCursor: null,
+      setup: pluginSetup,
+    },
+  },
+  details: Object.fromEntries(devdayPluginCatalog.entries.map((entry) => [entry.remoteId, entry])),
+};
 const pluginDiscoveryForm = [
   ...form,
   { selector: "#agent-auth-method", value: "codex_pat" },
+  { selector: "#plugin-discovery-token summary", click: true },
   { selector: "#provider-api-key", value: "at-storybook-pat" },
   click("Configure plugins"),
 ];
@@ -195,7 +277,7 @@ const account = [{ selector: ".account-toggle", click: true }];
 const devdayRepositorySelector = 'input[value="openclaw/openclaw-enterprise"]';
 const createSlackBotSecret = [
   { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
-  { selector: "#create-slack-bot-token-value", value: "simulated-bot-token" },
+  { selector: "#create-slack-secret-slack-bot-token-value", value: "simulated-bot-token" },
   click("Create Secret"),
 ];
 const allowEveryoneInSlackChannels = [
@@ -206,8 +288,8 @@ const createWorkspaceFields = [
   ...form,
   { selector: ".launch-advanced summary", click: true },
   { selector: "#agent-name", value: "Workspace seed demo" },
-  { selector: "#provider-api-key", value: "storybook-model-api-key" },
   { selector: "#agent-model", value: "gpt-5.6-sol" },
+  ...createModelSecret("storybook-model-api-key"),
   {
     selector: "#workspace-IDENTITY-md",
     value:
@@ -230,18 +312,18 @@ const devdayCreateCheckpoint = [
   click("Create Agent"),
   { selector: "#agent-preset", value: "pre_devday_codex" },
   { selector: "#preset-variable-name", value: "devday claw" },
-  { selector: "#preset-variable-modelSecret", value: "at-demo-devday-service-account-token" },
   click("Use Preset"),
+  { selector: "#provider-credential-secret", value: "sec_devday_model_token" },
   click("Configure plugins"),
-  click("Load plugins"),
-  { selector: 'button[aria-label="Calendar"]', click: true },
-  click("Add Calendar"),
-  { selector: 'select[aria-label="Calendar default reviewer"]', value: "auto" },
+  { selector: 'button[aria-label="Linear"]', click: true },
+  click("Add Linear"),
+  { selector: 'select[aria-label="Linear default reviewer"]', value: "auto" },
   {
-    selector: 'details.plugin-tool-row[data-tool="app_calendar/create_event"] > summary',
+    selector:
+      'details.plugin-tool-row[data-tool="asdk_app_69a089a326dc8191b32a3f2553f5be2c/create_issue"] > summary',
     click: true,
   },
-  { selector: 'select[aria-label="Create event approval"]', value: "prompt" },
+  { selector: 'select[aria-label="Create issue approval"]', value: "prompt" },
   click("Done"),
   { selector: devdayRepositorySelector, click: true },
   { selector: "#repository-profile-git-write", click: true },
@@ -556,17 +638,101 @@ export const scenarios = {
   },
   createPluginsUnavailable: {
     group: "Pages/Create Agent",
-    name: "Plugin discovery needs an entered token",
+    name: "Plugin discovery needs a service account credential",
     path: create,
     pluginCapabilities,
     actions: [...form, click("Configure plugins")],
     description:
-      "Plugin discovery requires a newly entered service account token with the Codex harness. Existing plugin IDs and policies stay in Plugin selections JSON.",
+      "Plugin discovery requires a selected service account Secret or an entered token with the Codex harness. Existing plugin IDs and policies stay in Plugin selections JSON.",
     steps: [
       "Click Done, open Plugin selections JSON, and enter a known plugin ID and policy.",
       "Open Configure plugins and choose the configured plugin. Change a policy, click Done, and inspect the JSON.",
     ],
-    gap: "API keys and saved Preset credentials do not enable this discovery flow. Enter only dummy credentials in Storybook.",
+    gap: "API keys do not enable this discovery flow. Enter only dummy credentials in Storybook.",
+  },
+  createPluginsSelectedSecret: {
+    group: "Pages/Create Agent",
+    name: "Discover plugins with a selected PAT Secret",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    extraSecrets: [{ id: "sec_storybook_pat", name: "Service account PAT (simulated)" }],
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "codex_pat" },
+      { selector: "#provider-credential-secret", value: "sec_storybook_pat" },
+      click("Configure plugins"),
+    ],
+    description: "The selected Secret enables discovery without entering a separate token.",
+    steps: [
+      "Choose Calendar to load its details, then click Done and select another Secret to clear the catalog.",
+      "Without a selected Secret, the optional token field remains available for a preview.",
+    ],
+    gap: "The Secret and OCC discovery responses are simulated. This preview does not verify live provider access or Secret storage.",
+  },
+  createPluginsSelectedSecretDenied: {
+    group: "Pages/Create Agent",
+    name: "Selected PAT Secret discovery denied",
+    path: create,
+    pluginCapabilities,
+    extraSecrets: [{ id: "sec_storybook_pat", name: "Service account PAT (simulated)" }],
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "codex_pat" },
+      { selector: "#provider-credential-secret", value: "sec_storybook_pat" },
+      click("Configure plugins"),
+    ],
+    rules: [{ suffix: "/agents/plugins", method: "POST", status: 403, code: "FORBIDDEN" }],
+    description:
+      "A denied discovery request explains that permission is required without exposing Secret data.",
+    gap: "The Secret and denial are simulated; this preview does not verify IAM enforcement.",
+  },
+  createPluginsCurated: {
+    group: "Pages/Create Agent",
+    name: "Select Linear from the curated catalog",
+    path: create,
+    pluginCapabilities,
+    pluginDiscoveryCredential: "none",
+    pluginDiscovery: (() => {
+      const linear = {
+        id: "codex-plugin:linear@openai-curated-remote",
+        remoteId: "plugin_asdk_app_69a089a326dc8191b32a3f2553f5be2c",
+        name: "Linear",
+        description: "Plan and build products",
+        websiteUrl: "https://linear.app/",
+        privacyPolicyUrl: "https://linear.app/privacy",
+        termsOfServiceUrl: "https://linear.app/terms",
+        selectableWithoutTools: true,
+        tools: null,
+      };
+      return {
+        pages: {
+          initial: {
+            plugins: [linear],
+            nextCursor: null,
+            setup: {
+              message:
+                "This catalog does not verify workspace access, app connections, or tool availability. Configure the Agent's credentials and app access before deployment.",
+              links: [
+                {
+                  label: "Manage workspace plugins",
+                  url: "https://chatgpt.com/admin/plugins?catalog=GLOBAL",
+                },
+              ],
+            },
+          },
+        },
+        details: { [linear.remoteId]: linear },
+      };
+    })(),
+    actions: [...form, click("Configure plugins")],
+    description:
+      "The selected Driver exposes Linear without a discovery token. Its tool inventory remains unknown.",
+    steps: [
+      "Choose Linear, add it, and set a default policy. Close the modal and inspect Plugin selections JSON.",
+      "The catalog does not establish account access or runtime readiness; configure the Agent's actual credentials separately.",
+    ],
+    gap: "The catalog and provider responses are simulated. This preview does not invoke Linear or verify runtime authentication.",
   },
   createPluginsDiscovered: {
     group: "Pages/Create Agent",
@@ -978,7 +1144,7 @@ export const scenarios = {
       { selector: "#slack-dm-policy", value: "disabled" },
     ],
     description:
-      "A new Agent can choose existing simulated Namespace Secrets or create new Slack token Secrets before the Agent resource exists.",
+      "A new Agent can choose existing simulated Namespace Secrets by name or create new Slack token Secrets before the Agent resource exists.",
   },
   createSlackCreateSecretModal: {
     group: "Pages/Create Agent",
@@ -1230,25 +1396,23 @@ export const scenarios = {
   },
   createPresetExistingSecret: {
     group: "Pages/Create Agent",
-    name: "SWE existing service account Secret",
+    name: "Standard Codex existing Secret",
     path: create,
-    devdayPreset: true,
-    extraSecrets: [
-      { id: "sec_devday_model_token", name: "DevDay Codex service account (simulated)" },
-    ],
+    standardCodexPreset: true,
+    extraSecrets: [{ id: "sec_devday_model_token", name: "Codex API key (simulated)" }],
     actions: [
       ...existingPresetSecret,
       { selector: "#preset-variable-modelSecret-existing-secret", value: "sec_devday_model_token" },
     ],
     description:
-      "SWE defaults to gpt-6-astra and Codex Service Accounts. Use Preset reuses this Namespace Secret without reading its value; Create Agent grants access.",
-    gap: "Secret metadata and API responses are simulated. This does not validate a real service account token.",
+      "The standard Codex Preset reuses this Namespace Secret without reading its value; Create Agent grants access.",
+    gap: "Secret metadata and API responses are simulated. This does not validate a real API key.",
   },
   createPresetSecretsLoading: {
     group: "Pages/Create Agent",
     name: "Preset Secrets loading",
     path: create,
-    devdayPreset: true,
+    standardCodexPreset: true,
     actions: existingPresetSecret,
     rules: [{ path: presetSecretsPath, hold: true }],
     description:
@@ -1258,7 +1422,7 @@ export const scenarios = {
     group: "Pages/Create Agent",
     name: "Preset Secret metadata denied",
     path: create,
-    devdayPreset: true,
+    standardCodexPreset: true,
     actions: existingPresetSecret,
     rules: [{ path: presetSecretsPath, status: 403 }],
     description:
@@ -1268,7 +1432,7 @@ export const scenarios = {
     group: "Pages/Create Agent",
     name: "No existing Preset Secrets",
     path: create,
-    devdayPreset: true,
+    standardCodexPreset: true,
     emptySecrets: true,
     actions: existingPresetSecret,
     description:
@@ -1381,7 +1545,7 @@ export const scenarios = {
     actions: [
       ...form,
       { selector: "#model-provider", value: "anthropic" },
-      { selector: "#provider-api-key", value: "storybook-anthropic-key" },
+      ...createModelSecret("storybook-anthropic-key"),
     ],
     description:
       "Anthropic offers only the OpenClaw harness, with Embedded execution. Its fixed model list is available before credential entry and starts without a selection.",
@@ -1393,7 +1557,7 @@ export const scenarios = {
     actions: [
       ...form,
       { selector: "#agent-auth-method", value: "codex_pat" },
-      { selector: "#provider-api-key", value: "at-storybook-pat" },
+      ...createModelSecret("at-storybook-pat"),
     ],
     description:
       "Service Accounts authentication is available with the Codex harness and uses the same fixed OpenAI model list. Switching to OpenClaw selects API-key authentication and clears the credential and model selection.",
@@ -1405,12 +1569,12 @@ export const scenarios = {
     actions: [
       ...form,
       { selector: "#agent-auth-method", value: "codex_pat" },
-      { selector: "#provider-api-key", value: "at-storybook-pat" },
+      ...createModelSecret("at-storybook-pat"),
       { selector: "#agent-model", value: "gpt-5.6-sol" },
       { selector: "#agent-harness", value: "openclaw" },
     ],
     description:
-      "Switching an unsaved service account form to OpenClaw clears the token and model, selects API-key authentication, and uses Embedded execution. Enter a dummy API key to continue.",
+      "Switching an unsaved service account form to OpenClaw clears the token and model, selects API-key authentication, and uses Embedded execution. Choose or create a simulated API key Secret to continue.",
   },
   createBoundPatPreset: {
     group: "Pages/Create Agent",
@@ -1453,7 +1617,7 @@ export const scenarios = {
     group: "Pages/Create Agent",
     name: "API key storage denied",
     path: create,
-    actions: [...readyForm, click("Create Agent")],
+    actions: readyForm,
     rules: [
       {
         path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets",
@@ -1462,7 +1626,7 @@ export const scenarios = {
       },
     ],
     description:
-      "A rejected Secret write keeps the form available and does not create a Configuration or Agent.",
+      "A rejected Secret write keeps the creation dialog open and does not create a Configuration or Agent.",
   },
   createGrantDenied: {
     unsupportedProvisioning: true,
@@ -1526,10 +1690,24 @@ export const scenarios = {
   },
   draft: {
     group: "Pages/Agent detail",
-    name: "New revision",
+    name: "First version",
     path: draft,
     description:
-      "Editable desired configuration, masked authentication summary, deployment gate, and Agent deletion.",
+      "An Agent without a version can edit saved settings and deploy its first immutable version.",
+  },
+  newVersion: {
+    group: "Pages/Agent detail",
+    name: "Create new version",
+    path: draft,
+    deployed: true,
+    description:
+      "Edit and save the current Configuration before deploying a new immutable version. The selected version stays unchanged until activation.",
+    steps: [
+      "Review the selected version and saved draft settings.",
+      "Edit and save Configuration; then deploy the new version.",
+      "Inspect the admitted version and its deployment activity.",
+    ],
+    gap: "The fixture simulates admission and worker completion; it does not verify a live Agent.",
   },
   configurationNavigation: {
     group: "Pages/Agent detail",
@@ -1568,25 +1746,26 @@ export const scenarios = {
   },
   admitted: {
     group: "Pages/Agent detail",
-    name: "Admitted revision",
+    name: "Current version",
     path: revision,
     deployed: true,
     description:
-      "Immutable Configuration snapshot with Deploy new revision targeting the current saved draft. Persisted deployment status does not establish live serving health.",
+      "The selected immutable version has recorded deployment success. It is not proof of current live serving health.",
   },
   repositoryDraft: {
     group: "Pages/Agent detail",
-    name: "Repository access in new revision",
+    name: "Repository access in new version",
     path: draft,
     repositoryBindings: [
       { repositoryRef: "application", profile: "git-write" },
       { repositoryRef: "handbook", profile: "git-read" },
     ],
-    description: "The new revision names Contributor and Read-only access and shows write limits.",
+    description:
+      "The new version draft names Contributor and Read-only access and shows write limits.",
   },
   repositoryAdmitted: {
     group: "Pages/Agent detail",
-    name: "Repository access in admitted revision",
+    name: "Repository access in current version",
     path: revision,
     deployed: true,
     repositoryBindings: [{ repositoryRef: "application", profile: "git-full" }],
@@ -1595,20 +1774,114 @@ export const scenarios = {
   },
   deploymentPending: {
     group: "Pages/Agent detail",
-    name: "Deployment pending",
-    path: revision,
+    name: "New version queued",
+    path: candidateVersion,
     deployed: true,
-    deploymentStatus: "queued",
-    description: "An admitted revision with pending simulated worker progress.",
+    candidateDeploymentStatus: "queued",
+    description:
+      "v7 is admitted and queued without a live worker claim. v6 remains selected; serving is unverified.",
+  },
+  deploymentRunning: {
+    group: "Pages/Agent detail",
+    name: "New version in progress",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "running",
+    description:
+      "A worker holds the v7 deployment claim while v6 remains selected. The API does not expose finer runtime stages.",
+  },
+  currentVersionDuringDeployment: {
+    group: "Pages/Agent detail",
+    name: "Current version during deployment",
+    path: currentVersion,
+    deployed: true,
+    candidateDeploymentStatus: "running",
+    description:
+      "Inspect v6 details while the newest deployment, v7, is still in progress. Browsing does not change selection.",
   },
   deploymentFailed: {
     group: "Pages/Agent detail",
-    name: "Deployment failed",
-    path: revision,
+    name: "New version failed",
+    path: candidateVersion,
     deployed: true,
-    deploymentStatus: "failed",
+    candidateDeploymentStatus: "failed",
     description:
-      "Persisted startup failure with runtime component, readiness check, and failure code.",
+      "v7 failed before activation; v6 remains selected. The record includes bounded startup failure evidence.",
+  },
+  deploymentFailedAfterSelection: {
+    group: "Pages/Agent detail",
+    name: "Deployment failed after selection",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "failed",
+    candidateSelected: true,
+    description:
+      "v7 is selected despite a recorded finalization failure. The timeline reports failure without claiming selection never occurred.",
+  },
+  deploymentSucceeded: {
+    group: "Pages/Agent detail",
+    name: "New version activated",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    description:
+      "v7 is now selected and its original deployment recorded success. This remains historical evidence, not a live probe.",
+  },
+  deploymentUnavailable: {
+    group: "Pages/Agent detail",
+    name: "Deployment activity unavailable",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "running",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deployments/rev_00000000-0000-4000-8000-000000000007",
+        status: 503,
+      },
+    ],
+    description:
+      "The latest deployment record cannot be read. Version history and the selected version remain distinct from the status error.",
+  },
+  diagnosticsSuccess: {
+    group: "Pages/Agent detail",
+    name: "Current observations for v7",
+    path: candidateVersion,
+    deployed: true,
+    slack: true,
+    candidateDeploymentStatus: "succeeded",
+    actions: [click("Run diagnostics for this version")],
+    description:
+      "An on-demand observation for viewed v7 reports timestamped Slack configuration, authentication, and connectivity checks. It does not change v7's persisted deployment result.",
+  },
+  diagnosticsUnknown: {
+    group: "Pages/Agent detail",
+    name: "Unknown observation for v6",
+    path: currentVersion,
+    deployed: true,
+    slack: true,
+    candidateDeploymentStatus: "running",
+    diagnosticsState: "unknown",
+    actions: [click("Run diagnostics for this version")],
+    description:
+      "While v7 deploys, the operator requests checks for viewed v6. Authentication and connectivity are unknown, not deployment failures.",
+  },
+  diagnosticsUnavailable: {
+    group: "Pages/Agent detail",
+    name: "Current observation unavailable",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deployments/rev_00000000-0000-4000-8000-000000000007/diagnostics",
+        method: "POST",
+        status: 503,
+        code: "DEPENDENCY_UNAVAILABLE",
+      },
+    ],
+    actions: [click("Run diagnostics for this version")],
+    description:
+      "A failed on-demand check reports its own error. The viewed v7 deployment record remains succeeded.",
   },
   agentMissing: {
     group: "Pages/Agent detail",
@@ -1657,13 +1930,13 @@ export const scenarios = {
         status: 403,
       },
     ],
-    actions: [click("Deploy new revision")],
+    actions: [click("Deploy new version")],
     description: "A rejected deployment reports failure and re-enables the action.",
   },
   revisionDeployDenied: {
     group: "Pages/Agent detail",
-    name: "Revision deployment denied",
-    path: revision,
+    name: "New version deployment denied",
+    path: draft,
     deployed: true,
     rules: [
       {
@@ -1672,19 +1945,18 @@ export const scenarios = {
         status: 403,
       },
     ],
-    actions: [click("Deploy new revision")],
+    actions: [click("Deploy new version")],
     description:
-      "A denied deployment from an admitted snapshot leaves the snapshot unchanged and permits an explicit retry.",
+      "A denied deployment from saved settings leaves the current version unchanged and permits an explicit retry.",
   },
   revisionCredentialsMissing: {
     group: "Pages/Agent detail",
-    name: "Revision deployment missing credentials",
-    path: revision,
+    name: "New version missing credentials",
+    path: draft,
     deployed: true,
     transport: false,
-    actions: [click("Deploy new revision")],
     description:
-      "Deployment checks the current draft and refuses missing generated credentials before admission.",
+      "A previous version exists, but generated runtime credentials are missing. Deployment remains blocked pending operator recovery.",
   },
   buildRevision: {
     group: "Components/Navigation",
@@ -1722,8 +1994,13 @@ export const scenarios = {
     group: "Components/Navigation",
     name: "Mobile Namespace selector",
     mobile: true,
+    namespaceName: "Engineering platform operations and infrastructure",
     description:
       "Choose a Namespace directly from the header at 390px, without opening navigation.",
+    steps: [
+      "Check that the long Namespace name truncates before the inset chevron.",
+      "Choose Research, then return to the long Namespace and check the selection.",
+    ],
   },
   mobile: {
     group: "Components/Navigation",
@@ -1856,7 +2133,21 @@ export const scenarios = {
     slack: true,
     actions: [click("Edit Slack")],
     description:
-      "Slack token references are menus backed by simulated same-Namespace Secret metadata. Options include readable existing Secrets and Create new Secret.",
+      "Search Slack token Secrets by name or ID; options and selections show names only. Use arrow keys and Enter to select, and Escape to retain the current binding. Metadata is simulated within this Namespace.",
+  },
+  slackSecretNameCollision: {
+    group: "Components/Channels",
+    name: "Slack Secret action name collision",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    extraSecrets: [
+      { id: "sec_story_create_name", name: "Create new Secret..." },
+      { id: "sec_story_none_name", name: "No Secret bound" },
+      { id: "sec_story_bound_name", name: "Bound Secret" },
+    ],
+    actions: [click("Edit Slack")],
+    description:
+      "Open the bot token selector to compare Secret names with matching picker actions. Real Secret names remain unchanged and conflicting actions have a qualifier.",
   },
   slackCreateSecretModal: {
     group: "Components/Channels",
@@ -1868,7 +2159,26 @@ export const scenarios = {
       { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
     ],
     description:
-      "Create new Secret opens a modal with the fixed Slack binding key and a password value field. Values are simulated and never read back.",
+      "Create new Secret opens a modal with an editable Agent-prefixed Name, a fixed Slack binding key, and a masked Secret value. Values are simulated and never read back.",
+  },
+  slackDuplicateSecret: {
+    group: "Components/Channels",
+    name: "Slack duplicate Secret name",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    actions: [
+      click("Edit Slack"),
+      { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
+      {
+        selector: "#create-slack-secret-slack-bot-token-name",
+        value: "Slack bot token (simulated)",
+      },
+      { selector: "#create-slack-secret-slack-bot-token-value", value: "synthetic-demo-token" },
+      click("Create Secret"),
+    ],
+    description:
+      "A simulated duplicate-name rejection preserves Name and the masked value. Change the Name and create again; the existing Secret remains unchanged.",
+    gap: "Simulated UI proof only; the browser integration suite verifies real controller conflict handling.",
   },
   slackSecretStaged: {
     group: "Components/Channels",
@@ -2049,7 +2359,7 @@ export const scenarios = {
       },
     ],
     description:
-      "Secret references remain preserved when Secret metadata cannot be listed in this Namespace.",
+      "Secret references remain preserved when metadata cannot be listed; the picker shows Bound Secret without an ID.",
   },
   credentialsSlackGrantDenied: {
     group: "Components/Credentials",
@@ -2133,7 +2443,7 @@ export const scenarios = {
     ],
     actions: [{ selector: "#harness-auth-secret", value: "sec_demo_model_replacement" }],
     description:
-      "The authentication source uses the same Secret picker and stages a different API-key Secret.",
+      "The authentication source picker displays Secret names and stages a different API-key Secret.",
   },
   authSecretReplacement: {
     group: "Components/Credentials",
@@ -2377,24 +2687,37 @@ export const scenarios = {
       "Choose Research assistant, fill Variable: name, then Use Preset.",
       "Review the Configuration, masked pre-existing model Secret reference, and four seeded workspace files; click Create Agent.",
       "Wait for the simulated provisioning and deployment to finish; the Console opens Workspace files for the admitted revision.",
-      "Use AgentRevision to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
+      "Use Versions to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
     ],
     gap: "The fixture supplies a ready Namespace, Preset, and model Secret. Set those up outside the console. Verify actual serving health and a model response outside this walkthrough.",
   },
   createHarnessFlow: {
     group: "Flows",
-    name: "Choose provider and harness",
+    name: "Choose provider, harness, and authentication",
     path: create,
     actions: readyForm,
     description:
       "Choose the provider first, then a compatible harness. The production form updates native Configuration and execution mode; credentials and deployment remain simulated.",
     steps: [
+      "Check the inset arrows on the Namespace, Provider, Harness, and Authentication method controls. Use the controls with a mouse and keyboard.",
       "OpenAI starts with Codex and Dedicated execution. Select OpenClaw: execution becomes Embedded and the API key and selected model remain available.",
       "Select Anthropic: only OpenClaw is available, and the previous provider's credential and model are cleared. Enter a dummy API key and choose a listed model.",
       "Select OpenAI again: Codex is selected by default. Choose Service Accounts, enter a dummy token, and choose a listed model.",
       "Select OpenClaw: authentication changes to API key and the token and model are cleared. Enter a dummy API key and select a model to continue creation.",
     ],
     gap: "This walkthrough covers form state and the fixed model choices. Real API integration and runtime checks establish credential routing and model execution.",
+  },
+  createExitFlow: {
+    group: "Flows",
+    name: "Restart Agent creation",
+    path: create,
+    description: "Leave a no-Preset Agent form and return to the initial creation choices.",
+    steps: [
+      "Choose Start without Preset and enter an Agent name.",
+      "Select Cancel or the Agents link, then choose Create Agent again.",
+      "Confirm the initial choices are shown. Start without Preset again and check that the name is empty.",
+    ],
+    gap: "The fixture demonstrates simulated console state; it does not verify a live backend or deployment.",
   },
   createWorkspaceFlow: {
     group: "Flows",
@@ -2450,8 +2773,11 @@ export const scenarios = {
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
     devdayPreset: true,
-    pluginDiscovery,
+    pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
+    fixturePluginCatalog: true,
+    fixturePluginCatalogMessage:
+      "Storybook is showing a simulated curated plugin catalog for DevDay rehearsal. Real deployments still require plugin access for the selected service account.",
     repositoryOptions: [
       {
         repositoryRef: "openclaw/openclaw-enterprise",
@@ -2483,11 +2809,11 @@ export const scenarios = {
       "DevDay create-flow rehearsal using real Console controls with fake service-account and Slack Secret data. Provisioning and deployment progress are simulated in the Storybook fixture.",
     steps: [
       "Start on the Agents list with the already deployed oceclaw seed, then click Create Agent.",
-      "The picker includes SWE Agent, Q&A Agent, and Oncall Agent. Select SWE Agent and enter devday claw for its name.",
-      "Keep the default gpt-6-astra model and enter fake modelSecret at-demo-devday-service-account-token, then Use Preset. Review AGENTS.md: its opening sentence now says You are devday claw. Workspace defaults remain editable.",
-      "Open Configure plugins, load the simulated catalog with the fake service-account token, add Calendar, set Calendar default reviewer to Automatic review, and set Create event approval to Ask for approval.",
+      "The picker includes SWE Agent, Community Agent, Q&A Agent, and Oncall Agent. Select SWE Agent and enter devday claw for its name.",
+      "Keep the default gpt-6-astra model and click Use Preset. Choose the existing DevDay Codex service account (simulated) Secret, or explicitly create a new simulated Secret. No credential is preselected. Review AGENTS.md: its opening sentence now says You are devday claw. Workspace defaults remain editable.",
+      "Open Configure plugins. The simulated curated catalog is available for every Preset and Secret choice in this Storybook flow; add Linear, set Linear default reviewer to Automatic review, and set Create issue approval to Ask for approval.",
       "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access.",
-      "Open Edit Slack. Confirm prefilled channel C0C43A2QA11, allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
+      "Open Edit Slack. Confirm the four prefilled channels: oce-feedback (C0C49E7CS4A), oce-team (C0C43A2QA11), oce-feedback-test (C0C569NN9ME), and oce-team-test (C0C4A0JH2BG); mentions are not required. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
       "Create Agent and keep the Console visible while the fixture progresses through provisioning and deployment activation until Workspace files open for the admitted revision.",
       "Use ← Agents and open oceclaw in the same fixture to continue segment 2. The next-segment link starts an independent resettable fixture.",
     ],
@@ -2504,8 +2830,11 @@ export const scenarios = {
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
     devdayPreset: true,
-    pluginDiscovery,
+    pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
+    fixturePluginCatalog: true,
+    fixturePluginCatalogMessage:
+      "Storybook is showing a simulated curated plugin catalog for DevDay rehearsal. Real deployments still require plugin access for the selected service account.",
     repositoryOptions: [
       {
         repositoryRef: "openclaw/openclaw-enterprise",
@@ -2537,7 +2866,7 @@ export const scenarios = {
       "Auto-run checkpoint for reviewers who want the deployed end state of the DevDay create segment without replaying every presenter click.",
     steps: [
       "Use the primary DevDay segment 1 story for recording the manual presenter flow.",
-      "This checkpoint clicks through the same controls, including the Calendar plugin policy choices, and waits until Workspace files open for the admitted revision.",
+      "This checkpoint clicks through the same controls, including the Linear plugin policy choices, and waits until Workspace files open for the admitted revision.",
     ],
     gap: "Checkpoint automation is a setup aid. Use the manual story for the demo video.",
   },
@@ -2586,12 +2915,12 @@ export const scenarios = {
     deployed: true,
     slack: true,
     description:
-      "Edit the new revision while an admitted revision remains unchanged; deploy a new immutable revision.",
+      "Edit saved settings while the current version stays unchanged; deploy a new immutable version.",
     steps: [
       "Open Edit Slack, add CNEW123 to Slack channel IDs, then Save configuration.",
-      "Select v1 in AgentRevision and open Channels: it still has the original settings.",
-      "While viewing v1, select Deploy new revision. It deploys the saved draft, not the viewed snapshot.",
-      "Refresh deployment and inspect the new revision. The prior snapshot remains readable.",
+      "Select View version v1 and open Channels: it still has the original settings.",
+      "Select Create new version, then Deploy new version. The saved draft is deployed, not the viewed snapshot.",
+      "Refresh deployment and inspect the new version. The prior snapshot remains readable.",
       "Workspace file edits are separate: they save immediately without a new revision.",
     ],
     gap: "Native JSON edits use Configuration, while Slack has a dedicated drawer. The Slack drawer preserves existing policies; change unsupported policy fields through native JSON.",
@@ -2666,7 +2995,7 @@ export const scenarios = {
     steps: [
       "Open Stop Agent and review the confirmation copy.",
       "Confirm Stop Agent. The page reports Stop requested and keeps revision/workspace inspection available.",
-      "Return to New revision and Deploy new revision to request running again.",
+      "Return to Create new version and Deploy new version to request running again.",
     ],
     gap: "Stop Agent confirms OCC accepted the stopped desired state and selected revision metadata only. Verify live gateway shutdown outside Console if required. Disabling a channel does not stop the Agent; deletion is destructive.",
   },

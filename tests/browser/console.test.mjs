@@ -476,14 +476,14 @@ test("console keeps loaded route families visible while return reads refresh", a
   t.after(() => createSessionHold.release());
   await page.goBack();
   await createSessionHold.waitForRelease();
-  await expectRetainedPreview(page);
-  assert.equal(await page.locator("#agent-name").inputValue(), "Retained draft Agent");
-  await releaseHeldRoute(page, sessionPattern, createSessionHold);
-  await page.getByRole("heading", { name: "Create Agent", exact: true }).waitFor();
-  assert.equal(
-    await page.getByLabel("Agent name", { exact: true }).inputValue(),
-    "Retained draft Agent",
-  );
+  // The abandoned no-Preset form must not be shown even as an inert cached preview.
+  assert.equal(await page.locator("#agent-name").count(), 0);
+  createSessionHold.release();
+  await page.getByRole("button", { name: "Start without Preset", exact: true }).waitFor();
+  await createSessionHold.waitForCompletion();
+  await page.unroute(sessionPattern);
+  await page.getByLabel("Preset template").waitFor();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
 });
 
 test("Refresh and focus restoration retain rows until fresh data arrives", async (t) => {

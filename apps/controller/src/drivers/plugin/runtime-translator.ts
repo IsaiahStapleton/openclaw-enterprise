@@ -33,6 +33,11 @@ export type PluginRuntimeResolvedArtifacts =
 
 type PluginRuntimeFailureInput = readonly { readonly pluginId: string }[];
 
+export interface CodexRepositoryBrokerNetworkPolicy {
+  readonly host: string;
+  readonly domains: Readonly<Record<string, "allow" | "deny">>;
+}
+
 export type CodexPluginCatalogReader = {
   listCatalog(signal?: AbortSignal): Promise<readonly PluginCatalogEntry[]>;
 };
@@ -64,6 +69,16 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
   const OCC_DRIVER_ID = "occ-plugin";
   const CODEX_DRIVER_ID = "codex-plugin";
   const CODEX_MARKETPLACE = "openai-curated-remote";
+  const CODEX_PLUGIN_READ_ONLY_PATHS = [
+    "/app/node_modules/openclaw",
+    "/home/node/.openclaw/plugin-skills",
+    "/home/node/openclaw-runtime-assets/plugin-skills",
+  ];
+  const CODEX_REPOSITORY_BROKER_READ_ONLY_PATHS = [
+    ...CODEX_PLUGIN_READ_ONLY_PATHS,
+    "/opt/oce/repository-credentials",
+    "/run/oce/repository-credentials",
+  ];
 
   // Native policy names are global: aliases/families can target core tools,
   // and another plugin's ID targets its entire tool inventory.
@@ -472,7 +487,8 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
 
   function codexObservedTools(statuses: readonly unknown[]): readonly {
     appId: string;
-    id: string;
+    name: string;
+    ids: readonly string[];
   }[] {
     const servers = statuses.filter((status) => isRecord(status) && status.name === "codex_apps");
     const server = servers[0];
@@ -498,12 +514,23 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
         if (key !== name) {
           throw new Error("Codex plugin tool identities are ambiguous.");
         }
-        return [
-          {
-            appId,
-            id: codexToolId(appId, name),
-          },
-        ];
+        const ids = [codexToolId(appId, name)];
+        const metadata = tool._meta._codex_apps;
+        const resource = isRecord(metadata)
+          ? optionalString(metadata.resource_uri)?.split("/")
+          : undefined;
+        // Hosted catalogs use action names; native names may have renamed or collision-suffixed prefixes.
+        // Bind through the server's /connector/target/action metadata, never a guessed display prefix.
+        if (
+          resource?.length === 4 &&
+          resource[0] === "" &&
+          resource[1] === appId &&
+          resource[2] &&
+          resource[3]
+        ) {
+          ids.push(codexToolId(appId, resource[3]));
+        }
+        return [{ appId, name, ids }];
       });
   }
 
@@ -516,18 +543,23 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
     if (policies.length === 0) {
       return new Map();
     }
-    const observed = new Set(
-      codexObservedTools(statuses)
-        .filter((tool) => ownedAppIds.includes(tool.appId))
-        .map((tool) => tool.id),
+    const observed = codexObservedTools(statuses).filter((tool) =>
+      ownedAppIds.includes(tool.appId),
     );
     const byApp = new Map<string, [string, Record<string, unknown>][]>();
     for (const [id, policy] of policies.sort(([left], [right]) => left.localeCompare(right))) {
-      if (!observed.has(id)) {
+      const [tool, duplicate] = observed.filter((tool) => tool.ids.includes(id));
+      if (tool === undefined) {
         throw new Error("Codex plugin tool policy references an unknown or unowned tool.");
       }
-      const { appId, name } = parseCodexToolId(id);
+      if (duplicate !== undefined) {
+        throw new Error("Codex plugin tool policy identity is ambiguous.");
+      }
+      const { appId, name } = tool;
       const entries = byApp.get(appId) ?? [];
+      if (entries.some(([existing]) => existing === name)) {
+        throw new Error("Codex plugin tool policies target the same native tool.");
+      }
       entries.push([
         name,
         {
@@ -539,8 +571,12 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
       ]);
       byApp.set(appId, entries);
     }
+    // Shared apps compare serialized policies; catalog/native aliases must produce the same order.
     return new Map(
-      [...byApp].map(([appId, tools]) => [appId, { tools: Object.fromEntries(tools) }]),
+      [...byApp].map(([appId, tools]) => [
+        appId,
+        { tools: Object.fromEntries(tools.sort(([left], [right]) => left.localeCompare(right))) },
+      ]),
     );
   }
 
@@ -611,35 +647,71 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
     };
   }
 
+  function codexBrokerOpenClawConfiguration(policy: unknown): Record<string, unknown> | undefined {
+    if (!isRecord(policy)) {
+      return undefined;
+    }
+    const host = requiredString(policy.host, "Repository credential broker host");
+    const domains = isRecord(policy.domains) ? policy.domains : {};
+    for (const decision of Object.values(domains)) {
+      if (decision !== "allow" && decision !== "deny") {
+        throw new Error("Repository credential broker domains are invalid.");
+      }
+    }
+    return {
+      appServer: {
+        networkProxy: {
+          enabled: true,
+          mode: "full",
+          allowLocalBinding: true,
+          readOnlyPaths: CODEX_REPOSITORY_BROKER_READ_ONLY_PATHS,
+          domains: { ...domains, [host]: "allow" },
+        },
+      },
+    };
+  }
+
   function codexOpenClawConfiguration(
     selections: unknown,
     failures: unknown = [],
+    repositoryBrokerNetworkPolicy: unknown = undefined,
   ): Record<string, unknown> | undefined {
     validatePolicies("codex", selections);
     const selected = selectionEntries(selections);
-    if (selected.length === 0) {
+    const brokerConfiguration = codexBrokerOpenClawConfiguration(repositoryBrokerNetworkPolicy);
+    if (selected.length === 0 && brokerConfiguration === undefined) {
       return undefined;
     }
     const failedPluginIds = failedPluginIdSet(failures);
+    const pluginFilesystemConfiguration =
+      selected.length === 0 || brokerConfiguration !== undefined
+        ? {}
+        : { appServer: { networkProxy: { readOnlyPaths: CODEX_PLUGIN_READ_ONLY_PATHS } } };
     return {
       plugins: {
         entries: {
           codex: {
             enabled: true,
             config: {
-              codexPlugins: {
-                enabled: true,
-                allow_all_plugins: false,
-                plugins: Object.fromEntries(
-                  selected.map(([pluginId, selection]) => {
-                    const slug = codexSlugFromNativeId(codexNativeIdFromPluginId(pluginId));
-                    return [
-                      slug,
-                      codexOpenClawPluginEntry(pluginId, selection, slug, failedPluginIds),
-                    ];
+              ...brokerConfiguration,
+              ...pluginFilesystemConfiguration,
+              ...(selected.length === 0
+                ? {}
+                : {
+                    codexPlugins: {
+                      enabled: true,
+                      allow_all_plugins: false,
+                      plugins: Object.fromEntries(
+                        selected.map(([pluginId, selection]) => {
+                          const slug = codexSlugFromNativeId(codexNativeIdFromPluginId(pluginId));
+                          return [
+                            slug,
+                            codexOpenClawPluginEntry(pluginId, selection, slug, failedPluginIds),
+                          ];
+                        }),
+                      ),
+                    },
                   }),
-                ),
-              },
             },
           },
         },
@@ -831,9 +903,13 @@ export function codexRuntimeArtifact(
 export function codexOpenClawConfiguration(
   selections: PluginDesiredState,
   failures: PluginRuntimeFailureInput = [],
+  repositoryBrokerNetworkPolicy?: CodexRepositoryBrokerNetworkPolicy,
 ): OpenClawConfigurationDocument | undefined {
-  return pluginRuntimeTranslator.codexOpenClawConfiguration(selections, failures) as
-    OpenClawConfigurationDocument | undefined;
+  return pluginRuntimeTranslator.codexOpenClawConfiguration(
+    selections,
+    failures,
+    repositoryBrokerNetworkPolicy,
+  ) as OpenClawConfigurationDocument | undefined;
 }
 
 export function openClawRuntimeArtifact(
