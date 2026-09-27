@@ -72,9 +72,7 @@ const CODEX_POLICY_SCHEMA: JSONSchema = deepFreeze({
 const OCC_CATALOG: readonly BundledCatalogEntry[] = deepFreeze(openClawCatalogEntries());
 
 // Entries use recorded marketplace identities; account access and tools remain unknown.
-// Releases with unsupported skills or local components must not be selectable.
-const CURATED_UNSUPPORTED =
-  "The recorded plugin release requires skills or local components that OCE does not support.";
+// Concrete apps and native component support are rechecked during deployment.
 const OPENAI_CURATED_CATALOG: readonly BundledCatalogEntry[] = deepFreeze([
   {
     id: "codex-plugin:linear@openai-curated-remote",
@@ -119,8 +117,7 @@ const OPENAI_CURATED_CATALOG: readonly BundledCatalogEntry[] = deepFreeze([
     websiteUrl: "https://www.notion.so/",
     privacyPolicyUrl: "https://www.notion.com/help/privacy",
     termsOfServiceUrl: "https://www.notion.so/legal/terms-of-use",
-    available: false,
-    unavailableReason: CURATED_UNSUPPORTED,
+    selectableWithoutTools: true,
     tools: null,
   },
   {
@@ -131,8 +128,7 @@ const OPENAI_CURATED_CATALOG: readonly BundledCatalogEntry[] = deepFreeze([
     websiteUrl: "https://www.figma.com",
     privacyPolicyUrl: "https://www.figma.com/legal/privacy/",
     termsOfServiceUrl: "https://www.figma.com/legal/tos/",
-    available: false,
-    unavailableReason: CURATED_UNSUPPORTED,
+    selectableWithoutTools: true,
     tools: null,
   },
   {
@@ -143,8 +139,7 @@ const OPENAI_CURATED_CATALOG: readonly BundledCatalogEntry[] = deepFreeze([
     websiteUrl: "https://www.canva.com",
     privacyPolicyUrl: "https://www.canva.com/policies/privacy-policy/",
     termsOfServiceUrl: "https://www.canva.com/policies/terms-of-use/",
-    available: false,
-    unavailableReason: CURATED_UNSUPPORTED,
+    selectableWithoutTools: true,
     tools: null,
   },
   {
@@ -167,7 +162,7 @@ const OPENAI_CURATED_CATALOG: readonly BundledCatalogEntry[] = deepFreeze([
     privacyPolicyUrl: "https://sentry.io/privacy/",
     termsOfServiceUrl: "https://sentry.io/terms/",
     available: false,
-    unavailableReason: CURATED_UNSUPPORTED,
+    unavailableReason: "The recorded plugin release has no concrete hosted app supported by OCE.",
     tools: null,
   },
   {
@@ -178,8 +173,7 @@ const OPENAI_CURATED_CATALOG: readonly BundledCatalogEntry[] = deepFreeze([
     websiteUrl: "https://www.adobe.com",
     privacyPolicyUrl: "https://www.adobe.com/privacy/policy.html",
     termsOfServiceUrl: "https://www.adobe.com/legal/terms.html",
-    available: false,
-    unavailableReason: CURATED_UNSUPPORTED,
+    selectableWithoutTools: true,
     tools: null,
   },
   {

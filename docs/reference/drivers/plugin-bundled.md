@@ -34,9 +34,9 @@ drivers:
 The curated catalog includes Linear, Slack, GitHub, Notion, Figma, Canva,
 Datadog, Sentry, Adobe, Coursera Learning, and Google Contacts. Their recorded
 identities and presentation metadata do not include tool inventory or
-account-specific availability. Notion, Figma, Canva, Sentry, and Adobe are
-unavailable because their recorded releases require unsupported skills or local
-components. Select a plugin and set its default policy; per-tool controls are
+account-specific availability. Notion, Figma, Canva, and Adobe include supported
+hosted apps with skills. Sentry remains unavailable because its recorded release
+has no concrete hosted app. Select a plugin and set its default policy; per-tool controls are
 unavailable until the catalog supplies tool details. Startup resolves native
 metadata independently and still requires the Agent's actual authentication and
 provider access. Catalog membership does not grant access or prove execution.
@@ -159,8 +159,16 @@ as do two selected IDs targeting the same native tool.
 Catalog classifications are not required, and app defaults are not expanded into
 per-tool rules. The optional controller catalog reader still returns `tools:null`.
 
-The scope remains concrete hosted apps. Marketplace visibility does not imply
-support for remote skills, hooks, arbitrary MCP servers, or template-only apps.
+Codex plugins must expose concrete hosted apps and may include skills. Native
+Codex installs the selected bundle and loads its skill instructions; OCE does not
+repackage or translate them. Skills grant no additional app tool permissions.
+Hooks, native MCP servers, and scheduled tasks remain unsupported, as do skill-only
+and template-only plugins without concrete apps.
+
+OCE selection constrains hosted app tools through native app policy and the
+OpenClaw bridge. It does not restrict skills from other plugins already enabled
+on the credential's account. Limiting those plugins requires separate native
+plugin default enablement support and OCE startup integration.
 The selected-only OpenClaw bridge is required for the dedicated Agent path.
 Effective nested policy requires the bridge changes in
 [OpenClaw #151260](https://github.com/openclaw/openclaw/pull/151260) and
@@ -280,4 +288,7 @@ not write the shared native registry while the prior gateway is running.
 Source and contract tests do not establish compatibility with every runtime
 image. Native proof requires the testing guide's opt-in real-runtime lane.
 
-Disabling a selection does not uninstall it. Native remote installation can enable a plugin on the credential’s account; Agent-local app configuration and the OpenClaw bridge still block its execution. Agent enablement does not manage account-wide installation state.
+Disabling a selection does not uninstall it or guarantee its skills are unloaded.
+Native remote installation can enable a plugin on the credential's account;
+Agent-local app configuration and the OpenClaw bridge block its hosted app tools.
+Agent enablement does not manage account-wide installation state.

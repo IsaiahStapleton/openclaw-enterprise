@@ -281,6 +281,21 @@ test("hosted plugin detail rejects an unmatched MCP despite a cloud executor ove
   assert.deepEqual(detail.unavailableHelp, runtimeHelp);
 });
 
+test("hosted plugin detail admits skills and an MCP route replaced by its hosted app", async (t) => {
+  const driver = useService(
+    t,
+    plugin({
+      app_manifest: { apps: { content: { id: "connector_fixture" } } },
+      skills: [{ name: "content-workflow" }],
+      mcp_servers: [{ key: "content", metadata: { type: "http" } }],
+    }),
+    [app("connector_fixture")],
+  );
+  const detail = await driver.getCatalogPlugin({ accessToken, pluginId });
+  assert.equal(detail.available, true);
+  assert.equal(detail.tools[0].id, "connector_fixture/search");
+});
+
 test("hosted plugin detail keeps MCPs whose duplicate app declaration Codex discards", async (t) => {
   const driver = useService(
     t,

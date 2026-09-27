@@ -255,14 +255,16 @@ test("Hardcoded OpenAI catalog returns curated details without provider requests
   // Recorded releases with unsupported components must never be offered for selection.
   assert.deepEqual(
     new Set(page.plugins.filter((entry) => entry.available === false).map((entry) => entry.name)),
-    new Set(["Notion", "Figma", "Canva", "Sentry", "Adobe"]),
+    new Set(["Sentry"]),
   );
   assert.equal(new Set(page.plugins.map((entry) => entry.remoteId)).size, page.plugins.length);
   for (const entry of page.plugins) {
     assert.ok(entry.remoteId);
     assert.deepEqual(await driver.getCatalogPlugin({ pluginId: entry.remoteId }), entry);
     if (entry.available === false) {
-      assert.match(entry.unavailableReason, /skills/);
+      assert.match(entry.unavailableReason, /no concrete hosted app/);
+    } else {
+      assert.equal(entry.selectableWithoutTools, true);
     }
   }
   assert.deepEqual(await driver.listCatalog(context("dedicated")), page.plugins);
@@ -710,6 +712,18 @@ test("Codex destructive defaults project to native config and the hosted-app bri
   }
 });
 
+test("Codex startup translation admits a selected plugin with native skills", () => {
+  const detail = codexDetail("linear", ["linear_app"], {
+    skills: [{ name: "linear-workflow" }],
+  });
+  const artifact = codexRuntimeArtifact(codexSelection(linearPluginId), [detail]);
+  assert.deepEqual(
+    artifact.installs.map((install) => install.pluginId),
+    [linearPluginId],
+  );
+  assert.equal(artifact.configuration.apps.linear_app.enabled, true);
+});
+
 test("Codex startup translation fails selected-only policy gaps at startup", () => {
   for (const [selection, details, pattern] of [
     [codexSelection(linearPluginId, { approvalMode: "never" }), codexDetails, /unsupported/i],
@@ -722,11 +736,16 @@ test("Codex startup translation fails selected-only policy gaps at startup", () 
       [codexDetail("linear", ["app"], { version: "" })],
       /release version/i,
     ],
-    [
+    ...["hooks", "mcpServers", "scheduledTasks"].map((field) => [
       codexSelection(linearPluginId),
-      [codexDetail("linear", ["app"], { mcpServers: [{ id: "native" }] })],
-      /mcpServers/i,
-    ],
+      [
+        codexDetail("linear", ["app"], {
+          skills: [{ name: "linear-workflow" }],
+          [field]: [{ id: "native" }],
+        }),
+      ],
+      new RegExp(field, "i"),
+    ]),
     [
       {
         ...codexSelection(linearPluginId, {

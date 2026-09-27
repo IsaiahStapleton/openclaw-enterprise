@@ -474,7 +474,9 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
     }
     // TODO: support app templates. For now, ignore their metadata and derive
     // enabled app IDs only from detail.apps.
-    for (const field of ["hooks", "skills", "mcpServers"]) {
+    // Native Codex owns bundled skills; they do not grant app tool permissions.
+    requiredArray(detail.skills, "Codex plugin detail skills");
+    for (const field of ["hooks", "mcpServers"]) {
       if (requiredArray(detail[field], "Codex plugin detail " + field).length > 0) {
         throw new Error("Codex plugin detail exposes unsupported " + field + ".");
       }
