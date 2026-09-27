@@ -581,7 +581,23 @@ function auditFromRow(row: PostgresRow, installationId: string): Readonly<AuditE
   if (details !== undefined) {
     delete details[AUDIT_METADATA_KEY];
   }
-  const metadata = rawMetadata === undefined ? {} : jsonObject(rawMetadata);
+  const storedMetadata = rawMetadata === undefined ? {} : jsonObject(rawMetadata);
+  const metadata: Record<string, unknown> = {};
+  for (const key of [
+    "schemaVersion",
+    "source",
+    "requestId",
+    "admissionDecisionId",
+    "actor",
+    "iamDriverId",
+    "authorization",
+    "decisionReason",
+    "reasonCode",
+  ] as const) {
+    if (Object.hasOwn(storedMetadata, key)) {
+      metadata[key] = storedMetadata[key];
+    }
+  }
 
   return immutableCopy({
     id: text(row, "id"),

@@ -758,6 +758,7 @@
               "flows/docker-compose-development/startup",
               "flows/docker-compose-development/agent-execution",
               "flows/common-logging",
+              "flows/audit-ledger",
               "flows/controller-worker",
               "flows/agent-deployment-diagnostics",
               "flows/platform-console",
