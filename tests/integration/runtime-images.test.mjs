@@ -10,13 +10,19 @@ import test from "node:test";
 import { DockerComputeDriver } from "../../apps/controller/src/drivers/compute/docker/index.ts";
 import { PLUGIN_RUNTIME_HELPERS } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { sha256Hex } from "../../packages/utils/src/index.ts";
-import { localDockerCli, withRuntimeImageFixture } from "../helpers/runtime-image-fixture.mjs";
+import {
+  isRuntimeImageJob,
+  localDockerCli,
+  withRuntimeImageFixture,
+} from "../helpers/runtime-image-fixture.mjs";
 import "../helpers/runtime-image-fixture.test.mjs";
 
 const execute = promisify(execFile);
-const base = process.env.OCC_TEST_RUNTIME_IMAGE;
+const base = `localhost/oce-runtime-images-${randomUUID()}/runtime:local`;
 const selected = {
-  skip: base ? false : "Set OCC_TEST_RUNTIME_IMAGE to test real Docker image inspection.",
+  skip: isRuntimeImageJob(process.env)
+    ? false
+    : "Run through the dedicated GitHub-hosted runtime-image-fixture job.",
 };
 const docker = localDockerCli(execute);
 

@@ -1728,9 +1728,8 @@ async function prepareLane({ lane, statePath }) {
       await ensurePostgresServer(resolvedStatePath, state);
       break;
     case "runtime-image-fixture":
-      // The test builds this unique tag on the job's engine and owns its
-      // lifecycle. Do not register it with generic force-removal cleanup.
-      env.OCC_TEST_RUNTIME_IMAGE = `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}/runtime:local`;
+      // The test builds and owns its own unique image on the job's engine.
+      // Do not register it with generic force-removal cleanup.
       env.OCC_RUNTIME_IMAGE_RECEIPT = join(
         dirname(resolvedStatePath),
         "runtime-image-fixture-receipt.json",

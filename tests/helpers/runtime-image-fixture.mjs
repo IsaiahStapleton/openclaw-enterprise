@@ -70,6 +70,7 @@ export function localDockerCli(
       throw new AggregateError(
         failed ? [commandError, error] : [error],
         "Docker command process group did not settle",
+        { cause: error },
       );
     }
     if (failed) {
@@ -82,6 +83,17 @@ export function localDockerCli(
     escapedDescendants: "not-observed",
   });
   return docker;
+}
+
+// This only selects the dedicated workflow route. It is not an attestation of
+// engine ownership; that boundary comes from the job and its execution order.
+export function isRuntimeImageJob(env) {
+  return (
+    env.GITHUB_ACTIONS === "true" &&
+    env.RUNNER_ENVIRONMENT === "github-hosted" &&
+    env.GITHUB_JOB === "runtime-image-fixture" &&
+    Boolean(env.OCC_RUNTIME_IMAGE_RECEIPT)
+  );
 }
 
 // The caller supplies unique tags and build inputs. A failed Docker command can

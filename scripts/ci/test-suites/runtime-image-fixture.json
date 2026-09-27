@@ -1,5 +1,5 @@
 {
-  "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE"],
+  "requiredEnv": ["OCC_RUNTIME_IMAGE_RECEIPT"],
   "prepare": {
     "requiresPreparedStateForFile": true
   },

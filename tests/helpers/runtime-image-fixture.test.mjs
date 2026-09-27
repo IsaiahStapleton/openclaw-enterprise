@@ -7,9 +7,24 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   assertProcessGroupSettled,
+  isRuntimeImageJob,
   localDockerCli,
   withRuntimeImageFixture,
 } from "./runtime-image-fixture.mjs";
+
+test("runtime image test routes only to its dedicated hosted job", () => {
+  const job = {
+    GITHUB_ACTIONS: "true",
+    RUNNER_ENVIRONMENT: "github-hosted",
+    GITHUB_JOB: "runtime-image-fixture",
+    OCC_RUNTIME_IMAGE_RECEIPT: "/tmp/receipt",
+  };
+  assert.equal(isRuntimeImageJob(job), true);
+  assert.equal(isRuntimeImageJob({ OCC_TEST_RUNTIME_IMAGE: "node:existing" }), false);
+  assert.equal(isRuntimeImageJob({ ...job, GITHUB_JOB: "another-job" }), false);
+  assert.equal(isRuntimeImageJob({ ...job, RUNNER_ENVIRONMENT: "self-hosted" }), false);
+  assert.equal(isRuntimeImageJob({ ...job, OCC_RUNTIME_IMAGE_RECEIPT: "" }), false);
+});
 
 const baseId = `sha256:${"b".repeat(64)}`;
 const ids = [`sha256:${"1".repeat(64)}`, `sha256:${"2".repeat(64)}`];
