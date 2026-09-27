@@ -40,6 +40,14 @@ function directoryTarget(value, kind) {
   return id && isSlackId(id, kind) ? { id } : null;
 }
 
+function searchTarget(value, kind) {
+  // Bare Slack IDs are canonical uppercase; native saved targets may use older casings.
+  if (value.length >= 8 && isSlackId(value, kind)) {
+    return directoryTarget(value, kind);
+  }
+  return /^(?:team:|user:|slack:|channel:|<@)/i.test(value) ? directoryTarget(value, kind) : null;
+}
+
 export function matchesSlackDirectoryCandidate(value, kind, candidate) {
   const target = directoryTarget(value, kind);
   return target?.id === candidate.id && (!target.teamId || target.teamId === candidate.workspaceId);
@@ -342,7 +350,7 @@ export function createSlackDirectoryPicker({
       return;
     }
     const cursor = index > pageIndex ? nextCursor : cursors[index];
-    const exactTarget = directoryTarget(query, kind);
+    const exactTarget = searchTarget(query, kind);
     const active = ++generation;
     busy = true;
     status.textContent = "Searching Slack directory…";
