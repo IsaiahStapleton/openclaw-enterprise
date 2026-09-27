@@ -4,16 +4,16 @@ import { request as httpsRequest } from "node:https";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { prepareFile } from "../../scripts/ci/prepare.mjs";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
 import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
 import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
   authorizedPrincipal,
-  cleanupBackendFixtures,
   createAccessTokenServiceAccount,
   createBackendWorkerDrivers,
   createBackendController,
-  databaseUrl,
   ensureInstallation,
   poolWithOneBackendBindingReadFault,
   backendDefinition,
@@ -22,9 +22,48 @@ import {
   waitFor,
 } from "../helpers/postgres-backend-state.mjs";
 
+async function prepareDatabase(context) {
+  assert.ok(
+    process.env.OPENCLAW_ENTERPRISE_CI_STATE,
+    "Worker tests require an owned PostgreSQL fixture; see docs/testing/postgresql.md.",
+  );
+  const prepared = await prepareFile({
+    lane: "postgres-application",
+    file: fileURLToPath(import.meta.url),
+    statePath: process.env.OPENCLAW_ENTERPRISE_CI_STATE,
+  });
+  const pools = new Set();
+  const workers = new Set();
+  let disposal;
+  function dispose() {
+    return (disposal ??= (async () => {
+      // Work claims span the entire database. Join every worker owned by this
+      // fixture before dropping it; never rewrite another worker's live claim.
+      for (const worker of workers) {
+        await worker.stop();
+      }
+      for (const pool of pools) {
+        if (!pool.ended) {
+          await pool.end();
+        }
+      }
+      await prepared.cleanup();
+    })());
+  }
+  context.after(dispose);
+  return { url: prepared.env.OCC_TEST_DATABASE_URL, pools, workers, dispose };
+}
+
 async function setup(
   context,
-  { leaseDurationMs = 30_000, onHealthy, metrics, repoDriver, secretAuthMethod = "api_key" } = {},
+  {
+    database,
+    leaseDurationMs = 30_000,
+    onHealthy,
+    metrics,
+    repoDriver,
+    secretAuthMethod = "api_key",
+  } = {},
 ) {
   const [
     { Pool },
@@ -41,8 +80,14 @@ async function setup(
     import("../../packages/occ/src/state/postgres-state.ts"),
     import("../../packages/occ/src/state/postgres-work-queue.ts"),
   ]);
-  const observerPool = new Pool({ connectionString: databaseUrl, max: 8 });
-  const createWorkerPool = () => new Pool({ connectionString: databaseUrl, max: 1 });
+  database ??= await prepareDatabase(context);
+  function createPool(max) {
+    const pool = new Pool({ connectionString: database.url, max });
+    database.pools.add(pool);
+    return pool;
+  }
+  const observerPool = createPool(8);
+  const createWorkerPool = () => createPool(1);
   const workerPool = createWorkerPool();
   const state = new PostgresPlatformState(observerPool);
   const installation = await ensureInstallation(state, "revision-worker");
@@ -63,25 +108,6 @@ async function setup(
     createdAt: new Date().toISOString(),
   };
   let worker;
-  context.after(async () => {
-    try {
-      if (worker === undefined) {
-        await workerPool.end();
-      } else {
-        await worker.stop();
-      }
-      // Preserve unresolved evidence, but keep another test's worker from
-      // consuming this stopped fixture's cleanup or maintenance Work.
-      await observerPool.query(
-        `UPDATE occ.controller_work SET state = 'queued', claim_token = NULL,
-         lease_expires_at = NULL, available_at = 'infinity'
-         WHERE namespace_id = $1 AND state IN ('queued', 'claimed')`,
-        [namespace.id],
-      );
-    } finally {
-      await observerPool.end();
-    }
-  });
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = {
     ...createDevelopmentComputeDriver(),
@@ -304,6 +330,7 @@ async function setup(
       ...(convergenceTimeoutMs === undefined ? {} : { convergenceTimeoutMs }),
       emit,
     });
+    database.workers.add(worker);
     return worker.start();
   }
 
@@ -314,6 +341,7 @@ async function setup(
   }
 
   return {
+    database,
     installation,
     controller,
     actor,
@@ -478,6 +506,55 @@ function repositoryAttempts(fixture, revision) {
     }),
   );
 }
+
+test(
+  "worker fixture disposal preserves another database's live claim and activation",
+  requiresPostgres,
+  async (context) => {
+    const first = await setup(context);
+    const firstOwner = await first.agent("isolated-first");
+    await first.revision(firstOwner, 1);
+    const second = await setup(context);
+    const queue = new second.PostgresWorkQueue(second.observerPool);
+    assert.equal(await queue.claim(), undefined, "workers cannot claim another fixture's work");
+
+    const owner = await second.agent("isolated-second");
+    const candidate = await second.revision(owner, 1);
+    const release = Promise.withResolvers();
+    let preparing = false;
+    try {
+      await second.start({
+        ...second.compute,
+        async prepareRevision(revision) {
+          preparing = true;
+          await release.promise;
+          return second.compute.prepareRevision(revision);
+        },
+      });
+      await waitFor("second fixture to hold its claim during preparation", async () =>
+        preparing ? true : undefined,
+      );
+      const before = await second.work(candidate, "claimed");
+      assert.equal(typeof before.claim_token, "string");
+
+      await first.database.dispose();
+      const renewed = await queue.heartbeat({
+        idempotencyKey: candidate.idempotencyKey,
+        claimToken: before.claim_token,
+      });
+      assert.equal(renewed?.claimToken, before.claim_token);
+      release.resolve();
+      await second.work(candidate, "succeeded");
+      const activated = await second.state.read((view) =>
+        view.agents.findAgent(second.namespace.id, owner.id),
+      );
+      assert.equal(activated.activeRevisionId, candidate.id);
+    } finally {
+      // Release Compute before the registered owner teardown joins its worker.
+      release.resolve();
+    }
+  },
+);
 
 test(
   "exclusive replacement blocks overlap, supersedes old maintenance and recovers through a new revision",
@@ -3237,7 +3314,7 @@ test(
     const owner = await fixture.agent("stop-prepare-race");
     // Other Namespaces share this worker's queue. Their durable stop work must
     // drain without changing this candidate's preparation gate or observations.
-    const foreign = await setup(context);
+    const foreign = await setup(context, { database: fixture.database });
     const foreignOwner = await foreign.agent("stop-prepare-foreign");
     const foreignRevision = await foreign.revision(foreignOwner, 1);
     const foreignStop = await foreign.requestStop(foreignOwner);
@@ -3306,7 +3383,7 @@ test(
 
     // This worker must drain another Namespace's real stop work without adding
     // its effects to this Agent's observations or consuming its injected fault.
-    const foreign = await setup(context);
+    const foreign = await setup(context, { database: fixture.database });
     const foreignOwner = await foreign.agent("stop-publication-foreign");
     const foreignRevision = await foreign.revision(foreignOwner, 1);
     const foreignStop = await foreign.requestStop(foreignOwner);
@@ -3757,7 +3834,7 @@ test(
     const fixture = await setup(context);
     // The shared worker must drain another Namespace without including its
     // Compute effects in this Namespace's issuance-revocation assertions.
-    const foreign = await setup(context);
+    const foreign = await setup(context, { database: fixture.database });
     const foreignOwner = await foreign.agent("issuance-foreign");
     const foreignRevision = await foreign.revision(foreignOwner, 1);
     const provider = backendDefinition();
@@ -3842,14 +3919,12 @@ test(
       },
     });
     const provider = backendDefinition();
-    const cleanup = { serviceAccountIds: [], agentIds: [], revisionIds: [] };
 
     const account = await createAccessTokenServiceAccount(
       fixture.state,
       fixture.namespace.id,
       "transient-provider-read",
     );
-    cleanup.serviceAccountIds.push(account.id);
     await seedBackendBinding(fixture.observerPool, account);
     const owner = await fixture.agent(
       "transient-provider-read",
@@ -3857,7 +3932,6 @@ test(
       account.id,
       provider.id,
     );
-    cleanup.agentIds.push(owner.id);
 
     const effects = [];
     try {
@@ -3876,7 +3950,6 @@ test(
       );
 
       const candidate = await fixture.revision(owner, 1);
-      cleanup.revisionIds.push(candidate.id);
 
       // A different connection can see the committed retry before the worker
       // receives COMMIT's acknowledgment and emits its completion event.
@@ -3931,7 +4004,6 @@ test(
     } finally {
       releaseRetry.resolve();
       await fixture.stop();
-      await cleanupBackendFixtures(fixture.observerPool, fixture.namespace.id, cleanup);
     }
   },
 );
@@ -4418,14 +4490,15 @@ test(
   "a lost retirement claim preserves the activated replacement and cannot complete stolen work",
   requiresPostgres,
   async (context) => {
+    const releaseRetirement = Promise.withResolvers();
+    // Release the held effect before fixture teardown joins the worker on failure.
+    context.after(() => releaseRetirement.resolve());
     const fixture = await setup(context);
     const owner = await fixture.agent("stale-retirement");
     const first = await fixture.revision(owner, 1);
-    const releaseRetirement = Promise.withResolvers();
     const effects = [];
     const events = [];
     let retirements = 0;
-    context.after(() => releaseRetirement.resolve());
     await fixture.start(
       {
         ...fixture.compute,
