@@ -84,10 +84,11 @@ Before Buildx runs, the workflow derives `SOURCE_DATE_EPOCH` from the exact
 source commit. BuildKit rewrites image and filesystem timestamps to that epoch,
 so wall-clock time does not change the image manifests on a cold-cache rebuild.
 
-`deploy/runtime/Dockerfile:openclaw-source` verifies the pinned source archive and
-applies the reviewed Codex 0.156.0 dependency/lockfile patch, selecting stock
-packages without modifying their binary. The OpenClaw bridge forwards the bound
-Agent's stock network settings. Both installs use
+`deploy/runtime/Dockerfile:openclaw-source` verifies the pinned source archive,
+applies the Codex 0.156.0 dependency/lockfile patch, and applies the temporary
+OpenClaw read-only-paths compatibility patch. The build verifies the latter's
+hash and records it in runtime provenance. The OpenClaw bridge forwards the bound
+Agent's stock network settings without modifying the Codex binary. Both installs use
 frozen lockfiles and upstream's selected-plugin manifests, retaining required
 bundled plugins plus Codex and Slack. The standalone Codex command links to the
 plugin's installation. Build tools remain in full Bookworm stages; final images
@@ -197,6 +198,8 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-27 20:26: Build the selected upstream commit with a verified temporary read-only-paths compatibility patch and record its hash. (codex/01a0e437-0dda-7ca2-9704-2c37c71f8d11 - 5d906bf9ad82bca1ec4f05d5958250607e185c6d)
 
 - 2026-09-27 19:28: Publish a verified mutable alias after both immutable source tags; keep recovery source-only. (codex/01a0e437-0dda-7ca2-9704-2c37c71f8d11 - 181b0472f9a5a9d422035edf5121d3a15c200cb5)
 
