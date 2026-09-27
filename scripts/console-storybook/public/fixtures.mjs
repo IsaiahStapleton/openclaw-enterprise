@@ -75,7 +75,12 @@ export function installFixture(scenario, evidence) {
   const namespaces = scenario.emptyNamespaces
     ? []
     : [
-        { id: namespaceId, name: "Engineering", status: "ready", createdAt },
+        {
+          id: namespaceId,
+          name: scenario.namespaceName ?? "Engineering",
+          status: "ready",
+          createdAt,
+        },
         {
           id: "ns_00000000-0000-4000-8000-000000000002",
           name: "Research",

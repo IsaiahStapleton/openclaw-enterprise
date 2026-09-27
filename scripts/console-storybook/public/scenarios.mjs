@@ -1835,8 +1835,13 @@ export const scenarios = {
     group: "Components/Navigation",
     name: "Mobile Namespace selector",
     mobile: true,
+    namespaceName: "Engineering platform operations and infrastructure",
     description:
       "Choose a Namespace directly from the header at 390px, without opening navigation.",
+    steps: [
+      "Check that the long Namespace name truncates before the inset chevron.",
+      "Choose Research, then return to the long Namespace and check the selection.",
+    ],
   },
   mobile: {
     group: "Components/Navigation",

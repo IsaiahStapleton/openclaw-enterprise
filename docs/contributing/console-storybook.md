@@ -86,8 +86,9 @@ loading.
 In **Components → Navigation → Namespace switcher**, use the header selector to
 switch between Engineering and Research. Check the URL, collection, and browser
 Back behavior; confirm the Namespaces page omits the selector. **Mobile Namespace
-selector** covers the same control without opening the drawer. Existing no-readable,
-unavailable, loading, and denied Namespace stories cover restricted selector states.
+selector** checks long-name truncation before the chevron and switching without the
+drawer. Existing no-readable, unavailable, loading, and denied stories cover
+restricted selector states.
 
 Saved simulated UI examples show the [desktop selector](../assets/console-namespace-selector/desktop.png),
 [mobile empty collection](../assets/console-namespace-selector/mobile.png),
