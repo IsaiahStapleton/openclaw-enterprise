@@ -8,9 +8,9 @@ Adapt the headings to the change and remove sections that do not apply. See the
 
 # RFC: [Decision or capability]
 
-**Status:** [Proposed / Implementing / Implemented]  
-**Owner:** [Responsible person or team]  
-**Related:** [Relevant issue, implementation PR, and existing contracts]
+- **Status:** [Proposed / Implementing / Implemented]
+- **Owner:** [Responsible person or team]
+- **Related:** [Relevant issue, implementation PR, and existing contracts]
 
 ## Problem and decision
 
