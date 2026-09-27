@@ -1,6 +1,7 @@
 import standardCodexPreset from "/console/standard-codex-preset.mjs";
 import standardOpenclawPreset from "/console/standard-openclaw-preset.mjs";
 import devdayPreset from "/console/devday-preset.mjs";
+import devdayPartnersPreset from "/console/devday-partners-preset.mjs";
 import devdayQaPreset from "/console/devday-qa-preset.mjs";
 import devdayOncallPreset from "/console/devday-oncall-preset.mjs";
 
@@ -31,6 +32,10 @@ function configurationValues(scenario) {
     values.channels.slack = {
       enabled: true,
       mode: scenario.slackMode ?? "socket",
+      ...(scenario.slackReplyToMode === undefined
+        ? {}
+        : { replyToMode: scenario.slackReplyToMode }),
+      ...(scenario.slackEnterpriseOrgInstall ? { enterpriseOrgInstall: true } : {}),
       dmPolicy: scenario.slackPolicy ?? "pairing",
       groupPolicy: scenario.slackPolicy === "open" ? "open" : "allowlist",
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
@@ -62,7 +67,11 @@ export function installFixture(scenario, evidence) {
   const roles = [];
   const bindings = [];
   const deleted = new Set();
-  const session = { user: { name: "Demo Operator", email: "operator@example.com" } };
+  const session = {
+    authenticated: true,
+    sessionKey: "storybook-session",
+    user: { id: "storybook-operator", name: "Demo Operator", email: "operator@example.com" },
+  };
   const namespaces = scenario.emptyNamespaces
     ? []
     : [
@@ -157,6 +166,7 @@ export function installFixture(scenario, evidence) {
       configurationGeneration: configuration.generation,
       createdAt,
       configuration: structuredClone(configuration.values),
+      secretBindings: structuredClone(configuration.secretBindings),
       harnessAuth: structuredClone(owner.harnessAuth),
       harness: { id: "codex", version: "demo", mode: owner.executionMode },
       compute: { id: "kubernetes-demo", implementation: "kubernetes" },
@@ -259,6 +269,7 @@ export function installFixture(scenario, evidence) {
     for (const [name, definition] of [
       ["standard-codex", standardCodexPreset],
       ["standard-openclaw", standardOpenclawPreset],
+      ["devday-partners", devdayPartnersPreset],
       ["devday-qa", devdayQaPreset],
       ["devday-oncall", devdayOncallPreset],
     ]) {
@@ -300,6 +311,24 @@ export function installFixture(scenario, evidence) {
         continue;
       }
       rule.used = rule.once === true;
+      if (rule.delayMs) {
+        await new Promise((resolve, reject) => {
+          const finish = () => {
+            options.signal?.removeEventListener("abort", abort);
+            resolve();
+          };
+          const timer = setTimeout(finish, rule.delayMs);
+          const abort = () => {
+            clearTimeout(timer);
+            reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+          };
+          if (options.signal?.aborted) {
+            abort();
+          } else {
+            options.signal?.addEventListener("abort", abort, { once: true });
+          }
+        });
+      }
       if (rule.hold) {
         return new Promise((_resolve, reject) => {
           const abort = () =>
@@ -311,7 +340,9 @@ export function installFixture(scenario, evidence) {
           }
         });
       }
-      return error(rule.status, rule.code);
+      if (rule.status) {
+        return error(rule.status, rule.code);
+      }
     }
     const body = options.body ? JSON.parse(options.body) : {};
     if (path === "/api/auth/session") {

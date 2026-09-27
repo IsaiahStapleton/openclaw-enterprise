@@ -1862,6 +1862,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (operation.operationId === "getInstallationDeploymentInventory") {
+      reply.send({
+        data: await controller.getInstallationDeploymentInventory(context.actorId),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
     if (operation.operationId === "listBackends") {
       await requireInstallationAdmin(request, operation, context);
       const backends = options.backendSummaries;
@@ -3018,7 +3026,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: "getAuthSession",
           summary: "Inspect authentication without revealing session tokens",
           description:
-            "Returns only authenticated status and public account identity, or null without a valid session; session tokens and credentials are never returned.",
+            "Returns authenticated status, public account identity, and a noncredential sessionKey that stays stable across reads and changes for a new session, or null without a valid session; session tokens and credentials are never returned.",
           tags: ["Authentication"],
           security: [],
           response: {
@@ -3030,9 +3038,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                   {
                     type: "object",
                     additionalProperties: false,
-                    required: ["authenticated", "user"],
+                    required: ["authenticated", "sessionKey", "user"],
                     properties: {
                       authenticated: { type: "boolean", const: true },
+                      sessionKey: { type: "string" },
                       user: {
                         type: "object",
                         additionalProperties: false,

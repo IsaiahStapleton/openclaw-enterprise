@@ -2,7 +2,8 @@ images:
   controller: ""
 
 metrics:
-  enabled: false
+  # Private listeners are available by default; paired selectors admit scrapers.
+  enabled: true
   port: 9464
   scraperNamespaceLabels: {}
   scraperPodLabels: {}
@@ -14,8 +15,14 @@ logging:
     image: docker.io/otel/opentelemetry-collector-contrib:0.159.0@sha256:1f2c54a30e713fac6b3ae77a1ec84010c2007e29ced8ec666214fc2f6739c1cc
     configSecretName: occ-otel-collector-config
     envSecretName: occ-otel-collector-exporter
+    metrics:
+      enabled: true
+      scraperNamespaceLabels: {}
+      scraperPodLabels: {}
     exporter:
       cidr: ""
+      namespaceLabels: {}
+      podLabels: {}
       port: 443
     resources:
       requests:
@@ -65,6 +72,16 @@ backend:
 repositoryCredentials:
   enabled: false
   image: ""
+  # Internal HTTPS Service name. Fresh installs default to git. Upgrades must
+  # set this explicitly to the current Service name until repository sessions
+  # drain, then switch it deliberately to git.
+  serviceName: ""
+  # Kubernetes cluster DNS suffix used to form the broker Service FQDN.
+  clusterDomain: cluster.local
+  # Optional exact Service hostname: <service>.<namespace>.svc or that name
+  # followed by .<clusterDomain>. Empty selects the cluster-qualified name.
+  # Preserve the current hostname during upgrades; it pins TLS and sessions.
+  hostname: ""
   backendId: ""
   # Operator-created immutable, versioned ConfigMap shared by all three consumers.
   registryConfigMapName: ""
@@ -117,6 +134,9 @@ database:
 api:
   port: 8080
   clients: []
+  # Optional model-list discovery: API Pod HTTPS egress to provider IPv4 /32 hosts.
+  # Operators maintain these addresses; Console model selection does not require it.
+  modelDiscoveryCidrs: []
 
 cluster:
   cidrs: []
@@ -124,6 +144,7 @@ cluster:
 
 controlPlane:
   nodeSelector: {}
+  installationChecksum: ""
 
 dns:
   namespace: kube-system

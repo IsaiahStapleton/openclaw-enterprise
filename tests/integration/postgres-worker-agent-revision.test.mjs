@@ -1133,6 +1133,20 @@ for (const loss of ["missing", "closed-repair"]) {
       await waitFor("unsafe revision runtime to retire", async () =>
         stopped.includes(candidate.id) ? true : undefined,
       );
+      if (loss === "missing") {
+        await waitFor("invalidated cleanup to wait for Driver maintenance", async () => {
+          const delayed = await fixture.observerPool.query(
+            `SELECT EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+             FROM occ.controller_work
+             WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2`,
+            [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+          );
+          return Number(delayed.rows[0]?.delay_ms) >=
+            repository.driver.maintenanceIntervalMs - 1_000
+            ? true
+            : undefined;
+        });
+      }
       await fixture.stop();
       const refusal = await fixture.observerPool.query(
         "SELECT reason_code FROM occ.controller_work WHERE idempotency_key = $1",

@@ -5,11 +5,16 @@ const revision =
 const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-000000000001";
 const click = (text) => ({ click: text });
 const form = [click("Start without Preset")];
+const createModelSecret = (value) => [
+  { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
+  { selector: "#create-provider-credential-secret-value", value },
+  click("Create Secret"),
+];
 const readyForm = [
   ...form,
   { selector: "#agent-name", value: "Research assistant" },
-  { selector: "#provider-api-key", value: "storybook-model-api-key" },
   { selector: "#agent-model", value: "gpt-5.6-sol" },
+  ...createModelSecret("storybook-model-api-key"),
 ];
 const passwordPresetForm = [
   { selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" },
@@ -19,8 +24,9 @@ const passwordPresetForm = [
   click("Use Preset"),
 ];
 const existingPresetSecret = [
-  { selector: "#agent-preset", value: "pre_devday_codex" },
-  { selector: "#preset-variable-name", value: "SWE assistant" },
+  { selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" },
+  { selector: "#preset-variable-name", value: "Codex assistant" },
+  { selector: "#preset-variable-model", value: "gpt-5.1" },
   { selector: "#preset-variable-modelSecret-secret-source", value: "existing" },
 ];
 const presetSecretsPath = "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets";
@@ -85,6 +91,62 @@ const unavailablePlugins = [
     tools: null,
   },
 ];
+// Names and IDs from plugin-suggestions branch commit eb83563c.
+// Catalog availability and tool details are simulated in this Storybook fixture.
+const codexPluginSuggestions = [
+  { id: "codex-plugin:airtable@openai-curated-remote", name: "Airtable" },
+  { id: "codex-plugin:asana@openai-curated-remote", name: "Asana" },
+  { id: "codex-plugin:box@openai-curated-remote", name: "Box" },
+  { id: "codex-plugin:canva@openai-curated-remote", name: "Canva" },
+  { id: "codex-plugin:datadog@openai-curated-remote", name: "Datadog (Preview)" },
+  { id: "codex-plugin:figma@openai-curated-remote", name: "Figma" },
+  { id: "codex-plugin:github@openai-curated-remote", name: "GitHub" },
+  { id: "codex-plugin:google-contacts@openai-curated-remote", name: "Google Contacts" },
+  { id: "codex-plugin:granola@openai-curated-remote", name: "Granola" },
+  { id: "codex-plugin:hubspot@openai-curated-remote", name: "HubSpot" },
+  { id: "codex-plugin:quickbooks@openai-curated-remote", name: "Intuit QuickBooks" },
+  { id: "codex-plugin:linear@openai-curated-remote", name: "Linear" },
+  { id: "codex-plugin:monday-com@openai-curated-remote", name: "monday.com" },
+  { id: "codex-plugin:notion@openai-curated-remote", name: "Notion" },
+  { id: "codex-plugin:outlook-calendar@openai-curated-remote", name: "Outlook Calendar" },
+  { id: "codex-plugin:outlook-email@openai-curated-remote", name: "Outlook Email" },
+  { id: "codex-plugin:posthog@openai-curated-remote", name: "PostHog" },
+  { id: "codex-plugin:semrush@openai-curated-remote", name: "Semrush" },
+  { id: "codex-plugin:sentry@openai-curated-remote", name: "Sentry" },
+  { id: "codex-plugin:sharepoint@openai-curated-remote", name: "SharePoint" },
+  { id: "codex-plugin:slack@openai-curated-remote", name: "Slack" },
+  { id: "codex-plugin:supabase@openai-curated-remote", name: "Supabase" },
+  { id: "codex-plugin:superhuman@openai-curated-remote", name: "Superhuman Mail" },
+  { id: "codex-plugin:teams@openai-curated-remote", name: "Teams" },
+  { id: "codex-plugin:vercel@openai-curated-remote", name: "Vercel" },
+  { id: "codex-plugin:zoom@openai-curated-remote", name: "Zoom" },
+];
+const linearAppId = "asdk_app_69a089a326dc8191b32a3f2553f5be2c";
+const devdayCuratedEntries = codexPluginSuggestions.map((suggestion) => {
+  const remoteId = suggestion.id.match(/^codex-plugin:([^@]+)@/)?.[1] ?? suggestion.id;
+  return {
+    ...suggestion,
+    remoteId,
+    available: true,
+    tools:
+      suggestion.id === "codex-plugin:linear@openai-curated-remote"
+        ? [
+            {
+              id: `${linearAppId}/create_issue`,
+              name: "Create issue",
+              ownerId: linearAppId,
+              description: "Create a Linear issue with a title, description, and team.",
+            },
+            {
+              id: `${linearAppId}/search_issues`,
+              name: "Search issues",
+              ownerId: linearAppId,
+              description: "Search Linear issues by text and status.",
+            },
+          ]
+        : [],
+  };
+});
 const pluginCatalog = {
   status: "ready",
   setup: pluginSetup,
@@ -181,9 +243,25 @@ const pluginDiscovery = {
   },
   details: Object.fromEntries(pluginCatalog.entries.map((entry) => [entry.remoteId, entry])),
 };
+const devdayPluginCatalog = {
+  status: "ready",
+  setup: pluginSetup,
+  entries: [...devdayCuratedEntries, pluginCatalog.entries[0]],
+};
+const devdayPluginDiscovery = {
+  pages: {
+    initial: {
+      plugins: devdayPluginCatalog.entries.map((entry) => ({ ...entry, tools: null })),
+      nextCursor: null,
+      setup: pluginSetup,
+    },
+  },
+  details: Object.fromEntries(devdayPluginCatalog.entries.map((entry) => [entry.remoteId, entry])),
+};
 const pluginDiscoveryForm = [
   ...form,
   { selector: "#agent-auth-method", value: "codex_pat" },
+  { selector: "#plugin-discovery-token summary", click: true },
   { selector: "#provider-api-key", value: "at-storybook-pat" },
   click("Configure plugins"),
 ];
@@ -206,8 +284,8 @@ const createWorkspaceFields = [
   ...form,
   { selector: ".launch-advanced summary", click: true },
   { selector: "#agent-name", value: "Workspace seed demo" },
-  { selector: "#provider-api-key", value: "storybook-model-api-key" },
   { selector: "#agent-model", value: "gpt-5.6-sol" },
+  ...createModelSecret("storybook-model-api-key"),
   {
     selector: "#workspace-IDENTITY-md",
     value:
@@ -219,6 +297,7 @@ const createProvisioningSecrets = [
   ...readyForm,
   { selector: "#agent-name", value: "Slack research assistant" },
   click("Configure Slack"),
+  { selector: "#slack-dm-policy", value: "disabled" },
   { selector: "#slack-secret-slack-app-token", value: "sec_demo_slack_app_token" },
   ...createSlackBotSecret,
   { selector: "#slack-channel-ids", value: "CDEMO123" },
@@ -229,18 +308,18 @@ const devdayCreateCheckpoint = [
   click("Create Agent"),
   { selector: "#agent-preset", value: "pre_devday_codex" },
   { selector: "#preset-variable-name", value: "devday claw" },
-  { selector: "#preset-variable-modelSecret", value: "at-demo-devday-service-account-token" },
   click("Use Preset"),
+  { selector: "#provider-credential-secret", value: "sec_devday_model_token" },
   click("Configure plugins"),
-  click("Load plugins"),
-  { selector: 'button[aria-label="Calendar"]', click: true },
-  click("Add Calendar"),
-  { selector: 'select[aria-label="Calendar default reviewer"]', value: "auto" },
+  { selector: 'button[aria-label="Linear"]', click: true },
+  click("Add Linear"),
+  { selector: 'select[aria-label="Linear default reviewer"]', value: "auto" },
   {
-    selector: 'details.plugin-tool-row[data-tool="app_calendar/create_event"] > summary',
+    selector:
+      'details.plugin-tool-row[data-tool="asdk_app_69a089a326dc8191b32a3f2553f5be2c/create_issue"] > summary',
     click: true,
   },
-  { selector: 'select[aria-label="Create event approval"]', value: "prompt" },
+  { selector: 'select[aria-label="Create issue approval"]', value: "prompt" },
   click("Done"),
   { selector: devdayRepositorySelector, click: true },
   { selector: "#repository-profile-git-write", click: true },
@@ -367,6 +446,72 @@ export const scenarios = {
       "Check text, search input, buttons, and the current navigation item. The console stays light with either system appearance preference.",
       "Tab through the search and creation controls, then search for an Agent and open its detail page.",
       "At a narrow viewport, use Open navigation and choose a page; the drawer must close and return focus to the page.",
+    ],
+  },
+  navigationRetained: {
+    group: "Pages/Navigation",
+    name: "Return to loaded pages",
+    rules: [
+      { path: "/api/auth/session", skip: 1, delayMs: 1200 },
+      { path: "/namespaces", skip: 1, delayMs: 1200 },
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents",
+        skip: 1,
+        delayMs: 1200,
+      },
+    ],
+    description:
+      "Return navigation and Refresh retain previously loaded content during slow reads. Responses are simulated; this story does not prove backend authorization or persistence.",
+    steps: [
+      "Wait for Agents, enter a search, open Create Agent, then return using the Agents breadcrumb. The loaded list and search remain visible while reads are pending.",
+      "Visit Namespaces and Settings, then repeat with browser Back and Forward. First visits may load; returning pages retain their content.",
+      "Open an Agent, visit its tabs, return to Agents, and use Back. Check the selected revision and tab. Refresh and refocus the preview to check pending-read behavior.",
+      "Switch Namespace to confirm the previous scope's rows disappear. Reset the story to clear retained state.",
+    ],
+  },
+  navigationDenied: {
+    group: "Pages/Navigation",
+    name: "Return access denied",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents",
+        skip: 1,
+        delayMs: 1200,
+        status: 403,
+      },
+    ],
+    description:
+      "A previously readable collection becomes denied on its next read. Retained content must clear when the denial arrives.",
+    steps: [
+      "Wait for the populated Agents list, open Create Agent, and return to Agents.",
+      "Observe the retained list while the response is pending, then the access-denied state. Retry must not restore the old rows.",
+    ],
+  },
+  navigationBackendDenied: {
+    group: "Pages/Navigation",
+    name: "Return Backend access denied",
+    path: "/console/backends?namespace=ns_00000000-0000-4000-8000-000000000001",
+    rules: [
+      { path: "/backends", skip: 2, delayMs: 1200, status: 403 },
+      { path: "/api/auth/session", skip: 3, delayMs: 1200 },
+    ],
+    description:
+      "An Installation-wide Backend denial invalidates previews under every Namespace selection.",
+    steps: [
+      "Wait for Backends, select Research, and wait for the Backend row again.",
+      "Select Refresh and wait for Access denied, then use browser Back to return to Engineering.",
+      "Confirm the previous Backend row stays absent while the session check runs and the denied state returns.",
+    ],
+  },
+  navigationExpired: {
+    group: "Pages/Navigation",
+    name: "Return session expired",
+    rules: [{ path: "/api/auth/session", skip: 1, delayMs: 1200, status: 401 }],
+    description:
+      "Session expiry clears private content and retained navigation state. The fixture supplies a delayed unauthorized response.",
+    steps: [
+      "Wait for Agents, then select Refresh or navigate to Namespaces.",
+      "When the session check fails, confirm the sign-in form replaces all private content. Browser Back must not restore the collection.",
     ],
   },
   agentsEmpty: {
@@ -908,6 +1053,7 @@ export const scenarios = {
       ...form,
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
+      { selector: "#slack-dm-policy", value: "disabled" },
     ],
     description:
       "A new Agent can choose existing simulated Namespace Secrets or create new Slack token Secrets before the Agent resource exists.",
@@ -920,6 +1066,7 @@ export const scenarios = {
       ...form,
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
+      { selector: "#slack-dm-policy", value: "disabled" },
       { selector: "#slack-secret-slack-app-token", value: "__openclaw_create_secret__" },
     ],
     description:
@@ -933,6 +1080,7 @@ export const scenarios = {
       ...form,
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
+      { selector: "#slack-dm-policy", value: "disabled" },
       { selector: "#slack-secret-slack-app-token", value: "sec_demo_slack_app_token" },
       ...createSlackBotSecret,
       click("Apply channel settings"),
@@ -948,6 +1096,7 @@ export const scenarios = {
       ...form,
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
+      { selector: "#slack-dm-policy", value: "disabled" },
       { selector: "#slack-channel-ids", value: "CDEMO123" },
       click("Apply channel settings"),
     ],
@@ -962,6 +1111,7 @@ export const scenarios = {
       ...form,
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
+      { selector: "#slack-dm-policy", value: "disabled" },
       { selector: "#slack-channel-ids", value: "CDEMO123" },
       ...allowEveryoneInSlackChannels,
       click("Apply channel settings"),
@@ -1060,7 +1210,7 @@ export const scenarios = {
   },
   createRepositoriesUnavailable: {
     group: "Pages/Create Agent",
-    name: "Optional repository service unavailable",
+    name: "Repository choices unavailable",
     path: create,
     actions: repositoryForm,
     rules: [
@@ -1071,7 +1221,12 @@ export const scenarios = {
       },
     ],
     description:
-      "The endpoint-specific optional-unavailability response permits an ordinary Agent. The preview does not establish real authorization.",
+      "Unavailable repository choices show administrator setup guidance and allow a draft without repositories.",
+    steps: [
+      "Read the setup guidance and open Set up repository access to review the operator procedure.",
+      "Retry repository choices, or save a draft without repositories.",
+    ],
+    gap: "Simulated UI proof only; this preview does not configure a GitHub App or verify repository access.",
   },
   createRepositoryNavigationOutage: {
     group: "Pages/Create Agent",
@@ -1153,25 +1308,23 @@ export const scenarios = {
   },
   createPresetExistingSecret: {
     group: "Pages/Create Agent",
-    name: "SWE existing service account Secret",
+    name: "Standard Codex existing Secret",
     path: create,
-    devdayPreset: true,
-    extraSecrets: [
-      { id: "sec_devday_model_token", name: "DevDay Codex service account (simulated)" },
-    ],
+    standardCodexPreset: true,
+    extraSecrets: [{ id: "sec_devday_model_token", name: "Codex API key (simulated)" }],
     actions: [
       ...existingPresetSecret,
       { selector: "#preset-variable-modelSecret-existing-secret", value: "sec_devday_model_token" },
     ],
     description:
-      "SWE defaults to gpt-6-astra and Codex Service Accounts. Use Preset reuses this Namespace Secret without reading its value; Create Agent grants access.",
-    gap: "Secret metadata and API responses are simulated. This does not validate a real service account token.",
+      "The standard Codex Preset reuses this Namespace Secret without reading its value; Create Agent grants access.",
+    gap: "Secret metadata and API responses are simulated. This does not validate a real API key.",
   },
   createPresetSecretsLoading: {
     group: "Pages/Create Agent",
     name: "Preset Secrets loading",
     path: create,
-    devdayPreset: true,
+    standardCodexPreset: true,
     actions: existingPresetSecret,
     rules: [{ path: presetSecretsPath, hold: true }],
     description:
@@ -1181,7 +1334,7 @@ export const scenarios = {
     group: "Pages/Create Agent",
     name: "Preset Secret metadata denied",
     path: create,
-    devdayPreset: true,
+    standardCodexPreset: true,
     actions: existingPresetSecret,
     rules: [{ path: presetSecretsPath, status: 403 }],
     description:
@@ -1191,7 +1344,7 @@ export const scenarios = {
     group: "Pages/Create Agent",
     name: "No existing Preset Secrets",
     path: create,
-    devdayPreset: true,
+    standardCodexPreset: true,
     emptySecrets: true,
     actions: existingPresetSecret,
     description:
@@ -1304,7 +1457,7 @@ export const scenarios = {
     actions: [
       ...form,
       { selector: "#model-provider", value: "anthropic" },
-      { selector: "#provider-api-key", value: "storybook-anthropic-key" },
+      ...createModelSecret("storybook-anthropic-key"),
     ],
     description:
       "Anthropic offers only the OpenClaw harness, with Embedded execution. Its fixed model list is available before credential entry and starts without a selection.",
@@ -1316,7 +1469,7 @@ export const scenarios = {
     actions: [
       ...form,
       { selector: "#agent-auth-method", value: "codex_pat" },
-      { selector: "#provider-api-key", value: "at-storybook-pat" },
+      ...createModelSecret("at-storybook-pat"),
     ],
     description:
       "Service Accounts authentication is available with the Codex harness and uses the same fixed OpenAI model list. Switching to OpenClaw selects API-key authentication and clears the credential and model selection.",
@@ -1328,12 +1481,12 @@ export const scenarios = {
     actions: [
       ...form,
       { selector: "#agent-auth-method", value: "codex_pat" },
-      { selector: "#provider-api-key", value: "at-storybook-pat" },
+      ...createModelSecret("at-storybook-pat"),
       { selector: "#agent-model", value: "gpt-5.6-sol" },
       { selector: "#agent-harness", value: "openclaw" },
     ],
     description:
-      "Switching an unsaved service account form to OpenClaw clears the token and model, selects API-key authentication, and uses Embedded execution. Enter a dummy API key to continue.",
+      "Switching an unsaved service account form to OpenClaw clears the token and model, selects API-key authentication, and uses Embedded execution. Choose or create a simulated API key Secret to continue.",
   },
   createBoundPatPreset: {
     group: "Pages/Create Agent",
@@ -1376,7 +1529,7 @@ export const scenarios = {
     group: "Pages/Create Agent",
     name: "API key storage denied",
     path: create,
-    actions: [...readyForm, click("Create Agent")],
+    actions: readyForm,
     rules: [
       {
         path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets",
@@ -1385,7 +1538,7 @@ export const scenarios = {
       },
     ],
     description:
-      "A rejected Secret write keeps the form available and does not create a Configuration or Agent.",
+      "A rejected Secret write keeps the creation dialog open and does not create a Configuration or Agent.",
   },
   createGrantDenied: {
     unsupportedProvisioning: true,
@@ -1495,7 +1648,7 @@ export const scenarios = {
     path: revision,
     deployed: true,
     description:
-      "Immutable Configuration snapshot, revision navigation, and persisted deployment status. This does not establish live serving health.",
+      "Immutable Configuration snapshot with Deploy new revision targeting the current saved draft. Persisted deployment status does not establish live serving health.",
   },
   repositoryDraft: {
     group: "Pages/Agent detail",
@@ -1583,6 +1736,32 @@ export const scenarios = {
     actions: [click("Deploy new revision")],
     description: "A rejected deployment reports failure and re-enables the action.",
   },
+  revisionDeployDenied: {
+    group: "Pages/Agent detail",
+    name: "Revision deployment denied",
+    path: revision,
+    deployed: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deploy",
+        method: "POST",
+        status: 403,
+      },
+    ],
+    actions: [click("Deploy new revision")],
+    description:
+      "A denied deployment from an admitted snapshot leaves the snapshot unchanged and permits an explicit retry.",
+  },
+  revisionCredentialsMissing: {
+    group: "Pages/Agent detail",
+    name: "Revision deployment missing credentials",
+    path: revision,
+    deployed: true,
+    transport: false,
+    actions: [click("Deploy new revision")],
+    description:
+      "Deployment checks the current draft and refuses missing generated credentials before admission.",
+  },
   buildRevision: {
     group: "Components/Navigation",
     name: "OCC build revision",
@@ -1638,6 +1817,55 @@ export const scenarios = {
     slack: true,
     description: "Enabled Socket Mode with standard unresolved credential references.",
   },
+  slackThreadedDefault: {
+    group: "Components/Channels",
+    name: "Slack threaded default",
+    path: `${draft}&tab=channels`,
+    description:
+      "New Slack setup threads channel replies without changing DM reply behavior. Missing credentials remain visible until Secrets are bound.",
+    steps: [
+      "Configure Slack, enter CDEMO123, allow everyone in the channel, and choose Disabled for direct messages.",
+      "Save configuration and open Configuration → View native Configuration: replyToModeByChatType.channel is all, with no global replyToMode.",
+    ],
+  },
+  slackDmPolicy: {
+    group: "Components/Channels",
+    name: "Slack direct-message policy",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    actions: [click("Edit Slack")],
+    description:
+      "Choose DM access independently of channel senders. Invalid allowlists stay in the drawer without saving.",
+    steps: [
+      "Select Allowlist, clear Allowed DM user IDs, and save to inspect the validation error.",
+      "Enter UDIRECT123, save, and reopen Slack to verify the saved selection.",
+      'Select Open and save: allowFrom becomes ["*"]. Switch to Allowlist: enter explicit IDs before saving.',
+      "Select Disabled for channel-only access; existing channel users and reply overrides stay unchanged.",
+    ],
+  },
+  slackEnterpriseDm: {
+    group: "Components/Channels",
+    name: "Slack organization-wide DM policy",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    slackPolicy: "disabled",
+    slackEnterpriseOrgInstall: true,
+    actions: [click("Edit Slack")],
+    description:
+      "Organization-wide installs recommend Disabled. Selecting Pairing or Allowlist fails before saving; Open is supported.",
+  },
+  slackReplyOverride: {
+    group: "Components/Channels",
+    name: "Slack non-threaded override",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    slackReplyToMode: "off",
+    description: "An existing explicit non-threaded setting survives Slack drawer edits.",
+    steps: [
+      "Edit Slack, change the channel IDs, and save configuration.",
+      "Open Configuration → View native Configuration: replyToMode remains off.",
+    ],
+  },
   slackNavigation: {
     group: "Components/Channels",
     name: "Keep Slack edits",
@@ -1690,6 +1918,7 @@ export const scenarios = {
     path: `${draft}&tab=channels`,
     actions: [
       click("Configure Slack"),
+      { selector: "#slack-dm-policy", value: "disabled" },
       { selector: "#slack-channel-ids", value: "CDEMO123" },
       click("Save configuration"),
     ],
@@ -1789,7 +2018,44 @@ export const scenarios = {
     path: `${revision}&tab=channels`,
     deployed: true,
     slack: true,
-    description: "Admitted channel settings are immutable. Switch to the new revision to edit.",
+    description:
+      "Inspect the app and bot token Secret names and IDs, then switch to Configuration to inspect the Harness Secret. This read-only snapshot retains its own bindings.",
+  },
+  revisionSecretsDenied: {
+    group: "Components/Channels",
+    name: "Revision Secret metadata denied",
+    path: `${revision}&tab=channels`,
+    deployed: true,
+    slack: true,
+    rules: [{ prefix: `${presetSecretsPath}/`, status: 403 }],
+    description:
+      "Bound IDs remain visible when exact Secret metadata reads are denied. Switch to Configuration to inspect the same state for Harness authentication.",
+  },
+  revisionSecretsMissing: {
+    group: "Components/Channels",
+    name: "Revision Secret metadata missing",
+    path: `${revision}&tab=channels`,
+    deployed: true,
+    slack: true,
+    rules: [{ prefix: `${presetSecretsPath}/`, status: 404 }],
+    description:
+      "Unavailable metadata does not erase the revision's bindings or claim credentials are unconfigured.",
+  },
+  revisionSecretsLoading: {
+    group: "Components/Channels",
+    name: "Revision Secret metadata loading",
+    path: `${revision}&tab=channels`,
+    deployed: true,
+    slack: true,
+    rules: [{ prefix: `${presetSecretsPath}/`, hold: true }],
+    description: "The bound IDs stay visible while metadata loads. Other tabs remain usable.",
+  },
+  revisionSecretsAbsent: {
+    group: "Components/Channels",
+    name: "Revision without Slack bindings",
+    path: `${revision}&tab=channels`,
+    deployed: true,
+    description: "A revision without Slack bindings shows No Secret bound for both token slots.",
   },
   channelConflict: {
     group: "Components/Channels",
@@ -1810,7 +2076,7 @@ export const scenarios = {
     group: "Components/Credentials",
     name: "Stored",
     path: `${draft}&tab=credentials`,
-    description: "Masked Secret reference and stored generated-runtime credential metadata.",
+    description: "Stored harness Secret reference and generated-runtime credential metadata.",
   },
   credentialsMissing: {
     group: "Components/Credentials",
@@ -1827,7 +2093,7 @@ export const scenarios = {
     slack: true,
     slackBindings: false,
     description:
-      "Both Slack token slots are empty and required before a Slack-enabled draft can deploy.",
+      "Both Slack token bindings are empty and required before a Slack-enabled draft can deploy.",
   },
   credentialsSlackStored: {
     group: "Components/Credentials",
@@ -1835,16 +2101,50 @@ export const scenarios = {
     path: `${draft}&tab=credentials`,
     slack: true,
     description:
-      "Synthetic masks show existing Secret bindings. The console does not retrieve stored token values.",
+      "Readable Secret names show existing bindings. The console does not retrieve stored token values.",
   },
   credentialsSlackReplacement: {
     group: "Components/Credentials",
-    name: "Slack token replacement",
+    name: "Slack token switch",
     path: `${draft}&tab=credentials`,
     slack: true,
-    actions: [{ selector: "#runtime-slack-app-token", value: "xapp-replacement-preview" }],
+    actions: [{ selector: "#runtime-slack-app-token", value: "sec_demo_slack_backup_token" }],
     description:
-      "Only fields with entered replacements are saved. Empty stored fields preserve their existing Secret binding.",
+      "The app token binding is staged to a different Secret while the bot token binding remains unchanged.",
+  },
+  credentialsSecretListDenied: {
+    group: "Components/Credentials",
+    name: "Secret list denied",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets",
+        method: "GET",
+        status: 403,
+      },
+    ],
+    description:
+      "Secret references remain preserved when Secret metadata cannot be listed in this Namespace.",
+  },
+  credentialsSlackGrantDenied: {
+    group: "Components/Credentials",
+    name: "Slack grant denied",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    actions: [
+      { selector: "#runtime-slack-app-token", value: "sec_demo_slack_backup_token" },
+      click("Save channel Secrets"),
+    ],
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/iam/access-bindings",
+        method: "POST",
+        status: 403,
+      },
+    ],
+    description:
+      "A saved Secret reference remains visible when the follow-up exact Secret access grant is denied.",
   },
   credentialsSlackPartial: {
     group: "Components/Credentials",
@@ -1853,7 +2153,7 @@ export const scenarios = {
     slack: true,
     slackBindings: "app",
     description:
-      "The app token is already bound and masked; the missing bot token remains empty and required.",
+      "The app token is already bound; the missing bot token remains empty and required.",
   },
   credentialsLocked: {
     group: "Components/Credentials",
@@ -1898,7 +2198,18 @@ export const scenarios = {
     path: `${draft}&tab=credentials`,
     auth: null,
     description: "Select a source before deployment.",
-    gap: "The API-key field expects an existing Secret ID, not a raw model API key. Create that Secret outside this console.",
+    gap: "The API-key field expects an existing Secret or a Secret created through the picker. It never reads raw credential values back.",
+  },
+  authApiKeySwitch: {
+    group: "Components/Credentials",
+    name: "API key Secret switch",
+    path: `${draft}&tab=credentials`,
+    extraSecrets: [
+      { id: "sec_demo_model_replacement", name: "Replacement model API key (simulated)" },
+    ],
+    actions: [{ selector: "#harness-auth-secret", value: "sec_demo_model_replacement" }],
+    description:
+      "The authentication source uses the same Secret picker and stages a different API-key Secret.",
   },
   authSecretReplacement: {
     group: "Components/Credentials",
@@ -2148,18 +2459,31 @@ export const scenarios = {
   },
   createHarnessFlow: {
     group: "Flows",
-    name: "Choose provider and harness",
+    name: "Choose provider, harness, and authentication",
     path: create,
     actions: readyForm,
     description:
       "Choose the provider first, then a compatible harness. The production form updates native Configuration and execution mode; credentials and deployment remain simulated.",
     steps: [
+      "Check the inset arrows on the Namespace, Provider, Harness, and Authentication method controls. Use the controls with a mouse and keyboard.",
       "OpenAI starts with Codex and Dedicated execution. Select OpenClaw: execution becomes Embedded and the API key and selected model remain available.",
       "Select Anthropic: only OpenClaw is available, and the previous provider's credential and model are cleared. Enter a dummy API key and choose a listed model.",
       "Select OpenAI again: Codex is selected by default. Choose Service Accounts, enter a dummy token, and choose a listed model.",
       "Select OpenClaw: authentication changes to API key and the token and model are cleared. Enter a dummy API key and select a model to continue creation.",
     ],
     gap: "This walkthrough covers form state and the fixed model choices. Real API integration and runtime checks establish credential routing and model execution.",
+  },
+  createExitFlow: {
+    group: "Flows",
+    name: "Restart Agent creation",
+    path: create,
+    description: "Leave a no-Preset Agent form and return to the initial creation choices.",
+    steps: [
+      "Choose Start without Preset and enter an Agent name.",
+      "Select Cancel or the Agents link, then choose Create Agent again.",
+      "Confirm the initial choices are shown. Start without Preset again and check that the name is empty.",
+    ],
+    gap: "The fixture demonstrates simulated console state; it does not verify a live backend or deployment.",
   },
   createWorkspaceFlow: {
     group: "Flows",
@@ -2187,6 +2511,7 @@ export const scenarios = {
       ...readyForm,
       { selector: "#agent-name", value: "Slack launch demo" },
       click("Configure Slack"),
+      { selector: "#slack-dm-policy", value: "disabled" },
       { selector: "#slack-channel-ids", value: "CDEMO123" },
       ...allowEveryoneInSlackChannels,
       { selector: "#slack-secret-slack-app-token", value: "sec_demo_slack_app_token" },
@@ -2214,8 +2539,11 @@ export const scenarios = {
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
     devdayPreset: true,
-    pluginDiscovery,
+    pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
+    fixturePluginCatalog: true,
+    fixturePluginCatalogMessage:
+      "Storybook is showing a simulated curated plugin catalog for DevDay rehearsal. Real deployments still require plugin access for the selected service account.",
     repositoryOptions: [
       {
         repositoryRef: "openclaw/openclaw-enterprise",
@@ -2247,11 +2575,11 @@ export const scenarios = {
       "DevDay create-flow rehearsal using real Console controls with fake service-account and Slack Secret data. Provisioning and deployment progress are simulated in the Storybook fixture.",
     steps: [
       "Start on the Agents list with the already deployed oceclaw seed, then click Create Agent.",
-      "The picker includes SWE Agent, Q&A Agent, and Oncall Agent. Select SWE Agent and enter devday claw for its name.",
-      "Keep the default gpt-6-astra model and enter fake modelSecret at-demo-devday-service-account-token, then Use Preset. Review AGENTS.md: its opening sentence now says You are devday claw. Workspace defaults remain editable.",
-      "Open Configure plugins, load the simulated catalog with the fake service-account token, add Calendar, set Calendar default reviewer to Automatic review, and set Create event approval to Ask for approval.",
+      "The picker includes SWE Agent, Community Agent, Q&A Agent, and Oncall Agent. Select SWE Agent and enter devday claw for its name.",
+      "Keep the default gpt-6-astra model and click Use Preset. Choose the existing DevDay Codex service account (simulated) Secret, or explicitly create a new simulated Secret. No credential is preselected. Review AGENTS.md: its opening sentence now says You are devday claw. Workspace defaults remain editable.",
+      "Open Configure plugins. The simulated curated catalog is available for every Preset and Secret choice in this Storybook flow; add Linear, set Linear default reviewer to Automatic review, and set Create issue approval to Ask for approval.",
       "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access.",
-      "Open Edit Slack. Confirm prefilled channel C0C43A2QA11, allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
+      "Open Edit Slack. Confirm the four prefilled channels: oce-feedback (C0C49E7CS4A), oce-team (C0C43A2QA11), oce-feedback-test (C0C569NN9ME), and oce-team-test (C0C4A0JH2BG); mentions are not required. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
       "Create Agent and keep the Console visible while the fixture progresses through provisioning and deployment activation until Workspace files open for the admitted revision.",
       "Use ← Agents and open oceclaw in the same fixture to continue segment 2. The next-segment link starts an independent resettable fixture.",
     ],
@@ -2268,8 +2596,11 @@ export const scenarios = {
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
     devdayPreset: true,
-    pluginDiscovery,
+    pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
+    fixturePluginCatalog: true,
+    fixturePluginCatalogMessage:
+      "Storybook is showing a simulated curated plugin catalog for DevDay rehearsal. Real deployments still require plugin access for the selected service account.",
     repositoryOptions: [
       {
         repositoryRef: "openclaw/openclaw-enterprise",
@@ -2301,7 +2632,7 @@ export const scenarios = {
       "Auto-run checkpoint for reviewers who want the deployed end state of the DevDay create segment without replaying every presenter click.",
     steps: [
       "Use the primary DevDay segment 1 story for recording the manual presenter flow.",
-      "This checkpoint clicks through the same controls, including the Calendar plugin policy choices, and waits until Workspace files open for the admitted revision.",
+      "This checkpoint clicks through the same controls, including the Linear plugin policy choices, and waits until Workspace files open for the admitted revision.",
     ],
     gap: "Checkpoint automation is a setup aid. Use the manual story for the demo video.",
   },
@@ -2354,7 +2685,7 @@ export const scenarios = {
     steps: [
       "Open Edit Slack, add CNEW123 to Slack channel IDs, then Save configuration.",
       "Select v1 in AgentRevision and open Channels: it still has the original settings.",
-      "Return to New revision, then Deploy new revision.",
+      "While viewing v1, select Deploy new revision. It deploys the saved draft, not the viewed snapshot.",
       "Refresh deployment and inspect the new revision. The prior snapshot remains readable.",
       "Workspace file edits are separate: they save immediately without a new revision.",
     ],

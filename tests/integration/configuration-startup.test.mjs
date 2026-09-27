@@ -124,7 +124,7 @@ async function repositoryInstallation(t) {
   configuration.drivers.repo = {
     id: "repository-credentials",
     configuration: {
-      controlSocket: join(directory, "absent-control", "control.sock"),
+      controlSocket: "/run/openclaw/repository-control/private/control.sock",
       sessionDurationSeconds: 600,
       publicCaPath,
     },
@@ -846,8 +846,8 @@ test("Installation default Presets are opt-in and reject ambiguous YAML settings
     environment: { OCC_CONFIG_PATH: await fixture(t, enabled) },
   });
   assert.deepEqual(enabledRuntime.defaultPresets.map((preset) => preset.name).sort(), [
-    "standard-codex",
-    "standard-openclaw",
+    "Standard Codex",
+    "Standard OpenClaw",
   ]);
   for (const presets of [
     { includeDefaults: "true" },
@@ -931,7 +931,7 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
     ],
     [
       "duplicate.json",
-      JSON.stringify({ name: "standard-codex", template: {} }),
+      JSON.stringify({ name: "Standard Codex", template: {} }),
       /configured more than once/,
     ],
   ]) {
