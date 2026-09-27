@@ -243,8 +243,12 @@ const PluginDiscoveryAccessToken = Type.String({
   writeOnly: true,
 });
 
-// Exactly one credential source is accepted; the Secret reference contains no value.
+// At most one credential source is accepted; the selected Driver determines whether it is required.
 export const DiscoverAgentPluginsBody = Type.Union([
+  Type.Object(
+    { cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })) },
+    { additionalProperties: false },
+  ),
   Type.Object(
     {
       accessToken: PluginDiscoveryAccessToken,
@@ -262,6 +266,10 @@ export const DiscoverAgentPluginsBody = Type.Union([
 ]);
 
 export const DiscoverAgentPluginDetailsBody = Type.Union([
+  Type.Object(
+    { pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
+    { additionalProperties: false },
+  ),
   Type.Object(
     {
       accessToken: PluginDiscoveryAccessToken,

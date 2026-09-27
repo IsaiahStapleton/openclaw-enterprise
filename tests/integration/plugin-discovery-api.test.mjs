@@ -10,6 +10,7 @@ import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { InMemoryPlatformState, PluginDiscoveryError } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 const accessToken = "at-plugin-discovery-private-fixture";
 const pluginId = "codex-plugin:knowledge@openai-remote";
@@ -633,4 +634,124 @@ test("Selected Secret backend failures suppress sensitive error details", async 
     (await fixture.request("POST", fixture.path, { body: { accessToken } })).status,
     200,
   );
+});
+
+test("Curated discovery admits Linear without provider I/O and saves its selection in a revision", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Curated plugins", { ready: true });
+  const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("plugin", driver.id);
+  const path = `/namespaces/${namespace.id}/agents/plugins`;
+
+  // Permit the real HTTP fixture transport while making any discovery-service call fail.
+  const fetch = globalThis.fetch;
+  const externalRequests = [];
+  t.mock.method(globalThis, "fetch", (url, options) => {
+    if (new URL(url).hostname !== "127.0.0.1") {
+      externalRequests.push(String(url));
+      throw new Error("Curated discovery must not call an external service.");
+    }
+    return fetch(url, options);
+  });
+  const installation = await fixture.request("GET", "/installation");
+  assert.deepEqual(installation.data.capabilities.pluginDiscovery, { credential: "none" });
+  const page = await fixture.request("POST", path, { body: {} });
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.equal(page.data.nextCursor, null);
+  const linear = page.data.plugins.find(
+    (entry) => entry.id === "codex-plugin:linear@openai-curated-remote",
+  );
+  assert.ok(linear);
+  assert.equal(linear.remoteId, "plugin_asdk_app_69a089a326dc8191b32a3f2553f5be2c");
+  assert.equal(linear.tools, null);
+  assert.equal(linear.selectableWithoutTools, true);
+  const details = await fixture.request("POST", `${path}/details`, {
+    body: { pluginId: linear.remoteId },
+  });
+  assert.equal(details.status, 200);
+  assert.deepEqual(details.data, linear);
+  const slack = page.data.plugins.find(
+    (entry) => entry.id === "codex-plugin:slack@openai-curated-remote",
+  );
+  assert.ok(slack);
+  const slackDetails = await fixture.request("POST", `${path}/details`, {
+    body: { pluginId: slack.remoteId },
+  });
+  assert.equal(slackDetails.status, 200);
+  assert.deepEqual(slackDetails.data, slack);
+  const notion = page.data.plugins.find(
+    (entry) => entry.id === "codex-plugin:notion@openai-curated-remote",
+  );
+  assert.equal(notion?.available, false);
+  assert.equal(
+    (await fixture.request("POST", `${path}/details`, { body: { pluginId: "unknown" } })).status,
+    503,
+  );
+  assert.equal((await fixture.request("POST", path, { body: { cursor: "unknown" } })).status, 503);
+
+  // The exact selected ID and policy enter the real Agent and immutable revision path.
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Linear agent",
+    createHarnessConfiguration("codex", "gpt-5.1"),
+    { executionMode: "dedicated" },
+  );
+  const plugins = {
+    [linear.id]: { enabled: true, toolDefaults: { reviewer: "auto" } },
+    [slack.id]: { enabled: true, toolDefaults: { reviewer: "auto" } },
+  };
+  const updated = await fixture.updateAgent(namespace.id, agent.id, {
+    configurationId: agent.configurationId,
+    plugins,
+  });
+  assert.deepEqual(updated.plugins, plugins);
+  const revision = await fixture.deployAgent(namespace.id, agent.id);
+  assert.deepEqual(revision.plugins.plugins, plugins);
+  assert.deepEqual(revision.plugins.driver, {
+    id: driver.id,
+    implementation: driver.implementation,
+  });
+  assert.deepEqual(externalRequests, []);
+});
+
+test("Hosted discovery requires a credential, and curated discovery still requires Agent-create authorization", async (t) => {
+  const fixture = await createFixture(t);
+  for (const [suffix, body] of [
+    ["", {}],
+    ["/details", { pluginId: remoteId }],
+  ]) {
+    const missing = await fixture.request("POST", `${fixture.path}${suffix}`, { body });
+    assert.equal(missing.status, 400);
+    assert.equal(missing.body.error.code, "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED");
+  }
+  assert.deepEqual(fixture.calls, []);
+
+  const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("plugin", driver.id);
+  const reader = await fixture.createAccountWithPolicy("curated-reader", (principal) => {
+    fixture.policy.roles.push({
+      id: "curated-reader-role",
+      namespaceId: fixture.namespace.id,
+      permissions: [{ action: "read", resourceKind: "namespace" }],
+    });
+    fixture.policy.bindings.push({
+      id: "curated-reader-binding",
+      namespaceId: fixture.namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "curated-reader-role",
+    });
+  });
+  const session = await fixture.signIn(reader.credentials);
+  for (const [suffix, body] of [
+    ["", {}],
+    ["/details", { pluginId: "plugin_asdk_app_69a089a326dc8191b32a3f2553f5be2c" }],
+  ]) {
+    const denied = await fixture.request("POST", `${fixture.path}${suffix}`, { session, body });
+    assert.equal(denied.status, 403);
+  }
 });

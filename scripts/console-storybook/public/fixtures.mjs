@@ -371,6 +371,9 @@ export function installFixture(scenario, evidence) {
             ? {}
             : { agentProvisioning: { executionModes: ["dedicated"] } }),
           ...(scenario.pluginCapabilities ? { pluginPolicies: scenario.pluginCapabilities } : {}),
+          ...(scenario.pluginDiscoveryCredential
+            ? { pluginDiscovery: { credential: scenario.pluginDiscoveryCredential } }
+            : {}),
         },
       });
     }
