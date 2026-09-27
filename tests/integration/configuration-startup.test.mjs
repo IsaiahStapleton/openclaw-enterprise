@@ -41,6 +41,29 @@ async function fixture(t, configuration = installation()) {
   return path;
 }
 
+test("Installation startup validates the optional external observability URL", async (t) => {
+  const configuration = installation();
+  configuration.observability = { url: "https://metrics.example.test/d/operations" };
+  const path = await fixture(t, configuration);
+  const loaded = await loadInstallationConfiguration({
+    mode: "development",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  assert.equal(loaded.installation.observability.url, configuration.observability.url);
+
+  for (const invalid of ["javascript:alert(1)", "https://user:pass@example.test", "relative"]) {
+    configuration.observability.url = invalid;
+    await writeFile(path, JSON.stringify(configuration), "utf8");
+    await assert.rejects(
+      loadInstallationConfiguration({
+        mode: "development",
+        environment: { OCC_CONFIG_PATH: path },
+      }),
+      /observability\.url/,
+    );
+  }
+});
+
 function chatgptInstallation() {
   const configuration = installation();
   configuration.backend = [

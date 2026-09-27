@@ -66,6 +66,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
   let session = null;
   let namespaces = [];
   let namespaceId = null;
+  let observabilityUrl = null;
   let menuControls = null;
   let drawerControls = null;
   let namespaceSelect = null;
@@ -203,7 +204,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
   }
 
   function renderShell(feature, state) {
-    ({ session, namespaces, namespaceId } = state);
+    ({ session, namespaces, namespaceId, observabilityUrl } = state);
     namespaceSelect = null;
     const nav = element("nav", { className: "nav", "aria-label": "Main navigation" });
     const icons = { agents: "◇", namespaces: "▤" };
@@ -228,6 +229,20 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
         navigate(name);
       });
       nav.append(link);
+    }
+    if (session && observabilityUrl) {
+      nav.append(
+        element(
+          "a",
+          {
+            href: observabilityUrl,
+            target: "_blank",
+            rel: "noopener noreferrer",
+          },
+          element("span", { className: "nav-icon", "aria-hidden": "true" }, "◉"),
+          "Observability",
+        ),
+      );
     }
     const revision = document.querySelector('meta[name="occ-build-revision"]')?.content;
     const knownRevision = /^[a-f0-9]{40}$/.test(revision ?? "");
@@ -427,6 +442,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       session = null;
       namespaces = [];
       namespaceId = null;
+      observabilityUrl = null;
     },
   };
 }

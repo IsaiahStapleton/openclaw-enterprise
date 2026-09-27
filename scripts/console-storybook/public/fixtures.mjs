@@ -437,6 +437,11 @@ export function installFixture(scenario, evidence) {
     if (path === "/backends" && method === "GET") {
       return response(backends);
     }
+    if (path === "/observability" && method === "GET") {
+      return scenario.observabilityDenied
+        ? error(403)
+        : response({ url: scenario.observabilityUrl ?? null });
+    }
     const match = path.match(/^\/namespaces\/([^/]+)\/(.*)$/);
     if (match) {
       const [, ns, resource] = match;

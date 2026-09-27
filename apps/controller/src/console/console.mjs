@@ -12,6 +12,7 @@ const lifetime = createViewLifetime();
 let session = null;
 let namespaces = [];
 let namespaceId = null;
+let observabilityUrl = null;
 let loggingOut = false;
 let navigateAgentTab = null;
 let discardCreationOnExit = null;
@@ -171,7 +172,12 @@ function resetReads({ retainView = false } = {}) {
 }
 
 function renderShell(feature) {
-  const shell = shellUI.renderShell(feature, { session, namespaces, namespaceId });
+  const shell = shellUI.renderShell(feature, {
+    session,
+    namespaces,
+    namespaceId,
+    observabilityUrl,
+  });
   if (shell.diagnostics) {
     void renderRuntimeImages(shell.diagnostics, {
       request,
@@ -187,6 +193,7 @@ function clearPrivate() {
   session = null;
   namespaces = [];
   namespaceId = null;
+  observabilityUrl = null;
   clearRetainedViews();
 }
 
@@ -374,7 +381,15 @@ async function loadPage({ fromNavigation = false } = {}) {
       void loadPage();
       return;
     }
-    const readable = await request("/namespaces");
+    const [readable, observability] = await Promise.all([
+      request("/namespaces"),
+      request("/observability").catch((error) => {
+        if (error.status === 401) {
+          throw error;
+        }
+        return null;
+      }),
+    ]);
     if (!lifetime.isCurrent(active)) {
       return;
     }
@@ -384,6 +399,7 @@ async function loadPage({ fromNavigation = false } = {}) {
     clearRetainedViewsOutsideNamespaces(readable);
     namespaces = sorted(readable);
     accessResolved = true;
+    observabilityUrl = typeof observability?.url === "string" ? observability.url : null;
     namespaceId =
       current.namespace ??
       (namespaces.find((item) => item.status === "ready") ?? namespaces[0])?.id ??

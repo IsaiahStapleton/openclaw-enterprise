@@ -6,6 +6,12 @@ OpenTelemetry Collector also exposes metrics about its own delivery pipeline;
 it does not collect application metrics, traces, or audit records. Run commands
 from the repository root.
 
+To give Installation administrators a shortcut to an observability UI, set
+`observability.url` in the [trusted startup YAML](../reference/configuration.md#installation-startup-configuration)
+and restart the API. The console opens that URL in a separate tab after an
+Installation `administer` check. Configure authentication at the destination.
+The link does not change Collector export.
+
 | Signal              | Available path                                                                                                                                                           |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Operational logs    | Local container output; optional OpenTelemetry Collector export over OTLP/HTTP to your log backend.                                                                      |

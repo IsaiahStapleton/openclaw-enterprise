@@ -1,21 +1,20 @@
 ---
 created: 2026-09-01
 updated: 2026-09-27
-last_updated_session: 01a0e099-da9d-78f1-8e79-ea4a919edf7d
+last_updated_session: authoring-run/f396defd-23ca-46d0-ab3a-e749b6ea1d18
 ---
 
 # Platform console request flow
 
 ## Overview
 
-`/console/` resolves a session and renders authorized resources.
-The [console reference](../reference/console.md) owns user-visible behavior;
-API and IAM authorize resources.
+`/console/` resolves a session and renders authorized resources. See the
+[console reference](../reference/console.md) for user-visible behavior.
 
 ## Entry Points
 
 - Browser entry: `apps/controller/src/console/console.mjs` composes the session,
-  request client, view lifetime, navigation, and shell.
+  request client and shell.
 - `api-client.mjs` owns cancellation and session expiry; `view-lifetime.mjs`
   owns generation and abort state; `navigation.mjs` owns return paths and history;
   `shell.mjs` owns navigation and collections.
@@ -123,9 +122,9 @@ these reads. Missing provenance and failures remain explicit. The
 `apps/controller/src/console/console.mjs:loadPage`
 
 `loadPage` advances the request generation and requests `GET /api/auth/session`.
-First loads show loading. Return navigation and Refresh can restore one of at most
-16 document-local previews keyed by route, Namespace, and session owner while reads
-run. Password fields clear before retention. Preview resource controls cannot
+First loads show loading. Navigation and Refresh can restore at most 16 previews
+scoped by route, Namespace, and session owner. Password fields clear before
+retention. Preview resource controls cannot
 issue operations; the navigation shell remains available.
 
 A changed user or session key clears retained views and drafts before further
@@ -309,6 +308,8 @@ refresh and inspection.
   wiring, static MIME/allowlisting, and unchanged API JSON errors. See
   [Testing](../testing/README.md) for commands and the image smoke boundary.
 
+The [observability link flow](platform-console/observability-link.md) traces its authorization.
+
 ## Related docs
 
 - [Console reference](../reference/console.md)
@@ -323,6 +324,8 @@ refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 15:08: Link observability flow. (authoring-run/f396defd-23ca-46d0-ab3a-e749b6ea1d18 - 0663fa97)
 
 - 2026-09-27 02:30: Use selected PAT Secrets for discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - ec4e9dc517497afe05be63a320542abcf61e8a55)
 

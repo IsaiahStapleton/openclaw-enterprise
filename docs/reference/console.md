@@ -37,6 +37,9 @@ The sidebar opens **Agents** or **Namespaces**; **Refresh** repeats the read.
 Set up models during Agent creation; the [experimental Backends](backends.md)
 tab is hidden. Namespace rows are read-only.
 
+A configured [observability URL](configuration.md#installation-startup-configuration)
+appears as an admin-only **Observability** link. The destination authenticates independently.
+
 | Page       | Scope and permission                                                     |
 | ---------- | ------------------------------------------------------------------------ |
 | Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |

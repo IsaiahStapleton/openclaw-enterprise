@@ -317,6 +317,41 @@ test("console browser flow keeps Namespace URL state across global pages and log
   );
 });
 
+test("console shows the external observability link only to Installation administrators", async (t) => {
+  const url = "https://metrics.example.test/d/operations";
+  const fixture = await createConsoleAppFixture(t, { observabilityUrl: url });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Observability access", { ready: true });
+  // The second account can open the console but has no Installation grant.
+  const limited = await fixture.createAccountWithPolicy("observability-limited", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-browser-observability-reader",
+      namespaceId: namespace.id,
+      permissions: [{ action: "read", resourceKind: "namespace" }],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-browser-observability-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-browser-observability-reader",
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture);
+  const link = page.getByRole("link", { name: "Observability" });
+  await link.waitFor();
+  assert.equal(await link.getAttribute("href"), url);
+  assert.equal(await link.getAttribute("target"), "_blank");
+  assert.equal(await link.getAttribute("rel"), "noopener noreferrer");
+
+  await openShellMenu(page);
+  await page.getByRole("menuitem", { name: "Logout" }).click();
+  await login(page, { ...fixture, credentials: limited.credentials });
+  await page.getByRole("heading", { name: "Agents" }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+});
+
 test("console ignores stale collection successes and errors while switching Namespaces", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

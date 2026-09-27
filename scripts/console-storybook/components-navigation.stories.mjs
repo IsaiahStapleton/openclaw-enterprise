@@ -9,3 +9,11 @@ export const Mobile = { ...story("mobile"), name: "Mobile drawer" };
 
 export const BuildRevision = { ...story("buildRevision") };
 export const DevelopmentBuild = { ...story("developmentBuild") };
+export const ObservabilityLink = {
+  ...story("observabilityLink"),
+  name: "Admin observability link",
+};
+export const ObservabilityDenied = {
+  ...story("observabilityDenied"),
+  name: "Observability access denied",
+};

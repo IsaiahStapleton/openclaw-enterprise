@@ -44,7 +44,7 @@ Each operation lists its supported status codes.
 | --- | --- |
 | [Authentication](#authentication) | 6 operations |
 | [Backends](#backends) | 1 operation |
-| [Installation](#installation) | 3 operations |
+| [Installation](#installation) | 4 operations |
 | [Namespaces](#namespaces) | 4 operations |
 | [Agents](#agents) | 23 operations |
 | [Agent deployments](#agent-deployments) | 2 operations |
@@ -357,6 +357,7 @@ List configured Backends (experimental)
 | [`GET /installation`](#get-installation) | Get the singleton Installation |
 | [`POST /installation/bootstrap`](#post-installationbootstrap) | Bootstrap the singleton Installation |
 | [`GET /installation/deployment-inventory`](#get-installationdeploymentinventory) | Get the complete authorized Agent deployment inventory |
+| [`GET /observability`](#get-observability) | Get the configured external observability destination |
 
 #### `GET /installation`
 
@@ -522,6 +523,41 @@ Get the complete authorized Agent deployment inventory
 | `data.namespaces[].agents[].status` | `"active" or "deleting"` | Yes | — |
 | `data.namespaces[].id` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.namespaces[].status` | `"provisioning" or "ready" or "failed" or "deleting"` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `GET /observability`
+
+<span id="get-observability"></span>
+
+Get the configured external observability destination
+
+**Operation ID:** `getObservability`
+
+**Permissions:** Requires administer permission on the requested Installation.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.url` | `string (uri) or null` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 

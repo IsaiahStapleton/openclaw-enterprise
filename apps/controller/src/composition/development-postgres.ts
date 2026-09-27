@@ -209,6 +209,9 @@ export async function composePostgresDevelopment(
       ...(drivers === undefined
         ? {}
         : { backendSummaries: backendSummariesFromDefinitions(drivers.installation.backend) }),
+      ...(drivers?.installation.observability === undefined
+        ? {}
+        : { observabilityUrl: drivers.installation.observability.url }),
       auth,
       ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,

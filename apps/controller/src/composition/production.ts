@@ -202,6 +202,9 @@ export async function composeProduction(config: ProductionConfig) {
       resolveHarness: resolveApprovedProductionHarness,
       auditSink: state.auditSink,
       backendSummaries: backendSummariesFromDefinitions(installation.backend),
+      ...(installation.observability === undefined
+        ? {}
+        : { observabilityUrl: installation.observability.url }),
       auth,
       ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,
