@@ -25,6 +25,7 @@ test("the Driver contract exposes the supported platform capabilities", () => {
     "secret",
     "sandbox",
     "plugin",
+    "channel",
     "repo",
     "credential_gateway",
   ]);

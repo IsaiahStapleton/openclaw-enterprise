@@ -42,7 +42,8 @@ and [runtime proof limits](../../reference/drivers/plugin-bundled.md#native-mapp
   Installation that explicitly selects the bundled OpenClaw Plugin Driver
   (`drivers.plugin.id: occ-plugin`); no Plugin Driver is selected by default.
   See [Driver selection](../../reference/drivers/plugin-bundled.md#selection-and-catalogs).
-  SSH Compute rejects Agents with plugin selections.
+  SSH Compute rejects Agents with plugin selections or an Agent default plugin
+  approver policy.
 - You need permission to read, update, and deploy the Agent, read its
   Configuration, and read the new Agent revision. Existing
   [model credential requirements](../../reference/agents.md#harness-authentication)

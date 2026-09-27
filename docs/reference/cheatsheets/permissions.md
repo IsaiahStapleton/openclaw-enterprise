@@ -52,6 +52,10 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
 
 ## Additional checks
 
+- [Channel directory lookup](../api.md#post-namespacesnamespaceidchanneldirectorylookup)
+  requires `agent:create` in the Namespace, or `agent:update` or
+  `configuration:update` on the exact edit target, plus `secret:operate` on the
+  exact same-Namespace Secret used for the lookup.
 - Model discovery for Agent creation requires `agent:create` in the exact
   Namespace. The supplied API key or service account token is used transiently; no resource is created.
 - [Create](../api.md#post-namespacesnamespaceidagents), [update](../api.md#patch-namespacesnamespaceidagentsagentid), and

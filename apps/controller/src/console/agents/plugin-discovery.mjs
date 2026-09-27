@@ -33,6 +33,7 @@ export function createPluginDiscovery({
   deniedMessage = "Plugin discovery requires Agent create permission in this Namespace. Saved selections can still be edited.",
   unsupportedMessage = "This Installation's Plugin Driver does not offer catalog browsing. You can edit configured selections or JSON, or ask an operator to select a catalog-capable Driver.",
   availableMessage = "Load plugins available to this service account token. Your plugin selections stay unchanged.",
+  createApproverField,
 }) {
   let generation = 0;
   let searchTimer = null;
@@ -46,6 +47,7 @@ export function createPluginDiscovery({
   const fields = createPluginFields({
     input,
     saveHint,
+    createApproverField,
     onLoadPlugins: (direction, q) => {
       if (direction === "search") {
         scheduleSearch(q);

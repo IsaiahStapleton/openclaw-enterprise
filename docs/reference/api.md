@@ -30,7 +30,7 @@ Each operation lists its supported status codes.
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `error` | `object` | Yes | — |
-| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE" or "REPOSITORY_OPTIONS_UNAVAILABLE" or "MODEL_DISCOVERY_CREDENTIALS_REJECTED" or "MODEL_DISCOVERY_RATE_LIMITED" or "MODEL_DISCOVERY_UNAVAILABLE" or "MODEL_DISCOVERY_INVALID_RESPONSE" or "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED" or "PLUGIN_DISCOVERY_RATE_LIMITED" or "PLUGIN_DISCOVERY_UNAVAILABLE" or "PLUGIN_DISCOVERY_INVALID_RESPONSE"` | Yes | — |
+| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE" or "REPOSITORY_OPTIONS_UNAVAILABLE" or "MODEL_DISCOVERY_CREDENTIALS_REJECTED" or "MODEL_DISCOVERY_RATE_LIMITED" or "MODEL_DISCOVERY_UNAVAILABLE" or "MODEL_DISCOVERY_INVALID_RESPONSE" or "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED" or "PLUGIN_DISCOVERY_RATE_LIMITED" or "PLUGIN_DISCOVERY_UNAVAILABLE" or "PLUGIN_DISCOVERY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED" or "CHANNEL_DIRECTORY_MISSING_SCOPE" or "CHANNEL_DIRECTORY_RATE_LIMITED" or "CHANNEL_DIRECTORY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_UNAVAILABLE"` | Yes | — |
 | `error.details` | `array<object>` | No | max items: 32 |
 | `error.details[].code` | `"REQUIRED" or "UNKNOWN_FIELD" or "INVALID_TYPE" or "INVALID_FORMAT" or "INVALID_VALUE" or "TOO_LONG" or "TOO_DEEP"` | Yes | — |
 | `error.details[].path` | `string` | Yes | max length: 512; pattern: `^(?:/(?:[^~/]\|~0\|~1)*)*$` |
@@ -46,7 +46,7 @@ Each operation lists its supported status codes.
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 3 operations |
 | [Namespaces](#namespaces) | 4 operations |
-| [Agents](#agents) | 23 operations |
+| [Agents](#agents) | 24 operations |
 | [Agent deployments](#agent-deployments) | 2 operations |
 | [Agent revisions](#agent-revisions) | 2 operations |
 | [Configurations](#configurations) | 4 operations |
@@ -396,6 +396,10 @@ Get the singleton Installation
 | `data.capabilities.pluginDiscovery` | `object` | No | — |
 | `data.capabilities.pluginDiscovery.credential` | `"required" or "none"` | Yes | — |
 | `data.capabilities.pluginPolicies` | `object` | No | — |
+| `data.capabilities.pluginPolicies.approvers` | `object` | No | — |
+| `data.capabilities.pluginPolicies.approvers.agent` | `boolean` | Yes | — |
+| `data.capabilities.pluginPolicies.approvers.plugin` | `boolean` | Yes | — |
+| `data.capabilities.pluginPolicies.approvers.tools` | `boolean` | Yes | — |
 | `data.capabilities.pluginPolicies.driver` | `PluginDriverIdentity` | Yes | — |
 | `data.capabilities.pluginPolicies.driver.id` | `string` | Yes | min length: 1 |
 | `data.capabilities.pluginPolicies.driver.implementation` | `string` | Yes | min length: 1 |
@@ -463,6 +467,10 @@ Bootstrap the singleton Installation
 | `data.capabilities.pluginDiscovery` | `object` | No | — |
 | `data.capabilities.pluginDiscovery.credential` | `"required" or "none"` | Yes | — |
 | `data.capabilities.pluginPolicies` | `object` | No | — |
+| `data.capabilities.pluginPolicies.approvers` | `object` | No | — |
+| `data.capabilities.pluginPolicies.approvers.agent` | `boolean` | Yes | — |
+| `data.capabilities.pluginPolicies.approvers.plugin` | `boolean` | Yes | — |
+| `data.capabilities.pluginPolicies.approvers.tools` | `boolean` | Yes | — |
 | `data.capabilities.pluginPolicies.driver` | `PluginDriverIdentity` | Yes | — |
 | `data.capabilities.pluginPolicies.driver.id` | `string` | Yes | min length: 1 |
 | `data.capabilities.pluginPolicies.driver.implementation` | `string` | Yes | min length: 1 |
@@ -750,6 +758,7 @@ Get an exact Installation-owned Namespace
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/stop`](#post-namespacesnamespaceidagentsagentidstop) | Stop one Agent while retaining its revision and persistent state |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`](#get-namespacesnamespaceidagentsagentidworkspacefilesname) | Read an allowed workspace file from one active Agent |
 | [`PUT /namespaces/{namespaceId}/agents/{agentId}/workspace/files/{name}`](#put-namespacesnamespaceidagentsagentidworkspacefilesname) | Create or replace an allowed workspace file for one active Agent |
+| [`POST /namespaces/{namespaceId}/channel-directory/lookup`](#post-namespacesnamespaceidchanneldirectorylookup) | Search a channel directory using an authorized Namespace Secret |
 
 #### `GET /namespaces/{namespaceId}/agents`
 
@@ -799,6 +808,9 @@ List authorized Agents in one exact Namespace
 | `data[].id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data[].name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data[].pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data[].pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data[].pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data[].plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data[].repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data[].repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -849,6 +861,9 @@ Create a Namespace-owned Agent
 | `initialWorkspaceFiles.SOUL.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
 | `initialWorkspaceFiles.USER.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `repositoryBindings` | `array<object>` | No | max items: 16; Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references. |
 | `repositoryBindings[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -885,6 +900,9 @@ Create a Namespace-owned Agent
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1142,6 +1160,9 @@ Create a new Agent and queue first-time provisioning
 | `initialWorkspaceFiles.SOUL.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
 | `initialWorkspaceFiles.USER.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
 | `name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `repositoryBindings` | `array<object>` | No | max items: 16; Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references. |
 | `repositoryBindings[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1385,6 +1406,9 @@ Begin deletion of an exact Namespace-owned Agent and its AgentRevisions
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1442,6 +1466,9 @@ Get an exact Namespace-owned Agent
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1487,6 +1514,7 @@ Replace an exact Namespace-owned Agent's editable draft
 | `configurationId` | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `executionMode` | `"embedded" or "dedicated"` | No | — |
 | `harnessAuth` | `object or object or object or object or object or null` | No | — |
+| `pluginApprovers` | `PluginApprovers or null` | No | — |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `repositoryBindings` | `array<object>` | No | max items: 16; Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references. |
 | `repositoryBindings[].profile` | `string` | No | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1522,6 +1550,9 @@ Replace an exact Namespace-owned Agent's editable draft
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -1592,6 +1623,9 @@ Admit an immutable revision from the Agent's saved draft
 | `data.harnessAuth` | `object or object or object or object or object` | Yes | — |
 | `data.id` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data.plugins` | `object` | No | — |
 | `data.plugins.driver` | `PluginDriverIdentity` | Yes | — |
 | `data.plugins.driver.id` | `string` | Yes | min length: 1 |
@@ -1779,6 +1813,10 @@ Read selected Plugin Driver policy capabilities for an active Agent with caller 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
+| `data.approvers` | `object` | No | — |
+| `data.approvers.agent` | `boolean` | Yes | — |
+| `data.approvers.plugin` | `boolean` | Yes | — |
+| `data.approvers.tools` | `boolean` | Yes | — |
 | `data.discoveryCredential` | `"required" or "none"` | Yes | — |
 | `data.driver` | `PluginDriverIdentity` | Yes | — |
 | `data.driver.id` | `string` | Yes | min length: 1 |
@@ -2062,6 +2100,9 @@ Stop one Agent while retaining its revision and persistent state
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
 | `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
@@ -2169,6 +2210,70 @@ Create or replace an allowed workspace file for one active Agent
 | `data` | `object` | Yes | — |
 | `data.name` | `"AGENTS.md" or "SOUL.md" or "IDENTITY.md" or "USER.md"` | Yes | — |
 | `data.size` | `integer` | No | minimum: 0; maximum: 16384 |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `POST /namespaces/{namespaceId}/channel-directory/lookup`
+
+<span id="post-namespacesnamespaceidchanneldirectorylookup"></span>
+
+Search a channel directory using an authorized Namespace Secret
+
+**Operation ID:** `lookupChannelDirectory`
+
+**Permissions:** Requires operate permission on the exact Secret named by secretId. Without an edit target, requires Agent create permission in the Namespace. With agentId, requires update permission on that exact Agent. With configurationId, requires update permission on that exact Configuration.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `operate` | `secret` | `request_body` |
+| `create` | `agent` | `namespace` |
+| `update` | `agent` | `request_body` |
+| `update` | `configuration` | `request_body` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+Schema: `object or object or object or object or object or object`.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `429` | Too Many Requests |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.candidates` | `array<object>` | Yes | max items: 100 |
+| `data.candidates[].displayName` | `string` | No | min length: 1; max length: 200 |
+| `data.candidates[].id` | `string` | Yes | min length: 1; max length: 200 |
+| `data.candidates[].name` | `string` | Yes | min length: 1; max length: 200 |
+| `data.complete` | `boolean` | Yes | — |
+| `data.nextCursor` | `string` | No | min length: 1; max length: 2048 |
+| `data.workspaceId` | `string` | Yes | min length: 1; max length: 200 |
+| `data.workspaceName` | `string` | No | min length: 1; max length: 200 |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -2349,6 +2454,9 @@ List authorized immutable revisions for one exact Agent
 | `data[].harnessAuth` | `object or object or object or object or object` | Yes | — |
 | `data[].id` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data[].pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data[].pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data[].pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data[].plugins` | `object` | No | — |
 | `data[].plugins.driver` | `PluginDriverIdentity` | Yes | — |
 | `data[].plugins.driver.id` | `string` | Yes | min length: 1 |
@@ -2424,6 +2532,9 @@ Get an exact authorized immutable Agent revision
 | `data.harnessAuth` | `object or object or object or object or object` | Yes | — |
 | `data.id` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
+| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
+| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
 | `data.plugins` | `object` | No | — |
 | `data.plugins.driver` | `PluginDriverIdentity` | Yes | — |
 | `data.plugins.driver.id` | `string` | Yes | min length: 1 |
@@ -4208,11 +4319,13 @@ Reusable schema names are referenced by operation request and response tables.
 | --- | --- |
 | `SafeJsonValue` | `string or boolean or number or null or array<SafeJsonValue> or object<string, SafeJsonValue>` |
 | `PluginDriverIdentity` | `object` |
+| `SecretResponse` | `object` |
+| `CredentialSourceResponse` | `object` |
+| `PluginApprovers` | `array<object>` |
 | `PluginToolPolicy` | `object` |
+| `PluginToolDefaults` | `object` |
 | `PluginDesiredSelection` | `object` |
 | `PluginDesiredState` | `object<string, PluginDesiredSelection>` |
 | `ErrorResponse` | `object` |
 | `AgentDeploymentDiagnosticsResponse` | `object` |
 | `AgentRuntimeCredentialResponse` | `object` |
-| `SecretResponse` | `object` |
-| `CredentialSourceResponse` | `object` |

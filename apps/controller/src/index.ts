@@ -30,6 +30,8 @@ import {
   PluginDesiredStateSchema,
   PluginDriverIdentitySchema,
   PluginToolPolicySchema,
+  PluginToolDefaultsSchema,
+  PluginApproversSchema,
   SecretResponse,
   CredentialSourceResponse,
   occApiRoutes,
@@ -40,6 +42,7 @@ import {
   type AuditEvent,
   type AuthorizationEvidence,
   type ConfigurationDriver,
+  type ChannelDriver,
   type ComputeDriver,
   type HarnessExecutionMode,
   type HarnessAuthBinding,
@@ -133,6 +136,7 @@ export interface ControllerAppOptions {
   readonly iamDriver: IAMDriver;
   readonly computeDriver?: ComputeDriver;
   readonly configurationDriver?: ConfigurationDriver;
+  readonly channelDriver?: ChannelDriver;
   readonly secretDriver?: SecretDriver;
   readonly sandboxDriver?: SandboxDriver;
   readonly resolveHarness: HarnessResolver;
@@ -195,6 +199,7 @@ interface RequiredPermission {
     | "associated_service_account"
     | "existing_namespace"
     | "bound_secret"
+    | "directory_lookup"
     | "selected_secret"
     | "iam_binding_target"
     | "provisioning_work"
@@ -479,6 +484,35 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     return [{ ...permission, scope: "namespace" }];
   }
 
+  if (operation.operationId === "lookupChannelDirectory") {
+    return [
+      {
+        action: "operate",
+        resourceKind: "secret",
+        scope: "request_body",
+        condition: "directory_lookup",
+      },
+      {
+        action: "create",
+        resourceKind: "agent",
+        scope: "namespace",
+        condition: "directory_lookup",
+      },
+      {
+        action: "update",
+        resourceKind: "agent",
+        scope: "request_body",
+        condition: "directory_lookup",
+      },
+      {
+        action: "update",
+        resourceKind: "configuration",
+        scope: "request_body",
+        condition: "directory_lookup",
+      },
+    ];
+  }
+
   if (operation.operationId === "createIAMAccessBinding") {
     return [
       { action: "administer", resourceKind: "installation", scope: "requested" },
@@ -689,6 +723,15 @@ function permissionDescription(
       if (condition === "associated_service_account") {
         return `Requires ${action} permission on each currently associated or newly associated ${name} when present.`;
       }
+      if (condition === "directory_lookup") {
+        if (resourceKind === "secret") {
+          return "Requires operate permission on the exact Secret named by secretId.";
+        }
+        if (action === "create") {
+          return "Without an edit target, requires Agent create permission in the Namespace.";
+        }
+        return `With ${resourceKind === "agent" ? "agentId" : "configurationId"}, requires update permission on that exact ${name}.`;
+      }
       if (condition === "existing_namespace") {
         return `Requires ${action} permission on the ${name} when selecting an existing Kubernetes namespace.`;
       }
@@ -769,6 +812,7 @@ function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
     backendId: agent.backendId,
     executionMode: agent.executionMode,
     ...(agent.plugins === undefined ? {} : { plugins: agent.plugins }),
+    ...(agent.pluginApprovers === undefined ? {} : { pluginApprovers: agent.pluginApprovers }),
     ...(agent.repositoryBindings === undefined
       ? {}
       : { repositoryBindings: agent.repositoryBindings }),
@@ -820,6 +864,9 @@ function clientRevision(revision: Readonly<AgentRevision>): Record<string, unkno
     ...(revision.secretDriverId === undefined ? {} : { secretDriverId: revision.secretDriverId }),
     ...(revision.secretBindings === undefined ? {} : { secretBindings: revision.secretBindings }),
     ...(revision.plugins === undefined ? {} : { plugins: revision.plugins }),
+    ...(revision.pluginApprovers === undefined
+      ? {}
+      : { pluginApprovers: revision.pluginApprovers }),
     ...(revision.repositoryCredentials === undefined
       ? {}
       : {
@@ -935,7 +982,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   app.removeContentTypeParser("text/plain");
   app.addSchema(JsonValue);
   app.addSchema(PluginDriverIdentitySchema);
+  app.addSchema(PluginApproversSchema);
   app.addSchema(PluginToolPolicySchema);
+  app.addSchema(PluginToolDefaultsSchema);
   app.addSchema(PluginDesiredSelectionSchema);
   app.addSchema(PluginDesiredStateSchema);
   void app.register(swagger, {
@@ -1915,6 +1964,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           created.registerDriver(options.secretDriver);
           created.selectDriver("secret", options.secretDriver.id);
         }
+        if (options.channelDriver) {
+          created.registerDriver(options.channelDriver);
+          created.selectDriver("channel", options.channelDriver.id);
+        }
         if (options.sandboxDriver) {
           created.registerDriver(options.sandboxDriver);
           created.selectDriver("sandbox", options.sandboxDriver.id);
@@ -2110,6 +2163,23 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (operation.operationId === "lookupChannelDirectory") {
+      const directory = await controller.lookupChannelDirectory(context.actorId, namespaceId, {
+        secretId: body?.secretId as string,
+        kind: body?.kind as "users" | "channels",
+        ...(body?.query === undefined ? {} : { query: body.query as string }),
+        ...(body?.cursor === undefined ? {} : { cursor: body.cursor as string }),
+        ...(body?.ids === undefined ? {} : { ids: body.ids as string[] }),
+        ...(body?.agentId === undefined ? {} : { agentId: body.agentId as string }),
+        ...(body?.configurationId === undefined
+          ? {}
+          : { configurationId: body.configurationId as string }),
+      });
+      reply.header("cache-control", "no-store");
+      reply.send({ data: directory, meta: { requestId: request.id } });
+      return;
+    }
+
     const resourceHandler = resourceHandlers[operation.operationId];
     if (resourceHandler) {
       await resourceHandler({
@@ -2174,6 +2244,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           ...(provisionBody.plugins === undefined
             ? {}
             : { plugins: provisionBody.plugins as never }),
+          ...(provisionBody.pluginApprovers === undefined
+            ? {}
+            : { pluginApprovers: provisionBody.pluginApprovers as never }),
           ...(provisionBody.repositoryBindings === undefined
             ? {}
             : {
@@ -2265,6 +2338,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             ? {}
             : { harnessAuth: body.harnessAuth as HarnessAuthBinding | null }),
           ...(body?.plugins === undefined ? {} : { plugins: body.plugins as never }),
+          ...(body?.pluginApprovers === undefined
+            ? {}
+            : { pluginApprovers: body.pluginApprovers as never }),
           ...(body?.repositoryBindings === undefined
             ? {}
             : {
@@ -2368,6 +2444,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             ? {}
             : { harnessAuth: body.harnessAuth as HarnessAuthBinding | null }),
           ...(body?.plugins === undefined ? {} : { plugins: body.plugins as never }),
+          ...(body?.pluginApprovers === undefined
+            ? {}
+            : { pluginApprovers: body.pluginApprovers as never }),
           ...(body?.repositoryBindings === undefined
             ? {}
             : {
