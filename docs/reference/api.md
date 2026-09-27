@@ -392,6 +392,8 @@ Get the singleton Installation
 | `data.capabilities` | `object` | No | — |
 | `data.capabilities.agentProvisioning` | `object` | No | — |
 | `data.capabilities.agentProvisioning.executionModes` | `array<"embedded" or "dedicated">` | Yes | min items: 1; max items: 2 |
+| `data.capabilities.pluginDiscovery` | `object` | No | — |
+| `data.capabilities.pluginDiscovery.credential` | `"required" or "none"` | Yes | — |
 | `data.capabilities.pluginPolicies` | `object` | No | — |
 | `data.capabilities.pluginPolicies.driver` | `PluginDriverIdentity` | Yes | — |
 | `data.capabilities.pluginPolicies.driver.id` | `string` | Yes | min length: 1 |
@@ -457,6 +459,8 @@ Bootstrap the singleton Installation
 | `data.capabilities` | `object` | No | — |
 | `data.capabilities.agentProvisioning` | `object` | No | — |
 | `data.capabilities.agentProvisioning.executionModes` | `array<"embedded" or "dedicated">` | Yes | min items: 1; max items: 2 |
+| `data.capabilities.pluginDiscovery` | `object` | No | — |
+| `data.capabilities.pluginDiscovery.credential` | `"required" or "none"` | Yes | — |
 | `data.capabilities.pluginPolicies` | `object` | No | — |
 | `data.capabilities.pluginPolicies.driver` | `PluginDriverIdentity` | Yes | — |
 | `data.capabilities.pluginPolicies.driver.id` | `string` | Yes | min length: 1 |
@@ -725,8 +729,8 @@ Get an exact Installation-owned Namespace
 | [`GET /namespaces/{namespaceId}/agents`](#get-namespacesnamespaceidagents) | List authorized Agents in one exact Namespace |
 | [`POST /namespaces/{namespaceId}/agents`](#post-namespacesnamespaceidagents) | Create a Namespace-owned Agent |
 | [`POST /namespaces/{namespaceId}/agents/models`](#post-namespacesnamespaceidagentsmodels) | List provider models for Agent creation without storing the supplied credential |
-| [`POST /namespaces/{namespaceId}/agents/plugins`](#post-namespacesnamespaceidagentsplugins) | List available plugins for Agent creation using a transient credential or Secret reference |
-| [`POST /namespaces/{namespaceId}/agents/plugins/details`](#post-namespacesnamespaceidagentspluginsdetails) | Read available plugin tools using a transient credential or Secret reference |
+| [`POST /namespaces/{namespaceId}/agents/plugins`](#post-namespacesnamespaceidagentsplugins) | List available plugins for Agent creation using the selected Driver |
+| [`POST /namespaces/{namespaceId}/agents/plugins/details`](#post-namespacesnamespaceidagentspluginsdetails) | Read plugin details using the selected Driver |
 | [`POST /namespaces/{namespaceId}/agents/provision`](#post-namespacesnamespaceidagentsprovision) | Create a new Agent and queue first-time provisioning |
 | [`GET /namespaces/{namespaceId}/agents/provision/{workId}`](#get-namespacesnamespaceidagentsprovisionworkid) | Get first-time provisioning status for one exact work item |
 | [`POST /namespaces/{namespaceId}/agents/provision/{workId}/retry`](#post-namespacesnamespaceidagentsprovisionworkidretry) | Retry failed first-time provisioning for one exact work item |
@@ -949,7 +953,7 @@ List provider models for Agent creation without storing the supplied credential
 
 <span id="post-namespacesnamespaceidagentsplugins"></span>
 
-List available plugins for Agent creation using a transient credential or Secret reference
+List available plugins for Agent creation using the selected Driver
 
 **Operation ID:** `discoverAgentPlugins`
 
@@ -972,7 +976,7 @@ List available plugins for Agent creation using a transient credential or Secret
 
 **Content type:** `application/json`
 
-Schema: `object or object`.
+Schema: `object or object or object`.
 
 ##### Responses
 
@@ -1005,6 +1009,7 @@ Schema: `object or object`.
 | `data.plugins[].name` | `string` | Yes | — |
 | `data.plugins[].privacyPolicyUrl` | `string` | No | — |
 | `data.plugins[].remoteId` | `string` | No | — |
+| `data.plugins[].selectableWithoutTools` | `boolean` | No | — |
 | `data.plugins[].termsOfServiceUrl` | `string` | No | — |
 | `data.plugins[].tools` | `null or array<object>` | Yes | — |
 | `data.plugins[].unavailableHelp` | `object` | No | — |
@@ -1024,7 +1029,7 @@ Schema: `object or object`.
 
 <span id="post-namespacesnamespaceidagentspluginsdetails"></span>
 
-Read available plugin tools using a transient credential or Secret reference
+Read plugin details using the selected Driver
 
 **Operation ID:** `discoverAgentPluginDetails`
 
@@ -1047,7 +1052,7 @@ Read available plugin tools using a transient credential or Secret reference
 
 **Content type:** `application/json`
 
-Schema: `object or object`.
+Schema: `object or object or object`.
 
 ##### Responses
 
@@ -1078,6 +1083,7 @@ Schema: `object or object`.
 | `data.name` | `string` | Yes | — |
 | `data.privacyPolicyUrl` | `string` | No | — |
 | `data.remoteId` | `string` | No | — |
+| `data.selectableWithoutTools` | `boolean` | No | — |
 | `data.termsOfServiceUrl` | `string` | No | — |
 | `data.tools` | `null or array<object>` | Yes | — |
 | `data.unavailableHelp` | `object` | No | — |

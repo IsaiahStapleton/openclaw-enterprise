@@ -683,6 +683,53 @@ export const scenarios = {
       "A denied discovery request explains that permission is required without exposing Secret data.",
     gap: "The Secret and denial are simulated; this preview does not verify IAM enforcement.",
   },
+  createPluginsCurated: {
+    group: "Pages/Create Agent",
+    name: "Select Linear from the curated catalog",
+    path: create,
+    pluginCapabilities,
+    pluginDiscoveryCredential: "none",
+    pluginDiscovery: (() => {
+      const linear = {
+        id: "codex-plugin:linear@openai-curated-remote",
+        remoteId: "plugin_asdk_app_69a089a326dc8191b32a3f2553f5be2c",
+        name: "Linear",
+        description: "Plan and build products",
+        websiteUrl: "https://linear.app/",
+        privacyPolicyUrl: "https://linear.app/privacy",
+        termsOfServiceUrl: "https://linear.app/terms",
+        selectableWithoutTools: true,
+        tools: null,
+      };
+      return {
+        pages: {
+          initial: {
+            plugins: [linear],
+            nextCursor: null,
+            setup: {
+              message:
+                "This catalog does not verify workspace access, app connections, or tool availability. Configure the Agent's credentials and app access before deployment.",
+              links: [
+                {
+                  label: "Manage workspace plugins",
+                  url: "https://chatgpt.com/admin/plugins?catalog=GLOBAL",
+                },
+              ],
+            },
+          },
+        },
+        details: { [linear.remoteId]: linear },
+      };
+    })(),
+    actions: [...form, click("Configure plugins")],
+    description:
+      "The selected Driver exposes Linear without a discovery token. Its tool inventory remains unknown.",
+    steps: [
+      "Choose Linear, add it, and set a default policy. Close the modal and inspect Plugin selections JSON.",
+      "The catalog does not establish account access or runtime readiness; configure the Agent's actual credentials separately.",
+    ],
+    gap: "The catalog and provider responses are simulated. This preview does not invoke Linear or verify runtime authentication.",
+  },
   createPluginsDiscovered: {
     group: "Pages/Create Agent",
     name: "Discover plugins with a service account token",
@@ -1835,8 +1882,13 @@ export const scenarios = {
     group: "Components/Navigation",
     name: "Mobile Namespace selector",
     mobile: true,
+    namespaceName: "Engineering platform operations and infrastructure",
     description:
       "Choose a Namespace directly from the header at 390px, without opening navigation.",
+    steps: [
+      "Check that the long Namespace name truncates before the inset chevron.",
+      "Choose Research, then return to the long Namespace and check the selection.",
+    ],
   },
   mobile: {
     group: "Components/Navigation",

@@ -1374,6 +1374,19 @@
                               "required": ["executionModes"],
                               "type": "object"
                             },
+                            "pluginDiscovery": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "credential": {
+                                  "anyOf": [
+                                    { "const": "required", "type": "string" },
+                                    { "const": "none", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["credential"],
+                              "type": "object"
+                            },
                             "pluginPolicies": {
                               "additionalProperties": false,
                               "properties": {
@@ -1578,6 +1591,19 @@
                                 }
                               },
                               "required": ["executionModes"],
+                              "type": "object"
+                            },
+                            "pluginDiscovery": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "credential": {
+                                  "anyOf": [
+                                    { "const": "required", "type": "string" },
+                                    { "const": "none", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["credential"],
                               "type": "object"
                             },
                             "pluginPolicies": {
@@ -3338,6 +3364,13 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "cursor": { "maxLength": 8192, "minLength": 1, "type": "string" }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
                       "accessToken": {
                         "maxLength": 16384,
                         "minLength": 1,
@@ -3403,6 +3436,7 @@
                               "name": { "type": "string" },
                               "privacyPolicyUrl": { "type": "string" },
                               "remoteId": { "type": "string" },
+                              "selectableWithoutTools": { "type": "boolean" },
                               "termsOfServiceUrl": { "type": "string" },
                               "tools": {
                                 "anyOf": [
@@ -3554,7 +3588,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "List available plugins for Agent creation using a transient credential or Secret reference",
+        "summary": "List available plugins for Agent creation using the selected Driver",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "create", "resourceKind": "agent", "scope": "namespace" },
@@ -3587,6 +3621,14 @@
             "application/json": {
               "schema": {
                 "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pluginId": { "maxLength": 256, "minLength": 1, "type": "string" }
+                    },
+                    "required": ["pluginId"],
+                    "type": "object"
+                  },
                   {
                     "additionalProperties": false,
                     "properties": {
@@ -3650,6 +3692,7 @@
                         "name": { "type": "string" },
                         "privacyPolicyUrl": { "type": "string" },
                         "remoteId": { "type": "string" },
+                        "selectableWithoutTools": { "type": "boolean" },
                         "termsOfServiceUrl": { "type": "string" },
                         "tools": {
                           "anyOf": [
@@ -3775,7 +3818,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Read available plugin tools using a transient credential or Secret reference",
+        "summary": "Read plugin details using the selected Driver",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "create", "resourceKind": "agent", "scope": "namespace" },

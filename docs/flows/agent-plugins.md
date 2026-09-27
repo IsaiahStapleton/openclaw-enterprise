@@ -1,18 +1,17 @@
 ---
 created: 2026-09-08
 updated: 2026-09-27
-last_updated_session: 01a0e099-da9d-78f1-8e79-ea4a919edf7d
+last_updated_session: 01a0e176-b1ee-7641-85e8-c167f10c6a66
 ---
 
 # Agent Plugin Deployment Flow
 
 ## Overview
 
-An authorized caller saves Agent plugin selections and deploys the Agent. OCC
-validates policy and snapshots selections and Driver at deployment. Startup
-resolves metadata, translates policy, and prepares the isolated revision. This
-flow ends at reconciliation or failure. The active revision pointer can change
-before runtime cutover finishes; the Harness owns tool invocation and approvals.
+An authorized caller saves plugin selections and deploys the Agent. OCC validates
+policy and snapshots selections and Driver. Startup resolves metadata, translates
+policy, and prepares the revision. The active revision pointer can change before
+runtime cutover finishes; the Harness owns tool invocation and approvals.
 
 ## Entry Points
 
@@ -33,10 +32,10 @@ graph TD
   D0["Request discovery"] --> D1["Authorize Agent create"]
   D1 -->|Secret reference| D2["Authorize exact Secret operate"]
   D2 --> D6["Check PluginDriver support"]
-  D1 -->|transient token| D6
+  D1 -->|transient token or no credential| D6
   D6 -->|unsupported| D7["Return unavailable capability"]
   D6 -->|Secret reference| D3["Read owned current value"]
-  D6 -->|transient token| D4["Call selected PluginDriver"]
+  D6 -->|transient token or no credential| D4["Call selected PluginDriver"]
   D3 --> D4
   D4 --> D5["Return safe catalog metadata"]
   A["Authorize and validate policy"] -->|valid| S["Save Agent selections"]
@@ -61,26 +60,27 @@ graph TD
 ### Credential-scoped discovery
 
 The [discovery routes](../reference/drivers/plugin.md#selection-and-catalogs) accept
-an ephemeral PAT or an exact Secret reference. `apps/controller/src/index.ts:createFastifyApp`
-passes the selected source to `packages/occ/src/index.ts:OpenClawController.discoverAgentPlugins`
-or `discoverAgentPluginDetails`. OCC authorizes Namespace Agent creation. For a
-reference, it rejects cross-Namespace scope and authorizes `operate` on the exact
-Secret before checking PluginDriver support. Unsupported discovery returns without
-reading a Secret value. Otherwise OCC reads its metadata, and the selected
-`SecretDriver.withValue` verifies backend ownership and passes its current value
-to the selected PluginDriver.
-No platform transaction is held during backend or provider I/O. Each request
-reads again, so rotation affects later requests; an already-started request can
-use the value it read before rotation. Missing, denied, and unavailable Secrets
-fail before provider discovery. No discovery state or value is stored.
+a PAT, exact Secret reference, or no credential if the Driver permits it.
+`apps/controller/src/index.ts:createFastifyApp` calls
+`packages/occ/src/index.ts:OpenClawController.discoverAgentPlugins` or
+`discoverAgentPluginDetails`. OCC authorizes Namespace Agent creation and, for a
+Secret, checks Namespace scope and exact `operate` permission before Driver support.
+Unsupported discovery never reads the Secret. Otherwise `SecretDriver.withValue`
+checks ownership and supplies its current value without a platform transaction.
+Each request rereads it; an in-flight request can use a pre-rotation value. Missing,
+denied, and unavailable Secrets fail before provider discovery. No discovery state
+or credential is stored.
 
-[Codex discovery](../../apps/controller/src/drivers/plugin/hosted-catalog.ts) hydrates identity,
-pages 20 GLOBAL entries, and loads tools (`null`: unknown). Filtering stays local.
-Bounded, redirect-free reads return `no-store` metadata without credentials; OCC
-rejects a result that echoes the supplied value. They return no artifacts or
-upstream errors. Driver-owned links, unavailable reasons, and
-[setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs) remain outside selections. App connections stay unverified.
-HTTPS logos use no referrers and fall back to initials.
+The [Codex Plugin Driver](../../apps/controller/src/drivers/plugin/index.ts)
+selects its configured catalog. Hosted discovery hydrates identity, pages 20
+GLOBAL entries, and loads tools (`null`: unknown). The hardcoded catalog returns
+entries without provider I/O or known tools and account access. Console permits
+supported entries after reading details; unsupported releases remain unavailable.
+Hosted reads are bounded and redirect-free. OCC returns `no-store` metadata,
+rejects results echoing credentials, and suppresses artifacts and upstream errors.
+Driver-owned links and [setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs)
+stay outside selections. App connections remain unverified; HTTPS logos use no
+referrers and fall back to initials.
 
 ### 1. Validate desired state under exact-Agent authority
 
@@ -98,17 +98,16 @@ authentication, and release/tool metadata remain startup checks. Agent mutations
 the reusable Configuration or active runtime. On update, omission preserves the
 map, `{}` clears it, and a nonempty map replaces it.
 
-Authorized `GET /installation` reads expose the selected Driver's
-`policyCapabilities` through `OpenClawController.getInstallation`. This is policy
-capability discovery; it does not list available plugins or tools.
+Authorized `GET /installation` exposes the selected Driver's `policyCapabilities` through
+`OpenClawController.getInstallation`; it does not list plugins or tools.
 
 ### 2. Admit an immutable plugin deployment
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
-Deployment revalidates Agent selections and Configuration, records the Driver
-identity and policy-only plugin map in AgentRevision, and queues the immutable
-revision. Native app mapping, release metadata, and configuration are resolved later.
+Deployment revalidates selections and Configuration, records the Driver and
+policy-only plugin map in AgentRevision, and queues the revision. Native app
+mapping, release metadata, and configuration are resolved later.
 
 ### 3. Deliver requested state through Compute preparation
 
@@ -116,10 +115,9 @@ revision. Native app mapping, release metadata, and configuration are resolved l
 
 Compute validates the admitted state, Driver, and Harness. Kubernetes projects
 the nonsecret request into the revision workload; Docker uses bounded runtime
-environment delivery. Both follow the existing Compute lifecycle.
+environment delivery.
 
-SSH Compute rejects nonempty plugin maps before host effects; plugin-free
-revisions use the ordinary SSH lifecycle.
+SSH Compute rejects nonempty plugin maps before host effects.
 
 For an initial embedded Kubernetes gateway, preparation applies exact-Agent HTTPS
 egress before installation. For an existing gateway, `prepareRevision` avoids a
@@ -166,11 +164,11 @@ At startup, native `plugin/list` discovers the `openai-curated-remote` marketpla
 app grant. See the [bundled Driver limits](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
 `runtime-translator.ts:codexInstallPlan` validates policy and native detail before
 Compute calls `plugin/install` for each enabled selection. Confirmed install
-rejections or missing app authentication produce warnings. If successful enabled
-selections contain explicit tool policies, `readCodexToolStatuses` pages through
-`mcpServerStatus/list` with `detail:"toolsAndAuthOnly"`. The translator checks the
-requested scoped tool IDs against `codex_apps` tool names and connector ownership.
-Unknown or unowned tools fail startup; tool classifications are not required.
+rejections or missing app authentication produce warnings. For explicit tool policies,
+`readCodexToolStatuses` reads `codex_apps` inventory through `mcpServerStatus/list`.
+`runtime-translator.ts:codexAppToolSettings` binds catalog action IDs to native names
+using connector-matched `_meta._codex_apps.resource_uri` metadata. Native IDs remain
+supported. Unknown, unowned, ambiguous, or duplicate targets fail startup.
 
 `codexRuntimeArtifact` writes app defaults and supplied tool fields independently;
 it does not expand category rules or copy defaults to every tool. `native` maps to
@@ -292,6 +290,12 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 06:07: Expanded the curated catalog and marked unsupported releases unavailable. (01a0e176-b1ee-7641-85e8-c167f10c6a66 - eb3d6c4c0b8881e5f7efe17c03cc05357e7c7734)
+
+- 2026-09-27 05:49: Added selected token-free curated catalog discovery and preserved runtime credential checks. (01a0e164-ee0e-7c51-a28f-b1179d5917dd - 7812d81bce78a415b7a47b4e335812304caf98ea)
+
+- 2026-09-27 05:38: Resolve catalog IDs through owned runtime metadata. (01a0d4f7-8085-70e0-9d0c-69a465a81fe3 - 6f7534fa)
 
 - 2026-09-27 02:41: Authorize the selected Secret before reporting unsupported plugin discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - 36cb6d6a4a515ad7328eb596b3da174f262f6d18)
 

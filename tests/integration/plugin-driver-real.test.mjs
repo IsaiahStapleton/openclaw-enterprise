@@ -39,6 +39,7 @@ test(
 
     const fixture = await createPluginDriverRealFixture(context, {
       pluginDriverId: "occ-plugin",
+      scenario: "openclaw",
       databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_OPENCLAW_DATABASE_URL,
     });
     const primary = await fixture.createAgent({
@@ -323,6 +324,96 @@ test(
 );
 
 test(
+  "curated catalog Linear selection runs in a normal Codex Agent turn",
+  {
+    skip: pluginProofSkipReason("codex_linear"),
+    timeout: 900_000,
+  },
+  async (context) => {
+    const prompt = process.env.OCC_TEST_CODEX_LINEAR_PROMPT;
+    const toolName = process.env.OCC_TEST_CODEX_LINEAR_TOOL_NAME;
+    const resultPattern = process.env.OCC_TEST_CODEX_LINEAR_RESULT_EXPECT;
+    assert.ok(prompt?.trim(), "OCC_TEST_CODEX_LINEAR_PROMPT must request a harmless Linear read.");
+    assert.ok(toolName?.trim(), "OCC_TEST_CODEX_LINEAR_TOOL_NAME must identify the read tool.");
+    assert.ok(
+      resultPattern?.trim(),
+      "OCC_TEST_CODEX_LINEAR_RESULT_EXPECT must identify its result.",
+    );
+
+    const credential = await readCodexServiceAccountCredential();
+    const fixture = await createPluginDriverRealFixture(context, {
+      pluginDriverId: "codex-plugin",
+      pluginDriverConfiguration: { catalogSource: "openai-curated" },
+      scenario: "codex_linear",
+      databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_CODEX_LINEAR_DATABASE_URL,
+      codexCredential: credential,
+    });
+    const path = `/namespaces/${fixture.namespaceId}/agents/plugins`;
+    const catalog = await fixture.request("POST", path, {});
+    assert.equal(catalog.status, 200, JSON.stringify(catalog.error));
+    const linear = catalog.data.plugins.find(
+      (entry) => entry.id === "codex-plugin:linear@openai-curated-remote",
+    );
+    assert.ok(linear, "the configured catalog must offer Linear without a discovery token.");
+    const detail = await fixture.request("POST", `${path}/details`, { pluginId: linear.remoteId });
+    assert.equal(detail.status, 200, JSON.stringify(detail.error));
+    assert.equal(detail.data.id, linear.id);
+
+    // Discovery does not grant access: the deployed Agent uses its own connected account.
+    const account = await fixture.createCodexServiceAccountFromToken({
+      accessToken: credential.accessToken,
+      name: `codex-linear-plugin-${randomUUID()}`,
+    });
+    assertNoSecretMaterial(
+      account,
+      [credential.accessToken, credential.workspaceId],
+      "Account metadata must not expose credentials.",
+    );
+    const agent = await fixture.createAgent({
+      harnessId: "codex",
+      executionMode: "dedicated",
+      name: `codex-linear-plugin-${randomUUID()}`,
+      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      backendId: "openai",
+    });
+    await fixture.selectPlugin(agent.id, {
+      pluginId: linear.id,
+      enabled: true,
+      toolDefaults: { approval: "native", reviewer: "auto" },
+    });
+    const deployed = await fixture.deployAndWait(agent);
+    assert.ok(Object.hasOwn(deployed.revision.plugins?.plugins ?? {}, linear.id));
+    assert.deepEqual(deployed.status.warnings, []);
+    const [native] = await fixture.listCodexNativeCatalog(agent, [linear.id]);
+    assert.equal(native?.remotePluginId, linear.remoteId);
+    assert.ok(native.detailAvailable && native.appCount > 0);
+
+    // A transcript with the exact tool and result proves execution, not just selection.
+    const turnMarker = `CODEX_LINEAR_CATALOG_${randomUUID()}`;
+    const sessionKey = `agent:main:codex-linear-${randomUUID()}`;
+    const content = await fixture.normalGatewayTurn({
+      agent,
+      gatewayPassword: deployed.gatewayPassword,
+      sessionKey,
+      prompt: `${prompt}\nInclude this marker in the final answer: ${turnMarker}`,
+      expectedPatterns: [turnMarker],
+      secrets: [credential.accessToken, credential.workspaceId],
+    });
+    assertNoSecretMaterial(
+      content,
+      [credential.accessToken, credential.workspaceId],
+      "Agent output must not expose credentials.",
+    );
+    await fixture.assertSessionToolCallEvidence(agent, {
+      sessionKey,
+      turnMarker,
+      toolName,
+      resultPattern,
+    });
+  },
+);
+
+test(
   "curated Codex Google Calendar enforces per-call human and automatic review in normal Agent turns",
   {
     skip: pluginProofSkipReason("codex_calendar"),
@@ -357,6 +448,7 @@ test(
     const credential = await readCodexServiceAccountCredential();
     const fixture = await createPluginDriverRealFixture(context, {
       pluginDriverId: "codex-plugin",
+      scenario: "codex_calendar",
       databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL,
       codexCredential: credential,
     });
@@ -614,6 +706,7 @@ test(
     const credential = await readCodexServiceAccountCredential();
     const fixture = await createPluginDriverRealFixture(context, {
       pluginDriverId: "codex-plugin",
+      scenario: "codex_failure",
       databaseUrl: process.env.OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL,
       codexCredential: credential,
     });
