@@ -410,7 +410,8 @@ function validName(value: unknown): value is string {
 
 type PluginDiscoveryCredential =
   | { readonly accessToken: string; readonly secretRef?: never }
-  | { readonly accessToken?: never; readonly secretRef: SecretReference };
+  | { readonly accessToken?: never; readonly secretRef: SecretReference }
+  | { readonly accessToken?: never; readonly secretRef?: never };
 
 function capability(value: unknown): value is DriverCapability {
   return typeof value === "string" && DRIVER_CAPABILITIES.some((candidate) => candidate === value);
@@ -918,6 +919,9 @@ export class OpenClawController {
       ...this.installation,
       capabilities: {
         ...this.installation.capabilities,
+        ...(driver.discoverCatalog && driver.getCatalogPlugin
+          ? { pluginDiscovery: { credential: driver.discoveryCredential ?? "required" } }
+          : {}),
         pluginPolicies: {
           driver: { id: driver.id, implementation: driver.implementation },
           ...driver.policyCapabilities,
@@ -2838,11 +2842,18 @@ export class OpenClawController {
           "Plugin discovery is unavailable.",
         );
       }
-      return (accessToken) =>
-        driver.discoverCatalog!(
-          { accessToken, ...(input.cursor === undefined ? {} : { cursor: input.cursor }) },
+      return (accessToken) => {
+        if (accessToken === undefined && driver.discoveryCredential !== "none") {
+          throw new PluginDiscoveryError("credentials_rejected");
+        }
+        return driver.discoverCatalog!(
+          {
+            ...(accessToken === undefined ? {} : { accessToken }),
+            ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+          },
           signal,
         );
+      };
     });
   }
 
@@ -2862,8 +2873,15 @@ export class OpenClawController {
           "Plugin tool discovery is unavailable.",
         );
       }
-      return (accessToken) =>
-        driver.getCatalogPlugin!({ accessToken, pluginId: input.pluginId }, signal);
+      return (accessToken) => {
+        if (accessToken === undefined && driver.discoveryCredential !== "none") {
+          throw new PluginDiscoveryError("credentials_rejected");
+        }
+        return driver.getCatalogPlugin!(
+          { ...(accessToken === undefined ? {} : { accessToken }), pluginId: input.pluginId },
+          signal,
+        );
+      };
     });
   }
 
@@ -2871,7 +2889,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     credential: PluginDiscoveryCredential,
-    prepareDiscovery: () => (accessToken: string) => Promise<T>,
+    prepareDiscovery: () => (accessToken: string | undefined) => Promise<T>,
   ): Promise<T> {
     const source = credential.secretRef;
     if (source !== undefined) {
@@ -2884,16 +2902,17 @@ export class OpenClawController {
     const discover = prepareDiscovery();
     // Keep both upstream errors and accidentally echoed credential material out of responses.
     const invoke = async (
-      accessToken: string,
+      accessToken: string | undefined,
     ): Promise<{ value: T } | { error: PluginDiscoveryError }> => {
       try {
         const value = await discover(accessToken);
         const serialized = JSON.stringify(value);
-        const encodedToken = JSON.stringify(accessToken).slice(1, -1);
+        const encodedToken =
+          accessToken === undefined ? undefined : JSON.stringify(accessToken).slice(1, -1);
         if (
-          encodedToken.length === 0 ||
           serialized === undefined ||
-          serialized.includes(encodedToken)
+          (encodedToken !== undefined &&
+            (encodedToken.length === 0 || serialized.includes(encodedToken)))
         ) {
           throw new PluginDiscoveryError("invalid_response");
         }
@@ -2910,7 +2929,7 @@ export class OpenClawController {
     let outcome: { value: T } | { error: PluginDiscoveryError };
     if (credential.accessToken !== undefined) {
       outcome = await invoke(credential.accessToken);
-    } else {
+    } else if (credential.secretRef !== undefined) {
       const source = credential.secretRef;
       const secret = await this.read(async (state) => {
         const found = await state.secrets.findSecret(namespaceId, source.id);
@@ -2927,6 +2946,8 @@ export class OpenClawController {
       }
       // No platform transaction is held over backend or provider I/O; each request reads the current value.
       outcome = await this.secretOperation(() => driver.withValue!(secret, invoke));
+    } else {
+      outcome = await invoke(undefined);
     }
     if ("error" in outcome) {
       throw outcome.error;

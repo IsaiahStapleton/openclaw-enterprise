@@ -1,18 +1,17 @@
 ---
 created: 2026-09-08
 updated: 2026-09-27
-last_updated_session: 01a0e099-da9d-78f1-8e79-ea4a919edf7d
+last_updated_session: 01a0e164-ee0e-7c51-a28f-b1179d5917dd
 ---
 
 # Agent Plugin Deployment Flow
 
 ## Overview
 
-An authorized caller saves Agent plugin selections and deploys the Agent. OCC
-validates policy and snapshots selections and Driver at deployment. Startup
-resolves metadata, translates policy, and prepares the isolated revision. This
-flow ends at reconciliation or failure. The active revision pointer can change
-before runtime cutover finishes; the Harness owns tool invocation and approvals.
+An authorized caller saves plugin selections and deploys the Agent. OCC validates
+policy and snapshots selections and Driver. Startup resolves metadata, translates
+policy, and prepares the revision. The active revision pointer can change before
+runtime cutover finishes; the Harness owns tool invocation and approvals.
 
 ## Entry Points
 
@@ -33,10 +32,10 @@ graph TD
   D0["Request discovery"] --> D1["Authorize Agent create"]
   D1 -->|Secret reference| D2["Authorize exact Secret operate"]
   D2 --> D6["Check PluginDriver support"]
-  D1 -->|transient token| D6
+  D1 -->|transient token or no credential| D6
   D6 -->|unsupported| D7["Return unavailable capability"]
   D6 -->|Secret reference| D3["Read owned current value"]
-  D6 -->|transient token| D4["Call selected PluginDriver"]
+  D6 -->|transient token or no credential| D4["Call selected PluginDriver"]
   D3 --> D4
   D4 --> D5["Return safe catalog metadata"]
   A["Authorize and validate policy"] -->|valid| S["Save Agent selections"]
@@ -61,26 +60,27 @@ graph TD
 ### Credential-scoped discovery
 
 The [discovery routes](../reference/drivers/plugin.md#selection-and-catalogs) accept
-an ephemeral PAT or an exact Secret reference. `apps/controller/src/index.ts:createFastifyApp`
-passes the selected source to `packages/occ/src/index.ts:OpenClawController.discoverAgentPlugins`
-or `discoverAgentPluginDetails`. OCC authorizes Namespace Agent creation. For a
-reference, it rejects cross-Namespace scope and authorizes `operate` on the exact
-Secret before checking PluginDriver support. Unsupported discovery returns without
-reading a Secret value. Otherwise OCC reads its metadata, and the selected
-`SecretDriver.withValue` verifies backend ownership and passes its current value
-to the selected PluginDriver.
-No platform transaction is held during backend or provider I/O. Each request
-reads again, so rotation affects later requests; an already-started request can
-use the value it read before rotation. Missing, denied, and unavailable Secrets
-fail before provider discovery. No discovery state or value is stored.
+a PAT, exact Secret reference, or no credential if the Driver permits it.
+`apps/controller/src/index.ts:createFastifyApp` calls
+`packages/occ/src/index.ts:OpenClawController.discoverAgentPlugins` or
+`discoverAgentPluginDetails`. OCC authorizes Namespace Agent creation and, for a
+Secret, checks Namespace scope and exact `operate` permission before Driver support.
+Unsupported discovery does not read the Secret. Otherwise `SecretDriver.withValue`
+checks backend ownership and supplies its current value without holding a platform
+transaction. Each request reads again; an in-flight request can use a pre-rotation
+value. Missing, denied, and unavailable Secrets fail before provider discovery.
+No discovery state or credential is stored.
 
-[Codex discovery](../../apps/controller/src/drivers/plugin/hosted-catalog.ts) hydrates identity,
-pages 20 GLOBAL entries, and loads tools (`null`: unknown). Filtering stays local.
-Bounded, redirect-free reads return `no-store` metadata without credentials; OCC
-rejects a result that echoes the supplied value. They return no artifacts or
-upstream errors. Driver-owned links, unavailable reasons, and
-[setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs) remain outside selections. App connections stay unverified.
-HTTPS logos use no referrers and fall back to initials.
+The [Codex Plugin Driver](../../apps/controller/src/drivers/plugin/index.ts)
+selects its configured catalog. Hosted discovery hydrates identity, pages 20
+GLOBAL entries, and loads tools (`null`: unknown). The hardcoded catalog returns
+Linear without provider I/O or known tools and account access. Console permits
+this marked entry after reading its details. Filtering stays local.
+Hosted reads are bounded and redirect-free. OCC returns `no-store` metadata,
+rejects results echoing credentials, and suppresses artifacts and upstream errors.
+Driver-owned links and [setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs)
+stay outside selections. App connections remain unverified; HTTPS logos use no
+referrers and fall back to initials.
 
 ### 1. Validate desired state under exact-Agent authority
 
@@ -292,6 +292,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 05:49: Added selected token-free curated catalog discovery and preserved runtime credential checks. (01a0e164-ee0e-7c51-a28f-b1179d5917dd - 7812d81bce78a415b7a47b4e335812304caf98ea)
 
 - 2026-09-27 02:41: Authorize the selected Secret before reporting unsupported plugin discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - 36cb6d6a4a515ad7328eb596b3da174f262f6d18)
 

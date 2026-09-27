@@ -195,7 +195,13 @@ export function createPluginFields({
     toolQuery = "";
     render();
     detail.querySelector("h3")?.focus();
-    if (entry.remoteId && entry.tools === null && !entry.toolError && catalog?.canLoad) {
+    if (
+      entry.remoteId &&
+      entry.tools === null &&
+      entry.toolStatus !== "loaded" &&
+      !entry.toolError &&
+      catalog?.canLoad
+    ) {
       onLoadTools?.(entry.id);
     }
   }
@@ -558,7 +564,11 @@ export function createPluginFields({
             }),
           );
           add.dataset.policyUnsupported = String(
-            !capabilities || entry.available === false || (entry.remoteId && entry.tools === null),
+            !capabilities ||
+              entry.available === false ||
+              (entry.remoteId &&
+                entry.tools === null &&
+                !(entry.selectableWithoutTools && entry.toolStatus === "loaded")),
           );
           details.append(add);
         }
@@ -576,7 +586,15 @@ export function createPluginFields({
               "Tool list unavailable. Existing tool overrides are preserved; this does not mean the plugin has no tools.",
             ),
           );
-          if (onLoadTools && entry.remoteId) {
+          if (entry.selectableWithoutTools && entry.toolStatus === "loaded") {
+            details.append(
+              element(
+                "p",
+                { className: "hint" },
+                "This catalog does not list tools. Runtime startup checks the selected plugin and its access.",
+              ),
+            );
+          } else if (onLoadTools && entry.remoteId) {
             details.append(
               element(
                 "p",

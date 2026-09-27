@@ -222,6 +222,7 @@ function installationConfiguration({
   gatewayImage,
   codexImage,
   pluginDriverId,
+  pluginDriverConfiguration,
   codexServiceAccountImport,
 }) {
   const configuration = createKubernetesInstallationConfiguration({
@@ -234,7 +235,7 @@ function installationConfiguration({
   configuration.drivers.secret.configuration.authentication = authentication;
   configuration.drivers.configuration.id = "configuration-kubernetes-plugin-real";
   configuration.drivers.compute.id = "compute-kubernetes-plugin-real";
-  configuration.drivers.plugin = { id: pluginDriverId, configuration: {} };
+  configuration.drivers.plugin = { id: pluginDriverId, configuration: pluginDriverConfiguration };
   configuration.drivers.compute.configuration.network.pluginStatusProxySourceCidrs =
     pluginProofPluginStatusProxyCidrs();
   if (codexServiceAccountImport !== undefined) {
@@ -1410,7 +1411,7 @@ function createNativePluginAssertions({
 
 export async function createPluginDriverRealFixture(
   context,
-  { pluginDriverId, databaseUrl, codexCredential },
+  { pluginDriverId, databaseUrl, codexCredential, pluginDriverConfiguration = {} },
 ) {
   const kubeconfigPath = requiredPluginProofEnv("OCC_TEST_KUBERNETES_KUBECONFIG");
   const kubernetesContext = requiredPluginProofEnv("OCC_TEST_KUBERNETES_CONTEXT");
@@ -1615,6 +1616,7 @@ export async function createPluginDriverRealFixture(
           gatewayImage,
           codexImage,
           pluginDriverId,
+          pluginDriverConfiguration,
           codexServiceAccountImport,
         }),
       ),
@@ -1629,6 +1631,7 @@ export async function createPluginDriverRealFixture(
           gatewayImage,
           codexImage,
           pluginDriverId,
+          pluginDriverConfiguration,
           codexServiceAccountImport,
         }),
       ),

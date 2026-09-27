@@ -109,16 +109,14 @@ OpenClaw and unsupported-runtime stories retain the draft workflow: provision
 credentials and deploy from Agent detail. These transitions demonstrate
 presentation only; they do not prove a worker ran.
 
-The DevDay segment offers SWE, Community, Q&A, Oncall, and both standard presets.
-DevDay presets supply model defaults, templated workspace files, and four Slack
-channels. Choose or create a model Secret; configure Linear from the simulated
-curated catalog and select `openclaw/openclaw-enterprise` or `openclaw/openclaw`.
-The catalog works with any Preset, either Secret option, or no Preset. Production
-discovery requires an eligible Codex service-account token.
-The workspace story demonstrates variable-rendered and intentionally empty files.
-The Standard OpenClaw preset story previews its native harness settings.
-Preset Secret stories cover existing selection, pending metadata, denied reads,
-and an empty catalog; each leaves new-token entry available explicitly.
+DevDay presets supply model defaults, workspace files, and four Slack channels.
+Choose a model Secret, configure Linear from the simulated catalog, and select
+`openclaw/openclaw-enterprise` or `openclaw/openclaw`. The catalog works with
+any Preset or Secret choice. **Plugins Curated** exercises token-free discovery
+with simulated Driver responses; actual access remains unverified. Hosted discovery
+requires an eligible Codex service-account token. Workspace and Standard OpenClaw
+stories preview file and harness settings. Preset Secret stories cover existing,
+pending, denied, and empty results while retaining new-token entry.
 Community Agent, Q&A Agent, and Oncall Agent remain disabled in the example
 Installation YAML.
 

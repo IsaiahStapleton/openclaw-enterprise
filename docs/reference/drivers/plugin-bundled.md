@@ -18,9 +18,28 @@ drivers:
     configuration: {}
 ```
 
-Dedicated Codex supports `configuration: {}` for startup and entered-PAT
-discovery. An optional controller-side `listCatalog` reader uses a separate native
-Codex profile:
+Dedicated Codex defaults to `catalogSource: hosted`, which discovers plugins
+using a PAT or a Secret containing one. Select the hardcoded OpenAI catalog in
+trusted Installation YAML to browse without a discovery credential or provider
+catalog requests:
+
+```yaml
+drivers:
+  plugin:
+    id: codex-plugin
+    configuration:
+      catalogSource: openai-curated
+```
+
+The curated catalog currently contains Linear. It provides verified plugin
+identity and presentation metadata, but no tool inventory or account-specific
+availability. Select a plugin and set its default policy; per-tool controls are
+unavailable until the catalog supplies tool details. Startup resolves native
+metadata independently and still requires the Agent's actual authentication and
+provider access. Catalog membership does not grant access or prove execution.
+
+An optional controller-side native `listCatalog` reader for hosted mode uses a
+separate Codex profile:
 
 ```yaml
 drivers:
@@ -37,11 +56,10 @@ backend authentication, separately from the operator's ordinary profile.
 `requestTimeoutMs` defaults to 10,000 milliseconds and accepts 1–60,000.
 This reader starts native app-server, calls `plugin/list`, and may update its cache.
 
-Create Agent discovery instead hydrates entered PAT identity and reads GLOBAL
+In hosted mode, Create Agent discovery hydrates entered PAT identity and reads GLOBAL
 plugin-service pages of up to 20 entries, fetching tools on demand. Requests have
 a 15-second deadline and 4 MiB response limit. Discovery does not read Codex home,
-install plugins, or return download URLs. Saved Secret and managed ServiceAccount
-references are unsupported. Plugin details show available website, privacy-policy,
+install plugins, or return download URLs. A same-Namespace Secret reference can supply the PAT; managed ServiceAccount references are unsupported. Plugin details show available website, privacy-policy,
 and terms-of-service links; invalid or non-HTTPS URLs are omitted.
 Catalog discovery does not verify current app connections. Check service-account
 connections in administration before deployment; OCE does not gate deployment on

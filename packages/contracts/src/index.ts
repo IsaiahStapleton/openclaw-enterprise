@@ -88,6 +88,7 @@ export interface BackendSummary {
 export interface InstallationCapabilities {
   readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
   readonly pluginPolicies?: PluginPolicyCapabilities & { readonly driver: PluginDriverIdentity };
+  readonly pluginDiscovery?: { readonly credential: "required" | "none" };
 }
 
 /** Experimental authenticated client shared by related Installation Drivers. */
@@ -333,6 +334,7 @@ export interface PluginCatalogEntry {
   readonly available?: boolean;
   readonly unavailableReason?: string;
   readonly unavailableHelp?: PluginCatalogLink;
+  readonly selectableWithoutTools?: boolean;
   readonly tools: readonly PluginToolCatalogEntry[] | null;
 }
 
@@ -871,13 +873,14 @@ export interface PluginDriver extends Driver {
   /** Checks policy support without installing plugins or performing authenticated discovery. */
   validatePolicies(selections: PluginDesiredState): void;
   listCatalog(context: PluginDriverContext): Promise<readonly PluginCatalogEntry[]>;
-  /** Pre-Agent discovery uses a transient credential; neither it nor results are persisted. */
+  /** Pre-Agent discovery defaults to requiring a transient credential. Results are not persisted. */
+  readonly discoveryCredential?: "required" | "none";
   discoverCatalog?(
-    input: { readonly accessToken: string; readonly cursor?: string },
+    input: { readonly accessToken?: string; readonly cursor?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage>;
   getCatalogPlugin?(
-    input: { readonly accessToken: string; readonly pluginId: string },
+    input: { readonly accessToken?: string; readonly pluginId: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry>;
 }

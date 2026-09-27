@@ -66,6 +66,7 @@ const PluginCatalogEntrySchema = Type.Object(
     available: Type.Optional(Type.Boolean()),
     unavailableReason: Type.Optional(Type.String()),
     unavailableHelp: Type.Optional(PluginCatalogLinkSchema),
+    selectableWithoutTools: Type.Optional(Type.Boolean()),
     tools: Type.Union([
       Type.Null(),
       Type.Array(
@@ -124,6 +125,12 @@ const InstallationCapabilitiesSchema = Type.Object(
     agentProvisioning: Type.Optional(
       Type.Object(
         { executionModes: Type.Array(HarnessExecutionModeSchema, { minItems: 1, maxItems: 2 }) },
+        { additionalProperties: false },
+      ),
+    ),
+    pluginDiscovery: Type.Optional(
+      Type.Object(
+        { credential: Type.Union([Type.Literal("required"), Type.Literal("none")]) },
         { additionalProperties: false },
       ),
     ),

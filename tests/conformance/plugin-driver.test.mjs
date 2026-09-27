@@ -214,6 +214,28 @@ test("OpenClaw tool enablement overrides tool defaults without enabling a disabl
   });
 });
 
+test("Hardcoded OpenAI catalog returns selectable Linear details without provider requests", async (t) => {
+  const requests = [];
+  t.mock.method(globalThis, "fetch", (url) => {
+    requests.push(String(url));
+    throw new Error("Unexpected provider request");
+  });
+  const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
+  const page = await driver.discoverCatalog({});
+  assert.equal(page.nextCursor, null);
+  assert.equal(page.plugins.length, 1);
+  const [linear] = page.plugins;
+  assert.equal(linear.id, linearPluginId);
+  assert.equal(linear.remoteId, "plugin_asdk_app_69a089a326dc8191b32a3f2553f5be2c");
+  assert.equal(linear.tools, null);
+  assert.equal(linear.selectableWithoutTools, true);
+  assert.deepEqual(await driver.getCatalogPlugin({ pluginId: linear.remoteId }), linear);
+  assert.deepEqual(await driver.listCatalog(context("dedicated")), [linear]);
+  await assert.rejects(driver.discoverCatalog({ cursor: "invalid" }));
+  await assert.rejects(driver.getCatalogPlugin({ pluginId: "invalid" }));
+  assert.deepEqual(requests, []);
+});
+
 test("Codex curated catalog discovery projects arbitrary marketplace entries", () => {
   const catalog = codexCatalogEntries(codexCatalogFixture());
   assert.deepEqual(
