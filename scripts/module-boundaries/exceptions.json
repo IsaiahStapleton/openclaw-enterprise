@@ -41,13 +41,14 @@
       "rule": "unresolved-dynamic-import",
       "from": "apps/controller/src/composition/installation-config.ts",
       "to": "",
-      "specifier": "pathToFileURL(entryPath).href",
+      "specifier": "unknown:sha256:e7ef793d2ca83cf43fe9dc1001737b21f64cc822094cdc628ca250c48b5c8c4e",
       "kind": "dynamic-import",
       "typeOnly": false,
       "bindings": ["*"],
       "owner": "Driver package composition",
       "reason": "The installed Driver loader validates configured package identity, trusted root and entrypoint at runtime; its target is deliberately not a statically enumerable workspace import.",
-      "removeWhen": "Remove this exception if the supported installed Driver loader is removed or replaced by static registration."
+      "removeWhen": "Remove this exception if the supported installed Driver loader is removed or replaced by static registration.",
+      "loaderIdentity": "loader:sha256:be4f7eadc000534007bfb3e207c2d92873152b92340a02a9863b9d8868478a2d"
     },
     {
       "rule": "cross-provider-implementation",
@@ -67,9 +68,9 @@
     },
     {
       "rule": "http-to-provider",
-      "from": "apps/controller/src/index.ts",
+      "from": "apps/controller/src/http/errors.ts",
       "to": "apps/controller/src/drivers/configuration/kubernetes/index.ts",
-      "specifier": "./drivers/configuration/kubernetes/index.ts",
+      "specifier": "../drivers/configuration/kubernetes/index.ts",
       "kind": "import",
       "typeOnly": false,
       "bindings": ["value:ConfigurationOwnershipError", "value:ConfigurationValidationError"],
@@ -93,6 +94,23 @@
       ],
       "owner": "Repository ports and mutation composition",
       "reason": "The OCC service imports repository contracts and its default in-memory store from the same persistence module.",
+      "removeWhen": "Move repository and transaction contracts into neutral ports, narrow this entry to any remaining store import, and remove it when default store selection moves to composition."
+    },
+    {
+      "rule": "domain-to-implementation",
+      "from": "packages/occ/src/index.ts",
+      "to": "packages/occ/src/state/platform-state.ts",
+      "specifier": "./state/platform-state.ts",
+      "kind": "import",
+      "typeOnly": true,
+      "bindings": [
+        "type:PlatformOperation",
+        "type:PlatformReadView",
+        "type:PlatformStateStore",
+        "type:PlatformUnitOfWork"
+      ],
+      "owner": "Repository ports and mutation composition",
+      "reason": "The OCC service imports repository contracts and its default in-memory store from the same persistence module. This separately tracked edge imports types only.",
       "removeWhen": "Move repository and transaction contracts into neutral ports, narrow this entry to any remaining store import, and remove it when default store selection moves to composition."
     },
     {
@@ -174,7 +192,7 @@
       "specifier": "../preset-variables.mjs",
       "kind": "import",
       "typeOnly": false,
-      "bindings": ["value:renderPresetTemplate"],
+      "bindings": ["value:renderPresetTemplate", "value:validatePresetTemplate"],
       "owner": "Console asset delivery",
       "reason": "This browser URL is served by the explicit Console asset map from the contracts package; it is not a file beside the consuming browser module.",
       "removeWhen": "Remove this exception when browser asset resolution is represented in the analyzer or the import moves to a statically resolved module."
@@ -235,6 +253,18 @@
     {
       "rule": "domain-to-implementation",
       "from": "packages/occ/src/index.ts",
+      "to": "packages/occ/src/state/controller-work.ts",
+      "specifier": "./state/controller-work.ts",
+      "kind": "import",
+      "typeOnly": true,
+      "bindings": ["type:DeploymentStatusResult"],
+      "owner": "Work status projection",
+      "reason": "OCC projects the existing Work record into deployment and provisioning status using contracts and pure helpers currently located under State. This separately tracked edge imports types only.",
+      "removeWhen": "Move shared Work contracts and status projections into neutral ports and update this import."
+    },
+    {
+      "rule": "domain-to-implementation",
+      "from": "packages/occ/src/index.ts",
       "to": "packages/occ/src/state/postgres-work-queue.ts",
       "specifier": "./state/postgres-work-queue.ts",
       "kind": "import",
@@ -242,6 +272,18 @@
       "bindings": ["type:ClaimedWork", "value:WorkClaimLostError"],
       "owner": "Work claim lifecycle",
       "reason": "OCC handles lost work claims using the existing shared error constructor and claim type exposed by the PostgreSQL queue module.",
+      "removeWhen": "Move the claim contract and shared lost-claim error into neutral Work ports and update this import."
+    },
+    {
+      "rule": "domain-to-implementation",
+      "from": "packages/occ/src/index.ts",
+      "to": "packages/occ/src/state/postgres-work-queue.ts",
+      "specifier": "./state/postgres-work-queue.ts",
+      "kind": "import",
+      "typeOnly": true,
+      "bindings": ["type:ClaimedWork"],
+      "owner": "Work claim lifecycle",
+      "reason": "OCC handles lost work claims using the existing shared error constructor and claim type exposed by the PostgreSQL queue module. This separately tracked edge imports types only.",
       "removeWhen": "Move the claim contract and shared lost-claim error into neutral Work ports and update this import."
     },
     {
