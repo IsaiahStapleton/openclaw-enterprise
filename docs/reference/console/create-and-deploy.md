@@ -1,36 +1,31 @@
 # Create and deploy Agents in the console
 
-Use the [platform console](../console.md) to create an Agent and start first-time
-provisioning for supported Dedicated runtimes. On an existing Kubernetes Installation,
-start with [production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
-you need a ready Namespace and configured Secret storage. New tokens require
-Secret creation permission. First-time provisioning grants access to accepted
-Secret references; ordinary draft creation also requires permission to grant
-Agent key access. After deployment, [verify this same
-Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
+Use the [platform console](../console.md) to create an Agent and provision supported
+Dedicated runtimes. On an existing Kubernetes Installation, prepare a ready Namespace
+and Secret storage as described in [production prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace).
+New tokens require Secret creation permission. Provisioning grants access to accepted
+Secret references; ordinary drafts also require permission to grant Agent key access.
+After deployment, [verify the same Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
 The [local walkthrough](../../guides/first-agent.md) creates a separate Agent.
 
 ## Create an Agent
 
-Embedded and Dedicated starters enable native Control UI at
-`http://127.0.0.1:18789` and `http://localhost:18789`. Compute renders gateway
-authentication from Installation trust; starters supply no gateway token.
-Do not expose the gateway publicly. **Open native admin UI** requires
-[native admin setup](../../guides/deploy/native-admin.md): trusted-proxy authentication
-and the exact Agent HTTPS origin. Loopback origins alone are insufficient.
-Presets and edited Configuration JSON retain their settings.
+Starters enable native Control UI at `http://127.0.0.1:18789` and
+`http://localhost:18789`. Compute renders gateway authentication from Installation
+trust; starters supply no gateway token. Do not expose the gateway publicly.
+**Open native admin UI** requires [native admin setup](../../guides/deploy/native-admin.md):
+trusted-proxy authentication and the exact Agent HTTPS origin. Loopback origins alone
+are insufficient. Presets and edited Configuration JSON retain their settings.
 
 1. Sign in, select the intended Namespace, open **Agents**, and select
    **Create Agent**.
 2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
    **Use Preset**. Review defaults and choose an existing or new model Secret.
-   The form opens with editable settings.
-   Select **Start with default Preset** to load the installed `default-codex` copy.
+   The form is editable. **Start with default Preset** loads the installed `default-codex` copy.
 3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
    **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
-   **Codex** and also offers **OpenClaw**; Anthropic currently offers only
-   **OpenClaw**. **Execution mode** follows the harness: Dedicated for Codex,
-   Embedded for OpenClaw.
+   **Codex** and also offers **OpenClaw**; Anthropic offers **OpenClaw** only.
+   **Execution mode** follows the harness: Dedicated for Codex, Embedded for OpenClaw.
    With OpenAI and Codex, choose **OpenAI API key** or **Service Accounts** under
    **Authentication method**. OpenClaw uses the selected provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
@@ -41,30 +36,28 @@ Presets and edited Configuration JSON retain their settings.
    Choose a model from the starter list or select **Enter model ID manually**.
    The list appears before credential entry without a preselected model. Confirm
    credential and runtime support; credentials stay outside Configuration.
-4. Confirm your Installation has access to the chosen model. Primary and fallback
-   models must use the same supported provider and Harness. For custom settings,
-   open **Advanced settings**. Selection changes preserve unrelated JSON edits;
-   **Reset template** replaces them.
-5. Optional: under **Repository access**, select up to 16 repositories approved
-   for this Namespace. Select one authorization level shared by every chosen
-   repository. Kubernetes supports Codex (Dedicated) or OpenClaw (Embedded),
-   without a Sandbox Driver. Use Codex for Slack. Leave repositories unselected
-   for an Agent without repository access.
+4. Confirm Installation access to the chosen model. Primary and fallback models
+   must use the same supported provider and Harness. Open **Advanced settings** for
+   custom settings. Selection changes preserve unrelated JSON edits; **Reset template**
+   replaces them.
+5. Under **Repository access**, optionally select up to 16 repositories approved
+   for this Namespace and one authorization level shared by all. Kubernetes supports
+   Codex (Dedicated) or OpenClaw (Embedded), without a Sandbox Driver. Use Codex
+   for Slack. Leave repositories unselected for an Agent without repository access.
 
 6. If you need Slack, use OpenAI with the **Codex** harness and its channel card.
-   Each token menu selects a readable Namespace Secret or **Create new Secret...**.
-   New Secrets persist even if you cancel Agent creation.
+   Select a readable Namespace Secret or **Create new Secret...** for each token.
+   New Secrets persist if you cancel creation.
    **Apply channel settings** stages settings and bindings into the form;
    cancelling the drawer discards its selections.
    Channel settings, plugin entries, and selected Secret bindings are saved with
    the Configuration when you select **Create Agent**. You can also supply Slack
    credentials from the Agent's **Credentials** tab after creation.
-7. Optionally configure plugins as described below, or open **Advanced settings**
-   to review Configuration JSON and **Workspace files**. Preset workspace
-   overrides prefill their matching fields; omitted files use OpenClaw defaults.
-   Edit any of the four files, keep the text to submit that default, or clear a
-   field to create an empty file. The browser submits LF newlines. See
-   [initial contents](../agents.md#initial-contents-at-creation) for limits.
+7. Configure plugins as described below, or open **Advanced settings** to review
+   Configuration JSON and **Workspace files**. Preset overrides prefill matching
+   fields; omitted files use OpenClaw defaults. Edit any of the four files, keep the text
+   to submit that default, or clear a field to create an empty file. The browser
+   submits LF newlines. See [initial contents](../agents.md#initial-contents-at-creation) for limits.
 8. Select **Create Agent**. Supported Dedicated runtimes submit inline Configuration,
    Secret references, Agent inputs, repositories, and workspace files for provisioning.
    Console follows the job through resource creation, credential provisioning, and
@@ -90,8 +83,8 @@ inventory and account access are unknown. In hosted mode, select **Service Accou
 (optional)**. **Previous page** and **Next page** fetch hosted pages; **Filter this
 page** filters locally. PAT catalog search is unavailable.
 Select a plugin to load tools, then **Add**. Use toggles and **Tool policy** for
-overrides. **Configured plugins** includes selections from other pages. **Done**
-closes the modal; **Create Agent** saves changes.
+overrides. **Configured plugins** includes selections from other pages. **Done** closes the modal;
+**Create Agent** saves changes.
 
 [Discovery](../../flows/agent-plugins.md#credential-scoped-discovery) requires
 permission to use any selected Secret. The server reads its value without returning
