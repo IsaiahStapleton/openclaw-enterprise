@@ -190,7 +190,11 @@ and verifies the bootstrap Namespace, RuntimeClass, Agent Sandbox API,
 deployment Gateway, operator label, workspace ServiceAccount, and actual
 matching Workspace through the Gateway API. It then creates another
 OCC Namespace and verifies that the Driver applies the same ServiceAccount and
-creates its matching Workspace without another Helm release:
+creates its matching Workspace without another Helm release. In that
+Namespace it uses the checkout-local `occ` CLI to register a synthetic `openai`
+credential source, reads its live `ready` status, finds the matching provider in
+the Namespace's OpenShell Workspace, creates a `credential_source` IAM Role, and
+deletes the source, which removes the provider:
 
 ```sh
 OCC_TEST_DEV_UP_OPENSHELL_REAL=1 \
@@ -206,8 +210,10 @@ It creates unique cluster, state, API, and Kubernetes port names and removes
 only those resources. Missing selected prerequisites fail.
 
 This case proves development orchestration, the two real charts, Driver-owned
-operator resource reconciliation, and Gateway Workspace creation. It does not
-create an Agent or Sandbox. The
+operator resource reconciliation, Gateway Workspace creation, and the
+credential-source CLI and API path. The synthetic key proves no model
+authentication. It does not create an Agent or Sandbox; for the manual Agent
+walkthrough, see [Use a credential source on the local OpenShell profile](../guides/deploy/openshell-credential-sources.md). The
 `OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` real Sandbox Driver case remains the
 Agent-level proof that the ordinary dedicated Codex workflow rejects unsupported
 Secret projection without creating a Sandbox or Agent Pod.

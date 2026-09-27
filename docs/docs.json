@@ -766,6 +766,7 @@
               }
             ],
             "hidden": [
+              "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
               "design/access",

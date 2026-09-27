@@ -73,8 +73,10 @@ bound or deployed.
 Set the Agent's binding to
 `{ "method": "credential_source", "sourceId": "cs_…" }`. The caller needs
 `credential_source:operate` on the exact source. Deployment also requires the
-Agent's service principal to have `operate` on it; the principal needs no
-permission on the underlying Secret. The worker rechecks both grants before it
+Agent's service principal to have `operate` on it; grant it with a
+[Namespace IAM](authorization.md#manage-namespace-policy) Role and an exact
+`credential_source` AccessBinding. The principal needs no permission on the
+underlying Secret. The worker rechecks both grants before it
 provisions the revision. See [Harness execution](harness-execution.md#harness-authentication)
 for the supported topology.
 

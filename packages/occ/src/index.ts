@@ -5698,6 +5698,7 @@ export class OpenClawController {
       kind !== "agent" &&
       kind !== "agent_revision" &&
       kind !== "configuration" &&
+      kind !== "credential_source" &&
       kind !== "preset" &&
       kind !== "secret" &&
       kind !== "service_account"
@@ -5780,6 +5781,17 @@ export class OpenClawController {
       if (resourceKind === "secret") {
         if ((await state.secrets.findSecret(namespaceId, resourceId)) === undefined) {
           throw new ScopeViolationError("The IAM target Secret does not belong to the Namespace.");
+        }
+        return;
+      }
+      if (resourceKind === "credential_source") {
+        if (
+          (await state.credentialSources.findCredentialSource(namespaceId, resourceId)) ===
+          undefined
+        ) {
+          throw new ScopeViolationError(
+            "The IAM target credential source does not belong to the Namespace.",
+          );
         }
         return;
       }

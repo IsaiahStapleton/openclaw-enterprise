@@ -119,6 +119,7 @@ async function fixture(options = {}) {
       {
         id: "source-administrator-role",
         permissions: [
+          { action: "administer", resourceKind: "installation" },
           ...["create", "read", "delete"].map((action) => ({ action, resourceKind: "namespace" })),
           ...["create", "read", "update", "delete"].map((action) => ({
             action,
@@ -476,6 +477,47 @@ test("deploy admission freezes the source and requires the Agent principal to op
     sourceType: "openai",
     loginMode: "api_key",
   });
+});
+
+test("Namespace IAM delegates operate on an exact credential source to an Agent principal", async () => {
+  const { controller, dedicatedAgent, makeReady, modelSecret, namespace } = await fixture();
+  await makeReady();
+  const secret = await modelSecret();
+  const source = await controller.createCredentialSource(administrator, {
+    namespaceId: namespace.id,
+    name: "openai",
+    type: "openai",
+    secrets: { api_key: secret.ref },
+  });
+  const agent = await dedicatedAgent();
+  // Operators grant deployment access through the Namespace IAM API, so the policy surface
+  // must accept credential_source Roles and exact source targets like other Namespace kinds.
+  const role = await controller.createIAMRole(administrator, {
+    namespaceId: namespace.id,
+    name: "Use a credential source",
+    permissions: [{ action: "operate", resourceKind: "credential_source" }],
+  });
+  const binding = await controller.createIAMAccessBinding(administrator, {
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: agent.servicePrincipalId,
+    roleId: role.id,
+    resourceKind: "credential_source",
+    resourceId: source.id,
+  });
+  assert.equal(binding.resourceId, source.id);
+  // A target outside the Namespace's credential sources is refused before policy is written.
+  await assert.rejects(
+    controller.createIAMAccessBinding(administrator, {
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: agent.servicePrincipalId,
+      roleId: role.id,
+      resourceKind: "credential_source",
+      resourceId: "cs_00000000-0000-4000-8000-000000000000",
+    }),
+    ScopeViolationError,
+  );
 });
 
 test("a selected Credential Gateway rejects Secret-backed Harness authentication", async () => {

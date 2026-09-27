@@ -150,6 +150,8 @@ endpoint and selects both the OpenShell Sandbox and the
 [OpenShell Credential Gateway](../../reference/drivers/openshell-credential-gateway.md),
 bound to the runtime image's native Codex executable. Agents in this profile
 must authenticate through a [credential source](../../reference/credential-sources.md).
+To register a key and bind it to an Agent in this profile, follow
+[Use a credential source on the local OpenShell profile](openshell-credential-sources.md).
 
 In Compose control-plane mode, the API uses its existing loopback Compose
 publication and the worker authenticates with the generated kubeconfig. The

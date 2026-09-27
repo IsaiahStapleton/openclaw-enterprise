@@ -1985,30 +1985,22 @@ async function prepareProductionInstallation(
   assert.equal(runtimeCredentials.status, 200, JSON.stringify(runtimeCredentials.error));
   assert.equal(runtimeCredentials.data.transportConfigured, true);
   const transport = await readAgentTransportCredentials(gatewayPlacement, agent.data.id);
-  const {
-    rows: [principal],
-  } = await observerPool.query(
-    "SELECT service_principal_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
-    [namespaceId, agent.data.id],
-  );
   // Deployment admission and the worker both require the Agent principal to operate the
-  // exact source; it receives no permission on the underlying Secret.
-  const roleId = `openshell-source-operate-${randomUUID()}`;
-  await observerPool.query(
-    "INSERT INTO occ.iam_roles (id, namespace_id, name, permissions) VALUES ($1, $2, $3, $4::jsonb)",
-    [
-      roleId,
-      namespaceId,
-      "Exact model credential source operate",
-      JSON.stringify([{ action: "operate", resourceKind: "credential_source" }]),
-    ],
-  );
-  await observerPool.query(
-    `INSERT INTO occ.iam_access_bindings
-       (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
-     VALUES ($1, $2, $3, $4, 'credential_source', $5)`,
-    [randomUUID(), namespaceId, principal.service_principal_id, roleId, modelSource.data.id],
-  );
+  // exact source; it receives no permission on the underlying Secret. The grant goes through
+  // the Namespace IAM API so its credential_source policy support is part of the proof.
+  const sourceRole = await request("POST", `/namespaces/${namespaceId}/iam/roles`, {
+    name: "Exact model credential source operate",
+    permissions: [{ action: "operate", resourceKind: "credential_source" }],
+  });
+  assert.equal(sourceRole.status, 201, JSON.stringify(sourceRole.error));
+  const sourceBinding = await request("POST", `/namespaces/${namespaceId}/iam/access-bindings`, {
+    subjectKind: "identity",
+    subjectId: agent.data.servicePrincipalId,
+    roleId: sourceRole.data.id,
+    resourceKind: "credential_source",
+    resourceId: modelSource.data.id,
+  });
+  assert.equal(sourceBinding.status, 201, JSON.stringify(sourceBinding.error));
   const deployed = await request(
     "POST",
     `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
