@@ -108,15 +108,9 @@ the full commit; invalid or absent metadata remains unknown.
 readable Agents in the selected Namespace.
 `packages/occ/src/index.ts:OpenClawController.getAgentRuntimeImages` authorizes
 exact Agent read, resolves its active revision, then calls its Compute Driver.
-Docker follows attached immutable images. Kubernetes reads revision-owned Pods
-and binds provenance to Pod/container identity, with a two-second metadata deadline.
-The Dockerfile bakes Enterprise metadata into `build.json`;
-`scripts/build-runtime-assets.mjs` records upstream OpenClaw in `provenance.json`.
-Both live under `/opt/oce/runtime/`; Drivers expose separate commits.
-
-Navigation preserves the flag and rejects stale responses; removing it stops
-these reads. Missing provenance and failures remain explicit. The
-[Compute contract](../reference/drivers/compute.md) defines inspection scope.
+The [Compute contract](../reference/drivers/compute.md) owns workload inspection
+and Enterprise/OpenClaw provenance. Navigation preserves `debug=true`; removing it
+stops reads. Stale responses are rejected; missing provenance stays explicit.
 
 ### 2. Resolve the session before private reads
 
@@ -183,12 +177,10 @@ Preset Secret takes precedence over an entered token. OCC reads the
 Secret server-side. Pagination is upstream; filtering is local. Selecting a plugin loads tools.
 Credential, provider, and Harness changes clear results and invalidate pending reads.
 
-`create.mjs:MODEL_CHOICES` supplies static provider lists before credentials,
-without discovery requests or account verification. Manual entry remains available;
-Presets retain model/authentication.
-Credential edits preserve selection; Provider/authentication-method changes reset it.
-Model edits preserve transport and Codex plugin settings. Provider/Harness changes
-regenerate them, retaining unrelated JSON; reset restores the starter.
+`create.mjs:MODEL_CHOICES` supplies unauthenticated static model lists and manual
+entry. Provider/Harness changes reset incompatible settings while retaining
+unrelated JSON. The [creation reference](../reference/console/create-and-deploy.md)
+owns selection and credential behavior.
 
 `configurationTemplate` enables Control UI with loopback origins on port 18789.
 Compute supplies gateway authentication; Presets replace the starter unchanged.
@@ -217,12 +209,11 @@ Ordinary drafts post `{kind: "agent", values, secretBindings}` to
 OCC stages all four workspace textareas, including unchanged/empty values, outside
 Agent/Configuration for [workspace setup](workspace-files.md).
 
-`create.mjs:grantConfigurationSecretAccess` grants exact Secret `operate` through
-Namespace IAM writes for final same-Namespace `env` bindings only. Failure retains
-the Agent: **Retry credential access** rereads grants without duplication; its link
-supports manual recovery. Failed Agent writes retain Configuration ID and lock
-JSON/Harness for explicit reuse. Writes never retry automatically. Drafts admit no
-revision, validate no plugin catalog, and start no runtime.
+`create.mjs:grantConfigurationSecretAccess` grants exact Secret `operate` for final
+same-Namespace `env` bindings. Failure retains the Agent; **Retry credential access**
+rereads grants without duplication. Failed Agent writes retain Configuration ID
+and lock JSON/Harness for explicit reuse. Writes never retry automatically; drafts
+admit no revision and start no runtime.
 
 `agents/harness-auth.mjs` edits bindings and renders
 [Secret identity summaries](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
@@ -230,21 +221,15 @@ without fetching values.
 
 ### 4–6. Edit the Agent and access runtime files
 
-[Console Agent editing and runtime requests](platform-console/agent-editing.md)
-traces draft/revision rendering, channel changes, credential provisioning,
-workspace reads/writes, stopping, and deletion. Each request returns through the
-response-ordering checks below.
+[Agent editing](platform-console/agent-editing.md) traces revision rendering,
+channels, credentials, workspace files, stopping, and deletion. Responses follow
+the ordering checks below.
 
-`apps/controller/src/console/channels/slack.mjs:supportSlack` rejects shapes the
-editor cannot preserve; [Agent editing](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
-owns those limits and DM policy editing. `updatedSlack` preserves untouched
-policies and reply overrides. New Slack blocks receive group allowlist access
-and `replyToModeByChatType: { channel: "all" }`.
-The API stores native values unchanged; admission snapshots them into the
-AgentRevision. Kubernetes Compute's
-`apps/controller/src/drivers/compute/kubernetes/index.ts:prepareRevision` carries
-the channel block through `kubernetesGatewayConfigurationDocument` into the
-Gateway's `openclaw.json` ConfigMap without adding Slack reply defaults.
+`channels/slack.mjs:supportSlack` rejects shapes the editor cannot preserve;
+`updatedSlack` preserves untouched policies and reply overrides. The
+[editing flow](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
+owns DM policies and channel-only reply defaults. Admission snapshots native values;
+Kubernetes `prepareRevision` carries them into `openclaw.json` without adding defaults.
 
 `apps/controller/src/console/agents/detail.mjs:renderAgentDetail` registers a
 handler for tab-only navigation with `console.mjs:loadPage`. Within one Agent, Namespace, and revision, tabs and browser history replace only
