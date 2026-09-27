@@ -1971,6 +1971,20 @@ export const scenarios = {
     description:
       "Search Slack token Secrets by name or ID; options and selections show names only. Use arrow keys and Enter to select, and Escape to retain the current binding. Metadata is simulated within this Namespace.",
   },
+  slackSecretNameCollision: {
+    group: "Components/Channels",
+    name: "Slack Secret action name collision",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    extraSecrets: [
+      { id: "sec_story_create_name", name: "Create new Secret..." },
+      { id: "sec_story_none_name", name: "No Secret bound" },
+      { id: "sec_story_bound_name", name: "Bound Secret" },
+    ],
+    actions: [click("Edit Slack")],
+    description:
+      "Open the bot token selector to compare Secret names with matching picker actions. Real Secret names remain unchanged and conflicting actions have a qualifier.",
+  },
   slackCreateSecretModal: {
     group: "Components/Channels",
     name: "Slack create Secret modal",

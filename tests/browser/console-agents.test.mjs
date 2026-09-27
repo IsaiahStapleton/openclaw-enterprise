@@ -3582,6 +3582,69 @@ test("Agent credentials choose existing Secrets for harness authentication", asy
   );
 });
 
+test("Agent credential Secret picker distinguishes action labels from Secret names", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Secret action names", { ready: true });
+  const original = await fixture.createSecret(namespace.id, "Hidden binding", "original-value");
+  const bound = await fixture.createSecret(namespace.id, "Bound Secret", "bound-value");
+  await fixture.createSecret(namespace.id, "No Secret bound", "none-value");
+  const create = await fixture.createSecret(namespace.id, "Create new Secret...", "create-value");
+  await fixture.createSecret(namespace.id, "Create new Secret... (action)", "action-value");
+  await fixture.createSecret(
+    namespace.id,
+    "Create new Secret... (action)  (action)",
+    "whitespace-value",
+  );
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Action Name Agent",
+    nativeValues("secret-action-names"),
+    { harnessAuth: { method: "api_key", source: original.ref }, executionMode: "dedicated" },
+  );
+  const { page } = await newPage(t, fixture);
+  await page.route(`**/namespaces/${namespace.id}/secrets`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data = body.data.filter((secret) => secret.id !== original.id);
+    await route.fulfill({ response, json: body });
+  });
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "credentials");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Action Name Agent" }).waitFor();
+  const apiKey = page.getByLabel("API key Secret", { exact: true });
+  await apiKey.click();
+  await page.getByRole("option", { name: "Bound Secret (current binding)", exact: true }).waitFor();
+  await page.getByRole("option", { name: "Bound Secret", exact: true }).click();
+  assert.equal(await apiKey.inputValue(), bound.name);
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents/${agent.id}`) &&
+      response.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save authentication source" }).click();
+  assert.equal((await saved).status(), 200);
+  const current = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
+  assert.deepEqual(current.data.harnessAuth.source, bound.ref);
+
+  await page.getByLabel("Authentication source").selectOption("codex_pat");
+  const token = page.getByLabel("Service account token Secret", { exact: true });
+  await token.click();
+  await page.getByRole("option", { name: "No Secret bound (no binding)", exact: true }).waitFor();
+  await page.getByRole("option", { name: "No Secret bound", exact: true }).waitFor();
+  await page
+    .getByRole("option", { name: "Create new Secret... (action) (action) (action)", exact: true })
+    .waitFor();
+  await page.getByRole("option", { name: "Create new Secret...", exact: true }).click();
+  assert.equal(await token.inputValue(), create.name);
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  await token.press("ArrowDown");
+  await page
+    .getByRole("option", { name: "Create new Secret... (action) (action) (action)", exact: true })
+    .click();
+  await page.getByRole("dialog", { name: "Create harness authentication Secret" }).waitFor();
+});
+
 test("Agent credential Secret picker searches, validates, and preserves duplicate create input", async (t) => {
   const secretDriver = createTestSecretDriver();
   const fixture = await createConsoleAppFixture(t, { secretDriver });

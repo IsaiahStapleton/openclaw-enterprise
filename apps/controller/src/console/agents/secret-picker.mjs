@@ -212,16 +212,27 @@ export function createSecretReferenceField({
     const selectedSecretId = currentSecretId();
     const readableSelected = secrets.find((secret) => secret.id === selectedSecretId);
     const options = [];
+    // Accessible names collapse whitespace, so compare synthetic labels the same way.
+    const normalizeLabel = (label) => label.trim().replace(/\s+/g, " ");
+    const usedLabels = new Set(secrets.map((secret) => normalizeLabel(secretOptionLabel(secret))));
+    function syntheticLabel(label, qualifier) {
+      let candidate = label;
+      while (usedLabels.has(normalizeLabel(candidate))) {
+        candidate += ` (${qualifier})`;
+      }
+      usedLabels.add(normalizeLabel(candidate));
+      return candidate;
+    }
     if (selectedSecretId === null) {
       options.push({
         kind: "none",
-        label: noSecretLabel,
+        label: syntheticLabel(noSecretLabel, "no binding"),
         searchText: noSecretLabel,
       });
     } else if (readableSelected === undefined) {
       options.push({
         kind: "current",
-        label: "Bound Secret",
+        label: syntheticLabel("Bound Secret", "current binding"),
         searchText: selectedSecretId,
       });
     }
@@ -235,7 +246,7 @@ export function createSecretReferenceField({
     }
     options.push({
       kind: "create",
-      label: "Create new Secret...",
+      label: syntheticLabel("Create new Secret...", "action"),
       searchText: "create new secret",
     });
     return options;
