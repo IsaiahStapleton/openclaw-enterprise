@@ -125,7 +125,7 @@ function nonAuthWriteRequests(requests) {
 }
 
 function secretOptionLabel(secret) {
-  return `${secret.name} · ${secret.id}`;
+  return secret.name;
 }
 
 async function selectSecret(scope, label, secret, options = {}) {
@@ -715,7 +715,7 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await page.getByText('"marker": "create"').waitFor();
   // The summary identifies its Secret, while credential values remain private.
   const boundSecret = page.getByRole("link", {
-    name: `${secret.name} · ${secret.id}`,
+    name: secret.name,
     exact: true,
   });
   await boundSecret.waitFor();
@@ -795,7 +795,11 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
   const savedSecretInput = page.getByLabel("API key Secret");
   assert.equal(await savedSecretInput.evaluate((node) => node.tagName), "INPUT");
-  assert.ok((await savedSecretInput.inputValue()).endsWith(secret.id));
+  await page.waitForFunction(
+    (name) => globalThis.document.querySelector("#harness-auth-secret")?.value === name,
+    secret.name,
+  );
+  assert.equal(await savedSecretInput.inputValue(), secret.name);
   const deniedBinding = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${created.data.id}` &&
@@ -3479,7 +3483,7 @@ test("Agent detail preserves admitted revision history while draft edits change 
   await page.getByLabel("AgentRevision").selectOption(first.revision.id);
   await page
     .getByRole("link", {
-      name: `Auth Revisioned Agent · ${agent.harnessAuth.source.id}`,
+      name: "Auth Revisioned Agent",
       exact: true,
     })
     .waitFor();
@@ -3560,6 +3564,22 @@ test("Agent credentials choose existing Secrets for harness authentication", asy
     await page.getByLabel("API key Secret").evaluate((node) => node.value),
     secretOptionLabel(replacementSecret),
   );
+
+  await page.route(`**/namespaces/${namespace.id}/secrets`, async (route) => {
+    await route.fulfill({ status: 403, contentType: "application/json", body: "{}" });
+  });
+  await page.reload();
+  await page.getByText(/Secrets unavailable/).waitFor();
+  const unreadableSecret = page.getByLabel("API key Secret", { exact: true });
+  assert.equal(await unreadableSecret.inputValue(), "Bound Secret");
+  await unreadableSecret.click();
+  await page.getByRole("option", { name: "Bound Secret", exact: true }).waitFor();
+  assert.equal(
+    await page
+      .getByRole("link", { name: /View harness authentication Secret metadata/ })
+      .getAttribute("href"),
+    `/namespaces/${namespace.id}/secrets/${replacementSecret.id}`,
+  );
 });
 
 test("Agent credential Secret picker searches, validates, and preserves duplicate create input", async (t) => {
@@ -3595,6 +3615,8 @@ test("Agent credential Secret picker searches, validates, and preserves duplicat
   await login(page, fixture, url.pathname + url.search);
   await page.getByRole("heading", { name: "Combobox Agent" }).waitFor();
   const apiKeySecret = page.getByLabel("API key Secret", { exact: true });
+  await apiKeySecret.fill(keyboardSecret.id);
+  await page.getByRole("option", { name: keyboardSecret.name, exact: true }).waitFor();
   await apiKeySecret.fill("keyboard");
   const keyboardOption = page.getByRole("option", {
     name: secretOptionLabel(keyboardSecret),
@@ -6577,9 +6599,11 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
   await page.getByLabel("Service account token Secret").waitFor();
   assert.equal(await page.getByLabel("Authentication source").inputValue(), "codex_pat");
-  assert.ok(
-    (await page.getByLabel("Service account token Secret").inputValue()).endsWith(secret.id),
+  await page.waitForFunction(
+    (name) => globalThis.document.querySelector("#harness-auth-secret")?.value === name,
+    secret.name,
   );
+  assert.equal(await page.getByLabel("Service account token Secret").inputValue(), secret.name);
   const patched = page.waitForResponse(
     (response) =>
       response.url().endsWith(`/agents/${created.data.id}`) &&
@@ -7030,9 +7054,9 @@ test("password Preset can reuse an existing Secret and retry an uncertain grant 
   await page.getByLabel("Variable: name", { exact: true }).fill("Existing Secret Agent");
   await page.getByLabel("Variable: model", { exact: true }).fill("gpt-5.1");
   await page.getByLabel("Secret source for modelSecret", { exact: true }).selectOption("existing");
-  await page
-    .getByLabel("Existing Secret for modelSecret", { exact: true })
-    .selectOption(modelSecret.id);
+  const existingSecret = page.getByLabel("Existing Secret for modelSecret", { exact: true });
+  await existingSecret.selectOption(modelSecret.id);
+  assert.equal(await existingSecret.locator("option:checked").textContent(), modelSecret.name);
   await page.getByRole("button", { name: "Use Preset" }).click();
   await page
     .getByText("Preset authentication: API key · Secret configured", { exact: true })
@@ -7999,13 +8023,11 @@ test("Secret summaries retain revision bindings and distinguish unreadable metad
   const requests = apiRequests(page, fixture.origin);
   const url = detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
   await login(page, fixture, url.pathname + url.search, limited.credentials);
-  await page
-    .getByRole("link", { name: `Auth Bound Secrets · ${agent.harnessAuth.source.id}`, exact: true })
-    .waitFor();
-  assert.equal(await page.getByText(`Draft model · ${replacement.id}`, { exact: true }).count(), 0);
+  await page.getByRole("link", { name: "Auth Bound Secrets", exact: true }).waitFor();
+  assert.equal(await page.getByText("Draft model", { exact: true }).count(), 0);
   await page.screenshot({ path: join(artifacts, "bound-harness-revision.png"), fullPage: true });
   await page.getByRole("button", { name: "Channels", exact: true }).click();
-  await page.getByRole("link", { name: `Revision Slack app · ${app.id}`, exact: true }).waitFor();
+  await page.getByRole("link", { name: "Revision Slack app", exact: true }).waitFor();
   await page
     .getByText(`Bound Secret · ${bot.id} · Metadata unavailable (access denied)`, { exact: true })
     .waitFor();
@@ -8039,5 +8061,5 @@ test("Secret summaries retain revision bindings and distinguish unreadable metad
   await page.getByText("No Secret bound", { exact: true }).first().waitFor();
   assert.equal(await page.getByText("No Secret bound", { exact: true }).count(), 2);
   await page.getByRole("button", { name: "Configuration", exact: true }).click();
-  await page.getByRole("link", { name: `Draft model · ${replacement.id}`, exact: true }).waitFor();
+  await page.getByRole("link", { name: "Draft model", exact: true }).waitFor();
 });

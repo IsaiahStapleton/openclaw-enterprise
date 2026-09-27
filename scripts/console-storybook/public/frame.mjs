@@ -77,7 +77,8 @@ try {
           option = [...(menu?.querySelectorAll('[role="option"]') ?? [])].find((item) =>
             action.value === "__openclaw_create_secret__"
               ? item.textContent.includes("Create new Secret")
-              : item.textContent.includes(action.value),
+              : !item.classList.contains("secret-typeahead-create") &&
+                item.textContent !== "Bound Secret",
           );
           if (option) {
             break;

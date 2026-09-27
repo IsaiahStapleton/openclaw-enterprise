@@ -107,7 +107,7 @@ function credentialLink(href, label) {
 }
 
 function secretOptionLabel(secret) {
-  return `${secret.name} · ${secret.id}`;
+  return secret.name;
 }
 
 function credentialMutationError(error) {
@@ -205,9 +205,7 @@ export function createSecretReferenceField({
     if (selectedSecretId === null) {
       return "";
     }
-    return readableSelected === undefined
-      ? `Bound Secret · ${selectedSecretId}`
-      : secretOptionLabel(readableSelected);
+    return readableSelected === undefined ? "Bound Secret" : secretOptionLabel(readableSelected);
   }
 
   function allSecretOptions() {
@@ -223,7 +221,7 @@ export function createSecretReferenceField({
     } else if (readableSelected === undefined) {
       options.push({
         kind: "current",
-        label: `Bound Secret · ${selectedSecretId}`,
+        label: "Bound Secret",
         searchText: selectedSecretId,
       });
     }
