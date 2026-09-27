@@ -2515,6 +2515,10 @@ test("invalidates unknown-load exceptions when destructured sources change", asy
       `const get = () => process.env; const box = get(); box.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     environmentConditionalAlias: (path) =>
       `const box = true ? process.env : {}; box.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    globalShorthandAlias: (path) =>
+      `const box = {global}; box.global.process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
+    globalThisShorthandAlias: (path) =>
+      `const box = {globalThis}; box.globalThis.process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     globalEnvironmentWrite: (path) =>
       `global.process.env.MODULE_TARGET = "${path}"; console.log((await import(process.env.MODULE_TARGET)).default);`,
     globalThisEnvironmentWrite: (path) =>
@@ -2565,6 +2569,7 @@ test("keeps direct environment reads and lexical shadows independent of unrelate
   const makeSource = (value) =>
     `function example(process) { return { env: process.env, value: "${value}" }; }
      const holder = { process: "${value}" }; holder.process;
+     const {process: ignored} = JSON.parse('{"process":0}'); void ignored;
      console.log((await import(process.env.MODULE_TARGET)).default);`;
   await write(source, makeSource("one"));
   assert.equal(
@@ -2656,4 +2661,89 @@ test("fails closed when import.meta.url can be changed", async (t) => {
       ),
     );
   }
+});
+
+test("tracks the shared Node module loader and ignores binding property names", async (t) => {
+  const source = "apps/app/src/public/prototype.cjs";
+  const esm = "apps/app/src/public/property.mjs";
+  const { root, write, check } = await workspace(t, {
+    boundaries: [
+      {
+        rule: "no-private",
+        from: ["apps/app/src/public/**"],
+        to: ["apps/app/src/private/**"],
+        kinds: ["require"],
+        message: "No private imports.",
+      },
+    ],
+  });
+  await write("apps/app/src/public/secret.cjs", 'module.exports = "PUBLIC";');
+  await write("apps/app/src/private/secret.cjs", 'module.exports = "PRIVATE";');
+  await write("apps/app/src/public/secret.mjs", 'export default "PUBLIC";');
+  for (const call of ['module.require("./secret.cjs")', 'require("./secret.cjs")']) {
+    for (const assignment of [
+      'const original = Module.prototype.require; Module.prototype.require = function() { return original.call(this, __dirname + "/../private/secret.cjs"); };',
+      'const original = Module._load; Module._load = function() { return original(__dirname + "/../private/secret.cjs", module); };',
+    ]) {
+      await write(
+        source,
+        `const Module = require("node:module"); ${assignment} console.log(${call});`,
+      );
+      assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PRIVATE");
+      const report = await check();
+      assert.ok(
+        report.violations.some(
+          (item) => item.from === source && item.rule === "unresolved-dynamic-import",
+        ),
+        `${call}: ${assignment}`,
+      );
+      assert.equal(
+        from(report, source).some((item) => item.to === "apps/app/src/public/secret.cjs"),
+        false,
+      );
+    }
+    await write(
+      source,
+      `const Module = require("node:module"); void Module; console.log(${call});`,
+    );
+    assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC");
+    // Exposing Module can mutate its loader, so use a non-exposing positive control below.
+  }
+  await write(source, 'console.log(require("./secret.cjs"), module.require("./secret.cjs"));');
+  assert.equal((await run(process.execPath, [join(root, source)])).stdout.trim(), "PUBLIC PUBLIC");
+  assert.ok(
+    from(await check(), source).some((item) => item.to === "apps/app/src/public/secret.cjs"),
+  );
+  for (const name of ["URL", "global", "globalThis"]) {
+    await write(
+      esm,
+      `const {${name}: value} = JSON.parse('{"${name}":false}'); void value; console.log((await import(new URL("./secret.mjs", import.meta.url).href)).default);`,
+    );
+    assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PUBLIC");
+    assert.ok(
+      from(await check(), esm).some((item) => item.to === "apps/app/src/public/secret.mjs"),
+      name,
+    );
+  }
+  await write("apps/app/src/private/secret.mjs", 'export default "PRIVATE";');
+  await write(
+    esm,
+    `const box = {URL}; Object.defineProperty(box.URL.prototype, "href", {get() { return import.meta.url.replace("property.mjs", "../private/secret.mjs"); }}); console.log((await import(new URL("./secret.mjs", import.meta.url).href)).default);`,
+  );
+  assert.equal((await run(process.execPath, [join(root, esm)])).stdout.trim(), "PRIVATE");
+  assert.ok(
+    (await check()).violations.some(
+      (item) => item.from === esm && item.rule === "unresolved-dynamic-import",
+    ),
+  );
+  await write(
+    esm,
+    'const object = {[URL]: true}; void object; console.log((await import(new URL("./secret.mjs", import.meta.url).href)).default);',
+  );
+  const computed = await check();
+  assert.ok(
+    computed.violations.some(
+      (item) => item.from === esm && item.rule === "unresolved-dynamic-import",
+    ),
+  );
 });

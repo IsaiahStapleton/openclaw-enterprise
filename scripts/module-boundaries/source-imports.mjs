@@ -155,12 +155,17 @@ function assignedSymbols(source, checker) {
     const propertyName =
       node.parent &&
       ((ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
-        (ts.isPropertyAssignment(node.parent) && node.parent.name === node));
+        (ts.isPropertyAssignment(node.parent) && node.parent.name === node) ||
+        (ts.isBindingElement(node.parent) && node.parent.propertyName === node));
+    const valueSymbol =
+      node.parent && ts.isShorthandPropertyAssignment(node.parent)
+        ? checker.getShorthandAssignmentValueSymbol(node.parent)
+        : checker.getSymbolAtLocation(node);
     if (
       ts.isIdentifier(node) &&
       !propertyName &&
       ["globalThis", "global"].includes(node.text) &&
-      implicitWrapperSymbol(checker.getSymbolAtLocation(node))
+      implicitWrapperSymbol(valueSymbol)
     ) {
       // Either Node global object alias can expose or replace builtins and env.
       globalURLMutable = true;
@@ -170,7 +175,7 @@ function assignedSymbols(source, checker) {
       ts.isIdentifier(node) &&
       !propertyName &&
       node.text === "URL" &&
-      implicitWrapperSymbol(checker.getSymbolAtLocation(node)) &&
+      implicitWrapperSymbol(valueSymbol) &&
       !(
         ts.isNewExpression(outerExpression(node).parent) &&
         outerExpression(node).parent.expression === outerExpression(node)
@@ -328,7 +333,9 @@ export function collectSourceImports(snapshot) {
           }
         }
         if (ts.isIdentifier(node)) {
-          const symbol = checker.getSymbolAtLocation(node);
+          const symbol = ts.isShorthandPropertyAssignment(node.parent)
+            ? checker.getShorthandAssignmentValueSymbol(node.parent)
+            : checker.getSymbolAtLocation(node);
           if (
             implicitWrapperSymbol(symbol) &&
             !(
@@ -339,6 +346,7 @@ export function collectSourceImports(snapshot) {
             !(
               (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
               (ts.isPropertyAssignment(node.parent) && node.parent.name === node) ||
+              (ts.isBindingElement(node.parent) && node.parent.propertyName === node) ||
               ts.isMetaProperty(node.parent)
             ) &&
             !(

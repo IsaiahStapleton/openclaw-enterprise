@@ -51,6 +51,8 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
     mutableModules.add(module);
     // The node:url module exposes the same constructor as the global URL.
     if (module === "node:url") mutableGlobalURL = true;
+    // Node module helpers share the CommonJS loader implementation.
+    if (module === "node:module") mutableCommonjsModule = true;
   }
   const moduleValue = (name) =>
     ["module", "url", "path"].includes(name?.replace(/^node:/, ""))
@@ -114,10 +116,10 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
         (["require", "module"].includes(node.text) && implicitWrapperSymbol(symbol(node)))
       ) {
         if (node.text === "require") {
-          return assigned.unbound.has("require")
+          return assigned.unbound.has("require") || mutableCommonjsModule
             ? {
                 kind: "unknown-loader",
-                reason: "The implicit require binding is assigned in this source.",
+                reason: "The implicit require loader may have changed in this source.",
               }
             : { kind: "require", anchor: path };
         }
@@ -270,7 +272,8 @@ export function createLoaderAnalysis({ checker, path, commonjs, assigned, source
         ts.isPropertyAccessExpression(node) ||
         ts.isElementAccessExpression(node)) &&
       !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
-      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node)
+      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node) &&
+      !(ts.isBindingElement(node.parent) && node.parent.propertyName === node)
     ) {
       const origin = reference(node);
       const outer = outerExpression(node);
