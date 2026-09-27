@@ -840,10 +840,16 @@ test("Agent creation selects approved repositories with one common explicit prof
     },
   ]);
 
+  // A Preset form retains repository selections across navigation and rediscovery.
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: { name: "Repository starter", template: { agent: {} } },
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.body));
   const { page } = await newPage(t, fixture);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
-  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByRole("button", { name: "Use Preset" }).click();
   await page.getByText("Select repositories for this Agent.", { exact: false }).waitFor();
   const accessDetails = page.locator(".repository-access-details");
   const accessSummary = accessDetails.locator("summary");
@@ -7378,6 +7384,81 @@ test("Credentials blocks repeat saves after losing an authentication PATCH respo
     ),
     true,
   );
+});
+
+test("leaving a no-Preset creation form discards its in-progress state", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Creation exit", { ready: true });
+  const otherNamespace = await fixture.createNamespace("Other Namespace", { ready: true });
+  const savedAgent = await fixture.createAgent(namespace.id, "Saved Agent");
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents?namespace=${namespace.id}`);
+
+  for (const exit of ["cancel", "breadcrumb", "sidebar", "history", "namespace"]) {
+    await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
+    await page.getByLabel("Agent name", { exact: true }).fill(`Abandoned ${exit}`);
+    await openAdvancedSettings(page);
+    await page.getByLabel("USER.md", { exact: true }).fill(`Abandoned workspace ${exit}`);
+
+    if (exit === "cancel") {
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    } else if (exit === "breadcrumb") {
+      await page.getByRole("link", { name: "← Agents" }).click();
+    } else if (exit === "sidebar") {
+      await page
+        .getByRole("navigation", { name: "Main navigation" })
+        .getByRole("link", { name: "Agents", exact: true })
+        .click();
+    } else if (exit === "history") {
+      // Leave with an un-applied channel drawer open; its draft must not reopen later.
+      await page.getByRole("button", { name: "Configure Slack", exact: true }).click();
+      await page
+        .getByRole("dialog", { name: "Configure Slack" })
+        .getByLabel("Slack channel IDs")
+        .fill("C12345");
+      await page.goBack();
+    } else {
+      await page.getByLabel("Namespace", { exact: true }).selectOption(otherNamespace.id);
+      await page.getByLabel("Namespace", { exact: true }).selectOption(namespace.id);
+    }
+
+    // History re-entry and the normal Create button must both return to the choice page.
+    if (exit === "history") {
+      await page.goForward();
+    } else {
+      await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    }
+    await page.getByRole("button", { name: "Start without Preset", exact: true }).waitFor();
+    await page.getByLabel("Preset template").waitFor();
+    assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0, exit);
+    await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
+    assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "", exit);
+    assert.notEqual(
+      await page.getByLabel("USER.md", { exact: true }).inputValue(),
+      `Abandoned workspace ${exit}`,
+      exit,
+    );
+    if (exit === "history") {
+      assert.equal(await page.getByRole("dialog", { name: "Configure Slack" }).count(), 0);
+      await page.getByRole("button", { name: "Configure Slack", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Configure Slack" });
+      assert.equal(await dialog.getByLabel("Slack channel IDs").inputValue(), "");
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    }
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+
+  // Exiting an unsaved form must not mutate or delete an Agent already saved by the user.
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  const result = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${savedAgent.id}`,
+  );
+  assert.equal(result.status, 200);
+  assert.equal(result.data.name, "Saved Agent");
 });
 
 test("unsaved Preset drafts retain unfinished edits across navigation until explicit discard", async (t) => {

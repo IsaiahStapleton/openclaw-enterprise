@@ -2472,6 +2472,18 @@ export const scenarios = {
     ],
     gap: "This walkthrough covers form state and the fixed model choices. Real API integration and runtime checks establish credential routing and model execution.",
   },
+  createExitFlow: {
+    group: "Flows",
+    name: "Restart Agent creation",
+    path: create,
+    description: "Leave a no-Preset Agent form and return to the initial creation choices.",
+    steps: [
+      "Choose Start without Preset and enter an Agent name.",
+      "Select Cancel or the Agents link, then choose Create Agent again.",
+      "Confirm the initial choices are shown. Start without Preset again and check that the name is empty.",
+    ],
+    gap: "The fixture demonstrates simulated console state; it does not verify a live backend or deployment.",
+  },
   createWorkspaceFlow: {
     group: "Flows",
     name: "Create with workspace files",

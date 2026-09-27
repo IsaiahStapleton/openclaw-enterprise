@@ -170,6 +170,9 @@ or Namespaces, and return with Back/Forward. Check empty and invalid text, then
 explicit Cancel or Reload. The Configuration story keeps deployment disabled;
 workspace Save changes only the selected simulated file.
 
+Use **Flows → Restart Agent creation** to enter a no-Preset form, leave it, and
+confirm re-entry shows the initial choices with an empty new form.
+
 Use **Pages/Create Agent → Keep Preset variables** before applying a Preset and
 **Keep an unsaved Preset draft** afterward. Ordinary fields survive while token
 inputs clear. Revisit the Agents list to check its search filter. Existing denied,

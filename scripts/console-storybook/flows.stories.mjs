@@ -13,6 +13,10 @@ export const SlackChannelAccessFlow = {
   name: "Change Slack channel senders",
 };
 export const StopFlow = { ...story("stopFlow"), name: "Stop an Agent" };
+export const CreateExitFlow = {
+  ...story("createExitFlow"),
+  name: "Restart Agent creation",
+};
 export const CreateWorkspaceFilesFlow = {
   ...story("createWorkspaceFlow"),
   name: "Create with workspace files",
