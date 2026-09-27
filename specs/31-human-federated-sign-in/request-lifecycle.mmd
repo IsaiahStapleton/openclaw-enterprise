@@ -3,54 +3,37 @@ config:
   theme: base
   htmlLabels: true
   themeVariables:
-    fontSize: 15px
-    actorBkg: "#EDF2F7"
-    actorBorder: "#879AB0"
-    actorTextColor: "#25364A"
-    signalColor: "#596779"
-    signalTextColor: "#344054"
-    noteBkgColor: "#F7F1E5"
-    noteBorderColor: "#B3A078"
+    fontSize: 14px
   sequence:
+    actorMargin: 15
+    width: 100
+    height: 45
+    messageMargin: 12
     mirrorActors: true
-    useMaxWidth: true
-    actorMargin: 24
-    width: 120
-    messageMargin: 20
-    noteMargin: 10
 ---
 sequenceDiagram
-  actor Browser
-  box OCC controller
-    participant Auth as Auth / Better Auth
-    participant State as State / PostgreSQL
-    participant IAM as Native IAM
+  participant M as Maintainer
+  participant B as Console
+  participant C as Controller
+  participant S as State
+  participant G as GitHub
+  M->>M: 1. IAM administer
+  M->>S: Guard / inspect / attach
+  B->>C: 2. Start / callback
+  C->>S: Consume attempt
+  C->>G: Code exchange
+  G-->>C: Numeric ID
+  C->>S: Enrolled ID, session + audit
+  alt Saved
+    C-->>B: Session + receipt
+    B->>C: 3. Agent read
+    C->>S: Check currentness
+    alt Allow
+      C->>C: IAM lookupIdentity / authorize
+      C-->>B: Authorized read
+    else Stop
+      C-->>B: Stop
+    end
+  else Stop
+    C-->>B: Stop without new cookie
   end
-  participant GitHub
-  Note over Browser,GitHub: Prerequisite: administrator enrolled this GitHub identity
-  Browser->>Auth: Start GitHub login
-  Auth->>State: Save browser-bound attempt (5 minutes)
-  State-->>Auth: Commit confirmed
-  Auth-->>Browser: GitHub URL + attempt cookie
-  Browser->>GitHub: Sign in and authorize
-  GitHub-->>Browser: Redirect with code and state
-  Browser->>Auth: Callback + attempt cookie
-  Auth->>State: Validate and consume attempt once
-  State-->>Auth: Commit confirmed
-  Note over Auth,State: Invalid or uncertain consumption stops here
-  Auth->>GitHub: Exchange code, then read /user
-  GitHub-->>Auth: Token and numeric user ID
-  Auth->>Auth: Discard provider token
-  Auth->>State: Resolve enrollment, check account, save session + audit
-  alt Session committed
-    State-->>Auth: Session + expiry
-    Auth-->>Browser: Session cookie, return to Console
-  else Login refused or commit uncertain
-    Auth-->>Browser: Generic failure, no session cookie
-  end
-  Browser->>Auth: Read an existing Agent
-  Auth->>State: Check stored session and account
-  State-->>Auth: Current local Principal, or deny
-  Auth->>IAM: Authorize exact Agent read if session valid
-  IAM-->>Auth: Allow or deny
-  Auth-->>Browser: Agent data or access denied

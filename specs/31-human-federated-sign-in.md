@@ -2,216 +2,112 @@
 
 # RFC: GitHub sign-in for existing accounts
 
-**Date:** 2026-09-22
+**Date:** 2026-09-22  
+**Status:** Draft. [PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305) is unmerged. Deployment and live GitHub verification remain open.
 
-**Status:** Draft. [Implementation PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305) is available for review. Deployment and live GitHub verification remain open.
-
-**2026-09-23 amendment:** Use the same GitHub App registration for sign-in and
-repository integration. This supersedes the OAuth-App-only choice below, including the Scope and
-Verification sections; those retain the original proposal wording.
-Sign-in uses the App's client ID and client secret; repository access keeps its
-existing private-key consumer. OCC reads the authenticated user's numeric ID,
-then discards the returned access and refresh tokens. App permissions govern
-those tokens; sign-in grants no OCE repository access. Changing the client ID
-requires explicit administrator enrollment under the new provider instance.
-See [the implementation's setup reference](https://github.com/openclaw/openclaw-enterprise/blob/feat/github-human-sign-in-20260922/docs/reference/authentication.md#github-sign-in-for-existing-accounts).
+**2026-09-23 amendment:** Use the repository integration's GitHub App for sign-in, superseding the OAuth-App-only choice. Login uses the client ID and secret. Repository access retains its separate private-key consumer.
 
 ## Problem and decision
 
-Let an existing OpenClaw Enterprise (OCE) user sign in with GitHub and keep the
-same account and permissions. The OpenClaw Control Plane (OCC) already uses
-Better Auth for password login and session cookies. Extend that path with
-GitHub OAuth, explicit administrator enrollment, and local session revocation.
-
-An administrator associates a GitHub identity with an existing OCE account.
-The user chooses **Continue with GitHub** in Console, signs in, and opens an
-Agent they already have permission to read. Login creates no account or grants.
-Personal and team use share the existing Namespace and IAM permission model.
+An existing OpenClaw Enterprise (OCE) user signs in with GitHub to read an authorized Agent. An administrator enrolls the identity during stopped maintenance. The local user, Installation Principal and grants remain. Login creates no account, link, IAM grant or repository access. Unknown or disabled identities are denied.
 
 ## Scope
 
-The MVP supports one github.com OAuth App, one serving controller, native IAM,
-restricted-role PostgreSQL, and one HTTPS Console origin. Accounts and permissions
-are provisioned beforehand. Password login remains available, including one
-designated recovery administrator who can sign in during a GitHub outage.
+One Installation and controller use native IAM, restricted-role PostgreSQL and one HTTPS origin. Mixed versions, shared-cookie native administration, other session readers and external account, policy and provisioning writers are excluded. Configured password recovery survives GitHub outages. Password-only binding is weaker. Service keys retain precedence.
 
-While this profile is active, account creation, policy administration, bootstrap,
-and other identity writers stay stopped. Shared-cookie native administration and
-other session readers are unsupported. These are first-release compatibility
-limits, not permanent removals of those capabilities.
+Cancellation and denial recovery remains the product owner's decision. The candidate blocks tabs without verified success and requires administrative resolution and a new tab.
+
+A future enabled event could enroll an identity and settle an administrator-configured, narrow, revocable shared-Agent or conversation entitlement through State and IAM, enforced by Gateway and sharing. This is tentative. Login never restores revoked grants. Google, enterprise OIDC, linking, online administration, broader CLI and stronger cross-tab guarantees remain future work.
 
 ## Contract
 
-### How this extends OCE
+Better Auth runs in the controller. PostgreSQL State owns attempts, account and method currentness, sessions and audit. The controller's IAM Driver resolves identity to a Principal and authorizes each exact action. Separate maintenance uses both. Its State guard and IAM reads rely on stopped writers, not a combined transaction.
 
-| Existing component                      | Change                                                                                                                                           |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Controller authentication / Better Auth | Add GitHub verification and route password and GitHub session writes through OCE State. Retain library password verification and signed cookies. |
-| PostgreSQL State                        | Store enrollment and revocation state, bind sessions to it, and save authentication changes with their audit events in one transaction.          |
-| Native IAM                              | Resolve the same account to the same Principal, OCE's authorization identity. Continue checking permissions for each resource request.           |
-| Console                                 | Add the GitHub button. Continue using the existing session, Namespace, and Agent APIs.                                                           |
+<a id="setup-and-sign-in"></a>
 
-The existing user, sign-in method, and session records remain. New State records
-bind each user to their Installation and Principal, track whether the account is
-disabled, designate the recovery account, and store short-lived login attempts.
-Account and method **version numbers** let session reads detect revocation or a
-changed sign-in method.
+### Operator setup and activation
 
-A GitHub method belongs to exactly one local account. Its identity is the
-configured OAuth application's client ID plus GitHub's immutable numeric user ID.
-The endpoints and application kind are fixed in this MVP. Changing the client ID
-selects a different provider instance; rotating its secret preserves enrollment.
-Email, GitHub usernames, and organization membership never select the local
-account or grant permissions. Login tokens are separate from the GitHub App
-credentials used by Agents to access repositories.
+Provision accounts and grants. Configure the App, Installation, restricted database and trust, and auth settings. Register `/api/auth/providers/github/callback` on `OCC_AUTH_BASE_URL`. Protect `OCC_AUTH_GITHUB_CLIENT_ID`, `OCC_AUTH_GITHUB_CLIENT_SECRET` and `OCC_AUTH_GITHUB_RECOVERY_USER_ID`. Allow controller HTTPS egress to GitHub token and user endpoints. Close ingress, drain requests, stop serving and conflicting account, policy, bootstrap, provisioning and session writers, and prevent restart. `--writers-stopped` asserts exclusion, not fencing.
 
-### Setup and sign-in
+From the matching checkout, use an owner-only, nonsymlink file with the real recovery email and password. Examples, not executed:
 
-Configure `OCC_AUTH_GITHUB_CLIENT_ID`, `OCC_AUTH_GITHUB_CLIENT_SECRET`, and
-`OCC_AUTH_GITHUB_RECOVERY_USER_ID` on the controller, alongside existing
-`OCC_AUTH_BASE_URL` and `OCC_AUTH_SECRET`. Keep secrets in protected server
-configuration. Register `/api/auth/providers/github/callback` on the configured
-origin as the OAuth callback.
-
-1. A human Installation administrator verifies the person's numeric GitHub ID
-   and the intended OCE account independently, then attaches that identity.
-   Attachment preserves the password and permissions but invalidates old sessions.
-2. Console starts a login attempt and sends the browser to GitHub.
-3. On return, OCC checks and consumes the browser's attempt before exchanging
-   the code. GitHub's authenticated `/user` response supplies the numeric ID.
-4. OCC finds the enrolled account, checks that it is enabled, and saves a new
-   session with its audit event. Only a confirmed commit releases a cookie.
-   Unknown or disabled identities receive a generic denial and no session.
-5. Console returns to its existing workflow:
-   `/api/auth/session` → `/namespaces` → an authorized Agent read.
-
-![GitHub sign-in followed by an authorized Agent read](31-human-federated-sign-in/request-lifecycle.svg)
-
-Proposed lifecycle. Arrows show requests and replies, not deployment status.
-[Editable diagram](31-human-federated-sign-in/request-lifecycle.mmd).
-
-### HTTP interfaces
-
-All paths below begin with `/api/auth`. JSON results use the existing
-`{data, meta: {requestId}}` envelope.
-
-Browser routes reserve `/providers/{provider}/start` and
-`/providers/{provider}/callback`, where `{provider}` selects a server-configured
-integration. Only GitHub ships in this MVP, with no arbitrary issuer URLs or
-generic OIDC backend.
-
-| Operation                                 | Input and result                                                                                                                                         |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /providers`                          | Returns `{github: boolean}` so Console can show the button.                                                                                              |
-| `POST /providers/github/start`            | Requires the configured browser `Origin`. Returns `{url}` and sets the attempt cookie. Accepts no provider override or return URL.                       |
-| `GET /providers/github/callback`          | Receives `state` and `code` or provider `error`, with the matching browser cookie. Redirects to `/console/`, or `/console/?authError=github` on failure. |
-| `GET /accounts/:userId`                   | Returns current `userId`, `principalId`, `version`, `disabled`, and `methods` with `methodId`, `providerId`, and `subject`.                              |
-| `POST /accounts/:userId/providers/github` | Accepts `{subject, expectedVersion}`. Attaches the numeric GitHub identity and invalidates prior sessions and pending authentication proofs.             |
-| `POST /accounts/:userId/disable`          | Accepts `{expectedVersion}`. Blocks login and invalidates sessions and pending proofs. Refuses the protected recovery account.                           |
-| `POST /accounts/:userId/revoke`           | Accepts `{expectedVersion}`. Invalidates sessions and pending proofs while allowing a fresh login.                                                       |
-
-All four account operations require a current human session, the exact trusted
-`Origin`, and native IAM `administer` permission on the Installation. Service keys
-do not qualify. Mutations return `{userId}` and leave IAM grants unchanged.
-
-For example, after an administrator reads account version `1`, the attachment
-body is:
-
-```json
-{ "subject": "12345678", "expectedVersion": 1 }
+```sh
+NODE_ENV=production pnpm auth:maintain --writers-stopped --credentials-file FILE --operation inspect --user-id ID
+NODE_ENV=production pnpm auth:maintain --writers-stopped --credentials-file FILE --operation attach-github --user-id ID --github-user-id 12345678 --expected-version VERSION
 ```
 
-`subject` is the verified GitHub user ID, not a username or email. The version
-prevents overwriting a concurrent account change: a stale value returns
-`409 RESOURCE_CONFLICT`. State rechecks the administrator's session while locking
-the affected accounts, so concurrent logout or revocation can deny the mutation.
+The first configured inspect can activate after validating the recovery password, Installation, Drivers, IAM `administer` and static configuration. There is no activate command. Activation enrolls existing password accounts, invalidates unbound sessions and refuses account creation before account or IAM writes. Maintenance rechecks the current session. Inspect returns the version. Attach the independently verified 1–20 digit GitHub ID without a leading zero at that version. Stale versions and owned subjects are refused. Attachment preserves account and grants while invalidating sessions and proofs. Start one compatible controller. Verify recovery, login, stale-session refusal and authorized Agent read before reopening ingress, retaining exclusions.
 
-If a database commit's outcome is unknown, administration returns
-`503 DEPENDENCY_UNAVAILABLE`. Do not automatically retry or compensate.
-An authorized account read shows present state, but cannot prove which request
-caused it. Resolve the uncertain operation before choosing another action.
+<a id="http-interfaces"></a>
 
-The existing password sign-in, session inspection, and sign-out routes remain.
-Both password and GitHub sessions expire after eight hours without refresh.
-Every request checks the stored session, account, method, versions, and expiry.
-Logout commits revocation and its audit event before clearing the cookie.
+### Console sign-in and security
 
-### Security
+Console pins `sessionBinding` from `GET /api/auth/providers` before writes: `true` here, `false` for password-only. Bad discovery permits only retrying that read. Sign-in, inspection and logout acknowledgments must match. `POST /api/auth/providers/github/start` requires the configured Origin and returns a fixed URL, browser cookie and `attemptId`. Callback consumes the bound attempt once before exchange, including valid provider errors. It rejects ambiguity, uses S256 PKCE and fixed endpoints, reads the numeric ID and discards tokens. Client ID plus immutable numeric ID uniquely identifies the method. Email, username, domain and organization confer no authority. Changing client ID requires reattachment. Secret rotation preserves enrollment but invalidates pending attempts.
 
-The main threats are signing into the wrong local account, replaying a callback,
-using a revoked session, unauthorized account changes, and credential disclosure.
-Browsers and provider responses are untrusted. Deployment and database
-administrators remain trusted.
+After session and audit commit, callback issues a cookie and signed two-minute receipt. No-store `POST /api/auth/providers/github/result` matches receipt, `attemptId` and current cookie to return the actual `sessionKey`. Password issuance also identifies its session. Console waits for matching inspection, then sends `x-occ-session-key` to narrow each request's cookie session. Logout matches and revokes that session. Only owner-proven `error.authentication` with matching `operation` and `outcome: "rejected"` proves no effect. Malformed, contradictory or lost replies do not. Markers are neither IAM authority nor durable journals. Late responses can change shared cookies. Logout does not cancel an in-flight sign-in.
 
-| Threat                                     | Required protection                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Account takeover through automatic linking | Explicit administrator enrollment, unique immutable method ownership, and no signup or email-based association. A failed login never falls back to another identity.                                                                                                                                                                                             |
-| Forged or replayed callback                | Unpredictable state, browser binding, S256 PKCE, exact provider/configuration/callback matching, and five-minute expiry. Reject ambiguous parameters. Consume once before remote work, including valid provider-error callbacks.                                                                                                                                 |
-| Revocation racing with login               | Serialize account changes with session issuance. Recheck account and method versions in the transaction that stores the session and audit event. No cookie after audit failure, unknown commit, or expiry.                                                                                                                                                       |
-| Provider stalls or resource exhaustion     | Bound request admission, concurrent work, stored attempts, and cleanup. Cancel both provider calls through body reads after a shared ten-second deadline, cap each response at 64 KiB, and refuse redirects. Password recovery has separate request capacity.                                                                                                    |
-| Credential disclosure                      | Use Secure, HttpOnly, SameSite=Lax, host-only cookies. Discard provider tokens after verification. Redact credentials, codes, and raw provider errors from response bodies, logs, telemetry, and audit. Audit contains local IDs, not external subjects or profiles. The OAuth code/state redirect and session cookie carry only their intended protocol values. |
+For unsafe cookie-session requests, the controller requires the exact configured Console Origin before session lookup or effects; absent, malformed or different Origins and contradictory supplied Fetch Metadata are rejected. An invalid service key never falls back to a cookie; bearer credentials are rejected. The native proxy retains its separate policy. Host-only cookies and the optional session-key header are not this boundary. This guard is required, not yet qualified.
 
-Local disablement and revocation affect OCE sessions. GitHub suspension does not
-continuously revoke them. Neither operation stops an Agent or closes its
-repository connections.
+Attempts expire in five minutes. Provider calls share ten seconds, cap each response at 64 KiB and refuse redirects. Per controller, password admission is 30 per minute and four active, GitHub start/callback is 60 per minute and eight active. State caps 1,000 pending attempts per Installation and removes at most 100 expired rows per start. Sessions last eight hours without refresh and use host-only Secure, HttpOnly, SameSite=Lax cookies. Reject duplicate active-session cookie names and redact credentials, tokens, codes and raw provider errors. Local revocation does not continuously track GitHub suspension, stop Agents or close repository connections.
 
-### Activation and recovery
+```mermaid
+---
+config:
+  theme: base
+  htmlLabels: true
+  themeVariables:
+    fontSize: 14px
+  sequence:
+    actorMargin: 15
+    width: 100
+    height: 45
+    messageMargin: 12
+    mirrorActors: true
+---
+sequenceDiagram
+  participant M as Maintainer
+  participant B as Console
+  participant C as Controller
+  participant S as State
+  participant G as GitHub
+  M->>M: 1. IAM administer
+  M->>S: Guard / inspect / attach
+  B->>C: 2. Start / callback
+  C->>S: Consume attempt
+  C->>G: Code exchange
+  G-->>C: Numeric ID
+  C->>S: Enrolled ID, session + audit
+  alt Saved
+    C-->>B: Session + receipt
+    B->>C: 3. Agent read
+    C->>S: Check currentness
+    alt Allow
+      C->>C: IAM lookupIdentity / authorize
+      C-->>B: Authorized read
+    else Stop
+      C-->>B: Stop
+    end
+  else Stop
+    C-->>B: Stop without new cookie
+  end
+```
 
-Use a maintenance window: close ingress, drain or terminate admitted work, stop
-old controllers, and prevent their restart. Validate configuration and existing
-accounts before changing state. Atomically enroll the account population,
-designate a usable password administrator, and invalidate legacy sessions.
-Start one compatible controller and verify recovery before reopening ingress.
-Rolling upgrades and rollback to old binaries are unsupported.
+Proposed lifecycle. The stopped maintainer and controller each compose IAM. Commit must be confirmed; read requires current identity and IAM allow. Denial or unknown outcome stops the path. [Source](31-human-federated-sign-in/request-lifecycle.mmd) and [SVG](31-human-federated-sign-in/request-lifecycle.svg).
 
-The recovery designation is fixed. Its account cannot be disabled through this
-API, and its password and Installation permission must remain available.
-Out-of-band database or policy changes can still destroy recovery.
+<a id="activation-and-recovery"></a>
 
-An installation that has never enabled GitHub retains its existing password and
-service-key behavior when GitHub configuration is absent. After activation,
-missing required configuration prevents startup. A GitHub outage with valid
-configuration still permits password login.
+### Recovery and uncertain outcomes
 
-## Implementation
+State commits local effects and audit together, not IAM reads, GitHub calls or browser delivery. On uncertain COMMIT discard the client without another query, fresh cookie, replay or compensation. A later read is current state, not a receipt. Preserve a potentially created account unless its owner proves no commit. After uncertain maintenance do no cleanup. Report operation, session cleanup and pool shutdown separately. Keep ingress closed for owner resolution. Maintenance cannot disable recovery, but out-of-band changes can destroy it. Missing configuration prevents startup after activation. Rolling upgrade, old-binary rollback and method repair are unsupported.
 
-Deliver one focused implementation over this RFC:
+## Implementation and verification
 
-1. Extend controller auth and Console with the routes above, using Better Auth
-   helpers and fixed GitHub endpoints.
-2. Add the State enrollment, session, attempt, and recovery records. Connect
-   both login methods, account controls, and audit to the same transactions.
-3. Document and verify operator enrollment, maintenance activation, and password
-   recovery through the ordinary Console workflow.
+Extend controller, Console, State and separate maintenance. Preserve main SQL and receipts, qualify receiving history and refuse unsupported predecessors. [PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305) and [PR #461](https://github.com/openclaw/openclaw-enterprise/pull/461) both propose index 32. The State owner and first landing determine order.
 
-The draft code and detailed API/operator references are in
-[PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305).
-The proposed State adapter extends existing persistence; it introduces no
-separate identity service or IAM policy writer.
+Acceptance requires stopped activation, recovery, Console login and authorized Agent read, unknown or disabled refusal, stale-version and revocation checks, audit, uncertain outcomes, upgrade preservation and installed HTTPS with the actual GitHub App. Pinned [main](https://github.com/openclaw/openclaw-enterprise/blob/181b0472f9a5a9d422035edf5121d3a15c200cb5/docs/reference/authentication.md) has password authentication. A source review found that a sibling-origin cookie POST could stop an Agent; the GitHub-profile consequence is inferred, not demonstrated in a real database or browser. The fix and exact source review remain open. Prior local checks do not establish exact-head hosted CI, installed HTTPS, live GitHub, human approval or release.
 
-## Verification
+## Open decisions and references
 
-| What must work                     | How we establish it                                                                                                                                                                   |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Existing permissions survive login | Sign in through real Console and read an existing authorized Agent. Deny unknown/same-email identities and unauthorized Namespace access.                                             |
-| Revocation and failure stay safe   | Exercise concurrent login, disable, revoke, and administrator logout against PostgreSQL. Test replay, expiry, stale versions, audit failure, and lost commit acknowledgment.          |
-| Recovery and deployment hold       | Preserve existing users, passwords, and grants on upgrade. Verify old-controller exclusion, HTTPS cookies, secret/log handling, and password administration during a provider outage. |
-| GitHub accepts the integration     | Complete sign-in using the actual registered OAuth App and exact deployed callback.                                                                                                   |
+The maintenance guide `docs/guides/deploy/github-sign-in.md` and browser reference `docs/reference/authentication/browser-sessions.md` are forthcoming on the reviewed implementation, not the older unmerged PR. Authenticated readback on the exact published stack gates publication. Anonymous 404 is not an intended-reader access test.
 
-The implementation draft has source review and connected PostgreSQL, controller,
-IAM, and Console checks using controlled GitHub endpoints. Receiving migration
-integration, installed maintenance/HTTPS/log checks, live GitHub sign-in, and
-release acceptance remain open.
-
-## Deferred
-
-Google sign-in is the next planned provider extension, using OIDC verification
-through the same account/session path. Enterprise SSO comes later; configured
-Entra, Okta, or other enterprise providers need their own identity rules and
-qualification.
-
-Later work may add external-only onboarding, account creation while this profile
-is active, method repair/linking, reenablement, password reset, CLI browser login,
-and additional session consumers. Public signup, invitations, SAML/SCIM, group
-sync, dynamic SSO administration, provider-wide logout, and Agent workload
-identity are outside this MVP.
+## Manual Notes
