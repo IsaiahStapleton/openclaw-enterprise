@@ -259,7 +259,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
             rel: "noopener noreferrer",
           },
           element("span", { className: "nav-icon", "aria-hidden": "true" }, "◉"),
-          "Metrics",
+          "Observability",
           externalLinkIcon(),
         ),
       );

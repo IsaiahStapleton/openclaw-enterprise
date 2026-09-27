@@ -11,9 +11,9 @@ export const BuildRevision = { ...story("buildRevision") };
 export const DevelopmentBuild = { ...story("developmentBuild") };
 export const ObservabilityLink = {
   ...story("observabilityLink"),
-  name: "Admin Metrics link",
+  name: "Admin Observability link",
 };
 export const ObservabilityDenied = {
   ...story("observabilityDenied"),
-  name: "Metrics access denied",
+  name: "Observability access denied",
 };

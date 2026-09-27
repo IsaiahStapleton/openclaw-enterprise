@@ -53,7 +53,7 @@ The optional `observability` block sets one external console destination:
 
 ```yaml
 observability:
-  url: https://metrics.example.com/d/operations
+  url: https://grafana.example.com/d/occ-observability
 ```
 
 `url` must be an absolute HTTP or HTTPS URL without embedded credentials or a

@@ -11,6 +11,9 @@ To give Installation administrators a shortcut to an observability UI, set
 and restart the API. The console opens that URL in a separate tab after an
 Installation `administer` check. Configure authentication at the destination.
 The link does not change Collector export.
+For the demonstration Grafana stack, point the link to `/d/occ-observability`;
+that landing page lists its metrics and operational logs views. The demo does
+not provide traces.
 
 | Signal              | Available path                                                                                                                                                           |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

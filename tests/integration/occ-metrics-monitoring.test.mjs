@@ -108,6 +108,10 @@ test(
       join(directory, "dashboards", "occ.json"),
       await readFile("deploy/helm/openclaw-observability-demo/files/dashboard.json"),
     );
+    await writeFile(
+      join(directory, "dashboards", "overview.json"),
+      await readFile("deploy/metrics/development/grafana/overview-dashboard.json"),
+    );
 
     async function container(role, image, args, extra = []) {
       const name = `occ-metrics-${role}-${randomUUID().slice(0, 8)}`;
@@ -220,6 +224,15 @@ test(
     ).then((response) => response.json());
     assert.equal(provisioned.dashboard.uid, "occ-development");
     assert.deepEqual(provisioned.dashboard.panels, dashboard.panels);
+    const overview = await fetch(
+      `http://127.0.0.1:${grafanaPort}/api/dashboards/uid/occ-observability`,
+    ).then((response) => response.json());
+    assert.equal(overview.dashboard.panels[0].type, "text");
+    assert.match(
+      overview.dashboard.panels[0].options.content,
+      /\[Metrics\]\(\/d\/occ-development\)/,
+    );
+    assert.doesNotMatch(overview.dashboard.panels[0].options.content, /\/d\/occ-logs/);
     // Grafana's HTTP listener can be ready before its datasource backend. Wait
     // for the actual Grafana-to-Prometheus query to succeed within the same bound.
     await waitFor(async () => {
