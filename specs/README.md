@@ -48,7 +48,7 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
-[Credential Gateway Driver](39-sandbox-credential-injection.md) — Proposed;
+[Credential Gateway Driver](39-sandbox-credential-injection.md) — Implementing; first slice in #461;
 Namespace credential sources attached to Agent revisions, with OpenShell
 injecting credentials outside the workload; static and OAuth2 refresh first.
 

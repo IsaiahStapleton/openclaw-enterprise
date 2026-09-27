@@ -1,7 +1,9 @@
 # RFC: Credential Gateway Driver for Sandbox-injected credentials
 
 **Date:** 2026-09-26
-**Status:** Proposed; not implemented or approved.
+**Status:** Implementing; the first slice shipped in
+[#461](https://github.com/openclaw/openclaw-enterprise/pull/461). See the
+[delivery record](#delivery-record).
 **Owner:** Driver contracts, Agent deployment, and the OpenShell integration.
 **Source baseline:** OCE `main` at `e4a807e7`, which pins OpenShell
 [`v0.1.0`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0) (`496ebba2`). Upstream
@@ -356,6 +358,29 @@ The implementation PR updates:
 - the API, permissions, and database-entity cheat sheets;
 - the [OpenShell provisioning flow](../docs/flows/openshell-sandbox-provisioning.md)
   and [OpenShell testing](../docs/testing/openshell.md).
+
+## Delivery record
+
+[#461](https://github.com/openclaw/openclaw-enterprise/pull/461) delivered
+registration, removal, attachment, and status for the `openai` source type. A
+real OpenShell model turn used the injected key while the Harness held only the
+placeholder. The current contract is owned by
+[Credential Gateway](../docs/reference/drivers/credential-gateway.md) and
+[credential sources](../docs/reference/credential-sources.md).
+
+The implementation differs from this proposal:
+
+- Registration commits a `registering` record before the gateway call. After an
+  uncertain call, the record stays `deleting`, and deletion finalizes only
+  70 seconds after `createdAt`.
+- Secret values come from the existing `SecretDriver.withValue`.
+- Compute's `resolveSandboxNamespace` supplies the gateway Workspace, and
+  providers set `profile_workspace`.
+- Plain in-cluster gateway transport requires `insecureTransport: network-policy`.
+- One gateway principal serves the API and worker.
+
+Remaining work is tracked in
+[#118](https://github.com/openclaw/openclaw-enterprise/issues/118).
 
 ## Open questions
 
