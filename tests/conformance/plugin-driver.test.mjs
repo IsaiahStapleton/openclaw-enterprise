@@ -315,12 +315,34 @@ test("Codex bridge configuration carries repository broker network policy withou
         allowLocalBinding: true,
         readOnlyPaths: [
           "/app/node_modules/openclaw",
+          "/home/node/.openclaw/plugin-skills",
+          "/home/node/openclaw-runtime-assets/plugin-skills",
           "/opt/oce/repository-credentials",
           "/run/oce/repository-credentials",
         ],
         domains: { "github.com": "allow", "git.tenant.svc": "allow" },
       },
     },
+  });
+});
+
+test("Codex bridge configuration grants plugin skill reads without broker policy", () => {
+  const bridgeConfiguration = codexOpenClawConfiguration(codexSelection());
+
+  assert.deepEqual(bridgeConfiguration.plugins.entries.codex.config.appServer, {
+    networkProxy: {
+      readOnlyPaths: [
+        "/app/node_modules/openclaw",
+        "/home/node/.openclaw/plugin-skills",
+        "/home/node/openclaw-runtime-assets/plugin-skills",
+      ],
+    },
+  });
+  assert.deepEqual(bridgeConfiguration.plugins.entries.codex.config.codexPlugins.plugins.linear, {
+    enabled: true,
+    marketplaceName: "openai-curated-remote",
+    pluginName: "linear",
+    allow_destructive_actions: "auto",
   });
 });
 
