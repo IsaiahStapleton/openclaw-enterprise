@@ -29,10 +29,9 @@ Omitting it or setting it to `false` disables bundled seeding; explicit
 the Installation YAML, independent of the process working directory; absolute
 paths are also supported. Mount the files readably for both the API and worker.
 Missing, malformed, invalid, or duplicate-name definitions prevent startup.
-Files are read at startup, not watched for changes. API startup adds missing defaults to existing ready or
+Files are read at startup, not watched. API startup adds missing defaults to existing ready or
 provisioning Namespaces, including the bootstrap Namespace. New Namespace
-creation includes the same defaults atomically. Failed or deleting Namespaces
-are skipped during startup.
+creation includes the same defaults atomically. Startup skips failed or deleting Namespaces.
 
 Each copy is an ordinary Namespace-owned Preset with its own ID and normal
 read/update/delete permissions. Matching names are preserved without comparing
@@ -112,7 +111,7 @@ limits. A saved template does not prove live Codex policy enforcement.
 ## DevDay custom presets
 
 [`SWE Agent`](../../deploy/presets/devday.json) is based on
-**Standard Codex**, uses `approvalPolicy: never`, and adds Slack Socket Mode with four prefilled channels.
+**Standard Codex**, uses `approvalPolicy: never`, and adds Slack Socket Mode.
 It uses the Codex harness with **Service Accounts** authentication (`codex_pat`).
 All four DevDay presets expose only `name` and `model` variables; `model` defaults
 to `gpt-6-astra` and remains editable. After **Use Preset**, choose an existing service account Secret or
@@ -120,10 +119,9 @@ to `gpt-6-astra` and remains editable. After **Use Preset**, choose an existing 
 DevDay files are opt-in through `presets.files`; `includeDefaults` does not load them.
 
 [`Community Agent`](../../deploy/presets/devday-partners.json) copies the SWE
-Agent runtime and prefilled Slack channels, with community-focused workspace
-instructions for answering questions and discussing the roadmap. Direct messages
-are disabled. It checks Linear
-for relevant updates when available and continues with other sources if access fails.
+Agent runtime and Slack channels, with community-focused workspace instructions
+to answer questions, discuss the roadmap, and check Linear for relevant updates when
+available. Direct messages are disabled; it uses other sources if Linear access fails.
 
 [`Q&A Agent`](../../deploy/presets/devday-qa.json) and
 [`Oncall Agent`](../../deploy/presets/devday-oncall.json) copy the entire SWE Agent
