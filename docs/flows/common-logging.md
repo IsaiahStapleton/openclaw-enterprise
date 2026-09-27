@@ -165,7 +165,9 @@ The shared Collector policy keeps transport-derived identity before parsing
 untrusted JSON. It promotes fixed OCC event names, gateway records from the
 `gateway` subsystem, and Codex stderr records from `codex_app_server`; malformed,
 oversized, unclassified, content-bearing, and protocol stdout records are
-dropped before remote export. Exporter credentials and TLS settings live in
+dropped before remote export. OCC `compute.preflight-warning` records retain
+WARN severity and their bounded `occ.code`; the remote body is the event name,
+not the local diagnostic message. Exporter credentials and TLS settings live in
 Collector-only configuration. Finite queues and retry limits make operational
 logs best-effort, but outage or overflow cannot block API service, worker
 reconciliation, or PostgreSQL audit persistence.
@@ -202,6 +204,8 @@ reconciliation, or PostgreSQL audit persistence.
 ## Changelog
 
 - 2026-09-25 09:56: Documented worker teardown correlation with the accompanying Collector allowlist repair. (codex/01a0d57b-51eb-7551-874e-38c5b633af76 - 939ae63ac2be06d424cdbd5c626cfa675561d127)
+
+- 2026-09-25 09:53: Documented preflight warning export and message exclusion with the accompanying Collector allowlist repair. (codex/01a0d57b-51eb-7551-874e-38c5b633af76 - 939ae63ac2be06d424cdbd5c626cfa675561d127)
 
 - 2026-09-23 17:40: Documented private Collector scraping and selected in-cluster export in the accompanying observability change. (authoring-run/8fb2b0ce-9ad1-401c-a9b9-4e3919b5f573 - faf0b0ae467a3bebfd5b5ed0a92f259248e5da74)
 

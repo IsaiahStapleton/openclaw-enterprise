@@ -634,17 +634,54 @@ export const scenarios = {
   },
   createPluginsUnavailable: {
     group: "Pages/Create Agent",
-    name: "Plugin discovery needs an entered token",
+    name: "Plugin discovery needs a service account credential",
     path: create,
     pluginCapabilities,
     actions: [...form, click("Configure plugins")],
     description:
-      "Plugin discovery requires a newly entered service account token with the Codex harness. Existing plugin IDs and policies stay in Plugin selections JSON.",
+      "Plugin discovery requires a selected service account Secret or an entered token with the Codex harness. Existing plugin IDs and policies stay in Plugin selections JSON.",
     steps: [
       "Click Done, open Plugin selections JSON, and enter a known plugin ID and policy.",
       "Open Configure plugins and choose the configured plugin. Change a policy, click Done, and inspect the JSON.",
     ],
-    gap: "API keys and saved Preset credentials do not enable this discovery flow. Enter only dummy credentials in Storybook.",
+    gap: "API keys do not enable this discovery flow. Enter only dummy credentials in Storybook.",
+  },
+  createPluginsSelectedSecret: {
+    group: "Pages/Create Agent",
+    name: "Discover plugins with a selected PAT Secret",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    extraSecrets: [{ id: "sec_storybook_pat", name: "Service account PAT (simulated)" }],
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "codex_pat" },
+      { selector: "#provider-credential-secret", value: "sec_storybook_pat" },
+      click("Configure plugins"),
+    ],
+    description: "The selected Secret enables discovery without entering a separate token.",
+    steps: [
+      "Choose Calendar to load its details, then click Done and select another Secret to clear the catalog.",
+      "Without a selected Secret, the optional token field remains available for a preview.",
+    ],
+    gap: "The Secret and OCC discovery responses are simulated. This preview does not verify live provider access or Secret storage.",
+  },
+  createPluginsSelectedSecretDenied: {
+    group: "Pages/Create Agent",
+    name: "Selected PAT Secret discovery denied",
+    path: create,
+    pluginCapabilities,
+    extraSecrets: [{ id: "sec_storybook_pat", name: "Service account PAT (simulated)" }],
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "codex_pat" },
+      { selector: "#provider-credential-secret", value: "sec_storybook_pat" },
+      click("Configure plugins"),
+    ],
+    rules: [{ suffix: "/agents/plugins", method: "POST", status: 403, code: "FORBIDDEN" }],
+    description:
+      "A denied discovery request explains that permission is required without exposing Secret data.",
+    gap: "The Secret and denial are simulated; this preview does not verify IAM enforcement.",
   },
   createPluginsDiscovered: {
     group: "Pages/Create Agent",
@@ -1932,7 +1969,7 @@ export const scenarios = {
     slack: true,
     actions: [click("Edit Slack")],
     description:
-      "Slack token references are menus backed by simulated same-Namespace Secret metadata. Options include readable existing Secrets and Create new Secret.",
+      "Search Slack token Secrets by name or ID, use arrow keys and Enter to select, and Escape to retain the current binding. Metadata is simulated within this Namespace.",
   },
   slackCreateSecretModal: {
     group: "Components/Channels",
@@ -1944,7 +1981,26 @@ export const scenarios = {
       { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
     ],
     description:
-      "Create new Secret opens a modal with the fixed Slack binding key and a password value field. Values are simulated and never read back.",
+      "Create new Secret opens a modal with an editable Agent-prefixed Name, a fixed Slack binding key, and a masked Secret value. Values are simulated and never read back.",
+  },
+  slackDuplicateSecret: {
+    group: "Components/Channels",
+    name: "Slack duplicate Secret name",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    actions: [
+      click("Edit Slack"),
+      { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
+      {
+        selector: "#create-slack-secret-slack-bot-token-name",
+        value: "Slack bot token (simulated)",
+      },
+      { selector: "#create-slack-secret-slack-bot-token-value", value: "synthetic-demo-token" },
+      click("Create Secret"),
+    ],
+    description:
+      "A simulated duplicate-name rejection preserves Name and the masked value. Change the Name and create again; the existing Secret remains unchanged.",
+    gap: "Simulated UI proof only; the browser integration suite verifies real controller conflict handling.",
   },
   slackSecretStaged: {
     group: "Components/Channels",

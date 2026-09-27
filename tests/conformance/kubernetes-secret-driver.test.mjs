@@ -202,6 +202,19 @@ test("kubernetes-secret-driver stores, verifies, updates, resolves, and deletes 
     },
     "rotated-value",
   );
+  const secret = {
+    ...identity,
+    driverId: driver.id,
+    backendRef,
+    createdAt: new Date().toISOString(),
+  };
+  assert.equal(await driver.withValue(secret, async (value) => value), "rotated-value");
+  await assert.rejects(
+    driver.withValue({ ...secret, backendRef: { ...backendRef, uid: "foreign" } }, async () =>
+      assert.fail("foreign Secret must not be used"),
+    ),
+    SecretOwnershipError,
+  );
   const updated = client.secrets.get(`${namespace}/${backendRef.name}`);
   assert.equal(updated.metadata.uid, backendRef.uid);
   assert.equal(updated.metadata.labels["operator.example/retained"], "true");
@@ -216,6 +229,20 @@ test("kubernetes-secret-driver stores, verifies, updates, resolves, and deletes 
     backendRef,
   );
 
+  // The callback receives the exact stored UTF-8 text, including a leading byte-order mark.
+  updated.data.value = Buffer.from("\uFEFFrotated-value").toString("base64");
+  assert.equal(await driver.withValue(secret, async (value) => value), "\uFEFFrotated-value");
+
+  // A corrupt backend value must not reach the consumer even when ownership matches.
+  for (const malformed of ["%%%", "/w=="]) {
+    updated.data.value = malformed;
+    await assert.rejects(
+      driver.withValue(secret, async () => assert.fail("invalid value must not be used")),
+      SecretBackendUnavailableError,
+    );
+  }
+  updated.data.value = Buffer.from("rotated-value").toString("base64");
+
   await driver.delete({
     ...identity,
     driverId: driver.id,
@@ -226,6 +253,10 @@ test("kubernetes-secret-driver stores, verifies, updates, resolves, and deletes 
     uid: updated.metadata.uid,
     resourceVersion: updated.metadata.resourceVersion,
   });
+  await assert.rejects(
+    driver.withValue(secret, async () => assert.fail("deleted Secret must not be used")),
+    SecretBackendUnavailableError,
+  );
   await driver.delete({
     ...identity,
     driverId: driver.id,
