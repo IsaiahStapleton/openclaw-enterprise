@@ -273,7 +273,7 @@ const account = [{ selector: ".account-toggle", click: true }];
 const devdayRepositorySelector = 'input[value="openclaw/openclaw-enterprise"]';
 const createSlackBotSecret = [
   { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
-  { selector: "#create-slack-bot-token-value", value: "simulated-bot-token" },
+  { selector: "#create-slack-secret-slack-bot-token-value", value: "simulated-bot-token" },
   click("Create Secret"),
 ];
 const allowEveryoneInSlackChannels = [
@@ -1093,7 +1093,7 @@ export const scenarios = {
       { selector: "#slack-dm-policy", value: "disabled" },
     ],
     description:
-      "A new Agent can choose existing simulated Namespace Secrets or create new Slack token Secrets before the Agent resource exists.",
+      "A new Agent can choose existing simulated Namespace Secrets by name or create new Slack token Secrets before the Agent resource exists.",
   },
   createSlackCreateSecretModal: {
     group: "Pages/Create Agent",
@@ -1969,7 +1969,21 @@ export const scenarios = {
     slack: true,
     actions: [click("Edit Slack")],
     description:
-      "Search Slack token Secrets by name or ID, use arrow keys and Enter to select, and Escape to retain the current binding. Metadata is simulated within this Namespace.",
+      "Search Slack token Secrets by name or ID; options and selections show names only. Use arrow keys and Enter to select, and Escape to retain the current binding. Metadata is simulated within this Namespace.",
+  },
+  slackSecretNameCollision: {
+    group: "Components/Channels",
+    name: "Slack Secret action name collision",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    extraSecrets: [
+      { id: "sec_story_create_name", name: "Create new Secret..." },
+      { id: "sec_story_none_name", name: "No Secret bound" },
+      { id: "sec_story_bound_name", name: "Bound Secret" },
+    ],
+    actions: [click("Edit Slack")],
+    description:
+      "Open the bot token selector to compare Secret names with matching picker actions. Real Secret names remain unchanged and conflicting actions have a qualifier.",
   },
   slackCreateSecretModal: {
     group: "Components/Channels",
@@ -2181,7 +2195,7 @@ export const scenarios = {
       },
     ],
     description:
-      "Secret references remain preserved when Secret metadata cannot be listed in this Namespace.",
+      "Secret references remain preserved when metadata cannot be listed; the picker shows Bound Secret without an ID.",
   },
   credentialsSlackGrantDenied: {
     group: "Components/Credentials",
@@ -2265,7 +2279,7 @@ export const scenarios = {
     ],
     actions: [{ selector: "#harness-auth-secret", value: "sec_demo_model_replacement" }],
     description:
-      "The authentication source uses the same Secret picker and stages a different API-key Secret.",
+      "The authentication source picker displays Secret names and stages a different API-key Secret.",
   },
   authSecretReplacement: {
     group: "Components/Credentials",
