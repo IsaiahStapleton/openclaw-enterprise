@@ -58,6 +58,9 @@
       "path": "tests/conformance/platform-state-memory.test.mjs"
     },
     {
+      "path": "tests/conformance/pr-status.test.mjs"
+    },
+    {
       "path": "tests/conformance/presets.test.mjs"
     },
     {
