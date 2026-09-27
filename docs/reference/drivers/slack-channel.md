@@ -23,6 +23,25 @@ Slack service produces a safe error without returning the token or upstream
 payload. Retry after fixing the token or scopes. Exact IDs can be entered when
 directory browsing is unavailable.
 
+## Enable lookup in production
+
+The production API leaves directory lookup unavailable unless the operator sets
+Helm `api.channelDirectoryProxyUrl` to an approved HTTP or HTTPS proxy endpoint,
+for example `http://198.51.100.25:3128` after replacing the example IP and port.
+The value must contain one literal IPv4 address and an explicit port, without
+credentials or a path. The chart passes it to the API as
+`OCC_CHANNEL_DIRECTORY_PROXY_URL` and allows API Pod egress only to that IP and
+port. It does not grant the worker or Agent Pods this egress.
+
+The proxy must permit HTTP `CONNECT` to `slack.com:443`. The Driver sends its
+Slack API requests through that tunnel and verifies Slack's TLS certificate.
+Restrict the proxy to that destination. Keep the selected bot token in the
+same-Namespace Secret; the proxy endpoint needs no token or other credential in
+the Helm value. When the value is empty, authorized lookups return an unavailable
+response and the Console offers exact-ID entry. See the
+[production controller settings](../settings/production.md) for the environment
+contract.
+
 See the [ChannelDriver contract](channel.md) for OCC authorization and
 [Slack Configuration](../configuration/secrets.md#native-channel-configuration)
 for gateway token bindings.

@@ -1345,6 +1345,63 @@ test(
   },
 );
 
+test("Slack directory proxy grants only API egress to its exact endpoint", tooling, async () => {
+  const name = "openclaw-enterprise-api-channel-directory-egress";
+  const defaults = await resources((await render()).stdout);
+  assert.ok(!defaults.some(({ metadata }) => metadata.name === name));
+  const objects = await resources(
+    (await render({ "api.channelDirectoryProxyUrl": "http://198.51.100.25:3128" })).stdout,
+  );
+  const policy = objects.find(
+    ({ kind, metadata }) => kind === "NetworkPolicy" && metadata.name === name,
+  );
+  assert.ok(policy, "configured directory proxy must render API egress");
+  assert.deepEqual(policy.spec, {
+    podSelector: {
+      matchLabels: {
+        "app.kubernetes.io/name": "openclaw-enterprise",
+        "app.kubernetes.io/instance": "oce",
+        "app.kubernetes.io/component": "api",
+      },
+    },
+    policyTypes: ["Egress"],
+    egress: [
+      {
+        to: [{ ipBlock: { cidr: "198.51.100.25/32" } }],
+        ports: [{ protocol: "TCP", port: 3128 }],
+      },
+    ],
+  });
+  const proxyEnvironment = (objects, component) =>
+    objects
+      .find(
+        ({ kind, spec }) =>
+          kind === "Deployment" &&
+          spec.template.metadata.labels["app.kubernetes.io/component"] === component,
+      )
+      .spec.template.spec.containers[0].env.find(
+        ({ name }) => name === "OCC_CHANNEL_DIRECTORY_PROXY_URL",
+      );
+  assert.deepEqual(proxyEnvironment(objects, "api"), {
+    name: "OCC_CHANNEL_DIRECTORY_PROXY_URL",
+    value: "http://198.51.100.25:3128",
+  });
+  assert.equal(proxyEnvironment(objects, "worker"), undefined);
+  assert.equal(proxyEnvironment(defaults, "api"), undefined);
+  for (const url of [
+    "http://slack.com:3128",
+    "http://198.51.100.25:65536",
+    "http://user:pass@198.51.100.25:3128",
+    "http://198.51.100.25:3128/path",
+    "http://198.51.100.999:3128",
+  ]) {
+    await assert.rejects(
+      render({ "api.channelDirectoryProxyUrl": url }),
+      /api.channelDirectoryProxyUrl/,
+    );
+  }
+});
+
 test(
   "optional database CA Secret mounts into every production database client",
   tooling,

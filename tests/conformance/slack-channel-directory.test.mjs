@@ -1,9 +1,30 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import test from "node:test";
 import { SlackChannelDriver } from "../../apps/controller/src/drivers/channel/slack.ts";
 import { ChannelDirectoryError } from "../../packages/occ/src/index.ts";
 
 const token = "xoxb-fixture";
+
+test("Slack directory sends HTTPS requests through its selected CONNECT proxy", async (t) => {
+  const targets = [];
+  const proxy = createServer();
+  proxy.on("connect", (request, socket) => {
+    targets.push(request.url);
+    assert.equal(request.headers.authorization, undefined);
+    socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+  });
+  await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  t.after(() => proxy.close());
+  const address = proxy.address();
+  assert.ok(address && typeof address !== "string");
+  const driver = new SlackChannelDriver(globalThis.fetch, `http://127.0.0.1:${address.port}`);
+
+  await assert.rejects(driver.lookupDirectory({ token, kind: "users" }), {
+    reason: "unavailable",
+  });
+  assert.deepEqual(targets, ["slack.com:443"]);
+});
 
 function auth() {
   return Response.json({

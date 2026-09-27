@@ -31,10 +31,12 @@ actionable error.
 graph TD
   A["Operator selects bot Secret and searches"] --> B["OCC checks edit target and exact Secret operate"]
   B -->|denied or missing| X["Return safe lookup error"]
-  B -->|authorized| C["SecretDriver reads current value"]
+  B -->|authorized| P{"ChannelDriver selected?"}
+  P -->|no| U["Return 501; Console offers exact-ID entry"]
+  P -->|yes| C["SecretDriver reads current value"]
   C --> D["OCC rechecks target, Secret grant, and backend identity"]
   D -->|changed| X
-  D -->|current| E["ChannelDriver reads workspace and bounded directory pages"]
+  D -->|current| E["Slack Driver reads workspace and bounded directory pages"]
   E -->|provider error| X
   E --> F["Console shows names and exact IDs"]
   F --> G["Configuration saves selected IDs"]
@@ -55,6 +57,12 @@ platform state. A missing or foreign target is rejected before provider I/O.
 
 `packages/occ/src/index.ts:OpenClawController.lookupChannelDirectory`
 
+Production composition selects the bundled Slack ChannelDriver only when the
+API has an approved `OCC_CHANNEL_DIRECTORY_PROXY_URL`. Without it, an authorized
+lookup returns `501` before the Secret value is read. Development selects the
+Driver directly. In production the Driver tunnels requests to `slack.com:443`
+through the configured proxy; the chart grants the API Pod egress only to that
+proxy IP and port.
 The selected SecretDriver invokes `withValue` and verifies backend ownership.
 OCC rechecks grants and Secret backend identity after the read. It passes the
 token only in process to the ChannelDriver. The bundled Slack implementation
@@ -78,6 +86,9 @@ until the operator saves the channel edit.
 - A denied lookup requires checking the exact edit permission and Secret
   `operate` grant. A token, scope, rate limit, or provider error returns a
   safe code without the token or upstream payload.
+- A `501` lookup in production means the API has no directory proxy configured.
+  Set the approved proxy IP and port in Helm `api.channelDirectoryProxyUrl`, and
+  verify that the proxy permits CONNECT to `slack.com:443`.
 - Directory conformance tests cover provider pagination and safe errors. The
   OCC API integration test covers both authorization checks and response
   projection. Browser checks cover name display and exact-ID saving.
@@ -97,4 +108,5 @@ until the operator saves the channel edit.
 
 ## Changelog
 
+- 2026-09-27 08:51: Document production Slack directory proxy selection and egress. (01a0df20-f340-7810-bb59-b1df6c0bbbd3 - 1a2764952c421bfee00ed6892714366292c2741a)
 - 2026-09-27 06:41: Describe authorized Slack directory lookup. (01a0df20-f340-7810-bb59-b1df6c0bbbd3 - 1d7b0b3b4e419cb8e085996be873ec233eeabf6d)

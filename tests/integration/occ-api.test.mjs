@@ -1624,6 +1624,12 @@ test("Channel directory lookup checks the exact edit target and Secret before an
   });
   assert.equal(agent.status, 201);
 
+  const path = `/namespaces/${namespace.id}/channel-directory/lookup`;
+  const body = { secretId: secret.data.id, kind: "users", query: "mem" };
+  const unavailable = await controller.request("POST", path, { body });
+  assert.equal(unavailable.status, 501);
+  assert.equal(unavailable.body.error.code, "NOT_IMPLEMENTED");
+
   let providerCalls = 0;
   let lastProviderInput;
   let providerResult = {
@@ -1646,8 +1652,6 @@ test("Channel directory lookup checks the exact edit target and Secret before an
   };
   fixture.controller.registerDriver(channelDriver);
   fixture.controller.selectDriver("channel", channelDriver.id);
-  const path = `/namespaces/${namespace.id}/channel-directory/lookup`;
-  const body = { secretId: secret.data.id, kind: "users", query: "mem" };
   const expected = {
     workspaceId: "T123",
     workspaceName: "Example workspace",

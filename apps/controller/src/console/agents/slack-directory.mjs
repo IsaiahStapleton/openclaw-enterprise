@@ -66,6 +66,9 @@ function lookupError(error) {
   if (error.status === 403) {
     return "You need access to this Agent or Configuration and permission to use its selected Slack bot Secret.";
   }
+  if (error.status === 501) {
+    return "Slack directory lookup is unavailable. Ask your operator to configure the API channel directory proxy, or enter exact IDs.";
+  }
   return reason ?? error.message ?? "Slack directory could not be loaded.";
 }
 
