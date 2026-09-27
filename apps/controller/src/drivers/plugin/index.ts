@@ -392,15 +392,20 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
   }
 
   async discoverCatalog(
-    input: { readonly accessToken?: string; readonly cursor?: string },
+    input: { readonly accessToken?: string; readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     if (this.catalogSource === "openai-curated") {
       if (input.cursor !== undefined) {
         throw new PluginDiscoveryError("invalid_response");
       }
+      const query = input.q?.trim().toLowerCase() ?? "";
       return {
-        plugins: this.catalog(OPENAI_CURATED_CATALOG),
+        plugins: this.catalog(OPENAI_CURATED_CATALOG).filter((entry) =>
+          [entry.name, entry.id, entry.description ?? ""].some((text) =>
+            text.toLowerCase().includes(query),
+          ),
+        ),
         nextCursor: null,
         setup: CURATED_SETUP,
       };
@@ -412,6 +417,7 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
       {
         accessToken: input.accessToken,
         ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.q === undefined ? {} : { q: input.q }),
       },
       signal,
     );

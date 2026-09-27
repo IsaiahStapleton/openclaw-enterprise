@@ -478,6 +478,22 @@ export function installFixture(scenario, evidence) {
         return selectedPreset ? response(selectedPreset) : error(404);
       }
       if (resource === "agents/plugins" && method === "POST" && scenario.pluginDiscovery) {
+        const query = body.q?.trim().toLowerCase();
+        if (query) {
+          const matches = Object.values(scenario.pluginDiscovery.pages)
+            .flatMap((page) => page.plugins)
+            .filter((entry) =>
+              [entry.name, entry.id, entry.description ?? ""].some((value) =>
+                value.toLowerCase().includes(query),
+              ),
+            );
+          const offset = body.cursor ? Number(body.cursor.slice("search-".length)) : 0;
+          return response({
+            plugins: matches.slice(offset, offset + 20),
+            nextCursor: offset + 20 < matches.length ? `search-${offset + 20}` : null,
+            setup: scenario.pluginDiscovery.pages.initial.setup,
+          });
+        }
         const page = scenario.pluginDiscovery.pages[body.cursor ?? "initial"];
         return page ? response(page) : error(400, "PLUGIN_DISCOVERY_INVALID_RESPONSE");
       }

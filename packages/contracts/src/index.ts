@@ -1093,7 +1093,7 @@ export interface PluginDriver extends Driver {
   /** Pre-Agent discovery defaults to requiring a transient credential. Results are not persisted. */
   readonly discoveryCredential?: "required" | "none";
   discoverCatalog?(
-    input: { readonly accessToken?: string; readonly cursor?: string },
+    input: { readonly accessToken?: string; readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage>;
   getCatalogPlugin?(

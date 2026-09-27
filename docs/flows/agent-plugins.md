@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-27
-last_updated_session: 01a0e3cf-cfd3-7c02-91ac-19a0efbd7645
+last_updated_session: 01a0e4d2-4f51-7780-b0fc-2352cb99078f
 ---
 
 # Agent Plugin Deployment Flow
@@ -66,33 +66,34 @@ graph TD
 
 ### Credential-scoped discovery
 
-[Create Agent discovery](../reference/drivers/plugin.md#selection-and-catalogs)
-accepts a transient PAT, same-Namespace Secret, or no credential when the Driver
-permits it. OCC checks Namespace Agent `create` and caller Secret `operate` before
-Driver support. Unsupported discovery reads no Secret.
+[Create discovery](../reference/drivers/plugin.md#selection-and-catalogs) accepts
+transient PATs, same-Namespace Secrets, or supported credential-free access.
+OCC checks Namespace Agent `create` and caller Secret `operate` before Driver
+support; unsupported discovery reads no Secret.
 
-Existing-Agent routes accept only cursors or plugin IDs under active Agent
-`read`/`update`. Curated discovery needs no Secret. Hosted discovery reads bound
-`codex_pat`, requires caller and Agent ServicePrincipal Secret `operate`, then
-rechecks binding and grants inside
-[`SecretDriver.withValue`](../reference/drivers/secret.md) before provider I/O.
-Plugin edits use Agent PATCH; admitted revisions stay immutable.
+Existing-Agent discovery requires active Agent `read`/`update`; inputs are queries,
+cursors, or plugin IDs. Hosted discovery resolves bound `codex_pat` and rechecks
+binding and caller/Agent Secret `operate` inside
+[`SecretDriver.withValue`](../reference/drivers/secret.md). Curated discovery needs
+no Secret. Missing, denied, or unavailable Secrets fail before discovery.
+Nontransactional reads use current values but may precede rotation; discovery
+persists no state or credentials.
 
-Secret-backed reads use current values without transactions; in-flight
-reads may use pre-rotation values. Missing, denied, or unavailable Secrets fail
-before provider discovery. Discovery stores no state or credential.
+The [Codex Driver](../../apps/controller/src/drivers/plugin/index.ts) hydrates
+hosted identity, then searches `q` or lists GLOBAL entries with opaque cursors.
+[Console discovery](../../apps/controller/src/console/agents/plugin-discovery.mjs)
+invalidates responses and aborts requests on input before the
+[search delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+Enter/paging run immediately; closing, configured view, or credential changes cancel
+searches. Request signals retain view cancellation.
+Tools (`null`: unknown) load on demand; supported entries become selectable after
+details. Unsupported releases stay unavailable. Curated catalogs filter bundled
+entries; tools/account access remain unknown.
 
-The [Codex Plugin Driver](../../apps/controller/src/drivers/plugin/index.ts)
-selects hosted or curated discovery. Hosted discovery hydrates identity, pages 20
-GLOBAL entries, and loads tools (`null`: unknown). Curated entries require no
-provider I/O; tools and account access remain unknown. Console permits
-supported entries after details; unsupported releases stay unavailable.
-Filtering is local; hosted reads are bounded and redirect-free. OCC returns
-`no-store` metadata, rejects credential echoes, and suppresses upstream errors
-and artifacts. Driver links and
-[setup guidance](../reference/drivers/plugin-bundled.md#selection-and-catalogs)
-stay outside selections. App connections remain unverified; HTTPS logos omit
-referrers and fall back to initials.
+Bounded hosted reads forbid redirects. OCC returns `no-store` metadata, rejects
+credential echoes, and suppresses upstream errors/artifacts. Selections exclude
+Driver links/setup guidance. Connections remain unverified; HTTPS logos omit
+referrers and default to initials.
 
 ### 1. Validate desired state under exact-Agent authority
 
@@ -100,7 +101,7 @@ referrers and fall back to initials.
 
 HTTP contracts validate input before
 [OpenClawController](../../packages/occ/src/index.ts) checks the exact Namespace
-and Agent. Reads require Agent `read`; create/update stores the `plugins` map.
+and Agent. Reads require Agent `read`; create/PATCH stores the `plugins` map.
 Shared validators check the nested selection shape.
 `OpenClawController.validatePluginPolicies` calls the selected Driver's
 `validatePolicies` before Agent create/update and provisioning writes. Unsupported
@@ -292,6 +293,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 21:52: Debounced catalog searches and canceled obsolete requests. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - a599db7e)
 
 - 2026-09-27 20:21: Documented approval mapping. (01a0e3cf-cfd3-7c02-91ac-19a0efbd7645 - 0663fa97ed5c0fcabc680241dbe7fbde9fde3562)
 

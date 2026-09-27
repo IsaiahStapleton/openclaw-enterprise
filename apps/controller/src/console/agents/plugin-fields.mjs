@@ -87,6 +87,7 @@ export function createPluginFields({
   catalog = null,
   capabilities = null,
   onLoadPlugins = null,
+  onCancelDiscovery = null,
   onLoadTools = null,
   saveHint = "Changes are saved when you create the Agent.",
   createApproverField,
@@ -94,14 +95,16 @@ export function createPluginFields({
   let disabled = false;
   let activeId = null;
   let configuredOnly = false;
+  let availableQuery = "";
   let toolQuery = "";
   let waitingForCatalog = false;
   const search = element("input", {
     type: "search",
     id: "plugin-search",
-    placeholder: "Filter this page",
+    placeholder: "Search plugins",
+    maxLength: 1024,
   });
-  const searchLabel = element("label", { for: search.id }, "Filter this page");
+  const searchLabel = element("label", { for: search.id }, "Search plugins");
   const status = element("p", { className: "hint", role: "status" });
   const feedback = element("p", { className: "error", role: "status" });
   const policyStatus = element("p", { className: "hint", role: "status" });
@@ -167,12 +170,16 @@ export function createPluginFields({
   );
   dialog.addEventListener("close", () => {
     waitingForCatalog = false;
+    onCancelDiscovery?.();
     configure.focus();
   });
   // A search Enter must not submit a surrounding form.
   dialog.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && event.target.matches('input[type="search"]')) {
       event.preventDefault();
+      if (event.target === search && !configuredOnly) {
+        loadPage("refresh");
+      }
     }
   });
   const json = element(
@@ -195,14 +202,16 @@ export function createPluginFields({
 
   function loadPage(direction) {
     activeId = null;
-    search.value = "";
-    onLoadPlugins?.(direction);
+    onLoadPlugins?.(direction, availableQuery);
   }
 
   function showConfigured(value) {
     waitingForCatalog = false;
     configuredOnly = value;
-    search.value = "";
+    if (value) {
+      onCancelDiscovery?.();
+    }
+    search.value = value ? "" : availableQuery;
     activeId = null;
     render();
   }
@@ -380,14 +389,14 @@ export function createPluginFields({
       ...(catalog?.setup ? setupContent(catalog.setup) : []),
     );
     summary.textContent = `${count} plugin${count === 1 ? "" : "s"} configured. Select plugins and set their tool policies.`;
-    searchLabel.textContent = configuredOnly ? "Filter configured plugins" : "Filter this page";
+    searchLabel.textContent = configuredOnly ? "Filter configured plugins" : "Search plugins";
     search.placeholder = searchLabel.textContent;
     if (configuredOnly) {
       status.textContent = `${count} configured plugin${count === 1 ? "" : "s"}`;
     }
     browser.setAttribute("aria-busy", String(catalog?.status === "loading"));
     workspace.dataset.showDetails = String(activeId !== null);
-    const query = search.value.trim().toLowerCase();
+    const query = configuredOnly || !onLoadPlugins ? search.value.trim().toLowerCase() : "";
     const candidates = configuredOnly
       ? Object.keys(values ?? {}).map((id) => entries.get(id))
       : (catalog?.entries ?? []);
@@ -928,7 +937,14 @@ export function createPluginFields({
     }
   }
   input.addEventListener("input", render);
-  search.addEventListener("input", render);
+  search.addEventListener("input", () => {
+    if (configuredOnly || !onLoadPlugins) {
+      render();
+      return;
+    }
+    availableQuery = search.value;
+    loadPage("search");
+  });
   render();
   return {
     section,
