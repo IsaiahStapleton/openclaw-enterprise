@@ -2250,7 +2250,7 @@ export const scenarios = {
     slack: true,
     actions: [click("Edit Slack")],
     description:
-      "Edit channels, users, mention requirement, and enabled state. Token references remain fixed; token values belong in Credentials.",
+      "Select or create Slack token Secrets at the top, then configure channel and direct-message access. The bot token enables name lookup; both tokens are required before deployment.",
     steps: [
       "Change the channel IDs, then click inside the panel and drag from its heading onto the gray backdrop. The editor stays open.",
       "Click the gray backdrop. Reopen Edit Slack and confirm the unsaved channel changes were discarded, just as with Cancel.",
@@ -2353,8 +2353,14 @@ export const scenarios = {
     path: `${draft}&tab=channels`,
     slack: true,
     slackBindings: "app",
-    actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
-    description: "The picker explains that a Slack bot token Secret must be selected first.",
+    actions: [click("Edit Slack")],
+    description:
+      "Credentials appear before access settings. The instructions explain that name lookup needs a bot token; exact-ID entry remains available.",
+    steps: [
+      "At the top of the editor, open Slack bot token and choose Slack bot token (simulated). Existing IDs resolve to names.",
+      "Continue to Channels, search for platform, and select the result. Review channel and direct-message access before saving.",
+    ],
+    gap: "Secret choices and directory responses are simulated; this does not verify a real Slack token.",
   },
   slackEveryone: {
     group: "Components/Channels",
