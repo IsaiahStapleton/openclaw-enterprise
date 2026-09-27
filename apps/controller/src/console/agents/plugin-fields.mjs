@@ -1,9 +1,10 @@
 import { element, button } from "../dom.mjs";
 
 const approvalOptions = [
-  ["native", "Native behavior"],
-  ["prompt", "Ask for approval"],
-  ["approve", "Approve"],
+  ["provider_default", "Provider default"],
+  ["all_actions", "Every action"],
+  ["write_actions", "Write actions"],
+  ["none", "No additional approval"],
 ];
 const reviewerOptions = [
   ["human", "Human"],
@@ -261,7 +262,9 @@ export function createPluginFields({
     const control = element(
       "select",
       { "aria-label": label },
-      ...options.map(([key, text]) => element("option", { value: key }, text)),
+      ...options.map(([key, text, disabled = false]) =>
+        element("option", { value: key, disabled }, disabled ? `${text} (unsupported)` : text),
+      ),
     );
     if (!options.some(([key]) => key === value)) {
       control.append(element("option", { value, disabled: true }, `${value} (unsupported)`));
@@ -270,6 +273,41 @@ export function createPluginFields({
     control.value = value;
     control.addEventListener("change", () => onChange(control.value));
     return element("label", { className: "plugin-control" }, label, control);
+  }
+
+  function approvalSelect(name, value, scope, onChange) {
+    const modes = capabilities?.[scope].approval ?? [];
+    const options = approvalOptions.map(([mode, label]) => [mode, label, !modes.includes(mode)]);
+    const field = select(
+      "Require approval for",
+      value ?? "",
+      [["", scope === "tools" ? "Inherit plugin policy" : "Inherit default policy"], ...options],
+      onChange,
+      modes.length > 0,
+    );
+    field.querySelector("select").setAttribute("aria-label", `${name} require approval for`);
+    return field;
+  }
+
+  function approvalHint(value, scope) {
+    const modes = capabilities?.[scope].approval ?? [];
+    const unsupported = approvalOptions
+      .filter(([mode]) => !modes.includes(mode))
+      .map(([, label]) => label);
+    if (capabilities && unsupported.length) {
+      return element(
+        "p",
+        { className: "hint" },
+        `This plugin provider does not support: ${unsupported.join(", ")}.`,
+      );
+    }
+    return value === "write_actions" && modes.includes(value)
+      ? element(
+          "p",
+          { className: "hint" },
+          "Write actions include creating, changing, or deleting data. Actions without read-only metadata also require approval.",
+        )
+      : null;
   }
 
   function render() {
@@ -288,12 +326,6 @@ export function createPluginFields({
     policyStatus.textContent = capabilities
       ? ""
       : "This installation does not support plugin policy editing. You can browse plugins; existing settings are preserved.";
-    const defaultApprovals = approvalOptions.filter(([mode]) =>
-      capabilities?.toolDefaults.approval.includes(mode),
-    );
-    const toolApprovals = approvalOptions.filter(([mode]) =>
-      capabilities?.tools.approval.includes(mode),
-    );
     const defaultReviewers = reviewerOptions.filter(([mode]) =>
       capabilities?.toolDefaults.reviewer?.includes(mode),
     );
@@ -498,7 +530,7 @@ export function createPluginFields({
               element(
                 "p",
                 { className: "hint" },
-                "Approval controls when review is required. Reviewer selects who reviews; automatic review may deny a call.",
+                "Approval applies to current and future actions unless a tool overrides it. Reviewer selects who reviews; automatic review may deny a call.",
               ),
               element(
                 "div",
@@ -514,15 +546,12 @@ export function createPluginFields({
                   (value) => writeDefault("enabled", value === "" ? undefined : value === "true"),
                   capabilities?.toolDefaults.enabled === true,
                 ),
-                select(
-                  `${entry.name} default approval`,
-                  defaults.approval ?? "",
-                  [["", "Inherit default policy"], ...defaultApprovals],
-                  (value) => writeDefault("approval", value || undefined),
-                  defaultApprovals.length > 0,
+                approvalSelect(entry.name, defaults.approval, "toolDefaults", (value) =>
+                  writeDefault("approval", value || undefined),
                 ),
                 defaultReviewer,
               ),
+              approvalHint(defaults.approval, "toolDefaults"),
             ),
           );
           if (createApproverField && capabilities?.approvers?.plugin === true) {
@@ -742,12 +771,8 @@ export function createPluginFields({
                 (value) => writeTool("enabled", value === "" ? undefined : value === "true"),
                 capabilities?.tools.enabled === true,
               ),
-              select(
-                `${tool.name} approval`,
-                policy.approval ?? "",
-                [["", "Inherit plugin policy"], ...toolApprovals],
-                (value) => writeTool("approval", value || undefined),
-                toolApprovals.length > 0,
+              approvalSelect(tool.name, policy.approval, "tools", (value) =>
+                writeTool("approval", value || undefined),
               ),
               toolReviewers.length > 0 || policy.reviewer !== undefined
                 ? select(
@@ -763,6 +788,7 @@ export function createPluginFields({
                     )
                   : null,
             ),
+            approvalHint(policy.approval, "tools"),
           );
           const toolApprovers =
             createApproverField && capabilities?.approvers?.tools === true

@@ -165,6 +165,10 @@
                     "label": "Secrets"
                   },
                   {
+                    "page": "reference/credential-sources",
+                    "label": "Credential Sources"
+                  },
+                  {
                     "page": "guides/topics/audit-log",
                     "label": "Audit Log"
                   }
@@ -277,6 +281,15 @@
                     "pages": [
                       {
                         "page": "reference/drivers/openshell-sandbox",
+                        "label": "OpenShell"
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Credential Gateway",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/openshell-credential-gateway",
                         "label": "OpenShell"
                       }
                     ]
@@ -637,6 +650,10 @@
                         "label": "Configuration"
                       },
                       {
+                        "page": "reference/drivers/credential-gateway",
+                        "label": "Credential Gateway"
+                      },
+                      {
                         "page": "reference/drivers/iam",
                         "label": "IAM"
                       },
@@ -711,6 +728,10 @@
                         "label": "Module Boundaries"
                       },
                       {
+                        "page": "testing/repository-boundaries",
+                        "label": "Repository Boundaries"
+                      },
+                      {
                         "page": "testing/fixtures-and-scenarios",
                         "label": "Fixtures and Scenarios"
                       },
@@ -758,6 +779,7 @@
               }
             ],
             "hidden": [
+              "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
               "design/access",
@@ -771,6 +793,7 @@
               "flows/docker-compose-development/startup",
               "flows/docker-compose-development/agent-execution",
               "flows/common-logging",
+              "flows/audit-ledger",
               "flows/controller-worker",
               "flows/agent-deployment-diagnostics",
               "flows/platform-console",
@@ -786,6 +809,7 @@
               "flows/harness-execution-topology",
               "flows/compute-driver-lifecycle-hooks",
               "flows/openshell-sandbox-provisioning",
+              "flows/credential-source-lifecycle",
               "flows/driver-plugin-loading",
               "flows/agent-plugins",
               "flows/agent-channel-directory",

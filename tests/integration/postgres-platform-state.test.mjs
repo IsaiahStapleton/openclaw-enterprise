@@ -1334,7 +1334,7 @@ test(
       "occ-plugin:diffs": {
         enabled: true,
         approvers: [{ channel: "slack", id: "team:T123:user:U123" }],
-        toolDefaults: { enabled: false, approval: "approve" },
+        toolDefaults: { enabled: false, approval: "none" },
         tools: { diffs: { enabled: true, approvers: [] } },
       },
     };
@@ -1496,8 +1496,8 @@ test(
     const replacementPlugins = {
       "occ-plugin:diffs": {
         enabled: true,
-        toolDefaults: { approval: "native" },
-        tools: { diffs: { approval: "approve" } },
+        toolDefaults: { approval: "provider_default" },
+        tools: { diffs: { approval: "none" } },
       },
     };
     const replacedPlugins = await controller.updateAgent(principalId, {

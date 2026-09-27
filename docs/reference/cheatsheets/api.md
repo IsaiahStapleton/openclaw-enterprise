@@ -120,6 +120,13 @@
 
 - [`listBackends`](../api.md#get-backends): List configured Backends (experimental).
 
+### Credential sources
+
+- [`listCredentialSources`](../api.md#get-namespacesnamespaceidcredentialsources): List readable credential sources without revealing credential values.
+- [`getCredentialSource`](../api.md#get-namespacesnamespaceidcredentialsourcescredentialsourceid): Get one credential source and its live Credential Gateway status.
+- [`createCredentialSource`](../api.md#post-namespacesnamespaceidcredentialsources): Register a credential source with the selected Credential Gateway.
+- [`deleteCredentialSource`](../api.md#delete-namespacesnamespaceidcredentialsourcescredentialsourceid): Remove an unreferenced credential source from the Credential Gateway.
+
 ### Presets
 
 - [`listPresets`](../api.md#get-namespacesnamespaceidpresets): List readable Presets in one Namespace.

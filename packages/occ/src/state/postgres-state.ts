@@ -15,6 +15,7 @@ import type {
   WorkspaceSetup,
   AgentRevision,
   AuditEvent,
+  CredentialSource,
   Group,
   GroupMembership,
   Identity,
@@ -54,6 +55,7 @@ import type {
   AgentRevisionRepository,
   ConfigurationOwnership,
   ConfigurationRepository,
+  CredentialSourceRepository,
   InstallationRepository,
   IAMPolicyRepository,
   NamespaceRepository,
@@ -361,6 +363,46 @@ function secretFromRow(row: PostgresRow): Readonly<Secret> {
   });
 }
 
+const CREDENTIAL_SOURCE_COLUMNS = `cs.id, cs.namespace_id, cs.name, cs.type, cs.config,
+  cs.driver_id, cs.state, cs.created_at,
+  COALESCE((
+    SELECT jsonb_object_agg(css.field, css.secret_id)
+    FROM occ.credential_source_secrets AS css
+    WHERE css.credential_source_id = cs.id
+  ), '{}'::jsonb) AS secret_ids`;
+
+function credentialSourceFromRow(row: PostgresRow): Readonly<CredentialSource> {
+  const namespaceId = text(row, "namespace_id");
+  const state = text(row, "state");
+  if (state !== "registering" && state !== "ready" && state !== "deleting") {
+    throw new DependencyUnavailableError("Persisted credential source state is invalid.");
+  }
+  const config = jsonObject(row.config);
+  const secretIds = jsonObject(row.secret_ids);
+  if (
+    Object.values(config).some((value) => typeof value !== "string") ||
+    Object.values(secretIds).some((value) => typeof value !== "string")
+  ) {
+    throw new DependencyUnavailableError("Persisted credential source metadata is invalid.");
+  }
+  return immutableCopy({
+    id: text(row, "id"),
+    namespaceId,
+    name: text(row, "name"),
+    type: text(row, "type"),
+    config: config as Record<string, string>,
+    secrets: Object.fromEntries(
+      Object.entries(secretIds as Record<string, string>).map(([field, id]) => [
+        field,
+        { kind: "secret" as const, namespaceId, id },
+      ]),
+    ),
+    driverId: text(row, "driver_id"),
+    state,
+    createdAt: timestamp(row, "created_at"),
+  });
+}
+
 function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
   const rawNumber = row.revision_number;
   const revision = typeof rawNumber === "string" ? Number(rawNumber) : rawNumber;
@@ -604,7 +646,23 @@ function auditFromRow(row: PostgresRow, installationId: string): Readonly<AuditE
   if (details !== undefined) {
     delete details[AUDIT_METADATA_KEY];
   }
-  const metadata = rawMetadata === undefined ? {} : jsonObject(rawMetadata);
+  const storedMetadata = rawMetadata === undefined ? {} : jsonObject(rawMetadata);
+  const metadata: Record<string, unknown> = {};
+  for (const key of [
+    "schemaVersion",
+    "source",
+    "requestId",
+    "admissionDecisionId",
+    "actor",
+    "iamDriverId",
+    "authorization",
+    "decisionReason",
+    "reasonCode",
+  ] as const) {
+    if (Object.hasOwn(storedMetadata, key)) {
+      metadata[key] = storedMetadata[key];
+    }
+  }
 
   return immutableCopy({
     id: text(row, "id"),
@@ -1385,6 +1443,17 @@ export class PostgresPlatformState implements PlatformStateStore {
         )[0];
         return found?.present === true;
       },
+      hasCredentialSources: async (namespaceId) => {
+        const found = rows(
+          (
+            await client.query(
+              "SELECT EXISTS (SELECT 1 FROM occ.credential_sources WHERE namespace_id = $1) AS present",
+              [namespaceId],
+            )
+          ).rows,
+        )[0];
+        return found?.present === true;
+      },
       transitionNamespaceStatus: async (namespaceId, expected, next) => {
         await this.requireInitialized(context);
         const expectedStatuses = Array.isArray(expected) ? expected : [expected];
@@ -1724,6 +1793,9 @@ export class PostgresPlatformState implements PlatformStateStore {
           (
             await client.query(
               `SELECT EXISTS (
+                 SELECT 1 FROM occ.credential_source_secrets
+                 WHERE namespace_id = $1 AND secret_id = $2
+               ) OR EXISTS (
                  SELECT 1
                  FROM occ.configurations AS c,
                       jsonb_each(COALESCE(c.secret_bindings, '{}'::jsonb)) AS binding(env, value)
@@ -1816,6 +1888,172 @@ export class PostgresPlatformState implements PlatformStateStore {
         ).rows,
       )[0];
       return found === undefined ? undefined : serviceAccountFromRow(found);
+    };
+
+    const findCredentialSource = async (
+      namespaceId: string,
+      credentialSourceId: string,
+      lock = false,
+    ): Promise<Readonly<CredentialSource> | undefined> => {
+      const found = rows(
+        (
+          await client.query(
+            `SELECT ${CREDENTIAL_SOURCE_COLUMNS}
+             FROM occ.credential_sources AS cs
+             JOIN occ.namespaces AS n ON n.id = cs.namespace_id AND n.deleted_at IS NULL
+             WHERE cs.namespace_id = $1 AND cs.id = $2${lock ? " FOR UPDATE OF cs" : ""}`,
+            [namespaceId, credentialSourceId],
+          )
+        ).rows,
+      )[0];
+      return found === undefined ? undefined : credentialSourceFromRow(found);
+    };
+
+    const credentialSources: CredentialSourceRepository = {
+      findCredentialSource,
+      listCredentialSources: async (namespaceId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                `SELECT ${CREDENTIAL_SOURCE_COLUMNS}
+                 FROM occ.credential_sources AS cs
+                 JOIN occ.namespaces AS n ON n.id = cs.namespace_id AND n.deleted_at IS NULL
+                 WHERE cs.namespace_id = $1
+                 ORDER BY cs.created_at, cs.id`,
+                [namespaceId],
+              )
+            ).rows,
+          ).map(credentialSourceFromRow),
+        ),
+      lockCredentialSource: async (namespaceId, credentialSourceId) =>
+        findCredentialSource(namespaceId, credentialSourceId, true),
+      createCredentialSource: async (source) => {
+        await this.requireInitialized(context);
+        const namespace = await namespaces.lockNamespace(source.namespaceId);
+        if (
+          namespace === undefined ||
+          (namespace.status !== "provisioning" && namespace.status !== "ready")
+        ) {
+          throw new ScopeViolationError(
+            "The credential source belongs to an unavailable Namespace.",
+          );
+        }
+        const secretInputs = Object.entries(source.secrets);
+        // Only the Secret ID is stored; the row's Namespace makes every input same-Namespace.
+        if (
+          secretInputs.some(
+            ([, reference]) =>
+              reference.kind !== "secret" || reference.namespaceId !== source.namespaceId,
+          )
+        ) {
+          throw new ScopeViolationError(
+            "Credential source Secret inputs must reference exact Secrets.",
+          );
+        }
+        await client.query(
+          `INSERT INTO occ.credential_sources
+           (id, namespace_id, name, type, config, driver_id, state, created_at)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
+          [
+            source.id,
+            source.namespaceId,
+            source.name,
+            source.type,
+            JSON.stringify(source.config),
+            source.driverId,
+            source.state,
+            source.createdAt,
+          ],
+        );
+        if (secretInputs.length > 0) {
+          await client.query(
+            `INSERT INTO occ.credential_source_secrets
+             (namespace_id, credential_source_id, field, secret_id)
+             SELECT $1, $2, input.field, input.secret_id
+             FROM unnest($3::text[], $4::text[]) AS input(field, secret_id)`,
+            [
+              source.namespaceId,
+              source.id,
+              secretInputs.map(([field]) => field),
+              secretInputs.map(([, reference]) => reference.id),
+            ],
+          );
+        }
+        return immutableCopy(source);
+      },
+      markCredentialSourceReady: async (namespaceId, credentialSourceId) => {
+        const updated = await client.query(
+          `UPDATE occ.credential_sources AS cs SET state = 'ready'
+           FROM occ.namespaces AS n
+           WHERE cs.namespace_id = $1 AND cs.id = $2 AND cs.state = 'registering'
+             AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
+          [namespaceId, credentialSourceId],
+        );
+        return updated.rowCount === 1
+          ? findCredentialSource(namespaceId, credentialSourceId)
+          : undefined;
+      },
+      markCredentialSourceDeleting: async (namespaceId, credentialSourceId) => {
+        const updated = await client.query(
+          `UPDATE occ.credential_sources AS cs SET state = 'deleting'
+           FROM occ.namespaces AS n
+           WHERE cs.namespace_id = $1 AND cs.id = $2 AND cs.state IN ('registering', 'ready')
+             AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
+          [namespaceId, credentialSourceId],
+        );
+        return updated.rowCount === 1
+          ? findCredentialSource(namespaceId, credentialSourceId)
+          : undefined;
+      },
+      hasReferences: async (namespaceId, credentialSourceId) => {
+        if ((await findCredentialSource(namespaceId, credentialSourceId)) === undefined) {
+          return false;
+        }
+        const found = rows(
+          (
+            await client.query(
+              `SELECT EXISTS (
+                 SELECT 1 FROM occ.agents
+                 WHERE namespace_id = $1 AND harness_auth_credential_source_id = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.agents AS a
+                 JOIN occ.agent_revisions AS r ON r.namespace_id = a.namespace_id
+                   AND r.agent_id = a.id AND r.id = a.active_revision_id
+                 WHERE a.namespace_id = $1
+                   AND r.admitted_spec #>> '{harness_auth,method}' = 'credential_source'
+                   AND r.admitted_spec #>> '{harness_auth,sourceId}' = $2
+               ) OR EXISTS (
+                 SELECT 1 FROM occ.controller_work AS w
+                 JOIN occ.agent_revisions AS r ON r.namespace_id = w.namespace_id
+                   AND r.agent_id = w.agent_id AND r.id = w.revision_id
+                 WHERE w.namespace_id = $1 AND w.state IN ('queued', 'claimed')
+                   AND r.admitted_spec #>> '{harness_auth,method}' = 'credential_source'
+                   AND r.admitted_spec #>> '{harness_auth,sourceId}' = $2
+               ) AS present`,
+              [namespaceId, credentialSourceId],
+            )
+          ).rows,
+        )[0];
+        return found?.present === true;
+      },
+      deleteCredentialSource: async (namespaceId, credentialSourceId) => {
+        if ((await findCredentialSource(namespaceId, credentialSourceId)) === undefined) {
+          return false;
+        }
+        if (await credentialSources.hasReferences(namespaceId, credentialSourceId)) {
+          throw new ScopeViolationError(
+            "The credential source is referenced by active platform state.",
+          );
+        }
+        const deleted = await client.query(
+          `DELETE FROM occ.credential_sources AS cs USING occ.namespaces AS n
+           WHERE cs.namespace_id = $1 AND cs.id = $2
+             AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
+          [namespaceId, credentialSourceId],
+        );
+        return deleted.rowCount === 1;
+      },
     };
 
     const serviceAccounts: ServiceAccountRepository = {
@@ -2069,7 +2307,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         await validateSecretBindingsAvailable(agent.namespaceId, configuration.secretBindings);
         await assertHarnessAuthAvailable(
-          { secrets, serviceAccounts },
+          { secrets, serviceAccounts, credentialSources },
           agent.namespaceId,
           agent.harnessAuth,
         );
@@ -2132,7 +2370,11 @@ export class PostgresPlatformState implements PlatformStateStore {
         pluginApprovers,
       ) => {
         if (harnessAuth !== undefined) {
-          await assertHarnessAuthAvailable({ secrets, serviceAccounts }, namespaceId, harnessAuth);
+          await assertHarnessAuthAvailable(
+            { secrets, serviceAccounts, credentialSources },
+            namespaceId,
+            harnessAuth,
+          );
         }
         const configuration = await configurations.findConfiguration(namespaceId, configurationId);
         if (configuration === undefined) {
@@ -2312,7 +2554,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           );
         }
         await assertHarnessAuthAvailable(
-          { secrets, serviceAccounts },
+          { secrets, serviceAccounts, credentialSources },
           revision.namespaceId,
           harnessAuthBindingFromSnapshot(revision.harnessAuth),
         );
@@ -2422,6 +2664,8 @@ export class PostgresPlatformState implements PlatformStateStore {
           "SELECT 1 FROM occ.configurations WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         preset: "SELECT 1 FROM occ.presets WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         secret: "SELECT 1 FROM occ.secrets WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
+        credential_source:
+          "SELECT 1 FROM occ.credential_sources WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         service_account:
           "SELECT 1 FROM occ.service_accounts WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
       };
@@ -2583,6 +2827,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       configurations,
       presets,
       secrets,
+      credentialSources,
       serviceAccounts,
       agents,
       workspaceSetups,

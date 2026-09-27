@@ -2,10 +2,10 @@
 
 Deploy an Agent into a ready Namespace and verify model execution. Complete
 [control-plane installation](production-installation.md) and its authenticated
-API check first. Run commands from the repository root,
-retaining its credentials and Kubernetes context. For Secret-backed authentication,
-you or an Installation administrator must also [grant the Agent access to the model
-Secret](#grant-the-agent-access-to-its-model-secret) before deployment.
+API check. Run commands from the repository root, retaining credentials and
+Kubernetes context. For Secret-backed authentication, you or an Installation
+administrator must [grant the Agent access to the model Secret](#grant-the-agent-access-to-its-model-secret)
+before deployment.
 
 ## Prepare each Namespace
 
@@ -19,11 +19,9 @@ occ namespace list
 export NAMESPACE_ID='<ID shown for default>'
 ```
 
-The worker creates
-the backing Kubernetes namespace and labels it with
-`openclaw.dev/namespace=$NAMESPACE_ID`. This is separate from Kubernetes'
-built-in `default` namespace. Once the worker has created it, discover and
-export its name for the tenant RoleBindings:
+The worker creates a Kubernetes namespace labeled
+`openclaw.dev/namespace=$NAMESPACE_ID`, separate from Kubernetes' built-in
+`default` namespace. Discover and export its name for tenant RoleBindings:
 
 ```bash
 TENANT_NAMESPACE="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
@@ -34,6 +32,9 @@ TENANT_NAMESPACE="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT"
 If no backing namespace is found, check the worker logs and repeat discovery
 after creation. Complete the tenant RoleBindings below, then wait until
 `GET /namespaces/$NAMESPACE_ID` reports `ready` before creating Configurations.
+If it reports `failed`, inspect audit evidence and worker logs.
+[Exhausted lease recovery](../../reference/controller/reconciliation.md#deferred-namespace-and-agent-convergence)
+stops provisioning permanently.
 
 ### Grant tenant RoleBindings
 

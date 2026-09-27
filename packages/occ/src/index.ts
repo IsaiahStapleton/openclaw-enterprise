@@ -14,6 +14,12 @@ import type {
   ComputeLifecycleHooks,
   Configuration,
   ConfigurationDriver,
+  CredentialGatewayDriver,
+  CredentialSource,
+  CredentialSourceMetadata,
+  CredentialSourceStatus,
+  CredentialSourceType,
+  AuditEvent,
   Driver,
   DriverCapability,
   HarnessDescriptor,
@@ -344,6 +350,14 @@ export interface CreateSecretInput {
   readonly value: string;
 }
 
+export interface CreateCredentialSourceInput {
+  readonly namespaceId: string;
+  readonly name: string;
+  readonly type: string;
+  readonly config?: Readonly<Record<string, string>>;
+  readonly secrets?: Readonly<Record<string, SecretReference>>;
+}
+
 export interface UpdateSecretInput {
   readonly namespaceId: string;
   readonly secretId: string;
@@ -416,8 +430,18 @@ type DriverByCapability = {
   plugin: PluginDriver;
   channel: ChannelDriver;
   repo: RepoDriver;
+  credential_gateway: CredentialGatewayDriver;
 };
 type DriverFor<Capability extends DriverCapability> = DriverByCapability[Capability];
+
+/** Bounds each synchronous Credential Gateway call made while serving an API request. */
+const CREDENTIAL_GATEWAY_TIMEOUT_MS = 30_000;
+/**
+ * A Credential Gateway must finish any effect of an aborted registration within
+ * CREDENTIAL_GATEWAY_TIMEOUT_MS after the abort. Until this long after `createdAt`, an absent
+ * gateway copy does not prove that no late create is still in flight, so the record is kept.
+ */
+const CREDENTIAL_REGISTRATION_FENCE_MS = 2 * CREDENTIAL_GATEWAY_TIMEOUT_MS + 10_000;
 
 const COMPUTE_LIFECYCLE_PHASES = [
   "afterNamespacePrepared",
@@ -440,6 +464,29 @@ function validRuntimeDiagnosticTimestamp(value: unknown): value is string {
   }
   const parsed = new Date(value);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+/** Rejects unknown and missing catalog fields before any Credential Gateway effect. */
+function credentialSourceFieldsMatch(
+  kind: "config" | "secrets",
+  specs: CredentialSourceType["config"],
+  values: Readonly<Record<string, unknown>>,
+): void {
+  const known = new Set(specs.map((spec) => spec.name));
+  for (const field of Object.keys(values)) {
+    if (!known.has(field)) {
+      throw new ScopeViolationError(
+        `The credential source ${kind} field ${field} is not supported.`,
+      );
+    }
+  }
+  for (const spec of specs) {
+    if (spec.required && values[spec.name] === undefined) {
+      throw new ScopeViolationError(
+        `The credential source ${kind} field ${spec.name} is required.`,
+      );
+    }
+  }
 }
 
 function validName(value: unknown): value is string {
@@ -489,6 +536,19 @@ function driverHasCapabilityContract(driver: Driver): boolean {
       (candidate.withValue === undefined || typeof candidate.withValue === "function")
     );
   }
+  if (driver.capability === "credential_gateway") {
+    return [
+      "listSourceTypes",
+      "registerSource",
+      "updateSource",
+      "rotateSource",
+      "sourceStatus",
+      "removeSource",
+      "attachForRevision",
+      "attachmentStatus",
+      "withdraw",
+    ].every((operation) => typeof candidate[operation] === "function");
+  }
   if (driver.capability === "service_account") {
     return ["create", "createCredential", "delete"].every(
       (operation) => typeof candidate[operation] === "function",
@@ -528,6 +588,8 @@ function driverHasCapabilityContract(driver: Driver): boolean {
     typeof candidate.retireRevision === "function" &&
     (candidate.getRuntimeImages === undefined ||
       typeof candidate.getRuntimeImages === "function") &&
+    (candidate.resolveSandboxNamespace === undefined ||
+      typeof candidate.resolveSandboxNamespace === "function") &&
     (candidate.getAgentRuntimeCredentialStatus === undefined ||
       typeof candidate.getAgentRuntimeCredentialStatus === "function") &&
     (candidate.provisionAgentRuntimeCredentials === undefined ||
@@ -1010,8 +1072,12 @@ export class OpenClawController {
   async validateBackendConfiguration(): Promise<void> {
     validateSelectedBackendDrivers(
       this.backends,
-      this.selections.get("service_account")?.driver,
-      this.selections.get("repo")?.driver,
+      Object.fromEntries(
+        [...this.selections.entries()].map(([capability, selection]) => [
+          capability,
+          selection.driver,
+        ]),
+      ),
     );
   }
 
@@ -2624,6 +2690,272 @@ export class OpenClawController {
     });
   }
 
+  /**
+   * Registration records the source as `registering` before the gateway write, so an uncertain
+   * gateway outcome always leaves a record an operator can list and delete. `audit` builds the
+   * success event, committed with the transition to `ready`.
+   */
+  async createCredentialSource(
+    principalId: string,
+    input: CreateCredentialSourceInput,
+    audit?: (source: Readonly<CredentialSourceMetadata>) => AuditEvent,
+  ): Promise<Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>> {
+    if (!validName(input.name)) {
+      throw new ScopeViolationError("The credential source name is invalid.");
+    }
+    const config = Object.freeze({ ...(input.config ?? {}) });
+    const secretRefs = Object.freeze({ ...(input.secrets ?? {}) });
+    const { namespace, gateway, source, values } = await this.mutate(async (state) => {
+      const locked = await this.lockNamespace(state, input.namespaceId);
+      await this.authorize(principalId, "create", {
+        kind: "credential_source",
+        id: locked.id,
+        namespaceId: locked.id,
+      });
+      if (locked.status !== "ready") {
+        throw new NamespaceNotReadyError();
+      }
+      const selected = this.credentialGatewayDriver();
+      const type = await this.credentialSourceType(selected, input.type);
+      credentialSourceFieldsMatch("config", type.config, config);
+      credentialSourceFieldsMatch("secrets", type.secrets, secretRefs);
+      const read: Record<string, string> = {};
+      for (const [field, reference] of Object.entries(secretRefs)) {
+        if (reference.namespaceId !== locked.id) {
+          throw new ScopeViolationError("Credential source Secrets cannot cross Namespaces.");
+        }
+        await this.authorize(principalId, "operate", reference);
+        const secret = await state.secrets.lockSecret(locked.id, reference.id);
+        if (secret === undefined) {
+          throw new ScopeViolationError("The credential source Secret is unavailable.");
+        }
+        const secretDriver = this.secretDriver(secret.driverId);
+        if (secretDriver.withValue === undefined) {
+          throw new DependencyUnavailableError(
+            "The selected Secret Driver cannot supply values to a Credential Gateway.",
+          );
+        }
+        const withValue = secretDriver.withValue.bind(secretDriver);
+        read[field] = await this.secretOperation(() => withValue(secret, async (value) => value));
+      }
+      const registering = await state.credentialSources.createCredentialSource(
+        Object.freeze({
+          id: this.nextIdentifier("credential_source"),
+          namespaceId: locked.id,
+          name: input.name,
+          type: type.type,
+          config,
+          secrets: secretRefs,
+          driverId: selected.id,
+          state: "registering",
+          createdAt: this.timestamp(),
+        }),
+      );
+      return { namespace: locked, gateway: selected, source: registering, values: read };
+    });
+    const placed = await this.credentialNamespace(namespace);
+    let status: CredentialSourceStatus;
+    // A returned result means every gateway effect of this attempt has finished; a throw does not.
+    let terminal = false;
+    try {
+      status = await this.credentialGatewayOperation(() =>
+        gateway.registerSource(
+          {
+            namespace: placed,
+            source,
+            signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
+          },
+          { type: source.type, config, secrets: values },
+        ),
+      );
+      terminal = true;
+      if (status.state === "failed" || status.state === "absent") {
+        throw new DependencyUnavailableError("The Credential Gateway did not store the source.");
+      }
+    } catch (error) {
+      await this.abandonCredentialRegistration(placed, gateway, source, terminal);
+      throw error;
+    }
+    // A commit failure leaves the record `registering`; deleting it removes any stored copy.
+    const ready = await this.mutate(async (state) => {
+      await this.lockNamespace(state, namespace.id);
+      const marked = await state.credentialSources.markCredentialSourceReady(
+        namespace.id,
+        source.id,
+      );
+      if (marked !== undefined && audit !== undefined) {
+        await state.audit.append(audit(this.credentialSourceMetadata(marked)));
+      }
+      return marked;
+    });
+    if (ready === undefined) {
+      // A concurrent deletion won; remove the copy this registration may have stored after it.
+      await this.abandonCredentialRegistration(placed, gateway, source, true);
+      throw new ResourceConflictError("The credential source changed during registration.");
+    }
+    return this.credentialSourceMetadata(ready, status);
+  }
+
+  /**
+   * Removes a failed registration's copy. The record is deleted only when the attempt is
+   * terminal and removal succeeded; otherwise it stays `deleting` so DELETE can repeat removal
+   * after any late gateway create.
+   */
+  private async abandonCredentialRegistration(
+    namespace: Readonly<Namespace>,
+    gateway: CredentialGatewayDriver,
+    source: Readonly<CredentialSource>,
+    terminal: boolean,
+  ): Promise<void> {
+    let removed = true;
+    try {
+      await this.credentialGatewayOperation(() =>
+        gateway.removeSource({
+          namespace,
+          source,
+          signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
+        }),
+      );
+    } catch {
+      removed = false;
+    }
+    try {
+      await this.mutate(async (state) => {
+        await this.lockNamespace(state, source.namespaceId);
+        await (removed && terminal
+          ? state.credentialSources.deleteCredentialSource(source.namespaceId, source.id)
+          : state.credentialSources.markCredentialSourceDeleting(source.namespaceId, source.id));
+      });
+    } catch {
+      // The record stays visible in its last committed state; DELETE completes the cleanup.
+    }
+  }
+
+  async readCredentialSource(
+    principalId: string,
+    namespaceId: string,
+    credentialSourceId: string,
+  ): Promise<Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>> {
+    await this.authorize(principalId, "read", {
+      kind: "credential_source",
+      id: credentialSourceId,
+      namespaceId,
+    });
+    const { namespace, source } = await this.read(async (state) => {
+      const exact = await this.exactNamespace(state, namespaceId);
+      const found = await state.credentialSources.findCredentialSource(
+        namespaceId,
+        credentialSourceId,
+      );
+      if (!found) {
+        throw new ScopeViolationError(
+          "The credential source does not belong to the exact Namespace.",
+        );
+      }
+      return { namespace: exact, source: found };
+    });
+    let status: CredentialSourceStatus;
+    try {
+      const gateway = this.credentialGatewayDriver(source.driverId);
+      status = await gateway.sourceStatus({
+        namespace: await this.credentialNamespace(namespace),
+        source,
+        signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
+      });
+    } catch {
+      status = { state: "failed", reason: "The Credential Gateway status is unavailable." };
+    }
+    return this.credentialSourceMetadata(source, status);
+  }
+
+  async listCredentialSources(
+    principalId: string,
+    namespaceId: string,
+  ): Promise<readonly Readonly<CredentialSourceMetadata>[]> {
+    return this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      const readable: Readonly<CredentialSourceMetadata>[] = [];
+      for (const source of await state.credentialSources.listCredentialSources(namespace.id)) {
+        if (
+          await this.canRead(principalId, {
+            kind: "credential_source",
+            id: source.id,
+            namespaceId: namespace.id,
+          })
+        ) {
+          readable.push(this.credentialSourceMetadata(source));
+        }
+      }
+      return Object.freeze(readable);
+    });
+  }
+
+  /**
+   * Deletion is caller-retried: the record stays `deleting` until the gateway copy is gone,
+   * which keeps the Namespace nonempty and blocks new bindings in the meantime.
+   */
+  async deleteCredentialSource(
+    principalId: string,
+    namespaceId: string,
+    credentialSourceId: string,
+    audit?: () => AuditEvent,
+  ): Promise<void> {
+    const { namespace, source } = await this.mutate(async (state) => {
+      const locked = await this.lockNamespace(state, namespaceId);
+      await this.authorize(principalId, "delete", {
+        kind: "credential_source",
+        id: credentialSourceId,
+        namespaceId: locked.id,
+      });
+      const found = await state.credentialSources.lockCredentialSource(
+        locked.id,
+        credentialSourceId,
+      );
+      if (!found) {
+        throw new ScopeViolationError(
+          "The credential source does not belong to the exact Namespace.",
+        );
+      }
+      if (await state.credentialSources.hasReferences(locked.id, found.id)) {
+        throw new ResourceConflictError(
+          "An Agent, active revision, or pending deployment still references the credential source.",
+        );
+      }
+      const deleting =
+        found.state === "deleting"
+          ? found
+          : await state.credentialSources.markCredentialSourceDeleting(locked.id, found.id);
+      if (deleting === undefined) {
+        throw new ResourceConflictError("The credential source changed during deletion.");
+      }
+      return { namespace: locked, source: deleting };
+    });
+    const gateway = this.credentialGatewayDriver(source.driverId);
+    const placed = await this.credentialNamespace(namespace);
+    await this.credentialGatewayOperation(() =>
+      gateway.removeSource({
+        namespace: placed,
+        source,
+        signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
+      }),
+    );
+    if (this.clock().getTime() < Date.parse(source.createdAt) + CREDENTIAL_REGISTRATION_FENCE_MS) {
+      throw new DependencyUnavailableError(
+        "The credential source registration may still be completing; retry the deletion shortly.",
+      );
+    }
+    // The success event commits with the final removal, so a completed deletion is always audited.
+    await this.mutate(async (state) => {
+      await this.lockNamespace(state, namespace.id);
+      if (!(await state.credentialSources.deleteCredentialSource(namespace.id, source.id))) {
+        throw new ResourceConflictError("The credential source changed during deletion.");
+      }
+      if (audit !== undefined) {
+        await state.audit.append(audit());
+      }
+    });
+  }
+
   async createConfiguration(
     principalId: string,
     input: CreateConfigurationInput,
@@ -3690,7 +4022,9 @@ export class OpenClawController {
           "The selected Sandbox Driver supports only dedicated Harness execution.",
         );
       }
+      this.assertCredentialGatewayDelivery(lockedAgent.harnessAuth);
       const harnessAuth = await this.admitHarnessAuth(state, principalId, lockedAgent);
+      const credentialSourceType = await this.admittedCredentialSourceType(harnessAuth, sandbox);
       await this.authorize(principalId, "read", {
         kind: "configuration",
         id: lockedAgent.configurationId,
@@ -3781,6 +4115,7 @@ export class OpenClawController {
           harnessAuth,
           admittedConfiguration,
           configuration.secretBindings,
+          credentialSourceType,
         );
       } catch {
         throw new ResourceConflictError(
@@ -3985,6 +4320,9 @@ export class OpenClawController {
         throw new NamespaceNotEmptyError();
       }
       if (await state.namespaces.hasSecrets(namespace.id)) {
+        throw new NamespaceNotEmptyError();
+      }
+      if (await state.namespaces.hasCredentialSources(namespace.id)) {
         throw new NamespaceNotEmptyError();
       }
       if (await state.namespaces.hasServiceAccounts(namespace.id)) {
@@ -4454,6 +4792,22 @@ export class OpenClawController {
         throw new ScopeViolationError("The Harness Secret does not belong to the exact Namespace.");
       }
       this.secretDriver(source.driverId);
+    } else if (binding.method === "credential_source") {
+      await this.authorize(principalId, "operate", {
+        kind: "credential_source",
+        namespaceId,
+        id: binding.sourceId,
+      });
+      const source = await state.credentialSources.lockCredentialSource(
+        namespaceId,
+        binding.sourceId,
+      );
+      if (source === undefined || source.state !== "ready") {
+        throw new ScopeViolationError(
+          "The Harness credential source is unavailable in the exact Namespace.",
+        );
+      }
+      this.credentialGatewayDriver(source.driverId);
     } else {
       await this.authorize(principalId, "read", {
         kind: "service_account",
@@ -4533,6 +4887,13 @@ export class OpenClawController {
     if (binding === null || binding.method === "runtime") {
       throw new ScopeViolationError(
         "Agent provisioning requires dedicated Harness authentication.",
+      );
+    }
+    // TODO(credential-gateway provisioning): admit credential sources in guided provisioning
+    // plans; until then those Agents are created first and deployed through deployAgent.
+    if (binding.method === "credential_source") {
+      throw new ResourceConflictError(
+        "Agent provisioning does not yet support credential-source Harness authentication.",
       );
     }
     const backendId = this.backendId(record.plan.backendId as BackendRef | undefined);
@@ -5278,6 +5639,34 @@ export class OpenClawController {
       }
       return immutableCopy({ ...binding, secretDriverId: driver.id });
     }
+    if (binding.method === "credential_source") {
+      await this.authorize(agent.servicePrincipalId, "operate", {
+        kind: "credential_source",
+        namespaceId: agent.namespaceId,
+        id: binding.sourceId,
+      });
+      const source = await state.credentialSources.lockCredentialSource(
+        agent.namespaceId,
+        binding.sourceId,
+      );
+      if (source === undefined || source.state !== "ready") {
+        throw new ScopeViolationError("The Harness credential source is unavailable.");
+      }
+      const gateway = this.credentialGatewayDriver(source.driverId);
+      const type = await this.credentialSourceType(gateway, source.type);
+      if (type.harnessAuth === undefined) {
+        throw new ResourceConflictError(
+          "The credential source type cannot authenticate a Harness.",
+        );
+      }
+      return immutableCopy({
+        method: "credential_source" as const,
+        sourceId: source.id,
+        credentialGatewayId: gateway.id,
+        sourceType: source.type,
+        loginMode: type.harnessAuth.loginMode,
+      });
+    }
     const account = await state.serviceAccounts.lockServiceAccount(
       agent.namespaceId,
       binding.serviceAccountId,
@@ -5303,6 +5692,39 @@ export class OpenClawController {
       credential: { kind: "access_token" as const, secretRef: account.credential.secretRef },
       backendBinding,
     });
+  }
+
+  /** A selected Credential Gateway replaces Secret-backed model delivery; no env fallback. */
+  private assertCredentialGatewayDelivery(binding: HarnessAuthBinding | null): void {
+    if (
+      this.selections.has("credential_gateway") &&
+      binding !== null &&
+      binding.method !== "credential_source" &&
+      binding.method !== "runtime"
+    ) {
+      throw new ResourceConflictError(
+        "The selected Credential Gateway requires credential-source Harness authentication.",
+      );
+    }
+  }
+
+  /** Credential sources are injected by the paired Sandbox, so one must be selected. */
+  private async admittedCredentialSourceType(
+    auth: HarnessAuthSnapshot,
+    sandbox: SandboxDriver | undefined,
+  ): Promise<CredentialSourceType | undefined> {
+    if (auth.method === "credential_source") {
+      if (sandbox === undefined) {
+        throw new ResourceConflictError(
+          "Credential-source Harness authentication requires a selected Sandbox Driver.",
+        );
+      }
+      return this.credentialSourceType(
+        this.credentialGatewayDriver(auth.credentialGatewayId),
+        auth.sourceType,
+      );
+    }
+    return undefined;
   }
 
   private validateSecretValue(value: unknown): asserts value is string {
@@ -5466,6 +5888,87 @@ export class OpenClawController {
     }
   }
 
+  private credentialGatewayDriver(expectedId?: string): CredentialGatewayDriver {
+    try {
+      const driver = this.selectedDriver("credential_gateway");
+      if (expectedId !== undefined && driver.id !== expectedId) {
+        throw new Error("Driver identity mismatch.");
+      }
+      return driver;
+    } catch {
+      throw new DependencyUnavailableError(
+        "The selected Credential Gateway Driver is unavailable or does not own this source.",
+      );
+    }
+  }
+
+  private async credentialGatewayOperation<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof ScopeViolationError || error instanceof ResourceConflictError) {
+        throw error;
+      }
+      throw new DependencyUnavailableError(
+        "The Credential Gateway operation failed or its outcome is unknown.",
+      );
+    }
+  }
+
+  /** Credential Gateways share the paired Sandbox's view, whose name is Compute's placement. */
+  private async credentialNamespace(namespace: Readonly<Namespace>): Promise<Readonly<Namespace>> {
+    let compute: ComputeDriver;
+    try {
+      compute = this.selectedDriver("compute");
+    } catch {
+      throw new DependencyUnavailableError("The selected compute Driver is unavailable.");
+    }
+    const resolve = compute.resolveSandboxNamespace;
+    if (resolve === undefined) {
+      throw new DependencyUnavailableError(
+        "The selected Compute Driver cannot place Credential Gateway sources.",
+      );
+    }
+    return this.credentialGatewayOperation(() => resolve.call(compute, namespace));
+  }
+
+  private async credentialSourceType(
+    driver: CredentialGatewayDriver,
+    type: string,
+  ): Promise<CredentialSourceType> {
+    const catalog = await this.credentialGatewayOperation(() =>
+      driver.listSourceTypes({ signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS) }),
+    );
+    const entry = catalog.find((candidate) => candidate.type === type);
+    if (entry === undefined) {
+      throw new ScopeViolationError(
+        "The selected Credential Gateway does not support this source type.",
+      );
+    }
+    return entry;
+  }
+
+  private credentialSourceMetadata(
+    source: Readonly<CredentialSource>,
+    status?: CredentialSourceStatus,
+  ): Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }> {
+    return Object.freeze({
+      id: source.id,
+      namespaceId: source.namespaceId,
+      name: source.name,
+      type: source.type,
+      config: source.config,
+      secrets: source.secrets,
+      state: source.state,
+      ref: Object.freeze({
+        kind: "credential_source" as const,
+        id: source.id,
+        namespaceId: source.namespaceId,
+      }),
+      ...(status === undefined ? {} : { status }),
+    });
+  }
+
   private runtimeCredentialComputeDriver(operation: "status" | "provision"): ComputeDriver {
     let driver: ComputeDriver;
     try {
@@ -5563,6 +6066,7 @@ export class OpenClawController {
       kind !== "agent" &&
       kind !== "agent_revision" &&
       kind !== "configuration" &&
+      kind !== "credential_source" &&
       kind !== "preset" &&
       kind !== "secret" &&
       kind !== "service_account"
@@ -5645,6 +6149,17 @@ export class OpenClawController {
       if (resourceKind === "secret") {
         if ((await state.secrets.findSecret(namespaceId, resourceId)) === undefined) {
           throw new ScopeViolationError("The IAM target Secret does not belong to the Namespace.");
+        }
+        return;
+      }
+      if (resourceKind === "credential_source") {
+        if (
+          (await state.credentialSources.findCredentialSource(namespaceId, resourceId)) ===
+          undefined
+        ) {
+          throw new ScopeViolationError(
+            "The IAM target credential source does not belong to the Namespace.",
+          );
         }
         return;
       }
@@ -5998,6 +6513,7 @@ export class OpenClawController {
       secret: "sec",
       agent: "agt",
       agent_revision: "rev",
+      credential_source: "cs",
     };
     const result = this.identifier
       ? this.identifier(kind)

@@ -192,7 +192,7 @@ function occSelection(overrides = {}) {
   return {
     "occ-plugin:diffs": {
       enabled: true,
-      toolDefaults: { approval: "approve" },
+      toolDefaults: { approval: "none" },
       ...overrides,
     },
   };
@@ -202,7 +202,7 @@ function codexSelection(overrides = {}) {
   return {
     "codex-plugin:linear@openai-curated-remote": {
       enabled: true,
-      toolDefaults: { approval: "native" },
+      toolDefaults: { approval: "provider_default" },
       ...overrides,
     },
   };
@@ -581,7 +581,9 @@ test("compute consumes Codex no-plugin selections from the revision", () => {
 });
 
 test("compute serializes selected Codex plugins for startup-time resolution", () => {
-  const state = codexLinearPluginState({ toolDefaults: { approval: "native", reviewer: "auto" } });
+  const state = codexLinearPluginState({
+    toolDefaults: { approval: "provider_default", reviewer: "auto" },
+  });
   const runtime = pluginRuntimeSpecForRevision(revision({ plugins: state }));
 
   assert.equal(runtime.kind, "codex");
@@ -621,8 +623,10 @@ test("compute serializes selected OpenClaw plugins for startup-time resolution",
   });
 });
 
-test("Codex runtime helper installs selected remote plugins before readiness", async () => {
-  const state = codexLinearPluginState({ toolDefaults: { approval: "native", reviewer: "auto" } });
+test("Codex runtime helper installs plugin and applies write action approval without tool inventory", async () => {
+  const state = codexLinearPluginState({
+    toolDefaults: { approval: "write_actions", reviewer: "auto" },
+  });
   const runtime = {
     manifest: pluginRuntimeSpecForRevision(revision({ plugins: state })),
   };
@@ -667,7 +671,7 @@ test("Codex runtime helper installs selected remote plugins before readiness", a
             mergeStrategy: "replace",
             value: {
               enabled: true,
-              default_tools_approval_mode: "auto",
+              default_tools_approval_mode: "writes",
               approvals_reviewer: "auto_review",
             },
           },
@@ -685,7 +689,10 @@ test("Codex runtime helper installs selected remote plugins before readiness", a
     }
     if (method === "config/read") {
       assert.deepEqual(params, {});
-      return codexConfigReadResponse({ approvals_reviewer: "auto_review" });
+      return codexConfigReadResponse({
+        default_tools_approval_mode: "writes",
+        approvals_reviewer: "auto_review",
+      });
     }
     if (method === "configRequirements/read") {
       assert.deepEqual(params, {});
@@ -864,8 +871,8 @@ test("Codex runtime helper verifies explicit reviewers before readiness without 
 
 test("Codex runtime helper discovers tool policy after installation and before readiness", async () => {
   const state = codexLinearPluginState({
-    toolDefaults: { enabled: false, approval: "prompt", reviewer: "human" },
-    tools: { [CODEX_LINEAR_APP_ID + "/list_issues"]: { enabled: true, approval: "approve" } },
+    toolDefaults: { enabled: false, approval: "all_actions", reviewer: "human" },
+    tools: { [CODEX_LINEAR_APP_ID + "/list_issues"]: { enabled: true, approval: "none" } },
   });
   const runtime = { manifest: pluginRuntimeSpecForRevision(revision({ plugins: state })) };
   const apps = {};
@@ -1005,7 +1012,9 @@ test("Codex runtime helper rejects incomplete or unbounded tool discovery before
 });
 
 test("Codex runtime helper reports plugin install warnings without retrying", async () => {
-  const state = codexLinearPluginState({ toolDefaults: { approval: "native", reviewer: "auto" } });
+  const state = codexLinearPluginState({
+    toolDefaults: { approval: "provider_default", reviewer: "auto" },
+  });
   const runtime = {
     manifest: pluginRuntimeSpecForRevision(revision({ plugins: state })),
   };
@@ -1066,7 +1075,7 @@ test("Codex runtime helper reports connector-auth warnings with the admitted key
       selections: {
         "linear@openai-curated-remote": {
           enabled: true,
-          toolDefaults: { approval: "native" },
+          toolDefaults: { approval: "provider_default" },
         },
       },
     },
@@ -1303,11 +1312,11 @@ test("Codex runtime installs and reports only enabled selections in mixed plugin
     plugins: {
       "codex-plugin:linear@openai-curated-remote": {
         enabled: true,
-        toolDefaults: { approval: "native" },
+        toolDefaults: { approval: "provider_default" },
       },
       "codex-plugin:asana@openai-curated-remote": {
         enabled: false,
-        toolDefaults: { approval: "native" },
+        toolDefaults: { approval: "provider_default" },
       },
     },
   };
@@ -1609,19 +1618,20 @@ test("Codex runtime helper checks every effective nested tool and account policy
     { name: "null maps inherit", tools: null, links: null },
     {
       name: "unrequested enablement bypasses native category defaults",
-      defaults: { approval: "prompt" },
+      defaults: { approval: "all_actions" },
       tools: { extra: { enabled: true } },
       rejects: true,
     },
     {
       name: "stricter unexpected approval also conflicts",
-      defaults: { enabled: true, approval: "approve" },
+      defaults: { enabled: true, approval: "none" },
+      nativeApproval: "approve",
       tools: { extra: { approval_mode: "prompt" } },
       rejects: true,
     },
   ]) {
     await t.test(scenario.name, async () => {
-      const defaults = scenario.defaults ?? { enabled: false, approval: "prompt" };
+      const defaults = scenario.defaults ?? { enabled: false, approval: "all_actions" };
       const state = codexLinearPluginState({ toolDefaults: defaults });
       const runtime = { manifest: pluginRuntimeSpecForRevision(revision({ plugins: state })) };
       // A second native layer can contribute descendants absent from the user
@@ -1647,7 +1657,7 @@ test("Codex runtime helper checks every effective nested tool and account policy
           if (method === "config/read") {
             return codexConfigReadResponse({
               default_tools_enabled: defaults.enabled ?? null,
-              default_tools_approval_mode: defaults.approval,
+              default_tools_approval_mode: scenario.nativeApproval ?? "prompt",
               tools: scenario.tools,
               links: scenario.links,
             });
@@ -1921,7 +1931,9 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   const dedicatedDriver = dedicatedPluginDriver();
   const dedicated = revision({
     compute: { id: dedicatedDriver.id, implementation: dedicatedDriver.implementation },
-    plugins: codexLinearPluginState({ toolDefaults: { approval: "native", reviewer: "auto" } }),
+    plugins: codexLinearPluginState({
+      toolDefaults: { approval: "provider_default", reviewer: "auto" },
+    }),
   });
   useRoutedGateway(dedicated);
   const dedicatedNamespace = kubernetesNamespaceName(dedicated.namespaceId);
@@ -2837,7 +2849,9 @@ test("Codex gateway supervisor exits when the peer Agent plugin failure set chan
 
   const runtime = pluginRuntimeSpecForRevision(
     revision({
-      plugins: codexLinearPluginState({ toolDefaults: { approval: "native", reviewer: "auto" } }),
+      plugins: codexLinearPluginState({
+        toolDefaults: { approval: "provider_default", reviewer: "auto" },
+      }),
     }),
   );
   const files = new Map([
@@ -3469,7 +3483,9 @@ test("Kubernetes dedicated Codex gateway mounts bridge runtime and prior plugin 
   const driver = createKubernetesComputeDriver(kubernetesOptions());
   const runtime = pluginRuntimeSpecForRevision(
     revision({
-      plugins: codexLinearPluginState({ toolDefaults: { approval: "native", reviewer: "auto" } }),
+      plugins: codexLinearPluginState({
+        toolDefaults: { approval: "provider_default", reviewer: "auto" },
+      }),
     }),
   );
   const deployment = driver.deployment(

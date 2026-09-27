@@ -1887,7 +1887,18 @@ function probeCodexAuthenticationFailureCode() {
       "Reply only READY. Do not use tools.",
     ], {
       cwd: directory,
-      env: { PATH: process.env.PATH, HOME: directory, CODEX_HOME: process.env.CODEX_HOME, RUST_LOG: "error" },
+      // Keep the runtime's TLS trust anchors so a TLS-inspecting egress proxy can serve the probe.
+      env: {
+        PATH: process.env.PATH,
+        HOME: directory,
+        CODEX_HOME: process.env.CODEX_HOME,
+        RUST_LOG: "error",
+        ...Object.fromEntries(
+          ["SSL_CERT_FILE", "SSL_CERT_DIR"]
+            .filter((name) => typeof process.env[name] === "string" && process.env[name].length > 0)
+            .map((name) => [name, process.env[name]]),
+        ),
+      },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
     });

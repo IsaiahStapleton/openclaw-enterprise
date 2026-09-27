@@ -109,6 +109,7 @@ export async function composePostgresDevelopment(
     });
     const computeDriver = options.computeDriver ?? createDevelopmentDockerComputeDriver();
     const sandboxDriver = drivers?.sandboxDriver;
+    const credentialGatewayDriver = drivers?.credentialGatewayDriver;
     const configurationDriver =
       options.configurationDriver ??
       ("installation" in options
@@ -159,6 +160,10 @@ export async function composePostgresDevelopment(
     if (sandboxDriver !== undefined) {
       controller.registerDriver(sandboxDriver);
       controller.selectDriver("sandbox", sandboxDriver.id);
+    }
+    if (credentialGatewayDriver !== undefined) {
+      controller.registerDriver(credentialGatewayDriver);
+      controller.selectDriver("credential_gateway", credentialGatewayDriver.id);
     }
     if (configurationDriver !== undefined) {
       controller.registerDriver(configurationDriver);

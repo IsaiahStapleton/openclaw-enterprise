@@ -1,6 +1,7 @@
 import type {
   OpenClawConfigurationDocument,
   PluginCatalogEntry,
+  PluginApprovalMode,
   PluginDesiredState,
   PluginApprovers,
 } from "@openclaw-enterprise/contracts";
@@ -187,7 +188,9 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
     }
     if (
       policy.approval !== undefined &&
-      !["native", "prompt", "approve"].includes(policy.approval as string)
+      !["provider_default", "all_actions", "write_actions", "none"].includes(
+        policy.approval as string,
+      )
     ) {
       throw new Error("Tool approval policy is unsupported.");
     }
@@ -338,19 +341,26 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
           if (!descriptor.toolNames.includes(id)) {
             throw new Error("Unknown OpenClaw plugin tool selection.");
           }
-          if (policy.approval === "prompt") {
-            throw new Error("OpenClaw plugin prompt approval is unsupported.");
+          if (policy.approval === "all_actions" || policy.approval === "write_actions") {
+            throw new Error("OpenClaw plugin " + policy.approval + " approval is unsupported.");
           }
         }
-        if (toolDefaults.approval === "prompt") {
-          throw new Error("OpenClaw plugin prompt approval is unsupported.");
+        if (toolDefaults.approval === "all_actions" || toolDefaults.approval === "write_actions") {
+          throw new Error("OpenClaw plugin " + toolDefaults.approval + " approval is unsupported.");
         }
       }
     }
   }
 
   function codexApproval(approval: unknown): unknown {
-    return approval === "native" ? "auto" : approval;
+    return (
+      {
+        provider_default: "auto",
+        all_actions: "prompt",
+        write_actions: "writes",
+        none: "approve",
+      } satisfies Record<PluginApprovalMode, string>
+    )[approval as PluginApprovalMode];
   }
 
   function pluginApprovalOverlay(
@@ -848,7 +858,7 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
           const existing = appEntries.get(appId);
           const requested = {
             enabled: true,
-            default_tools_approval_mode: codexApproval(toolDefaults.approval ?? "native"),
+            default_tools_approval_mode: codexApproval(toolDefaults.approval ?? "provider_default"),
             ...(toolDefaults.enabled === undefined
               ? {}
               : { default_tools_enabled: toolDefaults.enabled }),

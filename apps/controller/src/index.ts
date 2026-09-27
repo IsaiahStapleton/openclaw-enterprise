@@ -33,6 +33,7 @@ import {
   PluginToolDefaultsSchema,
   PluginApproversSchema,
   SecretResponse,
+  CredentialSourceResponse,
   occApiRoutes,
   type Agent,
   type ProvisionAgentBody,
@@ -117,6 +118,7 @@ import {
 import { configurationHandlers } from "./http/configurations.ts";
 import { presetHandlers } from "./http/presets.ts";
 import { secretHandlers } from "./http/secrets.ts";
+import { credentialSourceHandlers } from "./http/credential-sources.ts";
 import { iamHandlers } from "./http/iam.ts";
 import { serviceAccountHandlers } from "./http/service-accounts.ts";
 import type { RequestContext, ResourceHandlers } from "./http/types.ts";
@@ -213,6 +215,7 @@ const resourceHandlers: ResourceHandlers = {
   ...configurationHandlers,
   ...presetHandlers,
   ...secretHandlers,
+  ...credentialSourceHandlers,
   ...iamHandlers,
   ...serviceAccountHandlers,
 };
@@ -232,6 +235,7 @@ const RESOURCE_ID = {
   configurationId: /^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   serviceAccountId: /^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   secretId: /^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  credentialSourceId: /^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   agentId: /^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   revisionId: /^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
 } as const;
@@ -356,6 +360,8 @@ function operationTarget(
     typeof params.serviceAccountId === "string" ? params.serviceAccountId : undefined;
   const presetId = typeof params.presetId === "string" ? params.presetId : undefined;
   const secretId = typeof params.secretId === "string" ? params.secretId : undefined;
+  const credentialSourceId =
+    typeof params.credentialSourceId === "string" ? params.credentialSourceId : undefined;
   const agentId = typeof params.agentId === "string" ? params.agentId : undefined;
   const revisionId = typeof params.revisionId === "string" ? params.revisionId : undefined;
   if (operation.operationId === "createNamespace") {
@@ -384,6 +390,16 @@ function operationTarget(
   }
   if (secretId && namespaceId) {
     return { kind: "secret", id: secretId, namespaceId };
+  }
+  if (
+    (operation.operationId === "createCredentialSource" ||
+      operation.operationId === "listCredentialSources") &&
+    namespaceId
+  ) {
+    return { kind: "credential_source", id: namespaceId, namespaceId };
+  }
+  if (credentialSourceId && namespaceId) {
+    return { kind: "credential_source", id: credentialSourceId, namespaceId };
   }
   if (
     (operation.operationId === "createAgent" ||
@@ -698,6 +714,7 @@ function permissionDescription(
     secret: "Secret",
     agent: "Agent",
     agent_revision: "AgentRevision",
+    credential_source: "CredentialSource",
   };
 
   const description = permissions
@@ -3383,6 +3400,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     routes.addSchema(AgentDeploymentDiagnosticsResponse);
     routes.addSchema(AgentRuntimeCredentialResponse);
     routes.addSchema(SecretResponse);
+    routes.addSchema(CredentialSourceResponse);
     routes.route({
       method: "GET",
       url: nativeAdminStatusOperation.path,
