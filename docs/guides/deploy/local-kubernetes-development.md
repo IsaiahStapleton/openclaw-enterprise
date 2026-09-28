@@ -104,6 +104,35 @@ published API ports. Generated runtime workloads have a 2 GiB memory limit
 each; size the local engine VM for OCC plus the Agents you run. Keep each
 stack's resources under the helper's lifecycle until cleanup.
 
+## Require both proxies before enabling Slack
+
+For a Slack-enabled local installation, complete [both Slack proxy paths](../integrations/slack.md#configure-both-slack-proxies)
+before creating or deploying the Agent. The launcher does not provision these
+proxies or configure their URLs automatically.
+
+Provision the reviewed proxy on the owned k3d container network, or another
+private address reachable from the API and dedicated gateway Pods. Do not use
+host loopback as the proxy address: `127.0.0.1` inside a Pod is that Pod. For a
+proxy container on the k3d network, no host-published listener is needed. Restrict
+its source access to the actual traffic from this cluster, accounting for node
+source NAT.
+
+Preserve and update both generated files in the private state directory:
+
+- `installation.yaml`: set `drivers.compute.configuration.runtime.channels.proxyUrl`
+  for gateway Slack messaging.
+- `helm-values.json`: set `api.channelDirectoryProxyUrl` for Console user and
+  channel lookup. Kubernetes-only mode runs the production API, where lookup
+  stays disabled without this setting.
+
+Apply the updated Installation startup Secret and Helm values using the
+[installation procedure](production-installation.md#provision-system-secrets-and-install), retaining
+the existing release, namespace, images, and other protected inputs. Plan a
+maintenance window if Agents are already running; skip fresh bootstrap volume
+preparation for this existing installation. Do not rerun `dev-up` or
+delete the cluster to apply this configuration. Verify both directory search
+and gateway Socket Mode using the [Slack checks](../integrations/slack.md#configure-both-slack-proxies).
+
 ## Verify the local boundary
 
 Startup prints the API URL, kubeconfig, Kubernetes context, and service-key file.

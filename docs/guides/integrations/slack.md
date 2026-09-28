@@ -16,6 +16,9 @@ go to the Agent's gateway; model credentials are configured separately.
 - Invite the app's bot to the channel. Your Installation operator must allow
   the gateway's Slack network traffic and provide a runtime image that includes
   the native Slack plugin.
+- Require the operator to [configure and verify both Slack proxies](#configure-both-slack-proxies)
+  before enabling Slack: gateway messaging and Console directory lookup use
+  separate settings and egress rules.
 - Choose a dedicated Agent on Kubernetes and configure its
   [model authentication](../../reference/agents.md#harness-authentication).
   Embedded execution cannot isolate channel credentials from the Harness.
@@ -26,6 +29,72 @@ go to the Agent's gateway; model credentials are configured separately.
   [Namespace IAM administration](../../reference/authorization.md#manage-namespace-policy)
   to grant the Agent access to each exact Secret. Creating a token Secret also
   requires Secret creation permission in the Namespace.
+
+## Configure both Slack proxies
+
+For Slack-enabled k3d and EKS installations, configure both paths before
+creating a Slack-enabled Agent. A working Socket Mode connection does not
+establish that Console user or channel search works.
+
+| Path                            | Required setting                                                                   | Consumer          |
+| ------------------------------- | ---------------------------------------------------------------------------------- | ----------------- |
+| Slack messaging and Socket Mode | Installation `drivers.compute.configuration.runtime.channels.proxyUrl`             | Dedicated gateway |
+| Console user and channel lookup | Helm `api.channelDirectoryProxyUrl`, rendered as `OCC_CHANNEL_DIRECTORY_PROXY_URL` | OCC API           |
+
+Provision a reviewed HTTP CONNECT proxy reachable from each consumer. Use a
+literal IPv4 address and explicit port, with no URL credentials or path. The
+same endpoint can serve both paths when its access policy admits both sources;
+setting one URL does not configure the other path. Keep the listener private,
+restrict callers to the intended API and gateway traffic, and deny unrelated
+destinations and private upstream addresses.
+
+The directory path needs `CONNECT slack.com:443`. The gateway path also needs
+the Slack Socket Mode endpoints returned for the app; review the required
+`slack.com`, `slack-edge.com`, and `slack-msgs.com` domains and their subdomains.
+Retain TLS certificate verification. See the [directory proxy contract](../../reference/drivers/slack-channel.md#enable-lookup-in-production)
+and [gateway network boundary](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking).
+
+Merge these fragments into the protected Installation and Helm inputs. Replace
+the documentation-only IP with the reviewed endpoint; preserve other settings.
+
+```yaml
+# installation.yaml
+drivers:
+  compute:
+    configuration:
+      runtime:
+        channels:
+          proxyUrl: http://198.51.100.25:3128
+```
+
+```yaml
+# Helm values
+api:
+  channelDirectoryProxyUrl: http://198.51.100.25:3128
+```
+
+Apply both inputs through the installation procedure and roll out the affected
+control-plane processes so they load the new configuration. The Helm chart
+grants API egress to its configured proxy IP and port; Kubernetes Compute grants
+gateway egress to its channel proxy. Provision the proxy's own listener access
+and upstream connectivity separately. Keep Slack tokens in Namespace Secrets;
+do not place them in these inputs or the proxy configuration.
+
+Before handing off the Slack setup, verify both paths:
+
+1. In the Console, select the Slack bot Secret and search for a known user and
+   channel visible to that bot. Require successful results. The bot needs
+   `users:read`, `channels:read`, and `groups:read` for private channels.
+2. After deploying, require the current gateway and Harness to be Ready and
+   confirm Slack Socket Mode is connected. Use the authorized message proof
+   below to establish delivery separately.
+3. Confirm the proxy denies an unrelated public destination and a private
+   upstream destination from the same permitted caller path.
+
+A directory response of `501` means the API path is not configured; a missing
+scope response requires updating the bot's Slack scopes. Missing gateway proxy
+configuration prevents Slack-enabled workload preparation. Resolve each path
+independently; entering exact IDs does not verify directory lookup.
 
 ## Connect and verify
 
