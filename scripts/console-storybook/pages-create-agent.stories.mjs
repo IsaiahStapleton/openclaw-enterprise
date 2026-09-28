@@ -62,7 +62,8 @@ export const CreatePresetWorkspaceFiles = {
   name: "Preset workspace files",
 };
 export const CreateWorkspaceFiles = { ...story("createWorkspaceFiles"), name: "Workspace files" };
-export const CreateEmbedded = { ...story("createEmbedded"), name: "OpenAI with OpenClaw harness" };
+export const CreateDedicatedOpenclaw = story("createDedicatedOpenclaw");
+export const CreateEmbedded = { ...story("createEmbedded"), name: "Embedded OpenClaw" };
 export const RepositorySelection = {
   ...story("createRepositoriesSelected"),
   name: "Approved repositories and shared access",

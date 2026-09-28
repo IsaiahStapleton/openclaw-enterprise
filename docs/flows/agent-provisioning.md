@@ -1,7 +1,7 @@
 ---
 created: "2026-09-23"
-updated: "2026-09-23"
-last_updated_session: "public-pr/295"
+updated: "2026-09-28"
+last_updated_session: "Codex/01a0e8ec-d02f-7b93-a59b-5b7fccf2ebaa"
 ---
 
 # Agent provisioning flow
@@ -48,6 +48,13 @@ graph TD
 
 `apps/controller/src/console/agents/create.mjs:renderCreateAgent`
 
+Console keeps the configured Harness separate from execution mode: dedicated
+OpenClaw retains its native provider/model and uses the same provisioning,
+retry, and activation navigation as dedicated Codex. Preset restoration and
+Credentials read native model runtime policy through
+`apps/controller/src/console/agents/harness-auth.mjs:configuredHarnessId`.
+Service Accounts and Codex plugin browsing remain specific to Codex.
+
 The Slack channel setup modal sends each new token to ordinary `POST /namespaces/:namespaceId/secrets` immediately, before an Agent exists. It clears entered values after the save attempt. Applying channel settings stages the returned references and environment bindings in the form. Cancelling the drawer discards its selections but retains created namespace Secrets. Model discovery uses the entered API key or service account token without saving it. Create Agent saves that credential as an ordinary Namespace Secret, clears the input, and reuses its returned reference for provisioning retries. Bound Presets retain their credential and provider. A lost Secret-save response needs recovery rather than automatic repetition.
 
 Create Agent sends the parsed inline Configuration, ordinary Secret bindings, model-auth references, supported Agent options, selected repository bindings with an explicit access profile, and a stable request ID. The provisioning worker owns exact Secret grants; Slack has no special worker path. After an uncertain admission response, the Console resends the same request ID and accepted inputs, without resaving acknowledged Secrets.
@@ -75,6 +82,14 @@ The Compute Driver prepares runtime credentials through the existing credential 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
 The job admits one first revision and records its ID. Provisioning reports success at this handoff. Console then follows deployment status until activation and opens Workspace files for the returned Agent and revision. Ordinary revision reconciliation owns startup, activation and runtime failure. Later deployments use the regular Deploy API.
+
+Dedicated OpenClaw is an admitted topology when its selected Sandbox Driver
+provides the required containment facets. Admission does not prove that the
+Driver can deliver every workload requirement. The current Sandbox handoff
+rejects workspace initialization, and stock OpenShell rejects Secret-backed
+environment projection. These requirements remain enforced; the
+[OpenShell flow](openshell-sandbox-provisioning.md#3-validate-and-serialize-the-sandbox)
+describes the upstream delivery limits and verification-only path.
 
 ### 5. Failures preserve useful outputs
 
@@ -105,6 +120,8 @@ While initialization owns an Agent, conflicting edits and manual deployment are 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 17:30: Separate Console Harness selection from Dedicated placement and document retained Sandbox delivery requirements. (Codex/01a0e8ec-d02f-7b93-a59b-5b7fccf2ebaa - e2b739f5)
 
 - 2026-09-23 21:00: Integrate provider model discovery and saved API-key/PAT references with canonical Dedicated provisioning and deployment activation. (Codex/01a0cf27-71c6-7042-8357-74d1811a2ef8 - fb711b49)
 

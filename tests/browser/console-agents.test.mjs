@@ -834,6 +834,8 @@ test("Agent creation selects approved repositories with one common explicit prof
   await page.getByLabel("Agent name").fill("Repository Agent");
 
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  await page.getByText("Runtime details", { exact: true }).click();
+  await page.getByLabel("Execution mode").selectOption("embedded");
   const configurationResponse = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/configurations` &&
@@ -1281,6 +1283,8 @@ test("Agent creation recovers from stale authoritative admission without replaci
   await page.locator("#repository-application").check();
   await page.locator("#repository-profile-git-read").check();
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  await page.getByText("Runtime details", { exact: true }).click();
+  await page.getByLabel("Execution mode").selectOption("embedded");
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Recovered Repository Agent");
 
@@ -1465,6 +1469,8 @@ test("Agent creation does not expose recovery actions after an unknown admission
   await page.locator("#repository-application").check();
   await page.locator("#repository-profile-git-read").check();
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  await page.getByText("Runtime details", { exact: true }).click();
+  await page.getByLabel("Execution mode").selectOption("embedded");
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Unknown Outcome Agent");
 
@@ -1512,6 +1518,8 @@ test("Agent repository recovery with empty current policy requires an explicit n
   await page.locator("#repository-application").check();
   await page.locator("#repository-profile-git-read").check();
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  await page.getByText("Runtime details", { exact: true }).click();
+  await page.getByLabel("Execution mode").selectOption("embedded");
   const modelSecret = await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Repository policy removed");
   fixture.policy.restrictions.push({
@@ -1574,11 +1582,11 @@ test("Agent repository recovery with empty current policy requires an explicit n
   );
 });
 
-test("Dedicated Agent creation provisions inline Configuration and masked new Secrets", async (t) => {
+async function testDedicatedAgentProvisioning(t, harnessId) {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Provisioned create", { ready: true });
-  const values = nativeValues("provision", { harnessId: "codex", providerModel: "gpt-5.1" });
+  const values = nativeValues("provision", { harnessId, providerModel: "gpt-5.1" });
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
   const agentId = "agt_00000000-0000-4000-8000-00000000feed";
@@ -1634,7 +1642,7 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
     createdAt: agent.createdAt,
     configuration: values,
     harnessAuth: agent.harnessAuth,
-    harness: { id: "codex", version: "test", mode: "dedicated" },
+    harness: { id: harnessId, version: "test", mode: "dedicated" },
     compute: { id: "kubernetes-test", implementation: "kubernetes" },
     servicePrincipalId: agent.servicePrincipalId,
   };
@@ -1764,6 +1772,7 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   await page.getByLabel("Preset template").selectOption(workspacePreset.data.id);
   await page.getByRole("button", { name: "Use Preset" }).click();
   await page.getByLabel("Agent name", { exact: true }).waitFor();
+  await page.getByLabel("Harness", { exact: true }).selectOption(harnessId);
   await page.locator("#repository-application").check();
   await page.locator("#repository-profile-git-write").check();
   await createModelCredentialSecret(page, "model-secret-value");
@@ -1838,6 +1847,12 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
     { repositoryRef: "application", profile: "git-write" },
   ]);
   assert.equal(provisionBody.executionMode, "dedicated");
+  const modelReference = `${harnessId === "codex" ? "codex" : "openai"}/gpt-5.1`;
+  assert.equal(provisionBody.configuration.values.agents.defaults.model, modelReference);
+  assert.deepEqual(
+    provisionBody.configuration.values.agents.defaults.models[modelReference].agentRuntime,
+    { id: harnessId },
+  );
   assert.deepEqual(provisionBody.initialWorkspaceFiles, {
     ...WORKSPACE_DEFAULTS,
     "AGENTS.md": "# Provision edited\n",
@@ -1883,7 +1898,12 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   assert.equal(agentPostRequests(requests, namespace.id).length, 0);
   assert.ok(provisioningReads >= 1);
   assert.ok(deploymentReads >= 2);
-});
+}
+
+for (const harnessId of ["codex", "openclaw"]) {
+  test(`Dedicated ${harnessId} Agent creation provisions inline Configuration and masked new Secrets`, (t) =>
+    testDedicatedAgentProvisioning(t, harnessId));
+}
 
 test("Dedicated Agent creation uses regular create when provisioning is unsupported", async (t) => {
   const fixture = await createConsoleAppFixture(t);
@@ -2654,7 +2674,7 @@ test("Agent creation reuses its saved Secret and Configuration after an Agent cr
   await page.getByLabel("Model ID", { exact: true }).press("Tab");
   // OpenClaw requires a new API key, never the previous service account token.
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
-  assert.equal(await page.getByLabel("Execution mode").inputValue(), "embedded");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
   assert.equal(
     await page.getByLabel("Authentication method", { exact: true }).inputValue(),
     "api_key",
@@ -2674,6 +2694,27 @@ test("Agent creation reuses its saved Secret and Configuration after an Agent cr
   );
   assert.deepEqual(nonAuthWriteRequests(requests), []);
   assert.deepEqual(pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`), []);
+  await page.getByLabel("Harness", { exact: true }).selectOption("codex");
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
+  await selectSecret(page, "Service account token Secret", discardedPatSecret);
+  await openAdvancedSettings(page);
+  await page
+    .getByLabel("Configuration JSON")
+    .fill(JSON.stringify(createHarnessConfiguration("openclaw", "gpt-5.1")));
+  // Manual Configuration changes obey the same credential boundary while keeping their model.
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "openclaw");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
+  assert.equal(
+    await page.getByLabel("Authentication method", { exact: true }).inputValue(),
+    "api_key",
+  );
+  assert.equal(await page.getByLabel("API key Secret", { exact: true }).inputValue(), "");
+  assert.equal(await page.getByLabel("Model ID", { exact: true }).inputValue(), "gpt-5.1");
+  assert.equal(
+    JSON.parse(await page.getByLabel("Configuration JSON").inputValue()).agents.defaults.model,
+    "openai/gpt-5.1",
+  );
+  await page.getByText("Advanced settings", { exact: true }).click();
   await page.getByLabel("Harness", { exact: true }).selectOption("codex");
   await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
   assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
@@ -2984,6 +3025,7 @@ test("Agent creation preserves unrelated edited JSON across model changes and re
     fullPage: true,
   });
 
+  await page.getByText("Runtime details", { exact: true }).click();
   await mode.selectOption("embedded");
   assert.equal(await harness.inputValue(), "openclaw");
 
@@ -3186,7 +3228,7 @@ test("Agent creation blocks an incompatible fallback after changing provider unt
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
 });
 
-test("Agent creation saves explicitly selected models for both harnesses", async (t) => {
+test("Agent creation saves native models for dedicated and embedded harnesses", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Starter model", { ready: true });
@@ -3197,12 +3239,17 @@ test("Agent creation saves explicitly selected models for both harnesses", async
 
   for (const [mode, provider, harness, selectedModel] of [
     ["dedicated", "codex", "codex", "gpt-6-astra"],
+    ["dedicated", "openai", "openclaw", "gpt-5.6-sol"],
     ["embedded", "openai", "openclaw", "gpt-5.6-luna"],
   ]) {
     await page.goto(`${fixture.origin}/console/agents/new?namespace=${namespace.id}`);
     await page.getByRole("heading", { name: "Create Agent" }).waitFor();
     await page.getByRole("button", { name: "Start without Preset" }).click();
     await page.getByLabel("Harness", { exact: true }).selectOption(harness);
+    if (mode === "embedded") {
+      await page.getByText("Runtime details", { exact: true }).click();
+      await page.getByLabel("Execution mode").selectOption(mode);
+    }
     await page.getByLabel("Model", { exact: true }).selectOption(selectedModel);
     await page.getByLabel("Agent name").fill(`${mode}-${selectedModel}`);
     const selectedSecret = await createModelCredentialSecret(
@@ -3228,11 +3275,14 @@ test("Agent creation saves explicitly selected models for both harnesses", async
     // preserving the separate credentials for dedicated Codex execution.
     assert.equal(Object.hasOwn(configuration.data.values.gateway, "auth"), false);
     assert.deepEqual(configuration.data.values.gateway.controlUi, STARTER_CONTROL_UI);
-    if (mode === "dedicated") {
+    if (harness === "codex") {
       assert.equal(
         configuration.data.values.plugins.entries.codex.config.appServer.authToken,
         "${APP_SERVER_TOKEN}",
       );
+    } else {
+      assert.equal(configuration.data.values.plugins?.entries?.codex, undefined);
+      assert.equal(configuration.data.values.models.providers.codex, undefined);
     }
     const modelReference = `${provider}/${selectedModel}`;
     assert.equal(configuration.data.values.agents.defaults.model, modelReference);
@@ -3240,7 +3290,18 @@ test("Agent creation saves explicitly selected models for both harnesses", async
       [modelReference]: { agentRuntime: { id: harness } },
     });
     assert.deepEqual(configuration.data.values.models.providers[provider].models, [
-      { id: selectedModel, name: selectedModel },
+      {
+        id: selectedModel,
+        name: selectedModel,
+        ...(harness === "openclaw"
+          ? {
+              contextWindow: 128000,
+              maxTokens: 8192,
+              reasoning: true,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            }
+          : {}),
+      },
     ]);
   }
 });
@@ -3989,6 +4050,49 @@ test("Agent draft browses the curated catalog without a saved Secret", async (t)
   });
 });
 
+test("Dedicated OpenClaw credentials and plugins do not offer Codex-only controls", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("plugin", driver.id);
+  const namespace = await fixture.createNamespace("Dedicated OpenClaw controls", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Dedicated OpenClaw Agent",
+    createHarnessConfiguration("openclaw", "gpt-4.1"),
+    { executionMode: "dedicated" },
+  );
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "credentials");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByLabel("API key Secret", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByLabel("Authentication source").locator('option[value="codex_pat"]').count(),
+    0,
+  );
+  assert.equal(await page.getByLabel("API key Secret", { exact: true }).isEnabled(), true);
+
+  // A credentialless Codex catalog does not make an OpenClaw harness compatible with its plugins.
+  const capabilities = page.waitForResponse(
+    (response) =>
+      response.url() ===
+      `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/plugins/capabilities`,
+  );
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  assert.equal((await capabilities).status(), 200);
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  assert.equal(await dialog.getByRole("button", { name: "Load plugins" }).isDisabled(), true);
+  assert.deepEqual(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/${agent.id}/plugins`),
+    [],
+  );
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  assert.equal(await page.getByLabel("Plugin selections JSON").isEnabled(), true);
+});
+
 test("Agent credentials choose existing Secrets for harness authentication", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -4006,7 +4110,7 @@ test("Agent credentials choose existing Secrets for harness authentication", asy
   const agent = await fixture.createAgent(
     namespace.id,
     "Harness Picker Agent",
-    nativeValues("harness-picker"),
+    nativeValues("harness-picker", { harnessId: "codex" }),
     { harnessAuth: { method: "api_key", source: originalSecret.ref }, executionMode: "dedicated" },
   );
   const { page } = await newPage(t, fixture);
@@ -4081,7 +4185,7 @@ test("Agent credential Secret picker distinguishes action labels from Secret nam
   const agent = await fixture.createAgent(
     namespace.id,
     "Action Name Agent",
-    nativeValues("secret-action-names"),
+    nativeValues("secret-action-names", { harnessId: "codex" }),
     { harnessAuth: { method: "api_key", source: original.ref }, executionMode: "dedicated" },
   );
   const { page } = await newPage(t, fixture);
@@ -4150,7 +4254,7 @@ test("Agent credential Secret picker searches, validates, and preserves duplicat
   const agent = await fixture.createAgent(
     namespace.id,
     "Combobox Agent",
-    nativeValues("credential-picker-ux"),
+    nativeValues("credential-picker-ux", { harnessId: "codex" }),
     { harnessAuth: { method: "api_key", source: originalSecret.ref }, executionMode: "dedicated" },
   );
   const { page } = await newPage(t, fixture);
@@ -6071,6 +6175,61 @@ test("Plugin approval choices explain unsupported provider modes and preserve th
   assert.deepEqual(saved.data.plugins, {
     "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "provider_default" } },
   });
+});
+
+test("Dedicated OpenClaw Presets retain their harness when editing and saving a native model", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const root = await mkdtemp(join(tmpdir(), "occ-dedicated-openclaw-preset-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const namespace = await fixture.createNamespace("Dedicated OpenClaw Preset", { ready: true });
+  const secret = await fixture.createSecret(namespace.id, "OpenAI model key", "preset-model-key");
+  const harnessAuth = { method: "api_key", source: secret.ref };
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: {
+      name: "Dedicated OpenClaw",
+      template: {
+        agent: { name: "Dedicated OpenClaw Agent", executionMode: "dedicated", harnessAuth },
+        configuration: { values: createHarnessConfiguration("openclaw", "gpt-4.1") },
+      },
+    },
+  });
+  assert.equal(preset.status, 201);
+  const { page } = await newPage(t, fixture);
+  await routeInstallationWithoutProvisioning(page, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByRole("button", { name: "Use Preset" }).click();
+
+  // Execution topology must not replace the Preset's native OpenClaw harness with Codex.
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "openclaw");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
+  await page.getByLabel("Model ID", { exact: true }).fill("gpt-5.6-luna");
+  await page.getByLabel("Model ID", { exact: true }).press("Tab");
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  const response = await saved;
+  assert.equal(response.status(), 201);
+  const agent = (await response.json()).data;
+  assert.equal(agent.executionMode, "dedicated");
+  assert.deepEqual(agent.harnessAuth, harnessAuth);
+  const configuration = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.equal(configuration.data.values.agents.defaults.model, "openai/gpt-5.6-luna");
+  assert.deepEqual(
+    configuration.data.values.agents.defaults.models["openai/gpt-5.6-luna"].agentRuntime,
+    { id: "openclaw" },
+  );
+  assert.equal(configuration.data.values.plugins?.entries?.codex, undefined);
 });
 
 test("API-key Presets keep their credential provider fixed while allowing model and runtime changes", async (t) => {

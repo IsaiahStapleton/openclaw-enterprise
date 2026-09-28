@@ -183,6 +183,11 @@ export function installFixture(scenario, evidence) {
   credentials.set(agent.id, { transportConfigured: scenario.transport !== false });
   function snapshot(owner, id, revision) {
     const configuration = configs.get(owner.configurationId);
+    const model = configuration.values.agents?.defaults?.model;
+    const primaryModel = typeof model === "string" ? model : model?.primary;
+    const harnessId =
+      configuration.values.agents?.defaults?.models?.[primaryModel]?.agentRuntime?.id ??
+      (primaryModel?.startsWith("codex/") ? "codex" : "openclaw");
     return {
       id,
       namespaceId,
@@ -207,7 +212,7 @@ export function installFixture(scenario, evidence) {
             },
           }
         : {}),
-      harness: { id: "codex", version: "demo", mode: owner.executionMode },
+      harness: { id: harnessId, version: "demo", mode: owner.executionMode },
       compute: { id: "kubernetes-demo", implementation: "kubernetes" },
       servicePrincipalId: owner.servicePrincipalId,
       ...(owner.repositoryBindings?.length

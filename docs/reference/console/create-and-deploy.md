@@ -1,14 +1,11 @@
 # Create and deploy Agents in the console
 
-Use the [platform console](../console.md) to create an Agent and start first-time
-provisioning for supported Dedicated runtimes. On an existing Kubernetes Installation,
-start with [production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
-you need a ready Namespace and configured Secret storage. New tokens require
-Secret creation permission. First-time provisioning grants access to accepted
-Secret references; ordinary draft creation also requires permission to grant
-Agent key access. After deployment, [verify this same
-Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
-The [local walkthrough](../../guides/first-agent.md) creates a separate Agent.
+Use the [platform console](../console.md) to create and provision supported Dedicated
+Agents. Follow the [Kubernetes prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
+a ready Namespace, Secret storage, and permission to create any new Secrets.
+Provisioning grants accepted Secret access; ordinary drafts require permission
+to grant Agent key access. After deployment,
+[verify the same Agent and revision](../../guides/deploy/production-agents.md#verify-production-workloads).
 
 ## Create an Agent
 
@@ -20,17 +17,20 @@ Do not expose the gateway publicly. **Open native admin UI** requires
 and the exact Agent HTTPS origin. Loopback origins alone are insufficient.
 Presets and edited Configuration JSON retain their settings.
 
+Dedicated OpenClaw requires Sandbox Harness provisioning with all containment
+facets. Stock OpenShell cannot yet deliver Console-created Agents' Secrets and
+initial workspace files; these [Sandbox delivery limits](../../flows/openshell-sandbox-provisioning.md#3-validate-and-serialize-the-sandbox)
+remain enforced.
+
 1. Sign in, select the intended Namespace, open **Agents**, and select
    **Create Agent**.
 2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
    **Use Preset**. Review defaults and choose an existing or new model Secret.
    Select **Start without Preset** for standard defaults.
 3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
-   **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
-   **Codex** and also offers **OpenClaw**; Anthropic currently offers only
-   **OpenClaw**. Codex requires **Dedicated** execution. OpenAI with OpenClaw
-   supports **Dedicated** or **Embedded** execution; Anthropic OpenClaw uses
-   **Embedded** execution.
+   **Anthropic** under **Provider**, then **Harness**. OpenAI defaults to **Codex**
+   with **Dedicated** execution; **OpenClaw** allows **Dedicated** or **Embedded**.
+   Anthropic offers only **Embedded OpenClaw**.
    With OpenAI and Codex, choose **OpenAI API key** or **Service Accounts** under
    **Authentication method**. OpenClaw uses the selected provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
@@ -45,14 +45,13 @@ Presets and edited Configuration JSON retain their settings.
    models must use the same supported provider and Harness. For custom settings,
    open **Advanced settings**. Selection changes preserve unrelated JSON edits;
    **Reset template** replaces them.
-5. Optional: under **Repository access**, select up to 16 repositories approved
-   for this Namespace. Select one authorization level shared by every chosen
-   repository. Kubernetes supports Codex (Dedicated), OpenClaw (Dedicated), or
-   OpenClaw (Embedded), without a Sandbox Driver. Use Codex when this Agent also
-   needs Slack. Leave every repository unselected for an ordinary Agent without
-   repository access.
+5. Optional: under **Repository access**, choose up to 16 Namespace-approved
+   repositories with one common authorization level. Kubernetes requires Codex
+   (Dedicated) or OpenClaw (Embedded) without a Sandbox Driver. Dedicated OpenClaw
+   requires a Sandbox Driver, so repository credentials remain unsupported.
+   Leave repositories unselected if none are needed.
 
-6. If you need Slack, use OpenAI with the **Codex** harness and its channel card.
+6. If you need Slack, select **Dedicated** execution and use its channel card.
    Each token menu selects a readable Namespace Secret or **Create new Secret...**.
    New Secrets persist even if you cancel Agent creation.
    **Apply channel settings** stages settings and bindings into the form;
@@ -107,12 +106,14 @@ Presets with only an authentication method preselect that method and require a
 model credential Secret selection. Presets with saved authentication bindings
 retain them. Bound API-key and Service Accounts Presets
 fix the provider, including JSON edits; saved service account tokens also fix Codex.
+OpenClaw Presets retain their configured Harness independently of execution mode.
 Operator-managed credentials fix OpenClaw across provider changes. Start without a
 Preset to change these choices, or edit authentication later in **Credentials**.
 
 Provider changes reset Harness, credential, and model; authentication-method changes
-reset credential/model. Switching an unsaved PAT to OpenClaw selects API-key auth
-and clears token/model. API-key Harness changes preserve both. Credential edits
+reset credential/model. Selecting OpenClaw clears an unsaved PAT and model and
+selects API-key auth; JSON edits preserve their explicit model. API-key Harness
+changes preserve both. Credential edits
 preserve model selection. Select or enter a model before saving; the starter list
 does not prove runtime compatibility or provider acceptance.
 
@@ -206,7 +207,7 @@ ID, if available, to your operator.
 
 ## Use repositories and Slack on the same Agent
 
-Select **Dedicated**, the approved repositories and an explicit access level.
+Select **Codex**, **Dedicated**, the approved repositories and an explicit access level.
 Configure Slack and select its saved token Secrets in the creation form, then
 choose a compatible model-authentication source. With supported provisioning
 and successful repository discovery, **Create Agent** queues setup and follows
