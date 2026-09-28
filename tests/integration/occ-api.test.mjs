@@ -1135,6 +1135,68 @@ test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespac
   assert.equal(after.data.status, read.data.status, "the Namespace must not enter deletion");
 });
 
+test("OCC rejects Namespace lifecycle Role Permissions before any IAM Driver or State write", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "occ-role-permission-check");
+  const driverCalls = [];
+  // This Driver admits every request and accepts every Role without validation or State
+  // writes, so only OCC's own Permission check can reject a Namespace lifecycle action.
+  const permissiveDriver = {
+    id: "iam-permissive-role-sink",
+    capability: "iam",
+    implementation: "occ-permission-isolation-test",
+    async lookupIdentity(input) {
+      return input.issuer === fixture.principal.issuer &&
+        input.subject === fixture.principal.subject
+        ? fixture.principal
+        : undefined;
+    },
+    async authorize(request) {
+      return {
+        allowed: true,
+        reason: "admitted for OCC Permission isolation test",
+        driverId: "iam-permissive-role-sink",
+        evidence: {
+          identityId: request.principalId,
+          groupIds: [],
+          bindingIds: [],
+          roleIds: [],
+          restrictionIds: [],
+        },
+      };
+    },
+    async createNamespaceRole(_context, role) {
+      driverCalls.push(role);
+      return role;
+    },
+  };
+  fixture.controller.registerDriver(permissiveDriver);
+  fixture.controller.selectDriver("iam", permissiveDriver.id);
+  const createRole = (permissions) =>
+    controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+      body: { permissions },
+    });
+
+  for (const action of ["create", "update", "delete", "deploy", "operate", "administer"]) {
+    const rejected = await createRole([{ action, resourceKind: "namespace" }]);
+    assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "NOT_FOUND");
+  }
+  assert.deepEqual(driverCalls, [], "OCC must reject before delegating to the IAM Driver");
+
+  // Control: the same Driver receives a Namespace read Role, so the rejection above is OCC's.
+  const reader = await createRole([{ action: "read", resourceKind: "namespace" }]);
+  assert.equal(reader.status, 201, JSON.stringify(reader.body));
+  assert.deepEqual(
+    driverCalls.map((role) => role.permissions),
+    [[{ action: "read", resourceKind: "namespace" }]],
+  );
+});
+
 test("Console share grants confer only the shared Agent and Namespace discovery", async () => {
   const fixture = await createInjectedFixture();
   const member = await fixture.createAuthPrincipal("share-recipient");

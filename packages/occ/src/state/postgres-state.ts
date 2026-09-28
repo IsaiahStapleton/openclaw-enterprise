@@ -2914,11 +2914,20 @@ export class PostgresPlatformState implements PlatformStateStore {
             "The IAM AccessBinding must belong to an available Namespace.",
           );
         }
+        // Same subject rule as the in-memory adapter: a human without a Namespace, a
+        // non-Agent ServicePrincipal of the exact Namespace, or the ServicePrincipal of a
+        // live Agent there. The Agent owner key is deferred, so it cannot vouch mid-unit.
         const identity = await client.query(
-          `SELECT 1 FROM occ.iam_identities
-           WHERE id = $2 AND (
-             (kind = 'principal' AND namespace_id IS NULL) OR
-             (kind = 'service_principal' AND namespace_id = $1)
+          `SELECT 1 FROM occ.iam_identities AS i
+           WHERE i.id = $2 AND (
+             (i.kind = 'principal' AND i.namespace_id IS NULL) OR
+             (i.kind = 'service_principal' AND i.namespace_id = $1 AND (
+               i.agent_id IS NULL OR EXISTS (
+                 SELECT 1 FROM occ.agents AS a
+                 WHERE a.namespace_id = $1 AND a.id = i.agent_id
+                   AND a.service_principal_id = i.id
+               )
+             ))
            )`,
           [namespace.id, binding.subjectId],
         );

@@ -94,8 +94,14 @@ result. Later authorization requests read the current policy through the IAM
 Driver. Namespace locking serializes grant creation with Namespace deletion;
 exact resource targets retain their existing deletion locks. Identity foreign
 keys protect persisted bindings without expanding application-role privileges.
-The in-memory adapter accepts explicitly provisioned identities at construction
-and validates Agent-owned ServicePrincipals against its current Agent state.
+Both adapters apply one subject rule on every AccessBinding write: a human
+without a Namespace, a non-Agent ServicePrincipal of the exact Namespace, or the
+ServicePrincipal of a live Agent there. PostgreSQL checks the owning Agent in
+the same query because its Agent owner key is deferred to commit. The in-memory
+adapter resolves subjects live through its `resolveIAMIdentity` lookup, so
+humans enrolled after construction can be bound, then falls back to identities
+provisioned at construction. Agent-owned ServicePrincipals resolve only through
+its current Agent state.
 
 State also provides an opt-in Installation authority and native-IAM barrier
 for an original transaction. Its SQL supplier is unregistered, and the
