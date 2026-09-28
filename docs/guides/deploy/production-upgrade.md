@@ -1,13 +1,13 @@
 # Upgrade production images
 
 Use `scripts/upgrade-production-images` to release the OpenClaw Control Plane
-(OCC), Agent runtimes, or both. Select only the image you intend to change:
+(OCC), Agent runtimes, or both. Select the images you intend to change:
 
 - `--controller-image` updates the OCC API and worker without requesting Agent
   deployments. A restarted repository broker can interrupt existing revisions.
 - `--runtime-image` keeps the current controller image, updates the gateway and
   Agent runtime image, and deploys a new revision for every running Agent.
-- Supplying both performs the two changes together.
+- `--broker-image` selects the repository broker when credentials are enabled.
 
 Every release stops the OCC API and worker during migration and rollout. Runtime
 upgrades also restart the fleet concurrently. Schedule an interruption window
@@ -38,6 +38,18 @@ Prepare:
 - Agent-volume backups before a runtime release whose recovery may require
   restoring runtime data.
 
+For repository-enabled releases, supply both `--controller-image` and
+`--broker-image`, even when retaining the current digest. Stage the exact
+operator-trusted images locally on a Linux host running as UID 1000. Docker
+Engine must support platform-specific image inspection and export; Python 3,
+Node.js, and OpenSSL must be available. Every node matching the control-plane
+selector must use the host's single native `linux/amd64` or `linux/arm64`
+architecture. Freeze eligible nodes and their labels during the maintenance
+window. The Kubernetes identity must list nodes and read Deployments,
+ReplicaSets and Pods, and execute a read-only check in the worker container.
+The local preflight checks protocol compatibility, not Kubernetes image
+availability or admission, image trust, database durability, or session disposal.
+
 The OCC identity needs Installation `read`. A runtime upgrade additionally needs
 Installation `administer`, exact `read` access to every Namespace, Agent, and
 active Agent revision, plus exact `deploy` access to every running Agent.
@@ -46,12 +58,13 @@ Revision read access must also cover the replacement revisions.
 Review saved Agent and Configuration drafts before a runtime upgrade. Each
 deployment snapshots the current draft, not the previous active revision.
 
-If the worker has an enabled repository broker, its replacement also restarts
-the broker and loses in-memory sessions. Before either image release, identify
-running Agents with delivered repository sessions, plan their interruption, and
-review their current drafts and exact-resource deploy grants. Prepare authorized
-replacement revisions for affected Agents; stop if recovery cannot be performed
-safely. A controller-only release does not request those deployments for you.
+Restarting the repository broker loses delivered sessions. Before a release,
+plan interruption and authorized replacement revisions for affected Agents;
+review their drafts and deploy grants. Stop if recovery cannot be performed
+safely. A lost delivered session fails its revision and queues retirement;
+inspect its retained cleanup. A controller-only release does not request
+replacements. Follow the
+[broker recovery procedure](../repository-credentials/installation.md#install-and-verify).
 
 Stop other Helm changes until the command completes. Disable autoscalers and
 other automation that can restart or scale the OCC Deployments. Stop any other
@@ -163,29 +176,21 @@ scripts/upgrade-production-images \
   --occ /secure/occ/bin/occ
 ```
 
-The command verifies the selected cluster and OCC Installation and checks that
-protected files match live state. When repository credentials are enabled, it
-reads the running worker's broker origin and carries its Service name and exact
-hostname into the candidate values. It rejects a mismatch with explicit Helm
-settings. Keep the protected values equal to live values; do not add the hostname
-manually before running the helper. It then renders the chart and performs a
-server-side dry run.
+For a repository-enabled release, set `BROKER_IMAGE` to the selected immutable
+broker reference and add `--broker-image "$BROKER_IMAGE"` to this command. Keep
+the protected values equal to live values; the helper preserves
+the running broker's exact hostname in the candidate. It qualifies the pair
+before cluster mutation and verifies the deployed pair and broker capability.
 
-The command applies reviewed candidate settings, changes `images.controller`,
-persists the preserved broker endpoint when enabled, scales the API and worker to zero, and waits for their Pods to
-terminate. It then runs Helm, waits for the API and worker, verifies their image,
-and confirms OCC authentication recovers. Helm restores the candidate
-Deployments after its initialization hooks succeed.
+The command applies reviewed settings, scales the API and worker to zero, and
+waits for their Pods to terminate. Helm restores the candidate Deployments after
+its initialization hooks succeed. The helper verifies rollout and OCC access.
 
 Helm runs the candidate controller's database migration init container with the
 migration role, then runs bootstrap. The API and worker do not roll out unless
 both hooks succeed. The command does not request fleet inventory or Agent
-deployment authority. After a broker restart, a lost session already delivered to
-an Agent fails its revision and queues runtime retirement. Inspect retained
-cleanup obligations and explicitly deploy an authorized replacement revision
-for each affected Agent. The replacement snapshots the current draft; it does
-not settle old cleanup or replay repository operations. Follow the
-[broker recovery procedure](../repository-credentials/installation.md#install-and-verify).
+deployment authority. A replacement revision snapshots the current draft; it
+does not settle old cleanup or replay repository operations.
 
 For the first release that introduces `occ installation deployment-inventory`,
 verify that operation after the controller upgrade before attempting a runtime
@@ -202,7 +207,7 @@ Agents. Verify those Agents and their required repository operations separately.
 
 ## Upgrade Agent runtimes
 
-Set the runtime image and run the command without `--controller-image`:
+Set the runtime image and run the command:
 
 ```bash
 export RUNTIME_IMAGE='<registry>/runtime@sha256:<64-hex-digest>'
@@ -219,6 +224,10 @@ scripts/upgrade-production-images \
   --evidence-dir "$UPGRADE_EVIDENCE" \
   --occ /secure/occ/bin/occ
 ```
+
+When repository credentials are enabled, also pass `--controller-image` with
+the current controller digest and `--broker-image` with the selected broker
+digest. The worker and broker still restart during this release.
 
 Before mutation, the command requires a complete authorized inventory with no
 deployment in progress. Every running Agent must have a readable active revision
@@ -278,7 +287,8 @@ inventory and dispatch records are needed to avoid duplicate deployments. If
 preparation did not finish, the helper stopped before mutation; use a new
 evidence directory after resolving the failure. Otherwise, repeat the original
 command with the same arguments, protected file paths, kubeconfig contents,
-OCC URL, script, and chart, adding `--resume`. Include the original candidate
+OCC URL, scripts, flow, and chart, adding `--resume`. The helper rechecks the
+recorded image pair and eligible nodes. Include the original candidate
 flags and keep their files semantically unchanged. The helper uses the recorded
 candidate, reads the live Secret and Helm release, accepts only the recorded
 baseline or candidate, and continues the recorded fleet. It rejects unrelated drift. The evidence includes
@@ -350,8 +360,8 @@ delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
 
 ## Current limits
 
-- No canary, batching, automatic compatibility check, automatic rollback, or
-  cluster-wide upgrade lock.
+- No canary, batching, general runtime compatibility check, automatic rollback,
+  or cluster-wide upgrade lock.
 - Runtime upgrades start all recorded Agent deployments concurrently.
 - Agent deployments use current drafts rather than recreating active revisions.
 - One runtime image is used for both gateway and Agent containers.

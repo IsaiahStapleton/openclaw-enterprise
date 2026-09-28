@@ -1,7 +1,7 @@
 ---
 created: 2026-09-23
 updated: "2026-09-28"
-last_updated_session: "authoring-run/829b465b-4176-428a-a748-59968ab63b04"
+last_updated_session: "01a0e6ca-95a4-7e80-aab8-38c5e92a53da"
 ---
 
 # Production image upgrade flow
@@ -30,7 +30,10 @@ Doctor lint. Model and external integration checks remain operator tasks.
 
 ```mermaid
 graph TD
-    A["Validate inputs and freeze fleet"] --> B["Render candidate and save recovery record"]
+    A["Validate inputs and freeze fleet"] --> Q{"Repository broker enabled?"}
+    Q -->|Yes| P["Check image protocol and node architectures"]
+    Q -->|No| B["Render candidate and save recovery record"]
+    P --> B
     B --> C["Read live Secret and Helm state"]
     C --> D{"Candidate Helm release deployed?"}
     D -->|No| E["Stop API and worker Pods"]
@@ -54,7 +57,7 @@ graph TD
 
 ### 1. Prepare and freeze the target
 
-`scripts/upgrade-production-images:231`
+`scripts/upgrade-production-images:245`
 
 The script verifies the protected files, cluster, deployed Helm release, and
 matching OCC and Secret Installation IDs. It compares protected and live
@@ -68,10 +71,17 @@ A runtime release also reads complete authorized inventory and records every run
 revision. Nonterminal deployment work, a missing active revision, or an unready
 Namespace stops preparation. Stopped and deleting Agents are excluded.
 
-For repository-enabled releases, the script validates the running worker's
-broker origin against its Service settings and preserves the hostname in the
-candidate values. Restarting that broker loses delivered sessions; follow the
-[broker recovery procedure](../guides/repository-credentials/installation.md#install-and-verify).
+For repository-enabled releases, the helper requires explicit immutable
+controller and broker images. It inventories every node matching the control
+plane selector, including unready and cordoned nodes, and requires a single
+native architecture. `scripts/upgrade-repository-image-probe.mjs` runs both
+selected images with synthetic inputs and a private receipt listener. It checks
+recovery and refused reservation through the actual Driver and broker, and
+records the selected digest, platform manifest, configuration, requests, and responses.
+The check proves wire compatibility, not Kubernetes image availability, receipt
+durability, or disposal. The
+helper also preserves the live broker hostname; broker restart recovery remains
+an operator task in the [broker procedure](../guides/repository-credentials/installation.md#install-and-verify).
 
 The script renders the chart and performs a server-side Helm dry run. It saves
 candidate inputs, inventory, target identity, and parameter hashes in the
@@ -82,13 +92,14 @@ specified in the [production guide](../guides/deploy/production-upgrade.md).
 
 ### 2. Reconcile a prior attempt
 
-`scripts/upgrade-production-images:464`
+`scripts/upgrade-production-images:506`
 
 On every attempt the script rereads Helm status and values and the Installation
 Secret. Only the recorded baseline or candidate values are accepted; the
 Secret's UID, Installation annotation, and other data must match the baseline.
-Resume also binds the original kubeconfig contents, inputs, OCC URL, script,
-and chart. Candidate files must still match the saved reviewed inputs; the
+Resume also binds the original kubeconfig contents, inputs, OCC URL, scripts,
+flow, chart, and pair evidence. It requalifies the pair and rejects a changed
+eligible-node set. Candidate files must still match the saved reviewed inputs; the
 helper applies the saved candidate. Unexpected drift or an in-progress Helm
 release stops the command.
 
@@ -101,7 +112,7 @@ rollback. The guide describes the required attestation and recovery.
 
 ### 3. Quiesce writers and run the candidate release
 
-`scripts/upgrade-production-images:532`
+`scripts/upgrade-production-images:624`
 
 Before changing the Secret or invoking Helm, the script scales the selected API
 and worker Deployments to zero, waits until their Pods disappear, and confirms
@@ -125,7 +136,7 @@ it does not start the old image to undo a committed schema change.
 
 ### 4. Verify control-plane recovery
 
-`scripts/upgrade-production-images:597`
+`scripts/upgrade-production-images:694`
 
 The script waits for both OCC Deployments, checks their controller image and
 replica count, and checks the Installation checksum when its configuration
@@ -135,9 +146,15 @@ no worker exists in the ordinary container list. It rejects a non-restartable
 init worker or ambiguous placement. It retries authenticated OCC access and verifies the same Installation ID. A
 controller-only release then ends without requesting Agent deployments.
 
+For a repository-enabled release, it also verifies the ready API and worker
+Pods, their owning ReplicaSets, node architecture, and runtime controller and
+broker image IDs against the qualified pair. The deployed Driver checks the real
+broker's admission capability without opening a session. Pod identities must
+remain stable across that check and before dispatch and completion.
+
 ### 5. Deploy and verify the recorded fleet
 
-`scripts/upgrade-production-images:639`
+`scripts/upgrade-production-images:797`
 
 Before sending each ordinary exact-Agent deployment request, the script records
 an intent. Successful responses are saved atomically. On resume, existing
@@ -195,6 +212,8 @@ access, and required restore behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 12:36: Qualify the selected repository image pair and verify deployed identities and capability. (01a0e6ca-95a4-7e80-aab8-38c5e92a53da - 374dfd4c58587f64d859d4aa4fdaf446b158402a)
 
 - 2026-09-28 11:36: Restrict candidate changes to the reviewed proxy and curated catalog settings. (authoring-run/829b465b-4176-428a-a748-59968ab63b04 - e3bcdb9b3a82d16016c023a8a77d683bf0079ce7)
 

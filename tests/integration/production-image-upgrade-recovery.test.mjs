@@ -14,6 +14,7 @@ const script =
 const controller = `registry.example.invalid/controller@sha256:${"a".repeat(64)}`;
 const runtime = `registry.example.invalid/runtime@sha256:${"b".repeat(64)}`;
 const newController = `registry.example.invalid/controller@sha256:${"e".repeat(64)}`;
+const newBroker = `registry.example.invalid/broker@sha256:${"f".repeat(64)}`;
 const oldRuntime = `registry.example.invalid/runtime@sha256:${"c".repeat(64)}`;
 
 // This fixture substitutes the external command protocols, not the upgrade
@@ -74,6 +75,12 @@ if (tool === 'helm') {
     state.secret = secret; save(); log('secret-replaced');
     if (take('lost-secret-response')) process.exit(9);
   } else if (args.includes('get') && args.includes('secret')) out(state.secret);
+  else if (args.includes('get') && args.includes('nodes')) {
+    const architecture = process.arch === 'x64' ? 'amd64' : 'arm64';
+    if (fs.existsSync(path.join(root, 'change-node'))) { state.nodeReads = (state.nodeReads ?? 0) + 1; save(); }
+    const uid = state.nodeReads > 1 ? 'replacement-node-uid' : 'node-uid';
+    out({items: [{metadata: {name: 'node-a', uid, labels: {'kubernetes.io/os': 'linux', 'kubernetes.io/arch': architecture}}, status: {nodeInfo: {operatingSystem: 'linux', architecture}}}]});
+  }
   else if (args.includes('get') && args.includes('deployment') && args.includes('openclaw-enterprise-worker')) {
     out({metadata: {labels: {'app.kubernetes.io/instance': 'oce'}}, spec: {template: {spec: {containers: [{name: 'repository-credentials', args: ['--public-origin', 'https://git.system.svc.cluster.local']}]}}}});
   }
@@ -91,16 +98,39 @@ if (tool === 'helm') {
     if (args.some((a) => a.startsWith('jsonpath='))) {
       out(podSpec.containers.filter((item) => item.name === component).map((item) => item.image).join(' '));
     } else {
-      out({metadata: {labels: {'app.kubernetes.io/instance': 'oce', 'app.kubernetes.io/component': component}}, spec: {replicas: state[component], template: {metadata: {annotations: {'openclaw.dev/installation-checksum': state.checksum}}, spec: podSpec}}});
+      out({metadata: {name: 'openclaw-enterprise-' + component, uid: component + '-deployment-uid', generation: 1, labels: {'app.kubernetes.io/instance': 'oce', 'app.kubernetes.io/component': component}}, spec: {replicas: state[component], template: {metadata: {annotations: {'openclaw.dev/installation-checksum': state.checksum}}, spec: podSpec}}, status: {observedGeneration: 1, replicas: 1, updatedReplicas: 1, availableReplicas: 1}});
     }
   } else if (args.includes('get') && args.includes('jobs')) {
     out({items: state.initJobActive ? [{status: {active: 0, conditions: []}}] : []});
+  } else if (args.includes('get') && args.includes('replicasets')) {
+    const selector = fileArg('--selector');
+    const component = selector.endsWith('component=worker') ? 'worker' : 'api';
+    out({items: [{metadata: {name: component + '-rs', uid: component + '-rs-uid', ownerReferences: [{kind: 'Deployment', name: 'openclaw-enterprise-' + component, uid: component + '-deployment-uid', controller: true}]}}]});
   } else if (args.includes('get') && args.includes('pods')) {
     const initialization = args.some((a) => a.includes('component=initialization'));
     const revision = args.some((a) => a.includes('openclaw.dev/revision=rev_new'));
-    out({items: initialization && state.initActive ? [{status: {phase: 'Running'}}] : revision ? [{metadata: {namespace: 'tenant', name: 'gateway'}, spec: {containers: [{name: 'gateway', image: '${runtime}'}]}, status: {phase: 'Running', conditions: [{type: 'Ready', status: 'True'}]}}] : []});
+    const pairComponent = args.some((a) => a.includes('app.kubernetes.io/component=worker')) ? 'worker' : args.some((a) => a.includes('app.kubernetes.io/component=api')) ? 'api' : null;
+    if (pairComponent && state.simulatePair) {
+      const proof = JSON.parse(fs.readFileSync(path.join(root, 'evidence', 'pair-proof.json')));
+      const status = (name, image) => ({name, imageID: 'containerd://' + image.rootDigest, containerID: 'containerd://' + name, restartCount: 0, ready: true, state: {running: {}}});
+      const worker = {name: pairComponent, image: proof.controller.image};
+      const restartable = pairComponent === 'worker' && state.workerPlacement === 'restartable';
+      const podSpec = {nodeName: 'node-a', containers: restartable ? [] : [worker]};
+      const podStatus = {phase: 'Running', conditions: [{type: 'Ready', status: 'True'}], containerStatuses: restartable ? [] : [status(pairComponent, proof.controller)]};
+      if (restartable) { podSpec.initContainers = [{...worker, restartPolicy: 'Always'}]; podStatus.initContainerStatuses = [status('worker', proof.controller)]; }
+      if (pairComponent === 'worker') {
+        podSpec.containers.push({name: 'repository-credentials', image: proof.broker.image});
+        const brokerStatus = status('repository-credentials', proof.broker);
+        if (fs.existsSync(path.join(root, 'wrong-broker-identity'))) brokerStatus.imageID = 'containerd://sha256:' + '0'.repeat(64);
+        podStatus.containerStatuses.push(brokerStatus);
+      }
+      out({items: [{metadata: {name: pairComponent + '-pod', uid: pairComponent + '-pod-uid', ownerReferences: [{kind: 'ReplicaSet', name: pairComponent + '-rs', uid: pairComponent + '-rs-uid', controller: true}]}, spec: podSpec, status: podStatus}]});
+    } else out({items: initialization && state.initActive ? [{status: {phase: 'Running'}}] : revision ? [{metadata: {namespace: 'tenant', name: 'gateway'}, spec: {containers: [{name: 'gateway', image: '${runtime}'}]}, status: {phase: 'Running', conditions: [{type: 'Ready', status: 'True'}]}}] : []});
   } else if (args.includes('get')) out({items: []});
-  else if (args.includes('exec')) out('{}');
+  else if (args.includes('exec')) {
+    if (args.includes('worker') && state.simulatePair && take('fail-capability')) process.exit(9);
+    out(args.includes('worker') && state.simulatePair ? 'repository-admission-ready\\n' : '{}');
+  }
 } else if (tool === 'occ') {
   if (args.includes('deployment-inventory')) {
     out({installationId: 'ins_test', namespaces: [{id: 'ns_test', status: 'ready', agents: state.agent ? [{id: 'agt_test', status: 'active', desiredRuntimeState: 'running', executionMode: 'embedded', activeRevisionId: 'rev_old', deploymentInProgress: false}] : []}]});
@@ -121,6 +151,7 @@ async function fixture(
     candidates = false,
     controllerOnly = false,
     repositoryCredentials = false,
+    simulatePair = false,
     workerPlacement = "container",
   } = {},
 ) {
@@ -133,6 +164,24 @@ async function fixture(
     await writeFile(path, executable);
     await chmod(path, 0o755);
   }
+  if (simulatePair) {
+    // These cases exercise upgrade orchestration after a successful qualification.
+    // The separately selected real-image test verifies compatibility itself.
+    const wrapper = `#!${process.execPath}
+const {spawnSync} = require('child_process');
+const args = process.argv.slice(2);
+if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
+  const identity = (image) => ({image, platform: args[3], rootDigest: image.split('@').at(-1), manifestDigest: image.split('@').at(-1), configDigest: image.split('@').at(-1)});
+  process.stdout.write(JSON.stringify({controller: identity(args[1]), broker: identity(args[2])}) + '\\n');
+} else {
+  const child = spawnSync(${JSON.stringify(process.execPath)}, args, {stdio: 'inherit'});
+  process.exit(child.status ?? 1);
+}
+`;
+    const path = join(bin, "node");
+    await writeFile(path, wrapper);
+    await chmod(path, 0o755);
+  }
   const values = JSON.stringify({
     images: { controller },
     installation: { secretName: "occ-installation-startup", key: "installation.yaml" },
@@ -140,6 +189,7 @@ async function fixture(
       ? {
           repositoryCredentials: {
             enabled: true,
+            image: `registry.example.invalid/broker@sha256:${"1".repeat(64)}`,
             serviceName: "git",
             hostname: "git.system.svc.cluster.local",
             clusterDomain: "cluster.local",
@@ -201,6 +251,7 @@ async function fixture(
     controller,
     agent,
     workerPlacement,
+    simulatePair,
     dispatches: 0,
     initActive: false,
     secret: {
@@ -259,6 +310,8 @@ async function fixture(
     "--installation",
     join(directory, "installation"),
     ...(controllerOnly ? ["--controller-image", newController] : ["--runtime-image", runtime]),
+    ...(simulatePair && !controllerOnly ? ["--controller-image", newController] : []),
+    ...(simulatePair ? ["--broker-image", newBroker] : []),
     ...(candidates
       ? [
           "--candidate-values",
@@ -414,6 +467,7 @@ test("reviewed settings survive an interrupted controller upgrade without losing
     candidates: true,
     controllerOnly: true,
     repositoryCredentials: true,
+    simulatePair: true,
   });
   // The Secret write succeeds, but its client loses the response before Helm.
   await f.failNext("lost-secret-response");
@@ -480,6 +534,21 @@ test("resume refuses altered reviewed candidates before another mutation", async
   await writeFile(path, JSON.stringify(candidate));
   await assert.rejects(f.run("--resume"), /reviewed candidate values changed after preparation/);
   assert.equal((await f.events()).filter((event) => event === "migration").length, 0);
+});
+
+test("resume refuses changed prepared candidate and fleet evidence before another mutation", async (t) => {
+  for (const name of ["candidate-values.yaml", "targets.jsonl"]) {
+    await t.test(name, async (subtest) => {
+      const f = await fixture(subtest);
+      await f.failNext("fail-scale-worker");
+      await assert.rejects(f.run());
+      const events = await f.events();
+      // An interrupted release must use the frozen candidate and Agent inventory.
+      await writeFile(join(f.evidence, name), "{}\n");
+      await assert.rejects(f.run("--resume"), /prepared upgrade evidence changed/);
+      assert.deepEqual(await f.events(), events);
+    });
+  }
 });
 
 test("candidate cannot redirect the Installation Secret or change an image outside the selected flags", async (t) => {
@@ -625,6 +694,67 @@ test("candidate cannot change cluster credentials or other protected trust setti
   }
 });
 
+test("repository-enabled upgrades require both image selections before mutation", async (t) => {
+  for (const controllerOnly of [true, false]) {
+    await t.test(controllerOnly ? "controller release" : "runtime release", async (subtest) => {
+      const f = await fixture(subtest, { repositoryCredentials: true, controllerOnly });
+      // Either release restarts the worker and broker, so neither may reuse an unverified pair.
+      await assert.rejects(f.run(), /require explicit controller and broker image selections/);
+      assert.deepEqual(await f.events(), []);
+    });
+  }
+});
+
+test("broker image selection requires an enabled broker before mutation", async (t) => {
+  const f = await fixture(t, { controllerOnly: true });
+  const broker = `registry.example.invalid/broker@sha256:${"f".repeat(64)}`;
+  await assert.rejects(
+    f.run("--broker-image", broker),
+    /requires repository credentials to be enabled/,
+  );
+  assert.deepEqual(await f.events(), []);
+});
+
+test("an unchecked repository image pair cannot start an upgrade", async (t) => {
+  const f = await fixture(t, { repositoryCredentials: true, controllerOnly: true });
+  const broker = `registry.example.invalid/broker@sha256:${"f".repeat(64)}`;
+  // Selecting digests alone does not establish their admission compatibility.
+  await assert.rejects(f.run("--broker-image", broker), /failed compatibility qualification/);
+  assert.deepEqual(await f.events(), []);
+});
+
+test("a changed eligible node stops the upgrade before mutation", async (t) => {
+  const f = await fixture(t, {
+    agent: true,
+    repositoryCredentials: true,
+    simulatePair: true,
+  });
+  // Replace the selected node between preparation and the mutation boundary.
+  await f.failNext("change-node");
+  await assert.rejects(f.run(), /eligible control-plane nodes changed/);
+  assert.deepEqual(await f.events(), []);
+});
+
+test("deployed pair verification stops before Agent dispatch on failure", async (t) => {
+  for (const scenario of [
+    { flag: "wrong-broker-identity", error: /deployed worker identity does not match/ },
+    { flag: "fail-capability", error: /deployed controller cannot verify repository admission/ },
+  ]) {
+    await t.test(scenario.flag, async (subtest) => {
+      const f = await fixture(subtest, {
+        agent: true,
+        repositoryCredentials: true,
+        simulatePair: true,
+      });
+      // Helm has completed, but an unqualified Pod must not receive Agent work.
+      await f.failNext(scenario.flag);
+      await assert.rejects(f.run(), scenario.error);
+      assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+      assert.equal((await f.state()).dispatches, 0);
+    });
+  }
+});
+
 test("controller upgrade verifies worker placement with and without a repository broker", async (t) => {
   for (const scenario of [
     { name: "broker disabled", repositoryCredentials: false, workerPlacement: "container" },
@@ -640,7 +770,11 @@ test("controller upgrade verifies worker placement with and without a repository
     },
   ]) {
     await t.test(scenario.name, async (subtest) => {
-      const f = await fixture(subtest, { ...scenario, controllerOnly: true });
+      const f = await fixture(subtest, {
+        ...scenario,
+        controllerOnly: true,
+        simulatePair: scenario.repositoryCredentials,
+      });
       const result = await f.run();
       assert.match(result.stdout, /Upgraded controller image; no Agent deployments were requested/);
       assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
@@ -671,7 +805,11 @@ test("controller upgrade rejects missing, ambiguous, or invalid worker placement
     },
   ]) {
     await t.test(scenario.name, async (subtest) => {
-      const f = await fixture(subtest, { ...scenario, controllerOnly: true });
+      const f = await fixture(subtest, {
+        ...scenario,
+        controllerOnly: true,
+        simulatePair: scenario.repositoryCredentials,
+      });
       if (scenario.wrongImage) {
         const state = await f.state();
         state.workerObservedImage = oldRuntime;
