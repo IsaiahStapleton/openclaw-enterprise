@@ -21,21 +21,24 @@ owns the profile's rules; this page is the operator procedure.
 | `deactivate [--purge-disabled] --writers-stopped`                  | Return to password-only sign-in. See [Deactivate](#deactivate-github-sign-in).                                                                                                                     |
 
 Every change writes an audit event attributed to `maintenance:<database role>`.
-The command prints one JSON line and exits with:
+`activate` also records startup's own activation event, attributed to the
+recovery Principal; re-running it for the designated account changes nothing
+and writes no audit. The command prints one JSON line and exits with:
 
-| Exit | Meaning                                                                                                          |
-| ---- | ---------------------------------------------------------------------------------------------------------------- |
-| `0`  | Done.                                                                                                            |
-| `2`  | Another client is connected to the database. Nothing changed; the output lists the backends.                     |
-| `3`  | A precondition refused the operation (`reason` in the output, for example `DISABLED_ACCOUNTS`). Nothing changed. |
-| `1`  | Configuration, credential, or database failure.                                                                  |
-| `64` | Invalid arguments.                                                                                               |
+| Exit | Meaning                                                                                                                                  |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Done.                                                                                                                                    |
+| `2`  | Another client is connected to the database. Nothing changed; the output lists the backends.                                             |
+| `3`  | A precondition refused the operation (`reason` in the output, for example `DISABLED_ACCOUNTS` or `ACTIVATION_REFUSED`). Nothing changed. |
+| `1`  | Configuration, credential, or database failure.                                                                                          |
+| `64` | Invalid arguments.                                                                                                                       |
 
 ## Stop every writer
 
 `--writers-stopped` is checked, not trusted. Inside its transaction the command
 takes the activation lock and refuses while any other client is connected to
-the database, then checks again before committing. Stop the API and the worker,
+the database, then checks again before committing; `activate` runs the same
+checks inside the startup activation transaction. Stop the API and the worker,
 and close any `psql` or monitoring session on this database:
 
 ```bash
@@ -53,17 +56,20 @@ pause anything that would scale the Deployments back up.
 ## Run the command
 
 Run it from the installed controller image as a one-off Pod. The labels and
-service account reuse the initialization Job's database egress policy; the
-Secret is the chart's `occ-database` with its `migration-url` key. When
-`database.caSecretName` is set, mount that CA as the chart's Job does.
+service account reuse the initialization Job's database egress policy, which
+selects on the Helm release name (`RELEASE`); the Secret is the chart's
+`occ-database` with its `migration-url` key. The example mounts the
+`database.caSecretName` CA (key `ca.pem`) at the chart's `database.caMountPath`;
+without a database CA, drop `volumes` and `volumeMounts`.
 
 ```bash
+export RELEASE=oce DATABASE_CA_SECRET='<database.caSecretName>'
 export CONTROLLER_IMAGE='<registry>/controller@sha256:<64-hex-digest>'
 kubectl --kubeconfig /secure/occ/kubeconfig --context '<reviewed-context>' \
   --namespace openclaw-system run occ-auth-maintain --rm -i --restart=Never \
   --image "$CONTROLLER_IMAGE" \
-  --labels 'app.kubernetes.io/name=openclaw-enterprise,app.kubernetes.io/instance=oce,app.kubernetes.io/component=initialization' \
-  --overrides '{"spec":{"serviceAccountName":"openclaw-enterprise-initialization","automountServiceAccountToken":false,"securityContext":{"runAsNonRoot":true,"runAsUser":1000,"runAsGroup":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"occ-auth-maintain","image":"'"$CONTROLLER_IMAGE"'","args":["scripts/auth-maintain.mjs","status"],"env":[{"name":"NODE_ENV","value":"production"},{"name":"OCC_MIGRATION_DATABASE_URL","valueFrom":{"secretKeyRef":{"name":"occ-database","key":"migration-url"}}}],"securityContext":{"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"]}}}]}}'
+  --labels "app.kubernetes.io/name=openclaw-enterprise,app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=initialization" \
+  --overrides '{"spec":{"serviceAccountName":"openclaw-enterprise-initialization","automountServiceAccountToken":false,"securityContext":{"runAsNonRoot":true,"runAsUser":1000,"runAsGroup":1000,"seccompProfile":{"type":"RuntimeDefault"}},"volumes":[{"name":"database-ca","secret":{"secretName":"'"$DATABASE_CA_SECRET"'","items":[{"key":"ca.pem","path":"ca.pem"}]}}],"containers":[{"name":"occ-auth-maintain","image":"'"$CONTROLLER_IMAGE"'","args":["scripts/auth-maintain.mjs","status"],"env":[{"name":"NODE_ENV","value":"production"},{"name":"OCC_MIGRATION_DATABASE_URL","valueFrom":{"secretKeyRef":{"name":"occ-database","key":"migration-url"}}}],"volumeMounts":[{"name":"database-ca","mountPath":"/etc/openclaw/database-ca","readOnly":true}],"securityContext":{"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"]}}}]}}'
 ```
 
 Replace `"status"` with the operation's arguments, for example
@@ -87,9 +93,19 @@ session. Linked GitHub identities stay in the database but are unused.
 
 The legacy profile ignores account disablement, so `deactivate` refuses while any
 account is disabled and lists their IDs. `--purge-disabled` removes those
-accounts' passwords instead, so they still cannot sign in.
+accounts' passwords instead, so they still cannot sign in. Deactivation also
+removes the database fence on unbound sessions, so the older image and plain
+password sign-in work again.
 
-Before scaling the API back up, remove the GitHub configuration
-(`OCC_AUTH_GITHUB_CLIENT_ID`, `OCC_AUTH_GITHUB_CLIENT_SECRET`, and
-`OCC_AUTH_GITHUB_RECOVERY_USER_ID`) from its values. With them still set,
-startup activates the profile again.
+Then set `auth.github.enabled: false` and remove `auth.recoveryUserId` in the
+protected values, and run `helm upgrade`, which also restores the replicas.
+Without Helm, remove `OCC_AUTH_GITHUB_CLIENT_ID`, `OCC_AUTH_GITHUB_CLIENT_SECRET`,
+and `OCC_AUTH_GITHUB_RECOVERY_USER_ID` from the API environment before scaling
+it up. With them still set, startup activates the profile again.
+
+Activating again later, at startup or with `activate`, enrolls every account
+that has its Principal and exactly one password, as an enabled account; earlier
+disablement is not restored. Accounts that `--purge-disabled` left without a
+password are skipped: startup logs them, `status` lists them as unenrolled, and
+they cannot sign in. Disable again, through the accounts API, any account that
+must stay disabled.
