@@ -79,6 +79,13 @@ through real controls after loading fixture data.
 Pending-read stories use the real client's 15-second timeout; reset them to replay
 loading.
 
+## Return navigation
+
+Use **Pages/Navigation → Return to loaded pages** and **Return to Agent panels**.
+Search, expanded configuration, native admin access, and Credentials should survive
+Back/Forward and tab changes. Refresh reloads. **Return access denied** and
+**Return session expired** must clear retained content.
+
 ## Agent flows and UI gaps
 
 In **Components → Navigation → Namespace switcher**, use the header selector to
@@ -88,7 +95,7 @@ selector** checks long-name truncation before the chevron and switching without 
 drawer. Existing no-readable, unavailable, loading, and denied stories cover
 restricted selector states.
 
-Saved simulated UI examples show the [desktop selector](../assets/console-namespace-selector/desktop.png),
+Simulated examples: [desktop selector](../assets/console-namespace-selector/desktop.png),
 [mobile empty collection](../assets/console-namespace-selector/mobile.png),
 [Namespaces page without a selector](../assets/console-namespace-selector/namespaces.png),
 and a [switching walkthrough](../assets/console-namespace-selector/namespace-switching.webm).
@@ -110,7 +117,7 @@ OpenClaw and unsupported-runtime stories retain the draft workflow: provision
 credentials and deploy from Agent detail.
 
 DevDay previews SWE, Community, Q&A, Oncall, and standard presets with models,
-workspace templates, four Slack channels, model Secrets, Linear, and repository
+workspace templates, six Slack channels, model Secrets, Linear, and repository
 choices. The simulated catalog works with any Preset or Secret choice.
 **Plugins Curated** exercises token-free discovery with simulated Driver responses;
 actual access remains unverified. Hosted discovery requires an eligible Codex
@@ -201,24 +208,31 @@ switch to **Configuration** for Harness authentication. Values never appear.
 
 ### Discover and configure plugins
 
-**Create Agent / Discover plugins with a service account token** uses a dummy
-token and simulated OCC discovery. Open **Configure plugins** and select Calendar
-to load its details. **Add Calendar** exposes policies; expand a tool to edit an
-override. **Done** returns to the form; **Plugin selections JSON** shows the draft.
-**Filter this page** searches plugins; **Filter tools** narrows tool rows without
-moving the caret. Credential, provider, or Harness changes clear the catalog but
-preserve selections. Companion stories cover empty,
-loading, rejection, failure, and pagination states.
+**Create Agent / Discover plugins with a service account token** uses simulated
+discovery. Open **Configure plugins**, select Calendar, then **Add Calendar**;
+expand a tool to edit its policy. **Done** returns to the form;
+**Plugin selections JSON** shows the draft. **Search plugins** queries the
+catalog; **Filter tools** filters locally. Credential, provider, or Harness
+changes clear the catalog and preserve selections.
 
-**Create Agent / Discover plugins with a selected PAT Secret** uses simulated
-Secret metadata and discovery responses. Choose Calendar to inspect details, then
-change the selected Secret to clear the catalog. **Selected PAT Secret discovery
-denied** shows a simulated permission failure. Preset PAT Secrets enable discovery;
-API keys do not. Catalog visibility does not prove a plugin can be invoked.
+**Preload plugins after entering a service account token** starts with the picker
+closed. Open it to reuse the background request. **Plugin search loading** holds
+the search response: loading should start while typing, preserve input focus,
+and replace empty-result feedback. **Plugin tools loading** holds Calendar's
+details: check its loading status and disabled **Add Calendar**. Reset to replay
+pending states before timeout.
 
-**Components/Plugins** covers the modal with simulated catalogs and capabilities:
-available plugins, selected overrides, unknown tools, and empty, loading, denied,
-and capability-unavailable states. Expand a tool to inspect inherited enablement
+**Discover plugins with a selected PAT Secret** uses simulated Secret metadata.
+Choose Calendar, then change the Secret to clear discovery.
+**Selected PAT Secret discovery denied** previews permission failure.
+Preset PAT Secrets enable discovery; API keys do not. Catalog visibility does
+not prove invocation access.
+
+**Components/Plugins → Unavailable reason popover** covers keyboard access,
+dismissal, compact rows, help links, detail guidance, and disabled **Add**.
+
+**Components/Plugins** uses simulated catalogs and capabilities.
+Expand a tool to inspect inherited enablement
 and approval. Its reviewer shortcut opens the plugin default when per-tool review
 is unsupported. New plugins omit tool defaults; an omitted reviewer inherits the
 Harness reviewer. Codex offers reviewer selection at the plugin default scope
@@ -228,12 +242,11 @@ inherit. Tool IDs under names match the JSON keys.
 **Create Agent / Edit existing plugin policies** exercises the form with simulated
 policy capabilities; it does not verify installation or runtime enforcement.
 
-**Pages/Agent detail → Edit plugins in new revision** starts with Calendar saved
-on a deployed Agent. Open **Plugins** and load the catalog using its saved
-Service Accounts Secret. Add Documents and change Calendar's policy in
-**Configure plugins**, then save and deploy. **Plugins in admitted revision**
-shows the frozen snapshot. The fixture does not prove installation or a live
-Agent turn.
+**Pages/Agent detail → Edit plugins in new version** starts with Calendar saved.
+Opening **Plugins** preloads the catalog using its Service Accounts Secret.
+In **Configure plugins**, add Documents and change Calendar's policy, then save
+and deploy. **Plugins in admitted revision** shows the frozen snapshot.
+Fixtures do not prove installation or live Agent turns.
 
 ### Update
 
@@ -265,8 +278,7 @@ connect to a gateway, Slack, credentials, or a model.
 
 Open **Stop Agent**, inspect or cancel the confirmation, and confirm the stop.
 The fixture records the requested stopped state; **Refresh stop status** rereads
-it. This demonstrates the controls and request handling; it does not run a Compute
-Driver or prove live shutdown.
+it. It does not prove live shutdown.
 
 Resume with **Create new version** → **Deploy new version**, creating a new revision.
 Disabling Slack does not stop an Agent. See
@@ -308,10 +320,6 @@ When changing console pages, shared components, or lifecycle controls, update th
 corresponding scenarios and flow instructions in the same PR. Add an export to
 the owning story file for a new scenario. Keep visible failure messages owned by
 the console; configure API responses instead of writing replacement UI markup.
-
-Build Storybook, inspect the affected previews, and walk through changed flows.
-Keep backend and runtime verification in the existing code suites; a successful
-storybook fixture is not evidence that the real API or infrastructure works.
 
 ## Debug image walkthrough
 
