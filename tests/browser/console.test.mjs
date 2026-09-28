@@ -645,7 +645,7 @@ for (const gate of ["/api/auth/session", "/namespaces"]) {
   });
 }
 
-test("a replacement session for the same user discards retained creation drafts", async (t) => {
+test("a session replaced by another tab signs this tab out instead of being adopted", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Session replacement", { ready: true });
@@ -662,16 +662,23 @@ test("a replacement session for the same user discards retained creation drafts"
     data: { email: fixture.credentials.email, password: fixture.credentials.password },
   });
   assert.equal(response.status(), 200);
-  const pending = await holdRoute(t, page, "**/namespaces", (route, read) =>
-    read ? route.fulfill({ response: read }) : route.continue(),
+  const refused = page.waitForResponse(
+    (candidate) => new URL(candidate.url()).pathname === "/api/auth/session",
   );
-  t.after(() => pending.release());
   await page.goBack();
-  await pending.waitForRelease();
-  // The new session has been checked; the old preview must already be gone.
+  // This tab pinned the key of its own session. The controller refuses the
+  // replaced cookie for it, so the tab signs out rather than acting as another session.
+  const refusedSession = await refused;
+  assert.equal(refusedSession.status(), 401);
+  assert.ok(refusedSession.request().headers()["x-occ-session-key"]);
+  await page.getByText("Your session has expired").waitFor();
   assert.equal(await page.locator("#agent-name").count(), 0);
   assert.equal(await page.locator(".content [inert]").count(), 0);
-  await releaseHeldRoute(page, "**/namespaces", pending);
+
+  // Signing in again adopts the current session without the old session's draft.
+  await page.getByLabel("Username").fill(fixture.credentials.email);
+  await page.getByLabel("Password").fill(fixture.credentials.password);
+  await page.getByRole("button", { name: "Login" }).click();
   await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
 });

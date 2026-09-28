@@ -444,6 +444,16 @@ export const scenarios = {
     description:
       "A rejected callback shows the generic sign-in error and keeps password recovery available.",
   },
+  githubResultRejected: {
+    group: "Pages/Sign in",
+    name: "GitHub result not confirmed",
+    path: "/console/",
+    pendingGithubAttempt: true,
+    githubEnabled: true,
+    rules: [{ path: "/api/auth/providers/github/result", method: "POST", status: 401 }],
+    description:
+      "The tab that started GitHub sign-in could not confirm that the current session is the one its attempt created, so it shows the sign-in error instead of adopting that session.",
+  },
   providerDiscoveryUnavailable: {
     group: "Pages/Sign in",
     name: "Provider discovery unavailable",

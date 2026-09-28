@@ -680,12 +680,29 @@ test(
       });
     });
     await page.goto(`${origin}/console/`);
+    // The Console confirms that the callback's session is the one this tab's attempt
+    // created, then pins its key on every later request.
+    const resultRequest = page.waitForRequest(
+      (candidate) => new URL(candidate.url()).pathname === "/api/auth/providers/github/result",
+    );
+    const pinnedRead = page.waitForRequest(
+      (candidate) => new URL(candidate.url()).pathname === "/namespaces",
+    );
     await page.getByRole("button", { name: "Continue with GitHub" }).click();
     await page.waitForURL(/\/console\/(agents|providers|namespaces|settings)/);
+    const confirmedResult = await (await resultRequest).response();
+    assert.equal(confirmedResult.status(), 200);
     const browserSession = await page.evaluate(
       async () => (await (await fetch("/api/auth/session")).json()).data,
     );
     assert.equal(browserSession.user.id, recovery);
+    assert.equal((await confirmedResult.json()).data.sessionKey, browserSession.sessionKey);
+    assert.equal((await pinnedRead).headers()["x-occ-session-key"], browserSession.sessionKey);
+    assert.deepEqual(
+      await page.evaluate(() => ({ ...sessionStorage })),
+      {},
+      "the one-use attemptId leaves tab storage after the exchange",
+    );
     const browserNamespaces = await page.evaluate(
       async () => (await (await fetch("/namespaces")).json()).data,
     );
