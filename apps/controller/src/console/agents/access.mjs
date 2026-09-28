@@ -28,7 +28,8 @@ export function renderAgentAccess(context, agent) {
     className: "agent-card agent-access",
     "aria-labelledby": "agent-access-title",
   });
-  const feedback = element("div", { "aria-live": "polite" });
+  // role=status is an implicit polite live region without matching the page-view selector.
+  const feedback = element("div", { role: "status" });
   const grants = element("div");
   const principal = element("input", {
     id: "share-principal-id",
