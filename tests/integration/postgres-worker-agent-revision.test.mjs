@@ -241,14 +241,18 @@ async function setup(
     return { ...candidate, idempotencyKey };
   }
 
-  async function work(candidate, expected) {
-    return waitFor(`revision ${candidate.id} to become ${expected}`, async () => {
-      const rows = await observerPool.query(
-        "SELECT state, claim_token, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
-        [candidate.idempotencyKey],
-      );
-      return rows.rows[0]?.state === expected ? rows.rows[0] : undefined;
-    });
+  async function work(candidate, expected, timeoutMs) {
+    return waitFor(
+      `revision ${candidate.id} to become ${expected}`,
+      async () => {
+        const rows = await observerPool.query(
+          "SELECT state, claim_token, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
+          [candidate.idempotencyKey],
+        );
+        return rows.rows[0]?.state === expected ? rows.rows[0] : undefined;
+      },
+      timeoutMs,
+    );
   }
 
   async function requestStop(owner) {
@@ -565,7 +569,7 @@ test(
 
 test(
   "worker readiness and fresh Agent admission require the broker capability",
-  { ...requiresPostgres, timeout: 30_000 },
+  { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
     let healthy = 0;
     const fixture = await setup(context, {
@@ -652,7 +656,8 @@ test(
       fixture.workerPool,
       (drivers) => ({ ...drivers, repoDriver: driver }),
     );
-    await fixture.work(incompatible, "failed_permanent");
+    // Four jittered retry delays can total nearly 15 seconds before the fifth claim.
+    await fixture.work(incompatible, "failed_permanent", 20_000);
     assert.equal(healthy, 0);
     assert.deepEqual(await repositoryAttempts(fixture, incompatible), []);
     assert.ok(credentials.repositories.every(({ github }) => github.issuesOfTokens.length === 0));
@@ -675,13 +680,14 @@ test(
       return result;
     };
     const uncertain = await fixture.revision(owner, 2, undefined, selection);
-    await fixture.work(uncertain, "failed_permanent");
+    await fixture.work(uncertain, "failed_permanent", 20_000);
     assert.ok(lostSessionId);
-    assert.equal(
+    await waitFor("lost session disposal after work failure", async () =>
       (await repositoryAttempts(fixture, uncertain)).find(
         ({ sessionId }) => sessionId === lostSessionId,
-      )?.phase,
-      "disposed",
+      )?.phase === "disposed"
+        ? true
+        : undefined,
     );
     assert.equal((await repositoryAttempts(fixture, uncertain)).length, 1);
     // Recovery and disposal ran while capability was absent; fresh material
