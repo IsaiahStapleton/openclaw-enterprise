@@ -283,6 +283,73 @@ test(
       });
     });
 
+    await context.test(
+      "status and activate follow a designation moved by online replacement",
+      async () => {
+        let admin;
+        let persistence;
+        await withPool(databaseUrl, async (pool) => {
+          persistence = new PostgresHumanAuthentication(
+            new PostgresPlatformState(pool),
+            installationId,
+            betterAuthIssuer(installationId),
+          );
+          const snapshot = await persistence.snapshotPassword(recoveryEmail);
+          const session = await persistence.issueSession(
+            snapshot.proof,
+            sessionRecord(recoveryUserId),
+          );
+          admin = {
+            userId: recoveryUserId,
+            sessionId: session.id,
+            principalId: snapshot.proof.principalId,
+          };
+          const target = await persistence.readAccount(orphan.id, admin);
+          const moved = await persistence.replaceRecovery(
+            orphan.id,
+            target.principalId,
+            recoveryUserId,
+            admin,
+            target.version,
+          );
+          assert.equal(moved.changed, true);
+        });
+        const status = await maintain(["status"]);
+        assert.equal(status.code, 0, status.stderr);
+        assert.equal(status.output.designation.userId, orphan.id);
+        assert.equal(status.output.designation.email, orphan.email);
+
+        // The configured id only seeds first activation; the moved designation is kept.
+        const seeded = await maintain([
+          "activate",
+          "--recovery-user",
+          recoveryUserId,
+          "--writers-stopped",
+        ]);
+        assert.equal(seeded.code, 0, seeded.stderr);
+        assert.equal(seeded.output.seedIgnored, true);
+        assert.equal(seeded.output.designation.userId, orphan.id);
+        assert.match(seeded.stderr, /differs from the recorded recovery designation/);
+
+        await withPool(databaseUrl, async (pool) => {
+          persistence = new PostgresHumanAuthentication(
+            new PostgresPlatformState(pool),
+            installationId,
+            betterAuthIssuer(installationId),
+          );
+          const target = await persistence.readAccount(recoveryUserId, admin);
+          await persistence.replaceRecovery(
+            recoveryUserId,
+            admin.principalId,
+            orphan.id,
+            admin,
+            target.version,
+          );
+        });
+        assert.equal((await maintain(["status"])).output.designation.userId, recoveryUserId);
+      },
+    );
+
     const replacement = "replacement-recovery-password";
     let adminToken;
     await context.test(

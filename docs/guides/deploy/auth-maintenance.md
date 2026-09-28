@@ -22,8 +22,11 @@ owns the profile's rules; this page is the operator procedure.
 
 Every change writes an audit event attributed to `maintenance:<database role>`.
 `activate` also records startup's own activation event, attributed to the
-recovery Principal; re-running it for the designated account changes nothing
-and writes no audit. The command prints one JSON line and exits with:
+recovery Principal; re-running it changes nothing and writes no audit. Like
+startup, it keeps an existing designation, including one moved online through
+`POST /api/auth/recovery`: a different `--recovery-user` prints
+`"seedIgnored":true` and re-checks the current holder, which `status` shows.
+`enrol` applies the same rule as the online `POST /api/auth/accounts/:userId/enrol`. The command prints one JSON line and exits with:
 
 | Exit | Meaning                                                                                                                                  |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |

@@ -49,8 +49,9 @@ async function run(options, maintenance, state, installationId) {
       // Controller startup only activates with the bundled native IAM Driver, whose
       // decisions carry its own id; the documented recovery authority is native IAM.
       const iamDriver = new NativeIAMDriver(state, NATIVE_IAM_DRIVER);
+      let activation;
       try {
-        await activateRecoveryAccount(
+        activation = await activateRecoveryAccount(
           new PostgresHumanAuthentication(state, installationId, issuer),
           iamDriver,
           installationId,
@@ -63,8 +64,15 @@ async function run(options, maintenance, state, installationId) {
         }
         throw error;
       }
+      if (activation.seedIgnored) {
+        // Like startup: an existing designation (possibly moved online) is kept, not replaced.
+        process.stderr.write(
+          "--recovery-user differs from the recorded recovery designation, which is kept.\n",
+        );
+      }
       const status = await maintenance.status();
       return {
+        ...(activation.seedIgnored ? { seedIgnored: true } : {}),
         designation: status.designation,
         enrolled: status.enrolled,
         unenrolled: status.unenrolled,

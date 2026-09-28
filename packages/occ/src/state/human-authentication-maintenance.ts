@@ -313,7 +313,7 @@ export class PostgresHumanAuthenticationMaintenance {
           "The account is already enrolled.",
         );
       }
-      // The same rules as activation-time enrolment (PostgresHumanAuthentication.enrolUser).
+      // The same rule as activation and online repair (POST /api/auth/accounts/:userId/enrol).
       const enrolment = await new PostgresHumanAuthentication(
         this.state,
         this.installationId,
@@ -330,14 +330,9 @@ export class PostgresHumanAuthenticationMaintenance {
               "Enrolment requires exactly one password method.",
             );
       }
-      const [enrolledRow] = await this.query(
-        unit,
-        `SELECT principal_id FROM occ.human_authentication_accounts WHERE user_id = $1`,
-        [userId],
-      );
       // Sessions an older controller issued for this account were never bound.
       await this.query(unit, `DELETE FROM occ.session WHERE user_id = $1`, [userId]);
-      const principalId = enrolledRow!.principal_id as string;
+      const { principalId } = enrolment;
       return { result: { userId, principalId }, details: { userId, principalId } };
     });
   }
