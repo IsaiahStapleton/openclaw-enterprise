@@ -437,36 +437,34 @@ The published controller lacks GitHub sign-in; [build a compatible image](#build
 Follow the [single-controller profile](../../reference/authentication.md#github-sign-in-for-existing-accounts)
 during stopped maintenance.
 
-Before activation, set `agentNativeAdmin.enabled: false` in protected Helm values
-and rerender. The API environment, including `envFrom`, must
-set `OCC_AGENT_NATIVE_ADMIN_ENABLED=false` and omit `OCC_AUTH_COOKIE_DOMAIN`.
-Startup rejects enabled native administration; keep workspace routing enabled.
+Activation is one-way. Account creation stays frozen afterwards
+(`409 RESOURCE_CONFLICT`), and there is no rollback other than keeping the
+`OCC_AUTH_GITHUB_*` environment set. The Helm chart cannot yet carry those
+variables: out-of-band values vanish on the next `helm upgrade`, and the
+controller then fails startup.
 
-1. Provision password accounts and grants; verify password recovery. On the
-   repository integration's GitHub App, register `OCC_AUTH_BASE_URL` +
-   `/api/auth/providers/github/callback`; protect its **client ID** (not App ID)
-   and client secret.
-   Activation freezes account creation; old binaries must not bypass it.
+Before activation, set `agentNativeAdmin.enabled: false` in protected Helm values
+and rerender. The API environment must set `OCC_AGENT_NATIVE_ADMIN_ENABLED=false`
+and omit `OCC_AUTH_COOKIE_DOMAIN`; keep workspace routing enabled.
+
+1. Provision password accounts and grants; verify password recovery. Register
+   the GitHub App callback and protect its **client ID** (not App ID) and secret
+   as the [reference](../../reference/authentication.md#github-sign-in-for-existing-accounts) describes.
 2. Close ingress. Disable automatic restarts, rollouts, and policy/provisioning
-   writers. Drain or terminate admitted requests, stop **every** old controller,
-   then verify zero old Pods/processes and outstanding requests.
-   For this chart, scale `deployment/openclaw-enterprise-api` to zero and wait for
-   its Pods to disappear. If exclusion cannot be established, stop here.
+   writers. Drain admitted requests and stop **every** old controller. For this
+   chart, scale `deployment/openclaw-enterprise-api` to zero and wait for its
+   Pods to disappear. If exclusion cannot be established, stop here.
 3. Start only the compatible binary with complete protected configuration.
    Startup enrolls existing accounts and invalidates unbound sessions before
-   serving. A failure keeps ingress closed; removing
-   configuration or reverting to an old binary is not recovery.
+   serving. After a failure, keep ingress closed.
 4. Through restricted access, verify password recovery, new session admission,
    the expected Namespaces and existing Agent detail, and rejected stale sessions.
    Reopen ingress only after these checks, retaining one serving controller.
 
 For enrollment, obtain the numeric subject with `gh api user --jq .id` authenticated
-as the intended GitHub user. Verify ownership through your established identity
-process; email or unverified usernames are insufficient. Follow the reference's
-guarded read, versioned attachment, and unknown-outcome handling.
-
-Verify production stop/drain, HTTPS cookies, logging, and GitHub registration;
-loopback tests do not qualify them.
+as the intended GitHub user; verify ownership through your identity process, not
+email or usernames. Follow the reference's attachment and unknown-outcome handling.
+Loopback tests do not qualify production stop/drain, cookies, logging, or GitHub registration.
 
 ## Related
 
