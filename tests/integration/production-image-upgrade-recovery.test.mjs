@@ -78,10 +78,20 @@ if (tool === 'helm') {
     out({metadata: {labels: {'app.kubernetes.io/instance': 'oce'}}, spec: {template: {spec: {containers: [{name: 'repository-credentials', args: ['--public-origin', 'https://git.system.svc.cluster.local']}]}}}});
   }
   else if (args.some((a) => a.startsWith('deployment/')) && args.includes('get')) {
-    if (args.some((a) => a.startsWith('jsonpath='))) out(state.controller);
-    else {
-      const component = args.find((a) => a.startsWith('deployment/')).split('-').at(-1);
-      out({metadata: {labels: {'app.kubernetes.io/instance': 'oce', 'app.kubernetes.io/component': component}}, spec: {replicas: state[component], template: {metadata: {annotations: {'openclaw.dev/installation-checksum': state.checksum}}}}});
+    const component = args.find((a) => a.startsWith('deployment/')).split('-').at(-1);
+    const image = component === 'worker' ? (state.workerObservedImage ?? state.controller) : state.controller;
+    const container = {name: component, image};
+    const podSpec = {containers: [container]};
+    if (component === 'worker' && state.workerPlacement !== 'container') {
+      podSpec.containers = state.workerPlacement === 'ambiguous' ? [container] : [{name: 'repository-credentials', image: 'broker'}];
+      if (state.workerPlacement !== 'missing') {
+        podSpec.initContainers = [{...container, ...(state.workerPlacement === 'nonrestartable' ? {} : {restartPolicy: 'Always'})}];
+      }
+    }
+    if (args.some((a) => a.startsWith('jsonpath='))) {
+      out(podSpec.containers.filter((item) => item.name === component).map((item) => item.image).join(' '));
+    } else {
+      out({metadata: {labels: {'app.kubernetes.io/instance': 'oce', 'app.kubernetes.io/component': component}}, spec: {replicas: state[component], template: {metadata: {annotations: {'openclaw.dev/installation-checksum': state.checksum}}, spec: podSpec}}});
     }
   } else if (args.includes('get') && args.includes('jobs')) {
     out({items: state.initJobActive ? [{status: {active: 0, conditions: []}}] : []});
@@ -106,7 +116,13 @@ if (tool === 'helm') {
 
 async function fixture(
   t,
-  { agent = false, candidates = false, controllerOnly = false, repositoryCredentials = false } = {},
+  {
+    agent = false,
+    candidates = false,
+    controllerOnly = false,
+    repositoryCredentials = false,
+    workerPlacement = "container",
+  } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "occ-upgrade-recovery-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -184,6 +200,7 @@ async function fixture(
     worker: 1,
     controller,
     agent,
+    workerPlacement,
     dispatches: 0,
     initActive: false,
     secret: {
@@ -538,6 +555,66 @@ test("candidate cannot change repository identity, grants, trust, or the Compute
       await writeFile(path, JSON.stringify(candidate));
       await assert.rejects(f.run(), /candidate Installation changes/);
       assert.deepEqual(await f.events(), []);
+    });
+  }
+});
+
+test("controller upgrade verifies worker placement with and without a repository broker", async (t) => {
+  for (const scenario of [
+    { name: "broker disabled", repositoryCredentials: false, workerPlacement: "container" },
+    {
+      name: "broker enabled with existing chart",
+      repositoryCredentials: true,
+      workerPlacement: "container",
+    },
+    {
+      name: "broker enabled with restartable worker",
+      repositoryCredentials: true,
+      workerPlacement: "restartable",
+    },
+  ]) {
+    await t.test(scenario.name, async (subtest) => {
+      const f = await fixture(subtest, { ...scenario, controllerOnly: true });
+      const result = await f.run();
+      assert.match(result.stdout, /Upgraded controller image; no Agent deployments were requested/);
+      assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+      assert.equal((await f.state()).controller, newController);
+    });
+  }
+});
+
+test("controller upgrade rejects missing, ambiguous, or invalid worker placement", async (t) => {
+  for (const scenario of [
+    { name: "missing worker", repositoryCredentials: true, workerPlacement: "missing" },
+    { name: "duplicate worker", repositoryCredentials: true, workerPlacement: "ambiguous" },
+    {
+      name: "nonrestartable worker",
+      repositoryCredentials: true,
+      workerPlacement: "nonrestartable",
+    },
+    {
+      name: "init worker without broker",
+      repositoryCredentials: false,
+      workerPlacement: "restartable",
+    },
+    {
+      name: "wrong worker image",
+      repositoryCredentials: true,
+      workerPlacement: "restartable",
+      wrongImage: true,
+    },
+  ]) {
+    await t.test(scenario.name, async (subtest) => {
+      const f = await fixture(subtest, { ...scenario, controllerOnly: true });
+      if (scenario.wrongImage) {
+        const state = await f.state();
+        state.workerObservedImage = oldRuntime;
+        await writeFile(join(f.directory, "state.json"), JSON.stringify(state));
+      }
+      // A malformed or unexpected Deployment must not be reported as a
+      // successful controller rollout, even if the Helm request completed.
+      await assert.rejects(f.run(), /exactly one worker with the selected controller image/);
+      assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
     });
   }
 });

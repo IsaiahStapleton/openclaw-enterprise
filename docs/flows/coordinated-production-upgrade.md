@@ -1,7 +1,7 @@
 ---
 created: 2026-09-23
 updated: "2026-09-28"
-last_updated_session: "authoring-run/1d4977e8-b5e5-4b20-9909-bedc3c5b3900"
+last_updated_session: "authoring-run/4c22438e-4a96-4125-bdbb-47a3547a1232"
 ---
 
 # Production image upgrade flow
@@ -129,13 +129,16 @@ it does not start the old image to undo a committed schema change.
 `scripts/upgrade-production-images:586`
 
 The script waits for both OCC Deployments, checks their controller image and
-replica count, and checks the Installation checksum when its configuration changed. It
-retries authenticated OCC access and verifies the same Installation ID. A
+replica count, and checks the Installation checksum when its configuration
+changed. It requires exactly one named container for each component. For a
+broker-enabled worker it also accepts a restartable init container, provided
+no worker exists in the ordinary container list. It rejects a non-restartable
+init worker or ambiguous placement. It retries authenticated OCC access and verifies the same Installation ID. A
 controller-only release then ends without requesting Agent deployments.
 
 ### 5. Deploy and verify the recorded fleet
 
-`scripts/upgrade-production-images:616`
+`scripts/upgrade-production-images:629`
 
 Before sending each ordinary exact-Agent deployment request, the script records
 an intent. Successful responses are saved atomically. On resume, existing
@@ -193,6 +196,8 @@ access, and required restore behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 08:49: Verify the named controller image across ordinary and restartable worker placement. (authoring-run/4c22438e-4a96-4125-bdbb-47a3547a1232 - dcf7c58ef3fe7f6ec6ffc33c1062fee93c9bdeb2)
 
 - 2026-09-28 07:58: Guard repository Backend, Driver, network, and cluster trust settings during candidate preparation. (authoring-run/1d4977e8-b5e5-4b20-9909-bedc3c5b3900 - 2fd914a7273bb09e9d91543c806a4091772191f6)
 

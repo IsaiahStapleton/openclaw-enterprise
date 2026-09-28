@@ -58,6 +58,7 @@ case "$*" in
   *'openclaw.dev/installation-id'*) printf '%s\\n' "$CLUSTER_INSTALLATION_ID" ;;
   '-S '*|'-eS '*) cat ;;
   *'.installationId == '*) exit 0 ;;
+  *'.spec.template.spec as $pod'*) exit 0 ;;
   *'.deploymentInProgress'*|*'.activeRevisionId == null'*|*'.status != "ready"'*) exit 1 ;;
   *'namespaceId: $namespace.id'*) exit 0 ;;
   *'.id'*) printf 'ins_upgrade_test\\n' ;;
@@ -250,6 +251,7 @@ case "$*" in
   *'.data['*) printf 'cHJvdGVjdGVkCg==\\n' ;;
   *'openclaw.dev/installation-id'*) printf '%s\\n' "$CLUSTER_INSTALLATION_ID" ;;
   *'.installationId == '*) exit 0 ;;
+  *'.spec.template.spec as $pod'*) exit 0 ;;
   *'.deploymentInProgress'*|*'.activeRevisionId == null'*|*'.status != "ready"'*) exit 1 ;;
   *'namespaceId: $namespace.id'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","executionMode":"dedicated","baselineRevisionId":"rev_test"}' ;;
   *'gatewayNamespace: $gatewayNamespace'*) printf '%s\\n' '{"namespaceId":"ns_test","agentId":"agt_test","deploymentId":"rev_candidate","gatewayNamespace":"tenant-test","gatewayName":"gateway-test"}' ;;
