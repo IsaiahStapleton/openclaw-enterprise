@@ -7,6 +7,12 @@ export const NewVersion = story("newVersion");
 export const FirstDeployment = story("draftAutomaticCredentials");
 export const ConfigurationEditor = { ...story("configurationEditor"), name: "Edit Configuration" };
 export const PluginsDraft = story("pluginsDraft");
+export const PluginApproversInherited = story("pluginApproversInherited");
+export const PluginApproversOverrides = story("pluginApproversOverrides");
+export const PluginApproversLookup = story("pluginApproversLookup");
+export const PluginApproversDirectoryUnavailable501 = story(
+  "pluginApproversDirectoryUnavailable501",
+);
 export const PluginsAdmitted = story("pluginsAdmitted");
 export const InvalidConfiguration = {
   ...story("invalidConfiguration"),
