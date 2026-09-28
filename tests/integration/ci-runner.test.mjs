@@ -53,7 +53,7 @@ async function writePrepare(root) {
       "export async function prepareFile({ file, statePath }) {",
       "  if (file.path.endsWith('first.test.mjs')) {",
       "    return {",
-      "      env: { CI_RUNNER_SCOPED_VALUE: 'one', OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: 'private.example/controller@sha256:' + 'a'.repeat(64), OCC_TEST_KUBERNETES_RUNTIME_IMAGE: 'private.example/runtime@sha256:' + 'b'.repeat(64), OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE: 'private.example/broker@sha256:' + 'c'.repeat(64), OCC_TEST_PRODUCTION_NODE_IMAGE: 'untrusted-image-value' },",
+      "      env: { CI_RUNNER_SCOPED_VALUE: 'one', OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: 'private.example/controller@sha256:' + 'a'.repeat(64), OCC_TEST_KUBERNETES_RUNTIME_IMAGE: 'private.example/runtime@sha256:' + 'b'.repeat(64), OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: 'private.example/controller@sha256:' + 'd'.repeat(64), OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE: 'private.example/runtime@sha256:' + 'e'.repeat(64), OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE: 'private.example/broker@sha256:' + 'c'.repeat(64), OCC_TEST_PRODUCTION_NODE_IMAGE: 'untrusted-image-value' },",
       "      cleanup: async () => appendFile(statePath, `${file.path}\\n`),",
       "    };",
       "  }",
@@ -77,6 +77,8 @@ test("run resolves lane documents relative to the manifest and preserves ordered
       'import test from "node:test";',
       'test("first file sees scoped env", () => {',
       '  assert.equal(process.env.CI_RUNNER_SCOPED_VALUE, "one");',
+      "  assert.match(process.env.OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE, /@sha256:d{64}$/);",
+      "  assert.match(process.env.OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE, /@sha256:e{64}$/);",
       "});",
       "",
     ].join("\n"),
@@ -146,6 +148,8 @@ test("run resolves lane documents relative to the manifest and preserves ordered
   assert.deepEqual(summary.files[0].imageDigests, {
     controller: `sha256:${"a".repeat(64)}`,
     runtime: `sha256:${"b".repeat(64)}`,
+    controllerUpgrade: `sha256:${"d".repeat(64)}`,
+    runtimeUpgrade: `sha256:${"e".repeat(64)}`,
     repositoryCredentials: `sha256:${"c".repeat(64)}`,
   });
   assert.deepEqual(summary.files[1].imageDigests, {});

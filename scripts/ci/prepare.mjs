@@ -51,6 +51,10 @@ const fixtureLanes = new Set([
   "k3d-fixture-plugins",
 ]);
 const nativeIAMBarrierFile = "tests/integration/postgres-native-iam-policy-barrier.test.mjs";
+const productionUpgradeImages = {
+  OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+  OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE: "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+};
 
 function laneDefinition(name) {
   return laneDefinitions[name] ?? {};
@@ -605,6 +609,25 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
       effectiveEnv[prepare.mode0600Env],
       prepare.mode0600Description ?? prepare.mode0600Env,
     );
+  }
+  if (name === "production-tui") {
+    const candidates = Object.keys(productionUpgradeImages);
+    if (candidates.some((variable) => effectiveEnv[variable])) {
+      const baselines = Object.values(productionUpgradeImages);
+      assertImmutableEnvImages([...baselines, ...candidates], effectiveEnv);
+      for (let index = 0; index < baselines.length; index++) {
+        if (
+          effectiveEnv[baselines[index]].split(/@sha256:/i)[1].toLowerCase() ===
+          effectiveEnv[candidates[index]].split(/@sha256:/i)[1].toLowerCase()
+        ) {
+          throw new Error(
+            `${candidates[index]} must select a different digest from ${baselines[index]}.`,
+          );
+        }
+      }
+    } else {
+      assertNodeBaseImage(effectiveEnv.NODE_BASE_IMAGE);
+    }
   }
   if (name === "repository-credentials-installed") {
     const imageMode = effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE || "source";
@@ -2042,7 +2065,35 @@ async function prepareLane({ lane, statePath }) {
       const cluster = await ensureK3dCluster(resolvedStatePath, state);
       env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
-      await prepareProductionImages(resolvedStatePath, state, cluster, env);
+      const inputs = effectiveLaneEnv(name, env);
+      const upgradeSelected = Object.keys(productionUpgradeImages).some(
+        (variable) => inputs[variable],
+      );
+      const sourceImages = upgradeSelected
+        ? {
+            OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: inputs.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE,
+            OCC_TEST_KUBERNETES_RUNTIME_IMAGE: inputs.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
+          }
+        : undefined;
+      await prepareProductionImages(resolvedStatePath, state, cluster, env, { sourceImages });
+      if (upgradeSelected) {
+        for (const [variable, baseline] of Object.entries(productionUpgradeImages)) {
+          const imported = await registerImageInK3d(
+            resolvedStatePath,
+            state,
+            cluster,
+            inputs[variable],
+            variable,
+          );
+          const baselineImage = state.resources.find(
+            (resource) => resource.kind === "k3d-image" && resource.reference === env[baseline],
+          );
+          if (!baselineImage || imported.hostImageId === baselineImage.hostImageId) {
+            throw new Error(`${variable} must contain a different image from ${baseline}.`);
+          }
+          env[variable] = imported.reference;
+        }
+      }
       await prepareLaneLogging(resolvedStatePath, state, env, cluster);
       break;
     }
@@ -2118,6 +2169,31 @@ async function prepareFile({ lane, file, statePath }) {
   const effectiveState = state ?? baseState(name, resolvedStatePath);
   const env = baseEnv(resolvedStatePath, effectiveState);
   const resourceIds = [];
+
+  if (name === "production-tui" && state) {
+    const inputs = effectiveLaneEnv(name);
+    const variables = Object.keys(productionUpgradeImages);
+    const selected = variables.some((variable) => inputs[variable]);
+    const prepared = variables.some((variable) => state.env?.[variable]);
+    if (state.lane !== name || selected !== prepared) {
+      throw new Error("Production upgrade inputs must match the prepared lane state.");
+    }
+    if (selected) {
+      for (const variable of [...Object.values(productionUpgradeImages), ...variables]) {
+        if (
+          !state.resources.some(
+            (resource) =>
+              resource.kind === "k3d-image" &&
+              resource.sourceImage === inputs[variable] &&
+              resource.reference === state.env[variable] &&
+              resource.status === "ready",
+          )
+        ) {
+          throw new Error(`${variable} must match the prepared lane state.`);
+        }
+      }
+    }
+  }
 
   if (name === "repository-credentials-container") {
     if (state?.lane !== name) {

@@ -1085,6 +1085,69 @@ test("installed repository preparation requires explicit authorization and prote
   assert.deepEqual(state.resources, []);
 });
 
+test("production upgrade preparation requires two distinct immutable image pairs before creating resources", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "upgrade-state.json");
+  const image = (name, digit) => `registry.example/${name}@sha256:${digit.repeat(64)}`;
+  const env = {
+    OPENAI_API_KEY: "test-only-model-key",
+    OCC_TEST_OPENAI_MODEL: "test-model",
+    NODE_BASE_IMAGE: "",
+    OCC_TEST_PRODUCTION_POSTGRES_IMAGE: image("postgres", "a"),
+    OCC_TEST_PRODUCTION_NODE_IMAGE: image("node", "b"),
+    OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: image("controller", "c"),
+    OCC_TEST_KUBERNETES_RUNTIME_IMAGE: image("runtime", "d"),
+    OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: image("controller", "e"),
+    OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE: image("runtime", "f"),
+  };
+  const args = ["--lane", "production-tui", "--state", statePath];
+  for (const [override, expected] of [
+    [{ OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: "" }, /OCC_TEST_PRODUCTION_CONTROLLER_IMAGE/],
+    [
+      { OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE: "" },
+      /OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE/,
+    ],
+    [
+      { OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: "controller:latest" },
+      /OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE/,
+    ],
+    [
+      { OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: image("another-controller", "c") },
+      /must select a different digest/,
+    ],
+    [
+      {
+        OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: image("another-controller", "C").replace(
+          "@sha256:",
+          "@SHA256:",
+        ),
+      },
+      /must select a different digest/,
+    ],
+  ]) {
+    const rejected = runPrepare(args, { ...env, ...override });
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, expected);
+    await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+  }
+
+  // A complete release selection reaches tool discovery without a source build
+  // or secret-bearing preparation state; no cluster is created in this check.
+  const admitted = runPrepare(args, { ...env, OCC_HELM_BIN: join(root, "missing-helm") });
+  assert.equal(admitted.status, 1);
+  assert.match(admitted.stderr, /missing-helm/);
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(state.resources, []);
+  assert.ok(!JSON.stringify(state).includes(env.OPENAI_API_KEY));
+
+  const unprepared = runPrepare(
+    [...args, "--file", "tests/integration/production-tui-k3d-real.test.mjs"],
+    env,
+  );
+  assert.equal(unprepared.status, 1);
+  assert.match(unprepared.stderr, /must match the prepared lane state/);
+});
+
 test("ordinary CI groups require platform proof and exclude installed live repository writes", async () => {
   const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
   for (const name of ["ci", "full"]) {
