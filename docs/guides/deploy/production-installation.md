@@ -435,29 +435,36 @@ For later releases, follow the
 
 The published controller lacks GitHub sign-in; [build a compatible image](#build-and-publish-production-images).
 Follow the [single-controller profile](../../reference/authentication.md#github-sign-in-for-existing-accounts)
-during stopped maintenance.
+during stopped maintenance. Installation is two-phase: install without GitHub as
+above, then enable it with `helm upgrade`.
 
 Activation is one-way. Account creation stays frozen afterwards
-(`409 RESOURCE_CONFLICT`), and there is no rollback other than keeping the
-`OCC_AUTH_GITHUB_*` environment set. The Helm chart cannot yet carry those
-variables: out-of-band values vanish on the next `helm upgrade`, and the
-controller then fails startup.
-
-Before activation, set `agentNativeAdmin.enabled: false` in protected Helm values
-and rerender. The API environment must set `OCC_AGENT_NATIVE_ADMIN_ENABLED=false`
-and omit `OCC_AUTH_COOKIE_DOMAIN`; keep workspace routing enabled.
+(`409 RESOURCE_CONFLICT`), the `auth.github` values must stay set, and
+`helm rollback` past activation is unsupported; see
+[rollback](production-upgrade.md#roll-back-across-human-sign-in).
 
 1. Provision password accounts and grants; verify password recovery. Register
    the GitHub App callback and protect its **client ID** (not App ID) and secret
    as the [reference](../../reference/authentication.md#github-sign-in-for-existing-accounts) describes.
-2. Close ingress. Disable automatic restarts, rollouts, and policy/provisioning
-   writers. Drain admitted requests and stop **every** old controller. For this
-   chart, scale `deployment/openclaw-enterprise-api` to zero and wait for its
-   Pods to disappear. If exclusion cannot be established, stop here.
-3. Start only the compatible binary with complete protected configuration.
-   Startup enrolls existing accounts and invalidates unbound sessions before
-   serving. After a failure, keep ingress closed.
-4. Through restricted access, verify password recovery, new session admission,
+   Signed in as the recovery administrator, read `data.user.id` from
+   `GET /api/auth/session`.
+2. Create the Secret, then set `auth.github.enabled: true`, that ID as
+   `auth.recoveryUserId`, and `agentNativeAdmin.enabled: false` in protected
+   values, keeping workspace routing. Optionally narrow `auth.github.egressCidrs` or set `api.trustedProxy`
+   ([settings](../../reference/settings/production.md#github-sign-in-and-trusted-proxies)). Rerender.
+
+   ```bash
+   kubectl -n openclaw-system create secret generic occ-github-login \
+     --from-file=client-id=/secure/occ/github-client-id \
+     --from-file=client-secret=/secure/occ/github-client-secret
+   ```
+
+3. Close ingress. Disable automatic restarts and policy/provisioning writers,
+   and drain admitted requests.
+4. Run `helm upgrade` with the compatible image. The api Deployment uses
+   `Recreate`, so the old Pod stops first; startup enrolls existing accounts and
+   invalidates unbound sessions before serving. After a failure, keep ingress closed.
+5. Through restricted access, verify password recovery, new session admission,
    the expected Namespaces and existing Agent detail, and rejected stale sessions.
    Reopen ingress only after these checks, retaining one serving controller.
 
