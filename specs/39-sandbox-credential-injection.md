@@ -105,30 +105,42 @@ selection.
 
 ### Driver interface
 
-This proposed shape differs from the [current interface](https://github.com/openclaw/openclaw-enterprise/blob/ec103d947abb40b21411e5b8bdede7774ae35df1/docs/reference/drivers/credential-gateway.md).
+The method set matches main's [interface](../docs/reference/drivers/credential-gateway.md).
 
 ```ts
 interface CredentialGatewayDriver extends Driver {
   readonly capability: "credential_gateway";
   listSourceTypes(context: CredentialGatewayContext): Promise<readonly CredentialSourceType[]>;
 
-  registerSource(context: SourceContext, input: CredentialSourceInput): Promise<SourceStatus>;
-  updateSource(context: SourceContext, input: CredentialSourceInput): Promise<SourceStatus>;
-  rotateSource(context: SourceContext): Promise<SourceStatus>;
-  sourceStatus(context: SourceContext): Promise<SourceStatus>;
-  removeSource(context: SourceContext): Promise<void>;
+  registerSource(
+    context: CredentialSourceContext,
+    input: CredentialSourceInput,
+  ): Promise<CredentialSourceStatus>;
+  updateSource(
+    context: CredentialSourceContext,
+    input: CredentialSourceInput,
+  ): Promise<CredentialSourceStatus>;
+  rotateSource(context: CredentialSourceContext): Promise<CredentialSourceStatus>;
+  sourceStatus(context: CredentialSourceContext): Promise<CredentialSourceStatus>;
+  removeSource(context: CredentialSourceContext): Promise<void>;
 
-  attachForRevision(context: RevisionContext): Promise<readonly SourceAttachment[]>;
-  attachmentStatus(context: RevisionContext): Promise<readonly AttachmentStatus[]>;
-  withdraw(context: RevisionContext & { readonly sourceId: string }): Promise<AttachmentStatus>;
+  attachForRevision(
+    context: CredentialRevisionContext,
+  ): Promise<readonly CredentialSourceAttachment[]>;
+  attachmentStatus(
+    context: CredentialRevisionContext,
+  ): Promise<readonly CredentialAttachmentStatus[]>;
+  withdraw(
+    context: CredentialRevisionContext & { readonly sourceId: string },
+  ): Promise<CredentialAttachmentStatus>;
 }
 
 interface CredentialSourceType {
   readonly type: string; // implementation-defined, for example "openai" or "aws"
-  readonly config: readonly FieldSpec[]; // non-secret inputs
-  readonly secrets: readonly FieldSpec[]; // inputs supplied as OCC Secret references
+  readonly config: readonly CredentialSourceFieldSpec[]; // non-secret inputs
+  readonly secrets: readonly CredentialSourceFieldSpec[]; // OCC Secret references
   readonly rotation: "none" | "external" | "gateway";
-  readonly harnessAuth?: { readonly modelProvider: string; readonly loginMode: string };
+  readonly harnessAuth?: { readonly modelProvider: string; readonly loginMode: "api_key" };
 }
 
 interface CredentialSourceInput {
@@ -137,7 +149,7 @@ interface CredentialSourceInput {
   readonly secrets: Readonly<Record<string, string>>; // resolved values, never persisted by OCC
 }
 
-interface SourceAttachment {
+interface CredentialSourceAttachment {
   readonly sourceId: string;
   readonly ref: string; // opaque; consumed by the paired SandboxDriver
 }
@@ -148,23 +160,25 @@ Contract rules:
 - `listSourceTypes` is the implementation's catalog, like `PluginDriver.listCatalog`.
   OCC validates inputs against it; unknown types and fields fail before any effect.
 - Register, update, and remove are idempotent for one source. The driver never
-  logs, returns, or persists a secret value outside its credential store.
+  logs, returns, or persists a secret value outside its credential store. Every
+  effect of an aborted registration finishes within 30 seconds of the abort
+  (`CREDENTIAL_GATEWAY_TIMEOUT_MS`).
 - `attachForRevision` returns one attachment per bound source or throws. The
   paired SandboxDriver's `provisionHarness` must consume every attachment and
   reject any it did not issue.
-- `withdraw` returns `withdrawn` only after the implementation observes
-  revocation. For OpenShell, that is a detach receipt in state `revoked`: the
-  withdrawn placeholders stop resolving, even in running processes, but
-  requests already forwarded upstream are not undone
-  (`docs/how-it-works/providers/profiles.mdx:1018-1080`). Otherwise `withdraw`
-  returns `pending`, and retries continue. Withdrawal and bounded active-flow
-  closure remain future work; a detach receipt does not prove closure.
-- `removeSource` fails while any active or candidate revision references the
-  source. OpenShell also refuses to delete an attached provider. Withdrawal never
-  deletes shared source material.
-- Static updates reach only newly started processes, so a running Harness keeps
-  the previous value until it restarts. Gateway refresh keeps stable references.
-  OCC has no update or rotate caller yet.
+- `withdraw` returns `revoked` only after the implementation observes
+  revocation: for OpenShell, a detach receipt in state `revoked`. Withdrawn
+  placeholders stop resolving, even in running processes; forwarded requests are
+  not undone (`docs/how-it-works/providers/profiles.mdx:1018-1080`). Otherwise it
+  returns `pending`. Main's OpenShell `withdraw`, `updateSource` and
+  `rotateSource` throw "not supported yet"; OCC has no caller.
+- `removeSource` is idempotent. OCC, not the Driver, refuses deletion with 409
+  while an Agent draft, active revision, or pending deployment references the
+  source. A retiring revision's Sandbox is caught only by OpenShell's
+  attached-provider refusal: the source is already `deleting` and DELETE returns
+  503 for retry.
+- Static updates reach only newly started processes. Gateway refresh keeps stable
+  references.
 
 ### Resource and bindings
 
@@ -174,12 +188,12 @@ status. It fills the deferred `SecretBroker` slot in the
 [resource model](../docs/design/resources.md). Values stay with the Secret Driver
 and the credential store, and never enter OCC state, revisions, or audit.
 
-An Agent gains nullable `credentialSources: CredentialSourceReference[]`.
-Admission freezes the references, source types, and `credentialGatewayId` in the
-revision. `harnessAuth` gains `{ method: "credential_source"; sourceId }`. It
-requires a source type whose `harnessAuth.modelProvider` matches the configured
-model. With a credential gateway selected, secret-backed `harnessAuth` methods
-return 409; there is no fallback to environment delivery.
+An Agent binds at most one source through `harnessAuth: { method:
+"credential_source", sourceId }`. Admission freezes `{ method, sourceId,
+credentialGatewayId, sourceType, loginMode }` in the revision. The source type's
+`harnessAuth.modelProvider` must match the configured model. With a credential
+gateway selected, secret-backed `harnessAuth` methods return 409; there is no
+fallback to environment delivery. Proposed: a list of non-model sources per Agent.
 
 IAM follows existing Secret patterns. Source create, read, update, and delete are
 exact-resource actions. Registration also requires `operate` on each referenced
@@ -213,13 +227,8 @@ OpenShell checks token scope and caller role on every RPC
 | Delete a Namespace        | Worker    | `DeleteWorkspace` (`workspace:write`; `platform_admin`)                                                                                                                                                     |
 
 The API uses `SecretDriver.withValue` for authorized registration, passing
-plaintext to the Gateway Driver and store. A narrower reference bridge is next
-to explore; an operation-mediated broker is a later target. Neither is delivered.
-The proposed withdrawal uses the worker's `sandbox:write`.
-
-Proposed withdrawal applies to a running revision; OCC has no caller yet. The
-revision keeps its frozen binding but cannot re-attach a withdrawn source; a later
-deployment must omit the source or bind a replacement.
+plaintext to the Gateway Driver and store. A narrower reference bridge and an
+operation-mediated broker are later targets.
 
 ### Cleanup and retry
 
@@ -237,10 +246,9 @@ deployment must omit the source or bind a replacement.
   OpenShell rejects `DeleteWorkspace` with `FailedPrecondition` while providers,
   profiles, or refresh state remain (`docs/how-it-works/workspaces.mdx:221-234`).
   The worker keeps the Namespace `deleting` and retries.
-- **Withdrawal.** The worker repeats `DetachSandboxProvider`, which is
-  idempotent, until the receipt reaches `revoked`. After
-  `CONFIG_OPERATION_STORAGE_UNCERTAIN`, it reads the current status before
-  retrying, as upstream requires.
+- **Proposed: withdrawal.** The worker repeats `DetachSandboxProvider` until
+  `revoked`, reading status first after `CONFIG_OPERATION_STORAGE_UNCERTAIN`. A
+  later deployment omits or replaces the source.
 - **Revisions.** Retirement retries until the Sandbox is gone; sources it
   referenced become deletable only then.
 
