@@ -23,12 +23,14 @@ gh release download "$OCE_VERSION" \
   --repo openclaw/openclaw-enterprise \
   --pattern "$OCC_ASSET" --pattern SHA256SUMS
 expected="$(awk -v name="$OCC_ASSET" '$2 == name { print $1 }' SHA256SUMS)"
-test -n "$expected"
 actual="$(shasum -a 256 "$OCC_ASSET" | awk '{ print $1 }')"
-test "$actual" = "$expected"
-mkdir -p "$HOME/.local/bin"
-install -m 755 "$OCC_ASSET" "$HOME/.local/bin/occ"
-"$HOME/.local/bin/occ" --version
+if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+  mkdir -p "$HOME/.local/bin"
+  install -m 755 "$OCC_ASSET" "$HOME/.local/bin/occ"
+  "$HOME/.local/bin/occ" --version
+else
+  printf 'OCC CLI checksum verification failed; binary not installed.\n' >&2
+fi
 ```
 
 Ensure `$HOME/.local/bin` is on `PATH`. On Linux, use

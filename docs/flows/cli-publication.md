@@ -1,7 +1,7 @@
 ---
 created: 2026-09-28
 updated: 2026-09-28
-last_updated_session: authoring-run/9245ac4f-d350-4d1e-920b-3d9d638de966
+last_updated_session: authoring-run/185ec4e3-7292-41e3-a669-f574bccc3b16
 ---
 
 # OCC CLI publication flow
@@ -55,13 +55,16 @@ runs `--version` and `--help` on the runner-native
 binary, and writes `SHA256SUMS`. The prepare job has read-only repository
 permission and retains its output as one workflow artifact. The publication
 job consumes that artifact without rebuilding it.
+The prepare job passes its artifact name to the publication job, so a
+failed-job rerun can use the original build artifact.
 
 ### 3. Publish only the verified bytes
 
 `scripts/ci/cli-release.mjs:publish` rechecks source, CI, the protected
 `container-publish` environment, and each local checksum. It creates a
 lightweight version tag only when none exists; a matching tag is required on a
-retry. It creates or resumes a draft GitHub Release, uploads only missing assets,
+retry. It finds an existing draft through the authenticated release list,
+creates one if absent, and uploads only missing assets,
 downloads every asset, and compares each byte with the prepared artifact before
 publishing the draft. An existing published release is not modified. A partial
 failure leaves a draft and tag for inspection and a matching retry.
@@ -98,4 +101,5 @@ provenance.
 
 ## Changelog
 
+- 2026-09-28 17:25: Clarified draft lookup and failed-job artifact reuse (authoring-run/185ec4e3-7292-41e3-a669-f574bccc3b16 - fd9ed7f3f50c8e1f9867acb55b2b7bce00c341fa)
 - 2026-09-28 15:34: Documented the CLI release build, gate and draft publication path (authoring-run/9245ac4f-d350-4d1e-920b-3d9d638de966 - 7cd4a210d8cf63e6b541427c7d46d7524736a8dc)

@@ -5,7 +5,13 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { github, repository, verifyCi, verifyEnvironment } from "./container-release.mjs";
+import {
+  github,
+  githubPages,
+  repository,
+  verifyCi,
+  verifyEnvironment,
+} from "./container-release.mjs";
 
 const workflow = ".github/workflows/cli-release.yml";
 const platforms = [
@@ -117,6 +123,25 @@ async function verifyAssets(directory) {
   return { version, names };
 }
 
+async function findRelease(version, retryMissing = false) {
+  const attempts = retryMissing ? 6 : 1;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    // The tag lookup excludes drafts. The authenticated release list includes
+    // them, so it also finds a partial publication on a later run.
+    const matches = (await githubPages(`repos/${repository}/releases`)).filter(
+      (release) => release.tag_name === version,
+    );
+    assert.ok(matches.length <= 1, `Multiple releases use ${version}.`);
+    if (matches.length === 1) {
+      return github(`repos/${repository}/releases/${matches[0].id}`);
+    }
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+  }
+  return null;
+}
+
 async function publish(directory, env) {
   const { version } = await validate(env, true);
   const assets = await verifyAssets(directory);
@@ -139,8 +164,7 @@ async function publish(directory, env) {
   assert.equal(tag.object?.type, "commit", "Release tag must be a lightweight commit tag.");
   assert.equal(tag.object?.sha, env.SOURCE_SHA, "Release tag points to another source.");
 
-  const releasePath = `repos/${repository}/releases/tags/${version}`;
-  let release = await github(releasePath, { allowNotFound: true });
+  let release = await findRelease(version);
   if (!release) {
     command("gh", [
       "release",
@@ -155,8 +179,10 @@ async function publish(directory, env) {
       "--notes",
       `OCC CLI binaries for OCE ${version}, built from ${env.SOURCE_SHA}. These manage an existing OCC installation; local development commands still require a source checkout.`,
     ]);
-    release = await github(releasePath, { retryNotFound: true });
+    release = await findRelease(version, true);
   }
+  assert.ok(release, `Draft release ${version} was not found after creation.`);
+  const releasePath = `repos/${repository}/releases/${release.id}`;
   assert.equal(release.tag_name, version);
   assert.equal(release.draft, true, "Published releases cannot be replaced by a retry.");
   const expectedNames = new Set([...assets.names, "SHA256SUMS"]);
