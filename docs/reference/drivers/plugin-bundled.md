@@ -190,15 +190,22 @@ if managed `requiredOnModels` includes the current model, or model selection
 cannot be verified against a nonempty requirement. Omitted reviewers do not
 trigger these explicit-choice checks.
 
-Before readiness, startup checks every effective nested tool's enablement and
-approval against its requested override or app default. Absent/null fields inherit;
-an explicit tool enablement is rejected if neither level requested it, because
-it can bypass category restrictions. Account/link approval defaults must match
-the requested app approval.
+Before readiness, startup reads configuration for the Agent workspace and checks
+all managed app fields, including unexpected enablement/category defaults and tool
+exposure restrictions. An enabled app outside the selection fails verification;
+unselected disabled apps remain permitted. Native serialized defaults/nulls and
+omitted reviewers preserve inheritance. Category settings (`destructive_enabled`
+and `open_world_enabled`) compare against the requested app value, then requested
+global value, then native `true`. An explicit native value equal to that expected
+default is accepted. Every nested tool's enablement/approval must match its override
+or app default; account approval must match the app. Unexpected explicit enablement
+is rejected because it can bypass category rules.
 
-These checks verify startup configuration. Future turn routing, session/model
-changes, strict review, workspace configuration, managed requirements beyond
-reviewer checks, and real Agent enforcement remain draft acceptance gates; see
+This verifies loaded startup configuration, including trusted workspace layers.
+Codex 0.156 does not expose managed app/tool requirements through `config/read` or
+`configRequirements/read`; complete native effective-policy introspection remains
+required. Later workspace/session/model changes, strict review, and real Agent
+enforcement also remain acceptance gates. See
 [runtime proof notes](../../testing/plugins.md#current-proof-notes).
 
 Dedicated Codex starts without user plugins/apps, including when no PluginDriver
