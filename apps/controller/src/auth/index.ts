@@ -22,11 +22,18 @@ import {
   type HumanAuthenticationAccount,
   type PostgresPool,
   type PostgresPlatformState,
+  type PreparedPasswordAccount,
 } from "@openclaw-enterprise/occ";
 import type { IAMDriver } from "@openclaw-enterprise/contracts";
 import { createHumanLogin, type GitHubLoginConfiguration } from "./github.ts";
+import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
+export {
+  clientAddressConfiguration,
+  resolveClientAddress,
+  type ClientAddressConfiguration,
+} from "./client-address.ts";
 import type {
   AdmissionHeaders,
   AdmissionRequest,
@@ -66,6 +73,8 @@ export interface ControllerAuthOptions {
   readonly secureCookies?: boolean;
   readonly sharedCookieDomain?: string;
   readonly humanLogin?: ReturnType<typeof createHumanLogin>;
+  /** Trusted proxies whose client-address header keys sign-in admission. */
+  readonly clientAddress?: ClientAddressConfiguration;
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
@@ -88,6 +97,9 @@ export interface AuthenticatedAccount {
 
 export type AuthenticatedSession = AdmittedSession;
 
+/** A validated, hashed account that has not been written yet. */
+export type PreparedAuthAccount = PreparedPasswordAccount;
+
 export interface ProvisionAuthAccountInput {
   readonly email: string;
   readonly password: string;
@@ -107,6 +119,8 @@ export interface ControllerAuth {
   readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
   readonly githubEnabled: boolean;
+  /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
+  readonly activationSkipped?: readonly string[];
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   readAccount?(
@@ -121,7 +135,7 @@ export interface ControllerAuth {
   ): Promise<unknown>;
   changeAccount?(
     userId: string,
-    operation: "disable" | "revoke",
+    operation: "disable" | "enable" | "revoke",
     actor: HumanAuthenticationActor,
     expectedVersion: number,
   ): Promise<void>;
@@ -137,6 +151,16 @@ export interface ControllerAuth {
     userId: string,
     actor: HumanAuthenticationActor,
   ): Promise<{ principalId: string; version: number; created: boolean }>;
+  detachMethod?(
+    userId: string,
+    methodId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<{ methodId: string; providerId: string }>;
+  /** "guarded" once State-owned human sign-in admission is active. */
+  readonly humanProfile: "password" | "guarded";
+  prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount>;
+  writePreparedAccount(prepared: PreparedAuthAccount): Promise<AuthenticatedAccount>;
   createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount>;
   deleteAccount(account: Pick<AuthenticatedAccount, "id">): Promise<void>;
   principalSeed(
@@ -344,6 +368,14 @@ function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: st
   if (request.headers["sec-fetch-site"] === "cross-site") {
     throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
   }
+}
+
+function preparedId(
+  context: { generateId(options: { model: "user" | "account" }): string | false },
+  model: "user" | "account",
+): string {
+  const generated = context.generateId({ model });
+  return typeof generated === "string" && generated.length > 0 ? generated : randomUUID();
 }
 
 function accountName(input: ProvisionAuthAccountInput): string {
@@ -705,13 +737,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   });
   const api = auth.api;
 
-  async function createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount> {
-    // TODO(human-account-provisioning): join acknowledged provisioning to currentness before enabling creation after activation.
-    if (humanLogin) {
-      throw APIError.fromStatus("CONFLICT", {
-        message: "Provision accounts before activating GitHub sign-in.",
-      });
-    }
+  /** Validates and hashes a new password account without writing it. */
+  async function prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount> {
     const email = input.email.trim().toLowerCase();
     const password = input.password;
     if (!isNonEmptyString(email) || !isNonEmptyString(password)) {
@@ -744,13 +771,61 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         message: "The requested account already exists.",
       });
     }
-    const hash = await context.password.hash(password);
-    const created = await context.internalAdapter.createUser(
-      {
-        email,
-        name: accountName({ ...input, email }),
+    return Object.freeze({
+      id: preparedId(context, "user"),
+      email,
+      name: accountName({ ...input, email }),
+      passwordHash: await context.password.hash(password),
+      credentialId: preparedId(context, "account"),
+    });
+  }
+
+  /** Writes a prepared account through Better Auth, for compositions without original State. */
+  async function writePreparedAccount(
+    prepared: PreparedAuthAccount,
+  ): Promise<AuthenticatedAccount> {
+    const context = await auth.$context;
+    const created = await context.adapter.create<
+      Record<string, unknown>,
+      { id: string; email: string; name: string }
+    >({
+      model: "user",
+      data: {
+        id: prepared.id,
+        email: prepared.email,
+        name: prepared.name,
         emailVerified: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
+      forceAllowId: true,
+    });
+    try {
+      await context.adapter.create({
+        model: "account",
+        data: {
+          id: prepared.credentialId,
+          userId: prepared.id,
+          providerId: "credential",
+          accountId: prepared.id,
+          password: prepared.passwordHash,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        forceAllowId: true,
+      });
+    } catch (error) {
+      await context.internalAdapter.deleteUser(prepared.id).catch(() => {});
+      throw error;
+    }
+    return Object.freeze({ id: created.id, email: created.email, name: created.name });
+  }
+
+  async function createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount> {
+    const prepared = await prepareAccount(input);
+    const context = await auth.$context;
+    const created = await context.internalAdapter.createUser(
+      { email: prepared.email, name: prepared.name, emailVerified: true },
       { method: "admin" },
     );
     try {
@@ -758,7 +833,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         userId: created.id,
         providerId: "credential",
         accountId: created.id,
-        password: hash,
+        password: prepared.passwordHash,
       });
     } catch (error) {
       await context.internalAdapter.deleteUser(created.id).catch(() => {});
@@ -787,7 +862,17 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     }
     const headers = authHeaders(request.headers);
     headers.set("host", new URL(options.baseURL).host);
-    headers.set("x-occ-client-ip", request.ip);
+    // Sign-in admission keys on this value; Better Auth reads only this address header.
+    headers.set(
+      "x-occ-client-ip",
+      resolveClientAddress(
+        options.clientAddress,
+        request.ip,
+        options.clientAddress === undefined
+          ? undefined
+          : request.headers[options.clientAddress.header],
+      ),
+    );
     // The public wrapper already applies the established browser/CLI origin contract.
     if (!headers.has("origin") && (path === "/oce/password" || path === "/oce/sign-out")) {
       headers.set("origin", expectedBrowserOrigin);
@@ -938,6 +1023,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       options.installationId,
       sessionCookieName,
     ),
+    prepareAccount,
+    writePreparedAccount,
     createAccount,
     deleteAccount,
     principalSeed: (
@@ -951,6 +1038,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         seedOptions,
       ),
     githubEnabled: humanLogin !== undefined,
+    humanProfile: humanLogin === undefined ? "password" : "guarded",
     githubStart,
     githubCallback,
     signInEmail,
@@ -1038,22 +1126,24 @@ export async function createPostgresControllerAuth(
   });
   // Finish static auth initialization before the one-way activation transaction.
   await auth.auth.$context;
-  const designation = github === undefined ? undefined : await persistence!.recoveryDesignation();
-  if (
-    github !== undefined &&
-    designation !== undefined &&
-    designation.userId !== github.recoveryUserId
-  ) {
+  let activationSkipped: readonly string[] = [];
+  if (github !== undefined) {
+    const existing = await persistence!.recoveryDesignation();
     // The recovery user id seeds first activation only; an online replacement is authoritative.
-    onWarning?.({
-      event: "authentication.recovery-seed-warning",
-      message:
-        "OCC_AUTH_GITHUB_RECOVERY_USER_ID differs from the recorded recovery designation, which is kept.",
-    });
-  } else if (github !== undefined) {
+    const seedIgnored = existing !== undefined && existing.userId !== github.recoveryUserId;
+    if (seedIgnored) {
+      onWarning?.({
+        event: "authentication.recovery-seed-warning",
+        message:
+          "OCC_AUTH_GITHUB_RECOVERY_USER_ID differs from the recorded recovery designation, which is kept.",
+      });
+    }
+    // Every start re-checks the actual holder: its Principal must still administer the
+    // Installation, and activateRecovery re-checks enrolment, enabled state and the password.
+    const recoveryUserId = seedIgnored ? existing.userId : github.recoveryUserId;
     const principal = await iamDriver!.lookupIdentity({
       issuer: betterAuthIssuer(options.installationId),
-      subject: github.recoveryUserId,
+      subject: recoveryUserId,
     });
     if (!principal || principal.kind !== "principal") {
       throw new Error("Recovery Principal is unavailable.");
@@ -1066,10 +1156,17 @@ export async function createPostgresControllerAuth(
     if (!decision.allowed || decision.driverId !== iamDriver!.id) {
       throw new Error("Recovery account must administer the Installation.");
     }
-    await persistence!.activateRecovery(github.recoveryUserId, principal.id);
+    activationSkipped = (await persistence!.activateRecovery(recoveryUserId, principal.id)).skipped;
+    const designation = await persistence!.recoveryDesignation();
+    if (!designation) {
+      throw new Error("Recovery designation is unavailable.");
+    }
+    // The recovery account's password lane stays admitted under sign-in floods.
+    humanLogin!.designateRecovery(designation.email);
   }
   return {
     ...auth,
+    ...(activationSkipped.length === 0 ? {} : { activationSkipped }),
     ...(humanLogin === undefined
       ? {}
       : {
@@ -1090,27 +1187,40 @@ export async function createPostgresControllerAuth(
             ),
           changeAccount: (
             userId: string,
-            operation: "disable" | "revoke",
+            operation: "disable" | "enable" | "revoke",
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
           readRecovery: (actor: HumanAuthenticationActor) => persistence!.readRecovery(actor),
-          replaceRecovery: (
+          replaceRecovery: async (
             userId: string,
             principalId: string,
             expectedCurrentUserId: string,
             actor: HumanAuthenticationActor,
             expectedVersion: number,
-          ) =>
-            persistence!.replaceRecovery(
+          ) => {
+            const replaced = await persistence!.replaceRecovery(
               userId,
               principalId,
               expectedCurrentUserId,
               actor,
               expectedVersion,
-            ),
+            );
+            // Move the reserved password lane to the new holder's email.
+            const designation = await persistence!.recoveryDesignation();
+            if (designation !== undefined) {
+              humanLogin.designateRecovery(designation.email);
+            }
+            return replaced;
+          },
           enrolAccount: (userId: string, actor: HumanAuthenticationActor) =>
             persistence!.enrolAccount(userId, actor),
+          detachMethod: (
+            userId: string,
+            methodId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => persistence!.detachExternal(userId, methodId, actor, expectedVersion),
         }),
   };
 }

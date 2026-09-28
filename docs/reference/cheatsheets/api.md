@@ -9,7 +9,9 @@
 - [`getAuthAccount`](../api.md#get-apiauthaccountsuserid): Inspect current human account state.
 - [`createAuthAccount`](../api.md#post-apiauthaccounts): Create an administrator-controlled local auth account.
 - [`attachGitHubIdentity`](../api.md#post-apiauthaccountsuseridprovidersgithub): Attach an exact GitHub identity to an existing account.
+- [`detachAuthMethod`](../api.md#post-apiauthaccountsuseridmethodsmethodiddetach): Detach an external sign-in identity from an account.
 - [`disableAuthAccount`](../api.md#post-apiauthaccountsuseriddisable): Disable a human account.
+- [`enableAuthAccount`](../api.md#post-apiauthaccountsuseridenable): Re-enable a disabled human account.
 - [`enrolAuthAccount`](../api.md#post-apiauthaccountsuseridenrol): Enrol an existing account that activation skipped.
 - [`revokeAuthAccountSessions`](../api.md#post-apiauthaccountsuseridrevoke): Revoke all sessions for a human account.
 

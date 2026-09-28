@@ -7,9 +7,16 @@ import {
 import {
   createPostgresPool,
   OpenClawController,
+  PostgresHumanAuthentication,
   PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { createPostgresControllerAuth, type GitHubLoginConfiguration } from "../auth/index.ts";
+import {
+  betterAuthIssuer,
+  createPostgresControllerAuth,
+  type ClientAddressConfiguration,
+  type GitHubLoginConfiguration,
+  type PreparedAuthAccount,
+} from "../auth/index.ts";
 import { createFastifyApp } from "../index.ts";
 import { SlackChannelDriver } from "../drivers/channel/slack.ts";
 import type {
@@ -38,6 +45,7 @@ export interface ProductionConfig {
   readonly authSecret: string;
   readonly authBaseURL: string;
   readonly github?: GitHubLoginConfiguration;
+  readonly clientAddress?: ClientAddressConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly logger?: OccLogger;
@@ -106,11 +114,29 @@ export async function composeProduction(config: ProductionConfig) {
       ...(config.logger === undefined
         ? {}
         : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
+      ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
     });
-    const provisionAuthAccount = async (seed: AuthPrincipalSeed, auditEvent: AuditEvent) => {
+    if (auth.activationSkipped !== undefined && config.logger !== undefined) {
+      emitOccLogEvent(config.logger, {
+        event: "authentication.activation-warning",
+        reason: "Accounts without a Principal or exactly one password were not enrolled.",
+        skippedUserIds: auth.activationSkipped,
+      });
+    }
+    const humanAuthentication = new PostgresHumanAuthentication(
+      state,
+      persistedInstallation.id,
+      betterAuthIssuer(persistedInstallation.id),
+    );
+    const provisionAuthAccount = async (
+      seed: AuthPrincipalSeed,
+      auditEvent: AuditEvent,
+      prepared: PreparedAuthAccount,
+    ) => {
       const current = await state.loadNativeIAMState(persistedInstallation.id);
       validateAuthAccountPrincipalSeed(seed, current, persistedInstallation.id);
-      await state.appendNativeIAMPrincipal(seed, auditEvent);
+      // The account, its Principal and bindings, and its enrolment commit together.
+      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent);
     };
 
     const principal = iamState.identities.find((identity) => identity.kind === "principal");
@@ -236,6 +262,7 @@ export async function composeProduction(config: ProductionConfig) {
         installationId: persistedInstallation.id,
       },
       maxBodyBytes: 64 * 1024,
+      ...(config.clientAddress === undefined ? {} : { trustedProxies: config.clientAddress }),
       ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));

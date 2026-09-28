@@ -42,7 +42,7 @@ Each operation lists its supported status codes.
 
 | Resource | Operations |
 | --- | --- |
-| [Authentication](#authentication) | 16 operations |
+| [Authentication](#authentication) | 18 operations |
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 3 operations |
 | [Namespaces](#namespaces) | 4 operations |
@@ -67,7 +67,9 @@ Each operation lists its supported status codes.
 | [`POST /api/auth/accounts`](#post-apiauthaccounts) | Create an administrator-controlled local auth account |
 | [`GET /api/auth/accounts/{userId}`](#get-apiauthaccountsuserid) | Inspect current human account state |
 | [`POST /api/auth/accounts/{userId}/disable`](#post-apiauthaccountsuseriddisable) | Disable a human account |
+| [`POST /api/auth/accounts/{userId}/enable`](#post-apiauthaccountsuseridenable) | Re-enable a disabled human account |
 | [`POST /api/auth/accounts/{userId}/enrol`](#post-apiauthaccountsuseridenrol) | Enrol an existing account that activation skipped |
+| [`POST /api/auth/accounts/{userId}/methods/{methodId}/detach`](#post-apiauthaccountsuseridmethodsmethodiddetach) | Detach an external sign-in identity from an account |
 | [`POST /api/auth/accounts/{userId}/providers/github`](#post-apiauthaccountsuseridprovidersgithub) | Attach an exact GitHub identity to an existing account |
 | [`POST /api/auth/accounts/{userId}/revoke`](#post-apiauthaccountsuseridrevoke) | Revoke all sessions for a human account |
 | [`GET /api/auth/providers`](#get-apiauthproviders) | List configured browser sign-in methods |
@@ -225,6 +227,55 @@ Disable a human account
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
+#### `POST /api/auth/accounts/{userId}/enable`
+
+<span id="post-apiauthaccountsuseridenable"></span>
+
+Re-enable a disabled human account
+
+**Operation ID:** `enableAuthAccount`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
 #### `POST /api/auth/accounts/{userId}/enrol`
 
 <span id="post-apiauthaccountsuseridenrol"></span>
@@ -265,6 +316,56 @@ Enrol an existing account that activation skipped
 | `data.principalId` | `string` | Yes | — |
 | `data.userId` | `string` | Yes | — |
 | `data.version` | `integer` | Yes | minimum: 1 |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/methods/{methodId}/detach`
+
+<span id="post-apiauthaccountsuseridmethodsmethodiddetach"></span>
+
+Detach an external sign-in identity from an account
+
+**Operation ID:** `detachAuthMethod`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+| `methodId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 

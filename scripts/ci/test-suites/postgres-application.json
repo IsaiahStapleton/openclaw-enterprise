@@ -241,6 +241,12 @@
       "expectedTests": [
         "production GitHub-profile sessions reject cookies planted by a sibling domain"
       ]
+    },
+    {
+      "path": "tests/integration/postgres-trusted-proxy.test.mjs",
+      "expectedTests": [
+        "sign-in admission keys on the client behind a trusted ingress and ignores other peers' headers"
+      ]
     }
   ]
 }
