@@ -2484,19 +2484,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
         return result;
       }
     }
-    // Namespace policies are otherwise written only while a namespace is provisioning. Re-apply
-    // them so namespaces created before a grant was narrowed (for example the formerly
-    // podSelector-{} allow-dns) do not keep the broader grant after an upgrade. The dedicated
-    // Gateway namespace was verified Active and owned by requireGatewayNamespace above; the
-    // embedded Gateway runs in the tenant namespace. Activation stays write-free here.
-    for (const policy of this.networkPolicies(tenantOwnership, namespace)) {
-      await this.reconcile(policy, tenantOwnership, namespace);
-    }
-    if (!embedded) {
-      for (const policy of this.networkPolicies(tenantOwnership, gatewayNamespace)) {
-        await this.reconcile(policy, tenantOwnership, gatewayNamespace);
-      }
-    }
     const agentName = `agent-${sha256Hex(revision.agentId, 12)}`;
     const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const gatewayOwnership = { ...tenantOwnership, agentId: revision.agentId };
