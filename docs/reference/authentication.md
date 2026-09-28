@@ -157,9 +157,8 @@ Set all three API-process variables; partial configuration fails startup:
 | `OCC_AUTH_GITHUB_CLIENT_SECRET`    | GitHub App client secret in protected server configuration.             |
 | `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | Existing local password administrator retained for recovery.            |
 
-The Helm chart cannot yet carry these variables: its API container accepts no
-extra environment, so out-of-band values vanish on the next `helm upgrade` and
-an activated controller then fails startup.
+Helm renders them from `auth.github` and `auth.recoveryUserId`; see
+[production settings](settings/production.md#github-sign-in-and-trusted-proxies).
 
 Use the repository integration's GitHub App. Register `OCC_AUTH_BASE_URL` +
 `/api/auth/providers/github/callback` as its callback. Login receives the
