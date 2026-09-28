@@ -695,6 +695,7 @@ test(
       assert.deepEqual(token, outstanding[index]);
       assert.ok(token.expires > credentials.clock.wallNow());
     }
+    const cleanupEventCursor = fixture.events.length;
     const recoveredAfterCrash = await deployAfterLoss(
       restarted.revision,
       restarted.pod,
@@ -702,17 +703,28 @@ test(
     );
     // The explicitly admitted successor retires the old runtime while its
     // unresolved active receipts remain owned by durable cleanup work.
-    const retirementKey = `agent_revision:${restarted.revision.id}:repository_cleanup:${createHash(
-      "sha256",
-    )
-      .update(`agent_revision:${recoveredAfterCrash.revision.id}:reconcile`)
-      .digest("hex")}`;
+    const cleanupPrefix = `agent_revision:${restarted.revision.id}:repository_cleanup:`;
     const retirement = await kube.waitFor(
       "crash-lost sessions to retain cleanup ownership",
       async () => {
         const attempts = await fixture.attempts(restarted.revision);
         const cleanup = (await revisionWork(restarted.revision)).find(
-          ({ idempotency_key }) => idempotency_key === retirementKey,
+          ({ idempotency_key, state }) =>
+            idempotency_key.startsWith(cleanupPrefix) &&
+            /^[0-9a-f]{64}$/.test(idempotency_key.slice(cleanupPrefix.length)) &&
+            ["queued", "claimed"].includes(state) &&
+            fixture.events
+              .slice(cleanupEventCursor)
+              .some(
+                (event) =>
+                  event.event === "worker.completed" &&
+                  event.workId === idempotency_key &&
+                  event.namespaceId === namespace.id &&
+                  event.agentId === agent.id &&
+                  event.revisionId === restarted.revision.id &&
+                  event.outcome === "pending" &&
+                  event.code === "REPOSITORY_CLEANUP_PENDING",
+              ),
         );
         const closing = crashAttempts
           .filter(({ phase }) => phase === "open")
@@ -722,11 +734,10 @@ test(
                 admission_id === prior.admission_id && phase === "closing",
             ),
           );
-        return closing && cleanup && ["queued", "claimed"].includes(cleanup.state)
-          ? cleanup
-          : undefined;
+        return closing ? cleanup : undefined;
       },
     );
+    const retirementKey = retirement.idempotency_key;
     const successorWork = (await revisionWork(recoveredAfterCrash.revision)).find(
       ({ idempotency_key }) =>
         idempotency_key === `agent_revision:${recoveredAfterCrash.revision.id}:reconcile`,
@@ -735,18 +746,6 @@ test(
     assert.equal(retirement.agent_id, agent.id);
     assert.equal(retirement.revision_id, restarted.revision.id);
     assert.equal(retirement.actor_id, successorWork.actor_id);
-    await kube.waitFor("unresolved cleanup Work to report pending", () =>
-      fixture.events.some(
-        (event) =>
-          event.event === "worker.completed" &&
-          event.workId === retirementKey &&
-          event.namespaceId === namespace.id &&
-          event.agentId === agent.id &&
-          event.revisionId === restarted.revision.id &&
-          event.outcome === "pending" &&
-          event.code === "REPOSITORY_CLEANUP_PENDING",
-      ),
-    );
     const oldProjection = restarted.pod.spec.volumes.find(
       ({ name }) => name === "repository-material-projection",
     );
