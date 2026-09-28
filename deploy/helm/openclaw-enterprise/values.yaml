@@ -72,6 +72,16 @@ backend:
 repositoryCredentials:
   enabled: false
   image: ""
+  # Internal HTTPS Service name. Fresh installs default to git. Upgrades must
+  # set this explicitly to the current Service name until repository sessions
+  # drain, then switch it deliberately to git.
+  serviceName: ""
+  # Kubernetes cluster DNS suffix used to form the broker Service FQDN.
+  clusterDomain: cluster.local
+  # Optional exact Service hostname: <service>.<namespace>.svc or that name
+  # followed by .<clusterDomain>. Empty selects the cluster-qualified name.
+  # Preserve the current hostname during upgrades; it pins TLS and sessions.
+  hostname: ""
   backendId: ""
   # Operator-created immutable, versioned ConfigMap shared by all three consumers.
   registryConfigMapName: ""
@@ -100,6 +110,8 @@ gatewayRouting:
   caSecretName: ""
   caSecretKey: ""
   tlsSecretName: ""
+  serviceType: ClusterIP
+  remoteNodeCidrs: []
   tenantGatewayPort: 8080
   envoyHttpsTargetPort: 10443
   issuerRef:
@@ -124,6 +136,9 @@ database:
 api:
   port: 8080
   clients: []
+  # Optional exact HTTP(S) proxy endpoint for API-side Slack directory lookup.
+  # The proxy must allow CONNECT to slack.com:443; empty disables lookup in production.
+  channelDirectoryProxyUrl: ""
   # Optional model-list discovery: API Pod HTTPS egress to provider IPv4 /32 hosts.
   # Operators maintain these addresses; Console model selection does not require it.
   modelDiscoveryCidrs: []
@@ -135,6 +150,16 @@ cluster:
 controlPlane:
   nodeSelector: {}
   installationChecksum: ""
+
+# Separate operator-provisioned DP credentials for the API and worker.
+# The Installation selects /etc/openclaw/execution/kubeconfig explicitly.
+executionCluster:
+  enabled: false
+  apiKubeconfigSecretName: ""
+  workerKubeconfigSecretName: ""
+  kubeconfigKey: kubeconfig
+  apiCidrs: []
+  apiPort: 6443
 
 dns:
   namespace: kube-system

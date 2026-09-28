@@ -1,6 +1,7 @@
-ARG OPENCLAW_COMMIT=abc1b44118af833a24fa00763db10bde8a0a9a91
+ARG OPENCLAW_COMMIT=000d03942c8703a4c18615ab8d1a5f18c85b5674
 ARG NODE_BASE_IMAGE=docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
 ARG NODE_RUNTIME_BASE_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
+
 FROM ${NODE_BASE_IMAGE} AS repository-client-build
 
 WORKDIR /build
@@ -22,12 +23,22 @@ COPY deploy/runtime/repository-credentials/.dockerignore deploy/runtime/reposito
 COPY deploy/runtime/repository-credentials/hooks.json deploy/runtime/repository-credentials/hooks.json
 RUN corepack pnpm credentials:build
 
+# Build the service from the same checkout as the runtime client. Keep the
+# service closure separate from the Agent runtime and its unprivileged client.
+FROM ${NODE_BASE_IMAGE} AS repository-credentials-service
+WORKDIR /app
+COPY --from=repository-client-build /build/.build/repository-credentials/service/package.json ./package.json
+COPY --from=repository-client-build /build/.build/repository-credentials/service/dist ./dist
+RUN chmod -R a=rX /app
+USER node
+ENTRYPOINT ["node", "/app/dist/repository-credentials.js"]
+
 FROM ${NODE_BASE_IMAGE} AS openclaw-source
 
 # Keep the source identity separate from its unreleased package version.
 ARG OPENCLAW_COMMIT
 ENV GIT_COMMIT=${OPENCLAW_COMMIT}
-ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-24T23:13:58Z
+ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-27T20:21:06Z
 ENV OPENCLAW_PREFER_PNPM=1
 WORKDIR /source
 RUN --mount=type=secret,id=build-ca,required=false \
@@ -35,18 +46,22 @@ RUN --mount=type=secret,id=build-ca,required=false \
     if [ -f /run/secrets/build-ca ]; then export CURL_CA_BUNDLE=/run/secrets/build-ca; fi; \
     curl --fail --location --silent --show-error \
       "https://codeload.github.com/openclaw/openclaw/tar.gz/${GIT_COMMIT}" -o /tmp/openclaw-source.tar.gz; \
-    echo '18a6b66d16c422ad9f643e27decf81eb0decb7f8fc3ce712ac2a5b6aa8d113b3  /tmp/openclaw-source.tar.gz' | sha256sum --check --strict; \
+    echo '7fddb3787c64b8d0dc22595abc19e23862903b0349714e61dbac18240b2b5ced  /tmp/openclaw-source.tar.gz' | sha256sum --check --strict; \
     tar -xzf /tmp/openclaw-source.tar.gz --strip-components=1; \
     rm /tmp/openclaw-source.tar.gz
-COPY deploy/runtime/codex-0.156.0.patch /tmp/codex.patch
-RUN git apply /tmp/codex.patch
+# Pin the stock Codex package used by the bundled upstream OpenClaw extension.
+COPY deploy/runtime/stock-codex-0.156.0-dependency-pin.patch /tmp/codex-dependency-pin.patch
+# TODO: Remove this bridge patch when OpenClaw supports networkProxy.readOnlyPaths.
+COPY deploy/runtime/openclaw-codex-read-only-paths.patch /tmp/openclaw-codex-read-only-paths.patch
+RUN echo '62328f7cc72ada024a97a5a7bf89e988db3f91b64b4c6d7fa6809c218fc8b72e  /tmp/openclaw-codex-read-only-paths.patch' | sha256sum --check --strict \
+    && git apply /tmp/codex-dependency-pin.patch /tmp/openclaw-codex-read-only-paths.patch
 COPY scripts/build-runtime-assets.mjs /tmp/build-runtime-assets.mjs
 RUN node /tmp/build-runtime-assets.mjs inputs /source /inputs
 
 FROM ${NODE_BASE_IMAGE} AS openclaw-dependency-inputs
 ARG OPENCLAW_COMMIT
 ENV GIT_COMMIT=${OPENCLAW_COMMIT}
-ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-24T23:13:58Z
+ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-27T20:21:06Z
 ENV OPENCLAW_PREFER_PNPM=1
 WORKDIR /source
 COPY --from=openclaw-source /inputs/ ./
@@ -121,11 +136,10 @@ for (const plugin of ["codex", "slack"]) {
   }
 }
 NODE
-COPY --from=openclaw-source /tmp/codex.patch /tmp/codex.patch
 COPY scripts/build-runtime-assets.mjs /tmp/build-runtime-assets.mjs
 RUN --mount=type=bind,from=openclaw-source,source=/source/scripts,target=/verification/scripts \
     --mount=type=bind,from=openclaw-build,source=/source/node_modules,target=/verification/node_modules \
-    node /tmp/build-runtime-assets.mjs package /source /out /tmp/codex.patch \
+    node /tmp/build-runtime-assets.mjs package /source /out \
     && node /verification/scripts/check-package-dist-imports.mjs /source
 
 FROM ${NODE_RUNTIME_BASE_IMAGE} AS runtime
@@ -164,10 +178,12 @@ RUN mkdir -p node_modules/.bin \
     && ln -s ../openclaw/openclaw.mjs node_modules/.bin/openclaw \
     && ln -s ../openclaw/node_modules/@openai/codex/bin/codex.js node_modules/.bin/codex
 
+COPY scripts/build-runtime-assets.mjs /tmp/build-runtime-assets.mjs
+
 RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw /home/node/.codex/generated_images \
   && chown node:node /home/node/.codex /home/node/.codex/generated_images \
   && chmod 700 /home/node/.codex /home/node/.codex/generated_images \
-  && cp -R node_modules/openclaw/dist/extensions/slack/skills/slack ./plugin-skills/slack \
+  && cp -R node_modules/openclaw/dist/extensions/slack/skills/. ./plugin-skills/ \
   && ln -s node_modules/openclaw/openclaw.mjs ./openclaw.mjs \
   && ln -s node_modules/openclaw/dist ./dist \
   && cp -R node_modules/openclaw/skills ./skills \
@@ -178,13 +194,16 @@ RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw
   && test -d /app/skills \
   && test ! -L /app/skills \
   && test -d /app/plugin-skills/slack \
+  && test -f /app/plugin-skills/block-kit/references/official-block-kit.md \
   && test "$(stat -c '%U:%G:%a' /home/node/.codex)" = "node:node:700" \
   && test "$(stat -c '%U:%G:%a' /home/node/.codex/generated_images)" = "node:node:700" \
   && node /app/openclaw.mjs --version \
   && node -e 'if (typeof require("ws") !== "function") throw new Error("Runtime WebSocket dependency unavailable")' \
   && test "$(codex --version)" = "codex-cli ${OPENAI_CODEX_VERSION}" \
   && test -f /app/dist/extensions/codex/openclaw.plugin.json \
-  && test -f /app/dist/extensions/slack/openclaw.plugin.json
+  && test -f /app/dist/extensions/slack/openclaw.plugin.json \
+  && node /tmp/build-runtime-assets.mjs inventory /app/node_modules/openclaw /opt/oce/runtime \
+  && rm /tmp/build-runtime-assets.mjs
 
 COPY --from=repository-client-build /build/.build/repository-credentials/client/package.json /opt/oce/repository-credentials/package.json
 COPY --from=repository-client-build /build/.build/repository-credentials/client/dist /opt/oce/repository-credentials/dist

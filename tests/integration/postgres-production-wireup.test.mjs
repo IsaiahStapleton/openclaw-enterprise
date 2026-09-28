@@ -483,10 +483,11 @@ test(
       async function request(method, path, payload) {
         const response = await fetch(`${endpoint}${path}`, {
           method,
-          headers: authenticatedHeaders(
-            session,
-            payload === undefined ? {} : { "content-type": "application/json" },
-          ),
+          headers: authenticatedHeaders(session, {
+            // This fixture configures port 0 before listening on an ephemeral port.
+            origin: authBaseURL,
+            ...(payload === undefined ? {} : { "content-type": "application/json" }),
+          }),
           ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
         });
         return {
@@ -499,13 +500,13 @@ test(
       const defaults = await request("GET", presetPath);
       assert.equal(defaults.status, 200);
       assert.deepEqual(defaults.data.map((preset) => preset.name).sort(), [
-        "standard-codex",
-        "standard-openclaw",
+        "Standard Codex",
+        "Standard OpenClaw",
       ]);
-      const copied = defaults.data.find((preset) => preset.name === "standard-codex");
-      const copiedOpenClaw = defaults.data.find((preset) => preset.name === "standard-openclaw");
-      assert.ok(copied, "missing standard-codex");
-      assert.ok(copiedOpenClaw, "missing standard-openclaw");
+      const copied = defaults.data.find((preset) => preset.name === "Standard Codex");
+      const copiedOpenClaw = defaults.data.find((preset) => preset.name === "Standard OpenClaw");
+      assert.ok(copied, "missing Standard Codex");
+      assert.ok(copiedOpenClaw, "missing Standard OpenClaw");
       const worker = createControllerWorker({
         pool: new pg.Pool({ connectionString: databaseUrl }),
         mode: "production",
@@ -549,15 +550,15 @@ test(
       endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
       const afterRestart = await request("GET", presetPath);
       assert.deepEqual(afterRestart.data.map((preset) => preset.name).sort(), [
-        "standard-codex",
-        "standard-openclaw",
+        "Standard Codex",
+        "Standard OpenClaw",
       ]);
       assert.deepEqual(
-        afterRestart.data.find((preset) => preset.name === "standard-codex"),
+        afterRestart.data.find((preset) => preset.name === "Standard Codex"),
         customized.data,
       );
       assert.deepEqual(
-        afterRestart.data.find((preset) => preset.name === "standard-openclaw"),
+        afterRestart.data.find((preset) => preset.name === "Standard OpenClaw"),
         copiedOpenClaw,
       );
       const newNamespace = await request("POST", "/namespaces", {
@@ -566,15 +567,15 @@ test(
       assert.equal(newNamespace.status, 201);
       const newPresets = await request("GET", `/namespaces/${newNamespace.data.id}/presets`);
       assert.deepEqual(newPresets.data.map((preset) => preset.name).sort(), [
-        "standard-codex",
-        "standard-openclaw",
+        "Standard Codex",
+        "Standard OpenClaw",
       ]);
       assert.notEqual(
-        newPresets.data.find((preset) => preset.name === "standard-codex").id,
+        newPresets.data.find((preset) => preset.name === "Standard Codex").id,
         copied.id,
       );
       assert.notEqual(
-        newPresets.data.find((preset) => preset.name === "standard-openclaw").id,
+        newPresets.data.find((preset) => preset.name === "Standard OpenClaw").id,
         copiedOpenClaw.id,
       );
 

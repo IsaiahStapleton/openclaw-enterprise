@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadTestSuites } from "./test-suites.mjs";
+import { prepareRuntimeImageSmoke } from "./prepare.mjs";
 
 export const repository = "openclaw/openclaw-enterprise";
 export const publishWorkflow = ".github/workflows/container-publish.yml";
@@ -198,7 +199,15 @@ export async function verifyEnvironment() {
   );
 }
 
+function publicationAlias(value) {
+  const tag = value || "latest";
+  assert.match(tag, /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/, "Invalid image tag.");
+  assert.ok(!/^(?:sha|bootstrap)-/i.test(tag), "Source and bootstrap tags are reserved.");
+  return tag;
+}
+
 async function validate(env) {
+  publicationAlias(env.IMAGE_TAG);
   await verifyMainSource(env);
   assert.equal(
     env.SOURCE_SHA,
@@ -424,11 +433,18 @@ async function smoke(directory, env) {
   assert.equal(manifest.mediaType, "application/vnd.oci.image.manifest.v1+json");
   const tag = `localhost/enterprise-${env.IMAGE}:prepared-${arch}`;
   skopeo(["copy", `oci:${directory}`, `docker-daemon:${tag}`], { stdio: "inherit" });
+  let prepared;
   try {
     const [loaded] = JSON.parse(execFileSync("docker", ["image", "inspect", tag]));
     assert.equal(loaded.Id, manifest.config.digest);
     assert.equal(loaded.Os, "linux");
     assert.equal(loaded.Architecture, arch);
+    if (env.IMAGE === "runtime") {
+      prepared = await prepareRuntimeImageSmoke({
+        image: loaded.Id,
+        statePath: join(env.RUNNER_TEMP ?? tmpdir(), `runtime-smoke-${arch}.json`),
+      });
+    }
     console.log(`Smoke ${env.IMAGE} ${env.PLATFORM} @ ${descriptor.digest}`);
     execFileSync(
       process.execPath,
@@ -439,6 +455,7 @@ async function smoke(directory, env) {
       {
         env: {
           ...env,
+          ...prepared?.env,
           OCC_TEST_IMAGE_TIMEOUT_MULTIPLIER: "1",
           [env.IMAGE === "controller" ? "OCC_TEST_PRODUCTION_IMAGE" : "OCC_TEST_RUNTIME_IMAGE"]:
             loaded.Id,
@@ -461,7 +478,11 @@ async function smoke(directory, env) {
       )}\n`,
     );
   } finally {
-    execFileSync("docker", ["image", "rm", tag], { stdio: "inherit" });
+    try {
+      await prepared?.cleanup();
+    } finally {
+      execFileSync("docker", ["image", "rm", tag], { stdio: "inherit" });
+    }
   }
 }
 
@@ -490,7 +511,7 @@ export async function verifyGhcr(image, digest, tag) {
   return existing.length > 0;
 }
 
-export async function publishPrepared(directory, env, producer, verify) {
+export async function publishPrepared(directory, env, producer, verify, aliasTag) {
   await verify();
   const tag = `sha-${env.SOURCE_SHA}`;
   const prepared = [];
@@ -568,13 +589,55 @@ export async function publishPrepared(directory, env, producer, verify) {
         `Verified ${image.destination}:${tag} @ ${image.digest}${remoteDigest ? " (already published)" : ""}`,
       );
     }
+    if (aliasTag !== undefined) {
+      // Both immutable tags must be verified before either mutable alias moves.
+      for (const image of prepared) {
+        await verify();
+        await verifyGhcr(image.destination, image.digest, tag);
+        assert.equal(inspectDigest(`docker://${image.destination}:${tag}`, authfile), image.digest);
+        skopeo(
+          [
+            "copy",
+            "--all",
+            "--preserve-digests",
+            "--authfile",
+            authfile,
+            `oci-archive:${image.archive}`,
+            `docker://${image.destination}:${aliasTag}`,
+          ],
+          { stdio: "inherit" },
+        );
+        assert.equal(
+          inspectDigest(`docker://${image.destination}:${aliasTag}`, authfile),
+          image.digest,
+        );
+      }
+      // A second check catches drift while the other package was being copied.
+      for (const image of prepared) {
+        assert.equal(inspectDigest(`docker://${image.destination}:${tag}`, authfile), image.digest);
+        assert.equal(
+          inspectDigest(`docker://${image.destination}:${aliasTag}`, authfile),
+          image.digest,
+        );
+        console.log(`Verified ${image.destination}:${aliasTag} @ ${image.digest}`);
+      }
+    }
   } finally {
     await rm(authDirectory, { recursive: true, force: true });
   }
-  const receipt = prepared.map(({ archive, ...image }) => ({ ...image, tag }));
+  const receipt = prepared.map(({ archive, ...image }) => ({
+    ...image,
+    tag,
+    ...(aliasTag === undefined ? {} : { aliasTag }),
+  }));
   await appendFile(
     env.GITHUB_STEP_SUMMARY,
-    receipt.map((image) => `- ${image.image}: \`${image.destination}@${image.digest}\`\n`).join(""),
+    receipt
+      .map(
+        (image) =>
+          `- ${image.image}: \`${image.destination}@${image.digest}\`${aliasTag ? ` (tag: \`${aliasTag}\`)` : ""}\n`,
+      )
+      .join(""),
   );
   return receipt;
 }
@@ -597,6 +660,7 @@ async function main() {
       process.env,
       identity(process.env, "controller"),
       () => validate(process.env),
+      publicationAlias(process.env.IMAGE_TAG),
     );
     await writeFile(join(directory, "publication.json"), `${JSON.stringify(receipt, null, 2)}\n`);
   } else {

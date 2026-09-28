@@ -18,11 +18,14 @@ DNS, approved gateway clients, and required communication between an Agent's
 gateway and dedicated Harness. Cross-tenant traffic, traffic between different
 Agents, Kubernetes API access, and cloud metadata access remain denied.
 
-For Compute-owned startup failure evidence and plugin reporting, set
+For Compute-owned startup failure evidence, plugin reporting, and on-demand
+deployment diagnostics, set
 `network.pluginStatusProxySourceCidrs` to the precise source addresses used by the
 Kubernetes API server when proxying requests to workload Pods. The policy allows
-those sources only to the private status port, TCP/18791; worker RBAC separately
-requires `get` on `pods/proxy`. Prefer individual `/32` or `/128` addresses. On an
+those sources only to the private status port, TCP/18791. Both worker and API
+ServiceAccounts need namespace-local `get` on `pods/proxy` for their respective
+reads. The ingress rule also applies when an Agent has no enabled plugins.
+Prefer individual `/32` or `/128` addresses. On an
 overlay network, the observed source may be the control-plane node's overlay
 address rather than its node IP. Verify it across nodes with enforced policies.
 An omitted list adds no API-proxy ingress rule and leaves status unavailable
@@ -74,8 +77,49 @@ label. These selectors permit transport; the credential service still validates
 the session and repository grant. Verify the effective policies in the installed
 cluster; rendered rules alone do not prove traffic enforcement.
 
+Compute projects repository broker policy to the actual Codex consumer: the
+Agent Pod for dedicated Codex, or the gateway for embedded OpenClaw with
+`plugins.driver.implementation: occ/codex-plugin`. Embedded OpenClaw using
+`occ/openclaw-plugin` or no PluginDriver selection receives no Codex projection.
+
+Selected Codex plugins receive a filesystem-only profile that grants read-only
+access to the stock runtime package at `/app/node_modules/openclaw` and
+published plugin skills at `/home/node/.openclaw/plugin-skills` and
+`/home/node/openclaw-runtime-assets/plugin-skills`. This lets sandboxed skill
+reads use the installed runtime and packaged skills without enabling proxy
+networking, granting repository credential paths, granting whole-filesystem
+reads, or changing project write permissions.
+
+For Codex consumers with repository bindings, Compute also adds the exact broker
+hostname from admitted session material to the tool proxy's domain allowlist and
+sets stock Codex `allow_local_binding = true` and `mode = "full"`. An explicit
+deny matching the broker hostname fails closed. The repository-bound filesystem
+profile additionally grants read-only access to the repository client at
+`/opt/oce/repository-credentials` and admitted session material at
+`/run/oce/repository-credentials`. Unbound Agents receive none of those network
+or repository-material changes; their existing policy remains in effect.
+
+These settings apply to the Agent's whole tool proxy: local binding is allowed,
+Codex's additional private-address guard is disabled, and every HTTP method is
+allowed at otherwise allowed destinations. Domain rules match hostnames, not
+ports: an allowed host is reachable on any port permitted by the lower network
+layers. This is not a broker-only port or method exception. Managed requirements
+that forbid local binding or require limited mode reject the conflicting
+configuration. Domain allowlisting, explicit denies, Kubernetes NetworkPolicy,
+TLS verification, and broker session/repository authorization remain separate
+boundaries. The workspace sandbox remains enabled.
+
+Compute supplies the broker's public CA to that consumer before Codex starts. Stock full mode
+normally tunnels HTTPS, so Git verifies the broker certificate directly. If
+Codex separately requires HTTPS interception, it retains platform and startup
+roots upstream and supplies child tools with its managed CA bundle. Preserve
+inherited `GIT_SSL_CAINFO`; TLS verification remains enabled in both paths.
+
 Production currently permits public TCP/443 egress for model access; a
-restricted model proxy is not yet available. Channels require an approved
+restricted model proxy is not yet available. Before readiness, each dedicated
+revision receives its own authentication-only egress policy. Concurrent pending
+candidates cannot replace each other's grant; stop and retirement remove the
+exact revision's policy after its Harness terminates. Channels require an approved
 literal-IP HTTP(S) proxy configured through `runtime.channels`; direct public
 channel-provider access is denied.
 
