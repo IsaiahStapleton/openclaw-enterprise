@@ -102,7 +102,8 @@ these actions can be granted to either a human Principal or an Agent-owned
 ServicePrincipal through an appropriately scoped Role and AccessBinding.
 
 Resource kinds currently include `installation`, `namespace`, `configuration`,
-`preset`, `agent`, `agent_revision`, `secret`, and `service_account`. Use the
+`preset`, `agent`, `agent_revision`, `secret`, `credential_source`, and
+`service_account`. Use the
 [permissions cheat sheet](cheatsheets/permissions.md) for the resource matrix and
 operations that require additional grants.
 
@@ -202,15 +203,22 @@ Bind it to the immutable `servicePrincipalId` returned in the Agent response:
 }
 ```
 
-The identity, Role, and target must exist in the path Namespace, except that an
-Installation-scoped human Principal can be the subject. Exact targets and Role
+The subject must be an existing human Principal or a ServicePrincipal in the
+path Namespace. A human does not need a separate Namespace ServicePrincipal.
+The Role and target must exist in the path Namespace. Exact targets and Role
 permission kinds are `namespace`, `agent`, `agent_revision`, `configuration`,
-`preset`, `secret`, or `service_account`. `namespace` supports only exact read grants, and
-its `resourceId` must match the path Namespace ID. A ServiceAccount resource is
-not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown
-permissions, and extra fields are rejected. Native IAM commits validated policy
-and its attributable audit event together; later requests on other replicas see
-it without a restart.
+`credential_source`, `preset`, `secret`, or `service_account`. `namespace`
+permissions support only `read`, and for a `namespace` target, `resourceId` must
+equal the Namespace ID in the path. A ServiceAccount
+resource is not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
+and extra fields are rejected. Native IAM commits validated policy and its
+attributable audit event together; later requests on other replicas see it
+without a restart.
+
+For human discovery, grant `read` on that exact Namespace and separately grant
+the required actions on each exact Agent. A Namespace target grants only
+Namespace actions; it does not grant access to its Agents or permission to
+create child resources. Human enrollment and grant creation are separate steps.
 
 Roles and bindings cannot be updated. Create replacements and explicitly
 remove old bindings. A referenced Role cannot be deleted (`409`), and deleting
@@ -257,7 +265,9 @@ For each protected operation, the controller:
 
 Lists are also authorized per resource. Permission to deploy an Agent does not
 automatically grant permission to read it, and permission to read one Agent
-does not expose every Agent in the Namespace.
+does not expose every Agent in the Namespace. First deployment additionally
+checks Agent `read` and `operate` if Compute must generate missing transport
+credentials.
 
 The selected IAM Driver loads current authoritative policy for each identity
 lookup and authorization decision. Account and permission changes become

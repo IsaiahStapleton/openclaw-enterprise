@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:net";
 import { randomUUID, createHash, X509Certificate } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -10,7 +11,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
-import { providerSummariesFromDefinitions } from "../../apps/controller/src/composition/installation-config.ts";
+import { backendSummariesFromDefinitions } from "../../apps/controller/src/composition/installation-config.ts";
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
@@ -21,16 +22,16 @@ import { createTestConfigurationDriver } from "./configuration-driver.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
 import { createTestKubernetesComputeDriver } from "./kubernetes-compute.mjs";
 
-export const providerFixtures = Object.freeze([
+export const backendFixtures = Object.freeze([
   Object.freeze({
     id: "openai-primary",
     type: "chatgpt",
     configuration: Object.freeze({
       workspaceId: "11111111-1111-4111-8111-111111111111",
-      apiKeyPath: "/var/run/secrets/openclaw/providers/openai-primary/api-key",
+      apiKeyPath: "/var/run/secrets/openclaw/backends/openai-primary/api-key",
       credentialTtlSeconds: 3600,
     }),
-    drivers: Object.freeze({ service_account: "chatgpt-provider-service-account" }),
+    drivers: Object.freeze({ service_account: "chatgpt-backend-service-account" }),
   }),
 ]);
 
@@ -120,23 +121,77 @@ export async function createConsoleAppFixture(t, options = {}) {
     bindings: seed.bindings.map((binding) => ({ ...binding })),
     restrictions: [],
   };
-  const auditSink = new InMemoryAuditSink();
+  // These grant-free accounts are fixture setup. Accounts added later through
+  // createAccountWithPolicy are also shareable, because State resolves identities live.
+  const provisionedAccounts = [];
+  for (const label of options.provisionedPeople ?? []) {
+    const personCredentials = {
+      email: `${label}-${randomUUID()}@example.com`,
+      password: `console-password-${randomUUID()}`,
+      name: label,
+    };
+    const person = await auth.createAccount(personCredentials);
+    const personSeed = auth.principalSeed(person, { roleId: seed.roles[0].id });
+    policy.identities.push(personSeed.principal);
+    provisionedAccounts.push({ credentials: personCredentials, principal: personSeed.principal });
+  }
+  const auditSink = options.auditSink ?? new InMemoryAuditSink();
+  const policyUnit = new AsyncLocalStorage();
+  class ConsolePlatformState extends InMemoryPlatformState {
+    transact(work) {
+      // Authorization inside a transaction reads that actual unit, without waiting on itself.
+      return super.transact((unit) => policyUnit.run(unit, () => work(unit)));
+    }
+  }
+  const platformState =
+    options.state ??
+    new ConsolePlatformState({
+      auditSink,
+      // Live lookup, so people enrolled after construction can be bound like in Postgres.
+      resolveIAMIdentity: (identityId) =>
+        policy.identities.find((identity) => identity.id === identityId),
+    });
   const iamDriver = new NativeIAMDriver(
-    { loadNativeIAMState: async () => policy },
+    {
+      async loadNativeIAMState() {
+        // The real evaluator reads Roles and bindings committed by the real policy APIs.
+        if (options.provisionedPeople === undefined) {
+          return policy;
+        }
+        const readPolicy = async (view) => {
+          const namespaces = await view.namespaces.listNamespaces();
+          const roles = [];
+          const bindings = [];
+          for (const namespace of namespaces) {
+            roles.push(...(await view.iamPolicy.listRoles(namespace.id)));
+            bindings.push(...(await view.iamPolicy.listAccessBindings(namespace.id)));
+          }
+          return { roles, bindings };
+        };
+        const unit = policyUnit.getStore();
+        const managed = await (unit ? readPolicy(unit) : platformState.read(readPolicy));
+        return {
+          ...policy,
+          roles: [...policy.roles, ...managed.roles],
+          bindings: [...policy.bindings, ...managed.bindings],
+        };
+      },
+    },
     { id: "console-native-iam" },
   );
-  const providers = options.providers ?? providerFixtures;
+  const backends = options.backends ?? backendFixtures;
   const publicOrigin = options.publicOrigin === true ? origin : options.publicOrigin;
-  const providerSummaries = Object.hasOwn(options, "providerSummaries")
-    ? options.providerSummaries
-    : providerSummariesFromDefinitions(providers);
-  const platformState = options.state ?? new InMemoryPlatformState({ auditSink });
+  const backendSummaries = Object.hasOwn(options, "backendSummaries")
+    ? options.backendSummaries
+    : backendSummariesFromDefinitions(backends);
   const secretDriver = Object.hasOwn(options, "secretDriver")
     ? options.secretDriver
     : createTestSecretDriver({ id: "console-secret" });
   let controller;
   const appOptions = {
     metrics: options.metrics,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    workspaceFilesAccess: options.workspaceFilesAccess,
     auth,
     iamDriver,
     auditSink,
@@ -160,33 +215,36 @@ export async function createConsoleAppFixture(t, options = {}) {
       controller = new OpenClawController(installation, {
         state: platformState,
         recordOperations: options.recordOperations ?? false,
-        providers,
+        backends,
         defaultPresets: options.defaultPresets ?? [],
       });
-      const modelProviders = providers.filter((provider) => provider.type === "chatgpt");
-      if (modelProviders.length > 0) {
-        const unexpectedProviderCall = async () =>
-          assert.fail("Console read tests must not call Provider clients or provision accounts.");
-        for (const provider of modelProviders) {
+      const modelBackends = backends.filter((backend) => backend.type === "chatgpt");
+      if (modelBackends.length > 0) {
+        const unexpectedBackendCall = async () =>
+          assert.fail("Console read tests must not call Backend clients or provision accounts.");
+        for (const backend of modelBackends) {
           controller.registerDriver({
-            id: provider.drivers.service_account,
+            id: backend.drivers.service_account,
             capability: "service_account",
-            implementation: "provider-read-test",
-            providerId: provider.id,
-            create: unexpectedProviderCall,
-            createCredential: unexpectedProviderCall,
-            delete: unexpectedProviderCall,
+            implementation: "backend-read-test",
+            backendId: backend.id,
+            create: unexpectedBackendCall,
+            createCredential: unexpectedBackendCall,
+            delete: unexpectedBackendCall,
           });
         }
-        controller.selectDriver("service_account", modelProviders[0].drivers.service_account);
+        controller.selectDriver("service_account", modelBackends[0].drivers.service_account);
       }
       return controller;
     },
   };
-  if (providerSummaries !== undefined) {
-    appOptions.providerSummaries = providerSummaries;
+  if (backendSummaries !== undefined) {
+    appOptions.backendSummaries = backendSummaries;
   }
   const app = createFastifyApp(appOptions);
+  if (options.onSend) {
+    app.addHook("onSend", options.onSend);
+  }
   await app.listen({ host: "127.0.0.1", port });
   const cleanupBeforeAppClose = [];
   let appClosed = false;
@@ -340,7 +398,7 @@ export async function createConsoleAppFixture(t, options = {}) {
       headers: session === null ? headers : authenticatedHeaders(session, headers),
       body,
     });
-    const payload = parseJson(result);
+    const payload = result.response.status === 204 ? {} : parseJson(result);
     return {
       status: result.response.status,
       headers: result.response.headers,
@@ -422,7 +480,7 @@ export async function createConsoleAppFixture(t, options = {}) {
       body: {
         name,
         configurationId: configuration.id,
-        ...(options.providerId === undefined ? {} : { providerId: options.providerId }),
+        ...(options.backendId === undefined ? {} : { backendId: options.backendId }),
         harnessAuth,
         ...(options.executionMode === undefined ? {} : { executionMode: options.executionMode }),
       },
@@ -512,6 +570,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     browserArgs,
     credentials,
     memoryDatabase,
+    provisionedAccounts,
     policy,
     rawRequest,
     request,

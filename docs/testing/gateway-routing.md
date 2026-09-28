@@ -82,6 +82,14 @@ and verifies certificate renewal without restarting OCC.
 The ordinary [native-runtime suite](kubernetes.md#kubernetes-model-turns-and-secrets) leaves this additional routing case unselected. The earlier Docker manual-proxy proof has been removed because
 Docker does not implement automatic private Agent routes.
 
+## Native Gateway sharing
+
+Prepare `gateway-routing`, then run `native-admin-k3d-real.test.mjs`. Its embedded sharing case checks
+human cookies, exact Agent grants, denied sibling/Configuration access, the
+Console launcher and installed model turns. Removing one binding must close that
+person's WebSockets within 30 seconds while another continues.
+This does not qualify account enrollment, per-chat authority, Git or OpenShell.
+
 ## Related
 
 - [Kubernetes tests](kubernetes.md).

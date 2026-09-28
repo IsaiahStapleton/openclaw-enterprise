@@ -1,14 +1,15 @@
 export function createApiClient({ lifetime, hasSession, onExpired }) {
-  async function request(
-    path,
-    { method = "GET", body, signal = lifetime.signal, expectedStatus } = {},
-  ) {
+  async function request(path, { method = "GET", body, signal, expectedStatus } = {}) {
     const active = lifetime.capture();
     const response = await fetch(path, {
       method,
       credentials: "same-origin",
       cache: "no-store",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+      signal: AbortSignal.any([
+        lifetime.signal,
+        ...(signal ? [signal] : []),
+        AbortSignal.timeout(15_000),
+      ]),
       ...(body === undefined
         ? {}
         : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
@@ -16,6 +17,9 @@ export function createApiClient({ lifetime, hasSession, onExpired }) {
     // Expiry invalidates the whole view, including other reads or saves still pending.
     if (response.status === 401 && hasSession() && lifetime.isCurrent(active)) {
       onExpired();
+    }
+    if (response.status === 204 && response.ok) {
+      return undefined;
     }
     let payload;
     try {
