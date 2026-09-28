@@ -16,6 +16,15 @@ Before either kind of release, complete the
 [upgrade migration checklist](upgrade-checklist.md) so persisted control-plane,
 Driver, runtime, and cluster-owned state has an explicit disposition.
 
+The helper does not apply intentional non-image changes to Helm values or
+Installation configuration. A release that needs such changes depends on a
+separate reviewed configuration-update workflow and a release-specific order
+compatible with both images. Start the image helper only when its protected
+files match the live configuration. If the changes cannot be applied safely
+before the image upgrade, or no supported workflow exists, stop until a reviewed
+coordinated procedure is available; do not pass intended changes as drift to the
+image helper.
+
 The command supports the production Helm and Kubernetes Compute path. It does
 not build images, create backups, provision infrastructure, or prove model and
 external integration behavior.
