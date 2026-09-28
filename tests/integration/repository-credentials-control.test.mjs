@@ -345,6 +345,11 @@ test(
       upstreamOrigins: [github.origin],
     });
     assert.equal((await lstat(config.gateway.controlSocket)).mode & 0o777, 0o600);
+    // Standalone services do not implement registry-backed durable admission.
+    assert.equal(
+      (await control(config.gateway.controlSocket, "GET", "/v1/capabilities")).status,
+      404,
+    );
     const opened = await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
       durationSeconds: 86400,
     });
@@ -810,6 +815,13 @@ test(
       status: 200,
       body: { ready: true, protocolVersion: 1 },
     });
+    assert.deepEqual(
+      await control(fixture.config.gateway.controlSocket, "GET", "/v1/capabilities"),
+      {
+        status: 200,
+        body: { durableAdmissionVersion: 1 },
+      },
+    );
     assert.equal((await send({ durationSeconds: 600, profile: "git-full" })).status, 400);
     for (const field of [
       "namespaceId",

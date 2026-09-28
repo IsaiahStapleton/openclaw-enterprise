@@ -44,6 +44,35 @@ and fencing across service restart. The `postgres-restart-recovery.test.mjs` and
 retries and session-only repair.
 These checks do not prove a running Kubernetes Pod or a model turn.
 
+## Controller and broker image compatibility probe
+
+Use this probe only with a disposable broker configured with a synthetic registry,
+synthetic TLS and App material, and an isolated receipt socket fixture. Never
+point it at a live broker or production receipt listener. The controller image
+contains the entrypoint `/app/apps/controller/src/drivers/repo/github/credentials/admission-probe.mjs`.
+Run it as `node <entrypoint> <control-socket> <mode> <admission-id>`, once for
+`recover` and once for `reserve`. Use distinct, fresh IDs formatted as a
+13-digit wall-clock millisecond timestamp, a hyphen, and a lowercase UUIDv4.
+
+The probe calls the image's actual GitHub Repo Driver with a fixed synthetic
+binding and a two-second deadline. Exit 0 returns one JSON object containing
+`version: 1`, the `mode`, `admissionId`, `outcome`, and normalized `input`.
+Recovery succeeds only with `outcome: "missing"`; reservation succeeds only
+with `outcome: "unavailable"`. Exit 1 prints a generic error to stderr. No bearer
+or provider authority is printed. Missing entrypoints, invalid requests and
+unsupported broker capability fail the probe. A reserve timeout can produce an
+unavailable outcome and therefore cannot qualify the pair without the matching
+receipt observation.
+
+The receipt fixture must independently record each broker request and match its
+kind, admission ID, and normalized input to the report. It must respond to the
+matching `recover` request with HTTP 200 and `{"kind":"missing"}`, and reject
+the matching `reserve` request with HTTP 503 without acknowledging a reservation.
+Require both reports and both observations. An unavailable outcome by itself is
+ambiguous: it can also mean the broker or receipt listener was unreachable.
+Synthetic missing proves the wire exchange, not session absence, disposal, or
+PostgreSQL durability. The fixture must not create sessions or contact a provider.
+
 ## Exercise the controlled platform path
 
 Use the `repository-credentials-platform` CI lane for the complete prepared

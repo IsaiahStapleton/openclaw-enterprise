@@ -71,6 +71,8 @@ export interface RepoDriver extends Driver {
   readonly maintenanceIntervalMs: number;
   /** This Driver fences admission and retains confirmed terminal evidence durably. */
   readonly durableBrokerReceipts?: true;
+  /** Check whether fresh credential admission is currently supported. */
+  checkAdmissionReady?(signal: AbortSignal): Promise<void>;
   listOptions(input: { readonly namespaceId: string }): readonly RepositoryOption[];
   resolve(input: {
     readonly namespaceId: string;

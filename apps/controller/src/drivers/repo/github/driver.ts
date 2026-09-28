@@ -189,6 +189,10 @@ export class GitHubRepoDriver implements RepoDriver {
     }
   }
 
+  async checkAdmissionReady(signal: AbortSignal): Promise<void> {
+    await this.control(() => this.#client.checkAdmissionReady(signal));
+  }
+
   async open(
     input: OpenRepositorySessionInput,
     signal: AbortSignal,

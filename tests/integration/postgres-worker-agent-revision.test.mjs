@@ -546,6 +546,167 @@ test(
 );
 
 test(
+  "worker readiness remains available when repository credentials are disabled",
+  requiresPostgres,
+  async (context) => {
+    let healthy = false;
+    const fixture = await setup(context, {
+      onHealthy: async () => {
+        healthy = true;
+      },
+    });
+    const owner = await fixture.agent("no-repository-capability");
+    const candidate = await fixture.revision(owner, 1);
+    await fixture.start(fixture.compute);
+    await fixture.work(candidate, "succeeded");
+    await waitFor("repository-disabled worker readiness", async () => (healthy ? true : undefined));
+  },
+);
+
+test(
+  "worker readiness and fresh Agent admission require the broker capability",
+  { ...requiresPostgres, timeout: 30_000 },
+  async (context) => {
+    let healthy = 0;
+    const fixture = await setup(context, {
+      onHealthy: async () => {
+        healthy += 1;
+      },
+    });
+    const [
+      { GitHubRepoDriver },
+      { UnixRepositoryCredentialControlClient },
+      { startRegistryCredentialServiceFixture },
+      { startRepositoryReceiptServer },
+      { startControlResponseRelay },
+      { createResourceScope },
+      { createServer },
+      { dirname },
+    ] = await Promise.all([
+      import("../../apps/controller/src/drivers/repo/github/driver.ts"),
+      import("../../apps/controller/src/backends/repository-credentials/control-client.ts"),
+      import("../fixtures/repository-credentials/registry.mjs"),
+      import("../../apps/controller/src/backends/repository-credentials/receipt-server.ts"),
+      import("../fixtures/repository-credentials/control-relay.mjs"),
+      import("../fixtures/repository-credentials/resources.mjs"),
+      import("node:net"),
+      import("node:path"),
+    ]);
+    const reservation = createServer();
+    await new Promise((resolve, reject) => {
+      reservation.once("error", reject);
+      reservation.listen(0, "127.0.0.1", resolve);
+    });
+    const port = reservation.address().port;
+    await new Promise((resolve) => reservation.close(resolve));
+    const credentials = await startRegistryCredentialServiceFixture(context, {
+      namespaceId: fixture.namespace.id,
+      autoOpen: false,
+      clock: { ...createControlledClock(), wallNow: Date.now },
+      gateway: { listen: `127.0.0.1:${port}` },
+    });
+    const scope = createResourceScope();
+    context.after(() => scope.close());
+    const relay = await startControlResponseRelay(scope, {
+      directory: dirname(credentials.config.gateway.controlSocket),
+      target: credentials.config.gateway.controlSocket,
+    });
+    // Simulate the old broker's 404 while all other traffic still reaches the real service.
+    relay.setCapabilitiesHidden(true);
+    const driver = new GitHubRepoDriver(
+      {
+        id: credentials.backendId,
+        client: new UnixRepositoryCredentialControlClient({ controlSocket: relay.socketPath }),
+        drivers: { repo: "repository-credentials" },
+      },
+      credentials.registry,
+      { sessionDurationSeconds: 60, publicCa: credentials.tls.ca },
+    );
+    const receiptServer = await startRepositoryReceiptServer({
+      state: fixture.state,
+      controlSocket: credentials.config.gateway.controlSocket,
+      driverId: driver.id,
+      implementation: driver.implementation,
+      backendId: credentials.backendId,
+    });
+    context.after(() => receiptServer.close());
+    const resolution = driver.resolve({
+      namespaceId: fixture.namespace.id,
+      bindings: [{ repositoryRef: "repo-a", profile: "git-read" }],
+    });
+    const owner = await fixture.agent("repository-capability");
+    const selection = {
+      driver: { id: driver.id, implementation: driver.implementation },
+      deadlineWallMs: Date.now() + 120_000,
+      bindings: resolution.bindings,
+    };
+    const incompatible = await fixture.revision(owner, 1, undefined, selection);
+    await fixture.start(
+      {
+        ...fixture.compute,
+        validateRepositoryCredentials() {},
+      },
+      () => {},
+      undefined,
+      undefined,
+      fixture.workerPool,
+      (drivers) => ({ ...drivers, repoDriver: driver }),
+    );
+    await fixture.work(incompatible, "failed_permanent");
+    assert.equal(healthy, 0);
+    assert.deepEqual(await repositoryAttempts(fixture, incompatible), []);
+    assert.ok(credentials.repositories.every(({ github }) => github.issuesOfTokens.length === 0));
+    // Restoring the real capability permits an explicit new revision.
+    relay.setCapabilitiesHidden(false);
+    await waitFor("worker readiness after compatible broker selection", async () =>
+      healthy > 0 ? true : undefined,
+    );
+    const open = driver.open.bind(driver);
+    let lostSessionId;
+    driver.open = async (input, signal) => {
+      const result = await open(input, signal);
+      if (lostSessionId === undefined && result.kind === "created") {
+        lostSessionId = result.session.sessionId;
+        // The response is lost after the broker creates a session, then the
+        // capability disappears before recovery gets another worker claim.
+        relay.setCapabilitiesHidden(true);
+        throw new Error("repository admission response lost after creation");
+      }
+      return result;
+    };
+    const uncertain = await fixture.revision(owner, 2, undefined, selection);
+    await fixture.work(uncertain, "failed_permanent");
+    assert.ok(lostSessionId);
+    assert.equal(
+      (await repositoryAttempts(fixture, uncertain)).find(
+        ({ sessionId }) => sessionId === lostSessionId,
+      )?.phase,
+      "disposed",
+    );
+    assert.equal((await repositoryAttempts(fixture, uncertain)).length, 1);
+    // Recovery and disposal ran while capability was absent; fresh material
+    // requires restoring it and explicitly admitting another revision.
+    relay.setCapabilitiesHidden(false);
+    const compatible = await fixture.revision(owner, 3, undefined, selection);
+    await fixture.work(compatible, "succeeded");
+    assert.equal(
+      (await repositoryAttempts(fixture, compatible)).filter(({ phase }) => phase === "open")
+        .length,
+      1,
+    );
+    // Losing the capability again must not gate the real stop and cleanup paths.
+    relay.setCapabilitiesHidden(true);
+    const stop = await fixture.requestStop(owner);
+    await fixture.work(stop, "succeeded");
+    await waitFor("repository cleanup despite the missing capability", async () =>
+      (await repositoryAttempts(fixture, compatible)).every(({ phase }) => phase === "disposed")
+        ? true
+        : undefined,
+    );
+  },
+);
+
+test(
   "worker revalidates admitted repository selections through the concrete GitHub Driver and Unix control",
   { ...requiresPostgres, timeout: 30_000 },
   async (context) => {

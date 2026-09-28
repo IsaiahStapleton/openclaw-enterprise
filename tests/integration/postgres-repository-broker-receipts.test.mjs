@@ -470,6 +470,10 @@ test(
             await listener.close();
           }
         });
+        const control = new UnixRepositoryCredentialControlClient({
+          controlSocket: fixture.config.gateway.controlSocket,
+        });
+        await control.checkAdmissionReady(AbortSignal.timeout(2000));
         const opened = await fixture.open(admissionId, false, true);
         assert.equal(opened.session.state, "OPEN");
         assert.equal((await fixture.request(opened)).status, 200);
@@ -495,6 +499,13 @@ test(
           // No acknowledgment can be obtained after the worker listener is lost.
           await listener.close();
           listenerOpen = false;
+          // Capability identifies the protocol, not current journal availability.
+          // A later admission cannot return a bearer without a reservation.
+          await control.checkAdmissionReady(AbortSignal.timeout(2000));
+          assert.deepEqual(await fixture.open(fixture.admissionId(), false, true), {
+            error: "unavailable",
+          });
+          assert.equal(fixture.github.tokenState().length, 1);
           await fixture.shutdown(1);
           const receipt = await state.read((view) =>
             view.repositorySessions.findBrokerReceipt(admissionId),

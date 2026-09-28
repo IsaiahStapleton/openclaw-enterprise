@@ -58,6 +58,8 @@ whole-program dataflow analysis, prove that allowed owners handle secrets
 correctly, or sandbox malicious code. It does not replace capability design,
 runtime isolation, or the controlled and live tests below.
 
+For image-pair verification, use the [controller and broker compatibility probe](repository-credentials-platform.md#controller-and-broker-image-compatibility-probe).
+
 ## Run controlled tests
 
 ```sh

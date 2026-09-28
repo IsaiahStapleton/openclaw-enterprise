@@ -99,6 +99,10 @@ const reviewedImports = {
   "drivers/repo/github/driver.ts": {
     "@openclaw-enterprise/occ": ["DependencyUnavailableError", "ScopeViolationError"],
   },
+  // The isolated image probe reports only a synthetic binding and failure kind.
+  "drivers/repo/github/credentials/admission-probe.mjs": {
+    "@openclaw-enterprise/occ": ["DependencyUnavailableError"],
+  },
   // The broker journal client writes only nonsecret receipts over a local Unix socket.
   "drivers/repo/credentials/control.ts": { "node:crypto": ["randomUUID"] },
   "drivers/repo/credentials/receipt-client.ts": { "node:http": ["request"] },
@@ -144,6 +148,9 @@ const senderConsumers = {
   "backends/repository-credentials/control-client.ts": {
     "composition/repository-credentials/platform.ts": ["UnixRepositoryCredentialControlClient"],
     "drivers/repo/github/driver.ts": ["RepositoryCredentialControlError"],
+    "drivers/repo/github/credentials/admission-probe.mjs": [
+      "UnixRepositoryCredentialControlClient",
+    ],
   },
 };
 const rawGlobals = new Set([
@@ -195,6 +202,7 @@ const reviewedProcessMembers = {
   ],
   "drivers/repo/github/credentials/client/router.ts": ["argv", "env", "exitCode", "stderr"],
   "drivers/repo/github/credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "drivers/repo/github/credentials/admission-probe.mjs": ["argv", "exitCode", "stderr", "stdout"],
   "drivers/repo/github/credentials/client/private-files.ts": ["getuid"],
   "composition/repository-credentials/protected-file.ts": ["getuid"],
   "composition/repository-credentials/service.ts": ["exit", "once", "stderr", "stdout"],

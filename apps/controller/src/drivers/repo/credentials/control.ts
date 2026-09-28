@@ -232,6 +232,7 @@ export function createControlAdmission(
     return running.finally(() => operations.delete(id));
   };
   return {
+    durableAdmission: journal !== undefined,
     open,
     status: readStatus,
     async close(sessionId: string) {
@@ -317,11 +318,13 @@ export async function handleControl(
   }
   const open = head.method === "POST" && head.rawTarget === "/v1/sessions";
   const health = head.method === "GET" && head.rawTarget === "/healthz";
+  const capabilities = head.method === "GET" && head.rawTarget === "/v1/capabilities";
   const status = /^\/v1\/sessions\/([A-Za-z0-9_-]{1,128})$/.exec(head.rawTarget);
   const close = /^\/v1\/sessions\/([A-Za-z0-9_-]{1,128})\/close$/.exec(head.rawTarget);
   if (
     !open &&
     !health &&
+    !capabilities &&
     !(head.method === "GET" && status) &&
     !(head.method === "POST" && close)
   ) {
@@ -383,6 +386,14 @@ export async function handleControl(
       }
       if (health) {
         reply(response, 200, { ready: true, protocolVersion: 1 });
+        return;
+      }
+      if (capabilities) {
+        if (!admissions.durableAdmission) {
+          reply(response, 404, { error: "not-found" });
+        } else {
+          reply(response, 200, { durableAdmissionVersion: 1 });
+        }
         return;
       }
       const id = (status ?? close)![1]!;

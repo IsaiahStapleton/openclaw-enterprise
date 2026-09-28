@@ -16,30 +16,29 @@ Slack tokens stay in the gateway. Repository profiles and model authentication
 are independent. [Kubernetes policies](drivers/kubernetes-compute/networking-and-isolation.md#networking)
 allow consumer access to the credential sidecar.
 
-For repository-bound Codex consumers, Compute configures stock Codex with the
-exact broker hostname allowed, `allow_local_binding = true`, and `mode = "full"`.
-This permits local binding, disables Codex's additional private-address guard,
-and allows every HTTP method at otherwise allowed destinations. Explicit denies,
-Kubernetes NetworkPolicy, TLS verification, and broker repository authorization
-still apply. Unbound Agents retain their existing policy. See the
+For repository-bound Codex consumers, Compute permits the exact broker hostname
+with `allow_local_binding = true` and `mode = "full"`. This disables Codex's
+additional private-address guard and permits every HTTP method at otherwise
+allowed destinations. Explicit denies, NetworkPolicy, TLS and broker authorization
+still apply. Unbound Agents retain their policy; see the
 [networking contract](drivers/kubernetes-compute/networking-and-isolation.md#networking).
 
-Trusted startup loads protected configuration into the separate service process;
-backend construction and sender callbacks remain private. Session controls are
-`open`, `status`, `close`, and `shutdown`. Separate service and Git/gh artifacts
-keep signing and service modules out of the client. `SIGTERM` or `SIGINT` starts
-bounded cleanup and disposal.
+The separate service owns protected configuration and private sender callbacks.
+Its controls are `open`, `status`, `close`, and `shutdown`. Separate Git/gh artifacts
+exclude signing and service modules. `SIGTERM` and `SIGINT` start bounded cleanup.
 
 ## Repo Driver contract
 
 The optional `repo` capability uses `RepoDriver extends Driver`, with the bundled
 `GitHubRepoDriver`. Trusted Installation `drivers.repo` and GitHub Backend
 `drivers.repo` select the same configured Driver ID. The
-[shared contract](../../packages/contracts/src/repo.ts) exposes five operations:
+[shared contract](../../packages/contracts/src/repo.ts) exposes these operations:
 
 - `listOptions` returns Namespace-approved opaque references, display names and
   profiles.
 - `resolve` checks Namespace policy and returns admitted bindings and duration.
+- `checkAdmissionReady`, when provided, verifies that fresh admissions can be
+  attempted; unavailable dependencies block new attempts and worker readiness.
 - `open` returns `created` with private runtime files, `recovered` with status
   only, or `missing`. `recoverOnly` cannot create authority.
 - `status` returns the current observation or authoritative absence.
@@ -65,12 +64,11 @@ inventory and `invalidated` attempts retain cleanup Work and the deleting Agent.
 Deadlines do not settle provider cleanup. Evidence pruning and durable token
 recovery are unimplemented.
 
-Worker restart can retain surviving sessions and Compute material. A broker may
-recover an exact `DISPOSED` observation committed by the original broker before
-it exited. Active or uncertain sessions lost before that commit remain unknown;
-missing exposed sessions fail the revision and retain cleanup. Closing sessions
-block replacement until disposal. Users may deploy a new authorized revision;
-this neither settles old cleanup nor replays Git/API mutations.
+Worker restart can retain surviving sessions and Compute material. A broker can
+recover the original broker's committed `DISPOSED` observation; active or uncertain
+sessions without one remain unknown. Missing exposed sessions fail the revision
+and retain cleanup; closing sessions block replacement until disposal. A new
+authorized revision neither settles old cleanup nor replays Git/API mutations.
 
 ## Configuration
 
@@ -107,12 +105,10 @@ canonicalized to lowercase. The registry admits at most 128 repositories, 128
 Namespace policies per repository and 4,096 policies overall. References, numeric
 repository IDs and canonical names must be unique.
 
-The resolved grant fingerprint covers provider/App/installation identity,
-repository identity, maximum duration, Namespace, its complete allowed-profile
-set, optional push-ref policy, selected profile and exact permission contract.
-The service independently resolves and compares
-that fingerprint before admission. A changed policy cannot preserve an older
-grant merely by keeping the same reference.
+The grant fingerprint covers provider, App, installation, repository, maximum
+duration, Namespace, allowed profiles, optional push-ref policy, selected profile
+and permission contract. The service independently compares it before admission;
+a retained reference cannot preserve a grant after policy changes.
 
 Each Namespace policy may set an optional
 [`pushRefAllowlist`](repository-credentials/push-ref-guardrail.md) to prevent
@@ -220,6 +216,7 @@ The trusted worker or local operator uses HTTP over a private mode-0600 Unix soc
 
 | Request                                                           | Response                                                    |
 | ----------------------------------------------------------------- | ----------------------------------------------------------- |
+| `GET /v1/capabilities`                                            | Durable admission version for the registry-backed service   |
 | `POST /v1/sessions` with `durationSeconds` and optional `profile` | Private status, client configuration and bearer once        |
 | `GET /v1/sessions/{id}`                                           | Private session and cleanup status                          |
 | `POST /v1/sessions/{id}/close`                                    | Immediate local closure status; cleanup reported separately |
@@ -235,6 +232,11 @@ status only. Conflicts fail. Follow
 [lost-response recovery](../guides/repository-credentials.md#recover-an-admission)
 before explicitly requesting replacement material.
 
+Registry-backed brokers advertise `durableAdmissionVersion: 1` privately. The
+worker checks it before new attempts and readiness; an unavailable or older broker
+blocks both. This does not prove journal availability, absence or disposal.
+Recovery, closure and runtime retirement do not depend on the check.
+
 Platform admission binds `namespaceId`, `repositoryRef`, normalized `profile`,
 `expectedBinding` and `deadlineWallMs` to the persisted attempt. The worker's
 private receipt socket commits a reservation before the broker releases a bearer.
@@ -245,14 +247,14 @@ credentials and remain with attempt history. Journal failure prevents new bound
 admission and cannot establish absence or disposal.
 
 Unseen IDs must be less than 60 seconds old and never future-dated. Process-local
-correlations are bounded to twice the session limit and can return `overloaded`.
-Existing correlations survive that window while cleanup remains unresolved.
-Standalone correlations do not survive service restart; no correlation recovers a bearer.
+correlations are bounded to twice the session limit and can return `overloaded`;
+unresolved cleanup survives that window. Standalone correlations do not survive
+restart. No correlation recovers a bearer.
 
-Session duration is independent of token lifetime. On-demand replacement uses
-the original grant and requires validity through the remaining exchange budget
-plus safety margin. Idle sessions need no periodic mint. The original bearer
-works throughout the session while its process and upstream authorization survive.
+Session duration is independent of token lifetime. Replacement uses the original
+grant and must cover the remaining exchange budget plus safety margin. Idle
+sessions need no periodic mint. The bearer works while its session process and
+upstream authorization survive.
 
 Authentication eligibility and terminal cleanup expiry are separate deadlines.
 Both use elapsed monotonic time from the original capture; delayed acquisition
@@ -320,11 +322,10 @@ bearer; gateway closure can deny use earlier. Local commands continue after
 expiry or with stale pins because they do not consult the helper. Generation
 pinning does not promise a command-wide snapshot across arbitrary subprocesses.
 
-Native user configuration can override these defaults, and caller-added helpers
-or credential stores can retain credentials. The feature installs no cache/store
-helper; its `store` and `erase` operations are inert. There is no whole-command
-preflight across multi-request commands. An uncertain mutation is never retried
-by the client to obtain a successful result.
+Native configuration can override these defaults, and additional helpers or
+stores can retain credentials. The installed helper's `store` and `erase` are
+inert. There is no whole-command preflight, and the client never retries an
+uncertain mutation to obtain success.
 
 The API launcher requires GitHub CLI **2.100.0**, `GH_HOST=github.com`, a gateway
 hostname with verified TLS, and HTTPS port 443. Its private `hosts.yml` uses the

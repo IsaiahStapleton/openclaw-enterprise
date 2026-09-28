@@ -509,7 +509,8 @@ export class ControllerWorker {
         typeof driver.resolve !== "function" ||
         typeof driver.open !== "function" ||
         typeof driver.status !== "function" ||
-        typeof driver.close !== "function"
+        typeof driver.close !== "function" ||
+        (driver.durableBrokerReceipts === true && typeof driver.checkAdmissionReady !== "function")
       ) {
         throw new Error("The selected repository credential Driver is unavailable.");
       }
@@ -658,6 +659,7 @@ export class ControllerWorker {
     this.lastHealthAt = now;
     this.pendingHealth = (async () => {
       const pending = await this.queue.pending();
+      await this.repoDriver?.checkAdmissionReady?.(AbortSignal.timeout(2000));
       await this.onHealthy?.();
       this.emit({ event: "worker.health", status: "ready", pending });
     })()

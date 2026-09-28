@@ -11,6 +11,7 @@ export async function startControlResponseRelay(scope, { directory, target }) {
   const sockets = new Set();
   const requests = new Set();
   let armed;
+  let hideCapabilities = false;
   const server = createServer((incoming, outgoing) => {
     const upstream = request(
       {
@@ -35,6 +36,15 @@ export async function startControlResponseRelay(scope, { directory, target }) {
         response.on("error", () => outgoing.destroy());
         response.on("end", () => {
           const body = Buffer.concat(chunks);
+          if (
+            hideCapabilities &&
+            incoming.method === "GET" &&
+            incoming.url === "/v1/capabilities"
+          ) {
+            outgoing.writeHead(404, { "content-type": "application/json" });
+            outgoing.end('{"error":"not-found"}');
+            return;
+          }
           const forward = () => {
             if (outgoing.destroyed) {
               return;
@@ -104,6 +114,9 @@ export async function startControlResponseRelay(scope, { directory, target }) {
   await chmod(socketPath, 0o600);
   return {
     socketPath,
+    setCapabilitiesHidden(hidden) {
+      hideCapabilities = hidden;
+    },
     holdCreatedResponse(ordinal = 1) {
       assert.equal(armed, undefined, "only one control response fault may be armed");
       assert.ok(Number.isInteger(ordinal) && ordinal > 0);
