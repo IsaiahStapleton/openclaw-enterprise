@@ -17,6 +17,7 @@ import { createTestConfigurationDriver } from "../helpers/configuration-driver.m
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
+import { createOccLogger } from "../../apps/controller/src/logging.ts";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const email = "github-recovery@example.test";
@@ -746,6 +747,151 @@ test(
         })
       ).statusCode,
       403,
+    );
+    // Recovery replacement: read, guarded move, seed-only startup, and move back.
+    async function readRecovery(requestHeaders) {
+      const result = await app.inject({ url: "/api/auth/recovery", headers: requestHeaders });
+      assert.equal(result.statusCode, 200, result.body);
+      assert.equal(result.headers["cache-control"], "no-store");
+      return result.json().data;
+    }
+    async function replaceRecovery(body, requestHeaders = adminHeaders) {
+      return app.inject({
+        method: "POST",
+        url: "/api/auth/recovery",
+        headers: requestHeaders,
+        payload: body,
+      });
+    }
+    assert.equal((await readRecovery(adminHeaders)).userId, recovery);
+    assert.equal(
+      (await app.inject({ url: "/api/auth/recovery", headers: { cookie: browserCookies } }))
+        .statusCode,
+      403,
+      "a trusted Origin is required",
+    );
+    assert.equal(
+      (
+        await app.inject({
+          url: "/api/auth/recovery",
+          headers: { "x-api-key": serviceKey, origin },
+        })
+      ).statusCode,
+      403,
+    );
+    const enrolled = await app.inject({
+      method: "POST",
+      url: `/api/auth/accounts/${limited.id}/enrol`,
+      headers: adminHeaders,
+    });
+    assert.equal(enrolled.statusCode, 200, enrolled.body);
+    assert.equal(enrolled.json().data.created, false);
+    const unprovisioned = (
+      await pool.query(
+        `INSERT INTO occ."user" (id, name, email, email_verified, created_at, updated_at)
+         VALUES ('unprovisioned-recovery-target', 'Unprovisioned', 'unprovisioned@example.test', true, now(), now())
+         RETURNING id`,
+      )
+    ).rows[0].id;
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/auth/accounts/${unprovisioned}/enrol`,
+          headers: adminHeaders,
+        })
+      ).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await replaceRecovery({
+          userId: unprovisioned,
+          expectedCurrentUserId: recovery,
+          expectedVersion: 1,
+        })
+      ).statusCode,
+      404,
+    );
+    await pool.query('DELETE FROM occ."user" WHERE id = $1', [unprovisioned]);
+    const limitedVersion = (await readAccount(limited.id, adminHeaders)).version;
+    assert.equal(
+      (
+        await replaceRecovery({
+          userId: limited.id,
+          expectedCurrentUserId: limited.id,
+          expectedVersion: limitedVersion,
+        })
+      ).statusCode,
+      409,
+    );
+    assert.equal(
+      (
+        await replaceRecovery({
+          userId: limited.id,
+          expectedCurrentUserId: recovery,
+          expectedVersion: limitedVersion + 1,
+        })
+      ).statusCode,
+      409,
+    );
+    assert.equal(
+      (
+        await replaceRecovery(
+          { userId: limited.id, expectedCurrentUserId: recovery, expectedVersion: limitedVersion },
+          { cookie: browserCookies },
+        )
+      ).statusCode,
+      403,
+    );
+    const replaced = await replaceRecovery({
+      userId: limited.id,
+      expectedCurrentUserId: recovery,
+      expectedVersion: limitedVersion,
+    });
+    assert.equal(replaced.statusCode, 200, replaced.body);
+    assert.equal(replaced.json().data.userId, limited.id);
+    assert.equal(replaced.json().data.changed, true);
+    assert.equal((await readRecovery(adminHeaders)).userId, limited.id);
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/auth/accounts/${limited.id}/disable`,
+          headers: adminHeaders,
+          payload: { expectedVersion: limitedVersion },
+        })
+      ).statusCode,
+      404,
+      "the new recovery account cannot be disabled",
+    );
+    // The environment recovery id now only seeds first activation: a controller
+    // started with the previous id keeps the recorded designation and warns.
+    const logLines = [];
+    const seeded = await composePostgresDevelopment(
+      {
+        ...config,
+        logger: createOccLogger({
+          component: "controller",
+          destination: { write: (line) => logLines.push(line) },
+        }),
+      },
+      drivers(),
+    );
+    await seeded.close();
+    assert.ok(logLines.some((line) => line.includes("authentication.recovery-seed-warning")));
+    assert.equal((await readRecovery(adminHeaders)).userId, limited.id);
+    const restored = await replaceRecovery({
+      userId: recovery,
+      expectedCurrentUserId: limited.id,
+      expectedVersion: (await readAccount(recovery, adminHeaders)).version,
+    });
+    assert.equal(restored.statusCode, 200, restored.body);
+    assert.equal((await readRecovery(adminHeaders)).userId, recovery);
+    const audits = await state.transact((unit) => unit.audit.list());
+    assert.equal(
+      audits.filter((event) => event.action === "authentication.recovery.replace").length,
+      2,
     );
     assert.equal(
       (

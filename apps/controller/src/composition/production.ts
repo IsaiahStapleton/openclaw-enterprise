@@ -103,6 +103,9 @@ export async function composeProduction(config: ProductionConfig) {
       state,
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.logger === undefined
+        ? {}
+        : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
     });
     const provisionAuthAccount = async (seed: AuthPrincipalSeed, auditEvent: AuditEvent) => {
       const current = await state.loadNativeIAMState(persistedInstallation.id);

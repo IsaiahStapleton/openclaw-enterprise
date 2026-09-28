@@ -164,8 +164,11 @@ designate a usable password administrator, and invalidate legacy sessions.
 Start one compatible controller and verify recovery before reopening ingress.
 Rolling upgrades and rollback to old binaries are unsupported.
 
-The recovery designation is fixed. Its account cannot be disabled through this
-API, and its password and Installation permission must remain available.
+An Installation administrator can move the recovery designation to another
+enrolled, enabled administrator with one password; it is never removed, and the
+startup variable then only seeds first activation. The designated account cannot
+be disabled through this API, and its password and Installation permission must
+remain available.
 Out-of-band database or policy changes can still destroy recovery.
 
 An installation that has never enabled GitHub retains its existing password and

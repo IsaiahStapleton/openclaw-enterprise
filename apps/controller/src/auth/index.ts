@@ -18,6 +18,7 @@ import {
 import {
   PostgresHumanAuthentication,
   type HumanAuthenticationActor,
+  type HumanAuthenticationRecovery,
   type HumanAuthenticationAccount,
   type PostgresPool,
   type PostgresPlatformState,
@@ -75,6 +76,8 @@ export interface PostgresControllerAuthOptions extends Omit<
   readonly state?: PostgresPlatformState;
   readonly iamDriver?: IAMDriver;
   readonly github?: GitHubLoginConfiguration;
+  /** Receives nonfatal startup conditions as structured log events. */
+  readonly onWarning?: (event: { readonly event: string; readonly message: string }) => void;
 }
 
 export interface AuthenticatedAccount {
@@ -122,6 +125,18 @@ export interface ControllerAuth {
     actor: HumanAuthenticationActor,
     expectedVersion: number,
   ): Promise<void>;
+  readRecovery?(actor: HumanAuthenticationActor): Promise<HumanAuthenticationRecovery>;
+  replaceRecovery?(
+    userId: string,
+    principalId: string,
+    expectedCurrentUserId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<HumanAuthenticationRecovery & { changed: boolean }>;
+  enrolAccount?(
+    userId: string,
+    actor: HumanAuthenticationActor,
+  ): Promise<{ principalId: string; version: number; created: boolean }>;
   createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount>;
   deleteAccount(account: Pick<AuthenticatedAccount, "id">): Promise<void>;
   principalSeed(
@@ -987,7 +1002,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, state, iamDriver, github, ...controllerOptions } = options;
+  const { pool, state, iamDriver, github, onWarning, ...controllerOptions } = options;
   const persistence =
     state === undefined
       ? undefined
@@ -1023,7 +1038,19 @@ export async function createPostgresControllerAuth(
   });
   // Finish static auth initialization before the one-way activation transaction.
   await auth.auth.$context;
-  if (github !== undefined) {
+  const designation = github === undefined ? undefined : await persistence!.recoveryDesignation();
+  if (
+    github !== undefined &&
+    designation !== undefined &&
+    designation.userId !== github.recoveryUserId
+  ) {
+    // The recovery user id seeds first activation only; an online replacement is authoritative.
+    onWarning?.({
+      event: "authentication.recovery-seed-warning",
+      message:
+        "OCC_AUTH_GITHUB_RECOVERY_USER_ID differs from the recorded recovery designation, which is kept.",
+    });
+  } else if (github !== undefined) {
     const principal = await iamDriver!.lookupIdentity({
       issuer: betterAuthIssuer(options.installationId),
       subject: github.recoveryUserId,
@@ -1067,6 +1094,23 @@ export async function createPostgresControllerAuth(
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
+          readRecovery: (actor: HumanAuthenticationActor) => persistence!.readRecovery(actor),
+          replaceRecovery: (
+            userId: string,
+            principalId: string,
+            expectedCurrentUserId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) =>
+            persistence!.replaceRecovery(
+              userId,
+              principalId,
+              expectedCurrentUserId,
+              actor,
+              expectedVersion,
+            ),
+          enrolAccount: (userId: string, actor: HumanAuthenticationActor) =>
+            persistence!.enrolAccount(userId, actor),
         }),
   };
 }

@@ -440,14 +440,15 @@ during stopped maintenance.
 Activation is one-way. Account creation stays frozen afterwards
 (`409 RESOURCE_CONFLICT`), and there is no rollback other than keeping the
 `OCC_AUTH_GITHUB_*` environment set. The Helm chart cannot yet carry those
-variables: out-of-band values vanish on the next `helm upgrade`, and the
-controller then fails startup.
+variables: out-of-band values vanish on the next `helm upgrade`, and startup
+then fails.
 
 Before activation, set `agentNativeAdmin.enabled: false` in protected Helm values
 and rerender. The API environment must set `OCC_AGENT_NATIVE_ADMIN_ENABLED=false`
 and omit `OCC_AUTH_COOKIE_DOMAIN`; keep workspace routing enabled.
 
-1. Provision password accounts and grants; verify password recovery. Register
+1. Provision password accounts and grants; verify password recovery (its
+   administrator is [replaceable](../../reference/authentication.md#session-and-recovery-controls)). Register
    the GitHub App callback and protect its **client ID** (not App ID) and secret
    as the [reference](../../reference/authentication.md#github-sign-in-for-existing-accounts) describes.
 2. Close ingress. Disable automatic restarts, rollouts, and policy/provisioning

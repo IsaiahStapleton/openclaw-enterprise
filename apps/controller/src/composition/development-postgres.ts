@@ -28,7 +28,7 @@ import {
   initializeInstallationPresets,
   backendSummariesFromDefinitions,
 } from "./installation-config.ts";
-import type { LoggingConfiguration, OccLogger } from "../logging.ts";
+import { emitOccLogEvent, type LoggingConfiguration, type OccLogger } from "../logging.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import type { NativeAdminAccessConfig } from "../gateway/native-admin.ts";
@@ -126,6 +126,9 @@ export async function composePostgresDevelopment(
       state,
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.logger === undefined
+        ? {}
+        : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
       secureCookies: config.nativeAdmin?.enabled === true,
       ...(config.nativeAdmin?.enabled === true
         ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
