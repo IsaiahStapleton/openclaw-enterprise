@@ -205,7 +205,7 @@ function rollWindow(entry: AdmissionEntry, now: number): void {
 }
 
 // Caller keys are hashed; the address header value is capped before hashing.
-function admissionKey(kind: "ip" | "email", value: string | null | undefined): string {
+export function admissionKey(kind: "ip" | "email", value: string | null | undefined): string {
   const trimmed = (value ?? "").trim();
   const raw = kind === "ip" ? trimmed.slice(0, 64) : trimmed;
   return `${kind}:${digest(raw.length === 0 ? "unknown" : raw)}`;
@@ -303,6 +303,19 @@ function githubSubject(value: unknown): string | undefined {
     return Number.isSafeInteger(value) && value > 0 ? String(value) : undefined;
   }
   return typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value) ? value : undefined;
+}
+
+/**
+ * Password sign-in admission: a bounded table of hashed client-address and email keys,
+ * each with a one-minute budget and an active-request cap. Both profiles use it; only
+ * the GitHub profile designates a recovery account for the reserved lane.
+ */
+export function createPasswordAdmission() {
+  return keyedAdmission(
+    { perMinute: 10, concurrent: 2 },
+    { concurrent: 4, reserved: 1 },
+    { perMinute: 20, concurrent: 2 },
+  );
 }
 
 export function createHumanLogin(
@@ -413,11 +426,7 @@ export function createHumanLogin(
   // Single-controller admission keeps a bounded table of hashed client-address and email keys,
   // each with a one-minute budget and an active-request cap, under concurrency-only global lanes.
   // The recovery account keeps a reserved password lane during provider outage or login floods.
-  const admitPassword = keyedAdmission(
-    { perMinute: 10, concurrent: 2 },
-    { concurrent: 4, reserved: 1 },
-    { perMinute: 20, concurrent: 2 },
-  );
+  const admitPassword = createPasswordAdmission();
   const admitGithub = keyedAdmission(
     { perMinute: 30, concurrent: 4 },
     { concurrent: 8, reserved: 0 },

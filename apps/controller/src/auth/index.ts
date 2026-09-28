@@ -29,7 +29,12 @@ import {
   type PreparedPasswordAccount,
 } from "@openclaw-enterprise/occ";
 import type { IAMDriver } from "@openclaw-enterprise/contracts";
-import { createHumanLogin, type GitHubLoginConfiguration } from "./github.ts";
+import {
+  admissionKey,
+  createHumanLogin,
+  createPasswordAdmission,
+  type GitHubLoginConfiguration,
+} from "./github.ts";
 import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
 import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
 
@@ -925,6 +930,17 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await context.internalAdapter.deleteUser(account.id);
   }
 
+  function requestClientAddress(request: FastifyRequest): string {
+    return resolveClientAddress(
+      options.clientAddress,
+      request.ip,
+      options.clientAddress === undefined
+        ? undefined
+        : request.headers[options.clientAddress.header],
+    );
+  }
+  const legacyPasswordAdmission = createPasswordAdmission();
+
   async function runPrivateEndpoint(
     request: FastifyRequest,
     path: string,
@@ -937,16 +953,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     const headers = authHeaders(request.headers);
     headers.set("host", new URL(options.baseURL).host);
     // Sign-in admission keys on this value; Better Auth reads only this address header.
-    headers.set(
-      "x-occ-client-ip",
-      resolveClientAddress(
-        options.clientAddress,
-        request.ip,
-        options.clientAddress === undefined
-          ? undefined
-          : request.headers[options.clientAddress.header],
-      ),
-    );
+    headers.set("x-occ-client-ip", requestClientAddress(request));
     // Password sign-in keeps the established browser/CLI origin contract; sign-out already
     // required the exact browser Origin before reaching this point.
     if (!headers.has("origin") && path === "/oce/password") {
@@ -1041,13 +1048,22 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/password", body);
         }
-        return api.signInEmail({
-          body: { ...body, rememberMe: true },
-          headers: authHeaders(request.headers),
-          asResponse: false,
-          returnHeaders: true,
-          returnStatus: true,
-        });
+        // Server API calls bypass Better Auth's router rate limiter, so the password-only
+        // profile applies the same keyed admission as the GitHub profile's password lane.
+        return legacyPasswordAdmission.admit(
+          [
+            admissionKey("ip", requestClientAddress(request)),
+            admissionKey("email", body.email.trim().toLowerCase()),
+          ],
+          () =>
+            api.signInEmail({
+              body: { ...body, rememberMe: true },
+              headers: authHeaders(request.headers),
+              asResponse: false,
+              returnHeaders: true,
+              returnStatus: true,
+            }),
+        );
       },
       (response) => {
         const sessionKey = (response as { readonly sessionKey?: unknown } | null)?.sessionKey;

@@ -136,7 +136,9 @@ in its HttpOnly cookie and is omitted from session-inspection responses.
 under the auth secret (`apps/controller/src/auth/session-binding.ts`), alongside
 public user identity. Console compares it to invalidate retained views and drafts
 after a new session, including for the same user. Sign-out revokes the session,
-and public signup is disabled.
+and public signup is disabled. Without GitHub, `signInEmail` still admits attempts
+through `createPasswordAdmission` (`github.ts`): ten per minute per client address
+and per email; Better Auth's router limiter skips server API calls.
 
 `requireSessionKey` applies the optional `x-occ-session-key` header after the
 cookie session resolves, in `ControllerAdmissionVerifier.verify` (protected API
@@ -288,6 +290,7 @@ Account creation issues no session and infers no grants.
 
 ## Changelog
 
+- 2026-09-28 21:00: Trace keyed password admission in the password-only profile in the accompanying source fix. (test/github-sign-in-stack-e2e-20260928)
 - 2026-09-28 04:00: Trace the GitHub attempt receipt, result exchange, and `x-occ-session-key` narrowing in the accompanying source change. (feat/github-session-binding-20260928)
 
 - 2026-09-26 21:09: Trace origin checks for cookie-authenticated mutations and sign-out. (authoring-run/6d7cf57f-03f3-4ea7-8694-38edd9f3c9c2 - 849b2b24111fe237b12da5be1d4b411d3146cefb)
