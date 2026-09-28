@@ -1794,7 +1794,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     let admitted: AdmittedCaller;
     try {
-      admitted = await options.auth.admissionVerifier.verify({
+      admitted = await options.auth.admissionVerifier.verifyControllerRequest({
         requestId: request.id,
         method: request.method,
         routeId: operation.operationId,
