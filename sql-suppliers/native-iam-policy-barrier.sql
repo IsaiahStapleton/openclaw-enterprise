@@ -1,5 +1,9 @@
--- Unregistered State-owned supplier. Apply only on a stopped, qualified
--- predecessor after migration, ownership and catalog review.
+-- Unregistered State-owned supplier for CI and tests only. It is not a
+-- migration and has no production caller; do not apply it to a deployed
+-- database. Until it is registered as a migration, installing it adds an
+-- object to the occ schema, so the catalog digest checked by
+-- scripts/migration-history.mjs no longer matches and migrations refuse to run
+-- until the function is dropped again.
 BEGIN;
 
 DO $$

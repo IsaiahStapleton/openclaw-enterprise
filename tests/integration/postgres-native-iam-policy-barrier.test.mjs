@@ -235,7 +235,18 @@ test(
       connectionTimeoutMillis: 3000,
     });
     context.after(async () => {
-      await Promise.all([app.end(), migrator.end()]);
+      try {
+        if (!ciFixtureRequested) {
+          // Standalone mode shares the local development database, which is
+          // not dropped afterwards. Remove the unregistered supplier and the
+          // privilege probe so the next run starts without them and the
+          // migration catalog preflight still matches.
+          await migrator.query(`DROP FUNCTION IF EXISTS occ.native_iam_policy_barrier(text, boolean);
+            DROP TABLE IF EXISTS occ.native_iam_barrier_privilege_probe`);
+        }
+      } finally {
+        await Promise.all([app.end(), migrator.end()]);
+      }
     });
     const identityQuery = `SELECT current_user AS role, current_database() AS database,
       rolsuper, rolcreaterole, rolcreatedb, rolbypassrls
@@ -265,18 +276,28 @@ test(
         )
       ).rows;
     const beforePrivileges = await tablePrivileges();
-    assert.equal(
-      (await app.query("SELECT count(*)::integer AS n FROM occ.installation")).rows[0].n,
-      0,
-    );
+    const fixtureName = "Native IAM barrier fixture";
+    const existingInstallations = (await app.query("SELECT id, name FROM occ.installation")).rows;
+    // The installation row cannot be deleted, so a repeated standalone run
+    // reuses the row an earlier run of this test created. Any other existing
+    // installation still refuses the shared database.
+    const reusable =
+      !ciFixtureRequested &&
+      existingInstallations.length === 1 &&
+      existingInstallations[0].name === fixtureName;
+    if (!reusable) {
+      assert.equal(existingInstallations.length, 0);
+    }
     const state = new PostgresPlatformState(app);
-    const installation = await state.transact((unit) =>
-      unit.installations.createInstallation({
-        id: `ins_${randomUUID()}`,
-        name: "Native IAM barrier fixture",
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    const installation = reusable
+      ? existingInstallations[0]
+      : await state.transact((unit) =>
+          unit.installations.createInstallation({
+            id: `ins_${randomUUID()}`,
+            name: fixtureName,
+            createdAt: new Date().toISOString(),
+          }),
+        );
     const namespaceWork = () => {
       const namespaceId = `ns_${randomUUID()}`;
       return {
