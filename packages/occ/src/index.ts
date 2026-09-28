@@ -2700,6 +2700,7 @@ export class OpenClawController {
     input: CreateCredentialSourceInput,
     audit?: (source: Readonly<CredentialSourceMetadata>) => AuditEvent,
   ): Promise<Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>> {
+    this.assertCredentialSourceTransactionBoundary();
     if (!validName(input.name)) {
       throw new ScopeViolationError("The credential source name is invalid.");
     }
@@ -2900,6 +2901,7 @@ export class OpenClawController {
     credentialSourceId: string,
     audit?: () => AuditEvent,
   ): Promise<void> {
+    this.assertCredentialSourceTransactionBoundary();
     const { namespace, source } = await this.mutate(async (state) => {
       const locked = await this.lockNamespace(state, namespaceId);
       await this.authorize(principalId, "delete", {
@@ -6604,6 +6606,15 @@ export class OpenClawController {
   private async read<T>(work: (state: PlatformReadView) => Promise<T>): Promise<T> {
     const active = this.transactionContext.getStore();
     return active ? work(active) : this.state.read(work);
+  }
+
+  private assertCredentialSourceTransactionBoundary(): void {
+    // Async descendants can retain the borrowed unit after its transaction has ended.
+    if (this.transactionContext.getStore() !== undefined) {
+      throw new ResourceConflictError(
+        "Credential source registration and deletion cannot run in a controller transaction.",
+      );
+    }
   }
 
   private async mutate<T>(work: (state: PlatformUnitOfWork) => Promise<T>): Promise<T> {
