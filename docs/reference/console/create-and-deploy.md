@@ -22,6 +22,7 @@ are insufficient. Presets and edited Configuration JSON retain their settings.
 2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
    **Use Preset**. Review defaults and choose an existing or new model Secret.
    The form is editable. **Start with default Preset** loads the installed `default-codex` copy.
+   To start independently of installed Presets, select **Start without Preset**.
 3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
    **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
    **Codex** and also offers **OpenClaw**; Anthropic offers **OpenClaw** only.
@@ -69,8 +70,8 @@ are insufficient. Presets and edited Configuration JSON retain their settings.
 
 Before saving, Preset variables and explicitly selected Preset forms survive
 navigation, including Back/Forward; passwords clear. Leaving a form started with
-the default Preset shortcut discards its unsaved state; the next visit shows the
-initial choices. Saved Agents and Secrets remain. **Start over** confirms discard.
+the default Preset shortcut or without a Preset discards its unsaved state; the next
+visit shows the initial choices. Saved Agents and Secrets remain. **Start over** confirms discard.
 Reload, page exit, and sign-out clear local drafts. Once saving begins, navigation
 does not retain partial-save or uncertain-outcome form state; follow save recovery below.
 

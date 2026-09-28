@@ -413,7 +413,7 @@ export function createPresetFields(context, apply) {
   context
     .request(`${namespacePath(context.namespaceId)}/presets`)
     .then((presets) => {
-      if (!context.isCurrent()) {
+      if (!context.isCurrent() || !section.isConnected) {
         return;
       }
       selector.append(
@@ -441,7 +441,7 @@ export function createPresetFields(context, apply) {
       }
     })
     .catch((error) => {
-      if (!context.isCurrent()) {
+      if (!context.isCurrent() || !section.isConnected) {
         return;
       }
       if (error.status === 401) {

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-27
-last_updated_session: authoring-run/048d8546-acd0-4d1a-8231-61c9d9ccb9dc
+updated: 2026-09-28
+last_updated_session: authoring-run/c140c47a-799b-48c8-929a-5d1a37eb31d1
 ---
 
 # Agent Presets flow
@@ -45,6 +45,7 @@ graph TD
   D -->|Default quick-start without variables| F
   E --> F["Renderer copies launch settings"]
   F --> G["Chooser closes; user edits and saves ordinary draft"]
+  U["User selects Start without Preset"] --> G
   G --> S["Password input: create Secret in current Namespace"]
   S --> H["Configuration API admits and saves"]
   G -->|Existing credential binding| H
@@ -131,7 +132,9 @@ that same exact-resource read. It applies variable-free templates immediately;
 customized variable definitions retain the ordinary chooser. If that chooser is
 restored, it preserves the shortcut origin for the eventual form. Missing defaults or
 failed list/read requests cannot open a hidden hardcoded starter. Other readable
-Presets remain selectable.
+Presets remain selectable. The separate **Start without Preset** action opens
+the ordinary form without reading a Namespace Preset; it does not automatically
+replace a denied selection. Normal creation authorization still applies.
 
 The shipped `deploy/presets/default-codex.json` also supplies the public
 `/console/default-codex-preset.mjs` module through
@@ -168,7 +171,8 @@ model controls, workspace files, repository selections, and staged Secret
 references. The in-memory map is scoped to the signed-in user and Namespace.
 Returning to an explicitly selected Preset form through navigation or browser history reconstructs it
 from that copy; capability and repository discovery run again against current
-access. A form started through the default Preset shortcut registers for discard on exit. After
+access. A form started through the default Preset shortcut or without a Preset
+registers for discard on exit. After
 flushing captures, `loadPage` removes its creation and channel snapshots and its
 retained view when navigation leaves creation or changes Namespace. Re-entry
 opens the initial choices; resources already saved through the API remain.
@@ -265,6 +269,8 @@ or an immutable admitted revision.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-28 10:36: Restore explicit creation without a Preset. (authoring-run/c140c47a-799b-48c8-929a-5d1a37eb31d1 - 9f7ae3cfb749a58394f8446f3a429db6ffa6f129)
 
 - 2026-09-27 01:09: Preserve exit discard for the default Preset shortcut and retain explicitly selected Preset drafts. (authoring-run/048d8546-acd0-4d1a-8231-61c9d9ccb9dc - 7d0da53a8f092b0e2533464424dcb9c7fe15b139)
 

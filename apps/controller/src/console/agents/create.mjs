@@ -214,7 +214,14 @@ export function renderCreateAgent(context, draft) {
         { className: "muted" },
         "Choose a model, connect repositories, and give your Agent a place to work.",
       ),
-      presets.startDefault,
+      element(
+        "div",
+        { className: "launch-actions" },
+        presets.startDefault,
+        button("Start without Preset", () =>
+          renderAgentForm(context, {}, {}, { discardOnExit: true }),
+        ),
+      ),
     ),
     element(
       "section",

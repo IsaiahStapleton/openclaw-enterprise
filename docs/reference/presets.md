@@ -72,6 +72,9 @@ credential; the ordinary form collects them. An operator-customized copy with
 variables opens the variable chooser first. Missing or unreadable defaults
 disable quick-start; other readable Presets remain selectable. Install the file
 through `includeDefaults`, `presets.files`, or Preset POST to enable it.
+**Start without Preset** remains available independently of Namespace Presets.
+It uses the console's shared configuration base, and ordinary creation permissions
+still apply.
 
 The shipped default file also supplies the console's shared configuration base
 for empty templates, **Reset template**, and provider/Harness switches. It replaces

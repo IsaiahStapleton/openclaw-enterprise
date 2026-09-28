@@ -8745,6 +8745,154 @@ test("Slack editor preserves existing qualified channel and user targets", async
   assert.deepEqual(persisted.allowFrom, dmUsers);
 });
 
+test("an empty Namespace can create an Agent without a Preset", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "occ-console-empty-presets-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = await createConsoleAppFixture(t, {
+    defaultPresets: [],
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("No Presets", { ready: true });
+  const { page } = await newPage(t, fixture);
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByText(/No Presets in this Namespace/).waitFor();
+  assert.equal(
+    await page.getByRole("button", { name: "Start with default Preset" }).isDisabled(),
+    true,
+  );
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
+  await page.getByLabel("Agent name", { exact: true }).fill("Abandoned draft");
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
+  await page.getByLabel("Agent name", { exact: true }).fill("Agent without Preset");
+  await enterManualModel(page, "no-preset-model-key", "gpt-4.1");
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  assert.equal((await saved).status(), 201);
+  assert.equal(
+    requests.filter(
+      (request) =>
+        request.method === "GET" && request.path.startsWith(`/namespaces/${namespace.id}/presets/`),
+    ).length,
+    0,
+  );
+});
+
+test("a delayed restored Preset list cannot read a selection after starting without a Preset", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Delayed Preset list", { ready: true });
+  const presets = await fixture.request("GET", `/namespaces/${namespace.id}/presets`);
+  const starter = presets.data.find((preset) => preset.name === "default-codex");
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  const selectedPresetResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/presets/${starter.id}` &&
+      response.request().method() === "GET",
+  );
+  await page.getByLabel("Preset template").selectOption(starter.id);
+  assert.equal((await selectedPresetResponse).status(), 200);
+  await page.getByRole("button", { name: "Use Preset", exact: true }).click({ trial: true });
+  await page.getByRole("link", { name: "← Agents" }).click();
+
+  let releaseList;
+  const heldList = new Promise((resolve) => {
+    releaseList = resolve;
+  });
+  let listRequested;
+  const listStarted = new Promise((resolve) => {
+    listRequested = resolve;
+  });
+  const listPath = `**/namespaces/${namespace.id}/presets`;
+  await page.route(listPath, async (route) => {
+    listRequested();
+    await heldList;
+    await route.continue();
+  });
+  const listResponse = page.waitForResponse(
+    (response) => response.url().endsWith(`/namespaces/${namespace.id}/presets`),
+  );
+  let exactReadsBeforeRelease;
+  try {
+    await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+    await listStarted;
+    await page.getByRole("button", { name: "Start without Preset" }).click();
+    await page.getByLabel("Agent name", { exact: true }).fill("Independent Agent");
+    exactReadsBeforeRelease = requests.filter(
+      (request) =>
+        request.method === "GET" &&
+        request.path === `/namespaces/${namespace.id}/presets/${starter.id}`,
+    ).length;
+  } finally {
+    releaseList();
+  }
+  await (await listResponse).finished();
+  await page.unroute(listPath);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  assert.equal(
+    requests.filter(
+      (request) =>
+        request.method === "GET" &&
+        request.path === `/namespaces/${namespace.id}/presets/${starter.id}`,
+    ).length,
+    exactReadsBeforeRelease,
+  );
+  assert.equal(
+    await page.getByLabel("Agent name", { exact: true }).inputValue(),
+    "Independent Agent",
+  );
+  await page.getByLabel("Agent name", { exact: true }).fill("Still usable");
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Still usable");
+});
+
+test("denied Preset reads do not automatically start an Agent form", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Denied Preset", { ready: true });
+  const presets = await fixture.request("GET", `/namespaces/${namespace.id}/presets`);
+  const starter = presets.data.find((preset) => preset.name === "default-codex");
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start with default Preset" }).waitFor({ state: "visible" });
+  await page.waitForFunction(() => !globalThis.document.querySelector("#agent-preset").disabled);
+  // Deny the exact read after the list is visible to exercise a changed grant.
+  fixture.policy.restrictions.push({
+    id: "deny-selected-preset",
+    namespaceId: namespace.id,
+    resourceKind: "preset",
+    resourceId: starter.id,
+    action: "read",
+    effect: "deny",
+  });
+  const denied = page.waitForResponse((response) =>
+    response.url().endsWith(`/namespaces/${namespace.id}/presets/${starter.id}`),
+  );
+  await page.getByRole("button", { name: "Start with default Preset" }).click();
+  assert.equal((await denied).status(), 403);
+  await page.getByRole("alert").filter({ hasText: "Access denied" }).waitFor();
+  assert.equal(await page.locator("#create-agent-form").count(), 0);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
+  // A later list filters the now-unreadable Preset; the independent action remains available.
+  await page.getByRole("link", { name: "← Agents" }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page.getByText(/No Presets in this Namespace/).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
+});
+
 test("The console requires a readable installed default for quick-start and still allows other Presets", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "occ-console-no-default-"));
   t.after(() => rm(root, { recursive: true, force: true }));

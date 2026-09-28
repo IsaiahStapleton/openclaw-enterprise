@@ -1651,7 +1651,7 @@ export const scenarios = {
     name: "Default Preset access denied",
     path: create,
     rules: [{ path: presetSecretsPath.replace(/secrets$/, "presets"), status: 403 }],
-    description: "Denied Preset access leaves quick-start disabled and reports the error.",
+    description: "Denied Preset access leaves quick-start disabled and reports the error. Start without Preset remains available as a separate action.",
   },
   createNoPresets: {
     group: "Pages/Create Agent",
@@ -1659,7 +1659,17 @@ export const scenarios = {
     path: create,
     emptyPresets: true,
     description:
-      "The default starter is unavailable until an administrator installs a readable Preset.",
+      "The default starter is unavailable until an administrator installs a readable Preset. Start without Preset opens an independent form.",
+  },
+  createWithoutPreset: {
+    group: "Pages/Create Agent",
+    name: "Start without Preset",
+    path: create,
+    emptyPresets: true,
+    actions: [click("Start without Preset")],
+    description: "Create an editable Agent draft independently of a saved Preset.",
+    steps: ["Enter an Agent name, choose a model and credential, and review the Configuration."],
+    gap: "The fixture simulates API responses and does not verify deployment.",
   },
   createBoundCredentialPreset: {
     group: "Pages/Create Agent",
