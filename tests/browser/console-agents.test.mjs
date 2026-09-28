@@ -7144,6 +7144,64 @@ test("Agent sharing reconciles a truncated committed response without replaying 
   assert.equal(await panel.count(), 0);
 });
 
+test("Agent sharing creates exact Roles instead of reusing strict superset Roles", async (t) => {
+  const fixture = await createConsoleAppFixture(t, { provisionedPeople: ["superset-recipient"] });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Superset sharing");
+  const agent = await fixture.createAgent(namespace.id, "Superset Agent", nativeValues("superset"));
+  const person = fixture.provisionedAccounts[0];
+  const policyPath = `/namespaces/${namespace.id}/iam`;
+  // Each superset contains every permission sharing needs, plus one it must not grant.
+  const supersets = [];
+  for (const permissions of [
+    [
+      { action: "read", resourceKind: "agent" },
+      { action: "administer", resourceKind: "agent" },
+      { action: "delete", resourceKind: "agent" },
+    ],
+    [
+      { action: "read", resourceKind: "namespace" },
+      { action: "read", resourceKind: "secret" },
+    ],
+  ]) {
+    const role = await fixture.request("POST", `${policyPath}/roles`, { body: { permissions } });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+    supersets.push(role.data.id);
+  }
+  const { page } = await newPage(t, fixture);
+  const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`);
+  const panel = page.getByRole("region", { name: "Share Agent", exact: true });
+  await panel.getByLabel("Existing person’s Principal ID").fill(person.principal.id);
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText("Agent access is shared.", { exact: false }).waitFor();
+
+  const roles = (await fixture.request("GET", `${policyPath}/roles`)).data;
+  assert.equal(roles.length, 4, "sharing must add two exact Roles beside the supersets");
+  const bindings = (await fixture.request("GET", `${policyPath}/access-bindings`)).data;
+  assert.equal(bindings.length, 2);
+  const grantPermissions = (resourceKind) => {
+    const binding = bindings.find((candidate) => candidate.resourceKind === resourceKind);
+    assert.equal(supersets.includes(binding.roleId), false, `${resourceKind} reused a superset`);
+    return roles
+      .find((role) => role.id === binding.roleId)
+      .permissions.map((permission) => `${permission.action}:${permission.resourceKind}`)
+      .sort();
+  };
+  assert.deepEqual(grantPermissions("namespace"), ["read:namespace"]);
+  assert.deepEqual(grantPermissions("agent"), ["administer:agent", "read:agent"]);
+  const session = await fixture.signIn(person.credentials);
+  assert.equal(
+    (
+      await fixture.request("DELETE", `/namespaces/${namespace.id}/agents/${agent.id}`, {
+        session,
+      })
+    ).status,
+    403,
+  );
+});
+
 test("standard Codex password Preset creates one scoped Secret and reuses it after an Agent conflict", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

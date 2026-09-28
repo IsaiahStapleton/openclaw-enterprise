@@ -1135,6 +1135,88 @@ test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespac
   assert.equal(after.data.status, read.data.status, "the Namespace must not enter deletion");
 });
 
+test("Console share grants confer only the shared Agent and Namespace discovery", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("share-recipient");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "share-recipient-limits");
+  const agent = await createAgent(controller, namespace.id, "shared-agent");
+  const sibling = await createAgent(controller, namespace.id, "sibling-agent");
+  const policyPath = `/namespaces/${namespace.id}/iam`;
+  // The exact grants the Console share panel writes.
+  for (const [resourceKind, resourceId, permissions] of [
+    ["namespace", namespace.id, [{ action: "read", resourceKind: "namespace" }]],
+    [
+      "agent",
+      agent.id,
+      [
+        { action: "read", resourceKind: "agent" },
+        { action: "administer", resourceKind: "agent" },
+      ],
+    ],
+  ]) {
+    const role = await controller.request("POST", `${policyPath}/roles`, {
+      body: { permissions },
+    });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+    const binding = await controller.request("POST", `${policyPath}/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: role.data.id,
+        resourceKind,
+        resourceId,
+      },
+    });
+    assert.equal(binding.status, 201, JSON.stringify(binding.body));
+    // Mirror persisted policy into the native IAM state, as production loadNativeIAMState does.
+    // The live Postgres proof is in postgres-namespace-iam-policy.test.mjs.
+    fixture.state.roles.push(role.data);
+    fixture.state.bindings.push(binding.data);
+  }
+
+  const memberApp = fixture.createApp(member.principal);
+  const asMember = (method, path, options) => injectedRequest(memberApp, method, path, options);
+  for (const path of [
+    `/namespaces/${namespace.id}`,
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  ]) {
+    const allowed = await asMember("GET", path);
+    assert.equal(allowed.status, 200, `${path}: ${JSON.stringify(allowed.body)}`);
+  }
+  for (const [method, path, body] of [
+    ["DELETE", `/namespaces/${namespace.id}`],
+    ["GET", `/namespaces/${namespace.id}/agents/${sibling.id}`],
+    ["GET", `${policyPath}/roles`],
+    ["POST", `${policyPath}/roles`, { permissions: [{ action: "read", resourceKind: "agent" }] }],
+    ["GET", `${policyPath}/access-bindings`],
+    [
+      "POST",
+      `${policyPath}/access-bindings`,
+      {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: fixture.state.roles.at(-1).id,
+        resourceKind: "agent",
+        resourceId: sibling.id,
+      },
+    ],
+    ["DELETE", `/namespaces/${namespace.id}/agents/${agent.id}`],
+    ["GET", "/installation"],
+  ]) {
+    const denied = await asMember(method, path, body === undefined ? {} : { body });
+    assert.equal(denied.status, 403, `${method} ${path}: ${JSON.stringify(denied.body)}`);
+  }
+  const after = await controller.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
+  assert.equal(after.data.status, agent.status, "the shared Agent must not enter deletion");
+  const bindings = await controller.request("GET", `${policyPath}/access-bindings`);
+  assert.equal(bindings.data.length, 2, "denied policy writes must leave policy unchanged");
+});
+
 test("Namespace IAM read routes serialize broad native policy without widening mutations", async () => {
   const fixture = await createInjectedFixture();
   const controller = {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createBootstrapAdministratorSeed, NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import { AuthorizationDeniedError, OpenClawController } from "../../packages/occ/src/index.ts";
 import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-state.ts";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
@@ -622,6 +623,108 @@ test(
           event.actorId === principal.id && event.action === "openclaw.iam.accessBindings.create",
       ).length,
       2,
+    );
+  },
+);
+
+test(
+  "PostgreSQL native IAM confines Console share grants to the shared Agent and Namespace discovery",
+  requiresPostgres,
+  async (context) => {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: databaseUrl });
+    context.after(() => pool.end());
+    const state = new PostgresPlatformState(pool);
+    const iam = new NativeIAMDriver(state, { id: `postgres-share-limits-${randomUUID()}` });
+    const { installation, namespace, agent } = await createNamespaceAgentState(state);
+    const sibling = {
+      ...agent,
+      id: identifier("agt"),
+      name: `Sibling ${randomUUID()}`,
+      servicePrincipalId: `service-agent-${randomUUID()}`,
+    };
+    await state.transact((unit) => unit.agents.createAgent(sibling));
+    const principal = await createHumanPrincipal(state);
+    // Persist exactly the grants the Console share panel writes.
+    const bindings = await state.transact(async (unit) => {
+      const created = [];
+      for (const [resourceKind, resourceId, permissions] of [
+        ["namespace", namespace.id, [{ action: "read", resourceKind: "namespace" }]],
+        [
+          "agent",
+          agent.id,
+          [
+            { action: "read", resourceKind: "agent" },
+            { action: "administer", resourceKind: "agent" },
+          ],
+        ],
+      ]) {
+        const role = await iam.createNamespaceRole(
+          { policy: unit.iamPolicy },
+          { id: identifier("role"), namespaceId: namespace.id, permissions },
+        );
+        created.push(
+          await iam.createNamespaceAccessBinding(
+            { policy: unit.iamPolicy },
+            {
+              id: identifier("binding"),
+              namespaceId: namespace.id,
+              subjectKind: "identity",
+              subjectId: principal.id,
+              roleId: role.id,
+              resourceKind,
+              resourceId,
+            },
+          ),
+        );
+      }
+      return created;
+    });
+    // OCC authorizes every route below against the live PostgreSQL policy.
+    const controller = new OpenClawController(installation, { state, recordOperations: false });
+    controller.registerDriver(iam);
+    controller.selectDriver("iam", iam.id);
+
+    assert.equal((await controller.getNamespace(principal.id, namespace.id)).id, namespace.id);
+    assert.equal((await controller.getAgent(principal.id, namespace.id, agent.id)).id, agent.id);
+    const denied = {
+      "DELETE /namespaces/:id": () => controller.deleteNamespace(principal.id, namespace.id),
+      "GET sibling Agent": () => controller.getAgent(principal.id, namespace.id, sibling.id),
+      "GET IAM Roles": () => controller.listIAMRoles(principal.id, namespace.id),
+      "POST IAM Roles": () =>
+        controller.createIAMRole(principal.id, {
+          namespaceId: namespace.id,
+          permissions: [{ action: "read", resourceKind: "agent" }],
+        }),
+      "GET IAM AccessBindings": () => controller.listIAMAccessBindings(principal.id, namespace.id),
+      "POST IAM AccessBindings": () =>
+        controller.createIAMAccessBinding(principal.id, {
+          namespaceId: namespace.id,
+          subjectKind: "identity",
+          subjectId: principal.id,
+          roleId: bindings[1].roleId,
+          resourceKind: "agent",
+          resourceId: sibling.id,
+        }),
+      "DELETE shared Agent": () => controller.deleteAgent(principal.id, namespace.id, agent.id),
+      "GET /installation": () => controller.getInstallation(principal.id),
+    };
+    for (const [route, operation] of Object.entries(denied)) {
+      // OCC maps AuthorizationDeniedError to 403.
+      await assert.rejects(operation, AuthorizationDeniedError, route);
+    }
+
+    const after = await state.transact(async (unit) => ({
+      namespace: await unit.namespaces.findNamespace(namespace.id),
+      agent: await unit.agents.findAgent(namespace.id, agent.id),
+      bindings: await iam.listNamespaceAccessBindings({ policy: unit.iamPolicy }, namespace.id),
+    }));
+    assert.equal(after.namespace.status, namespace.status);
+    assert.notEqual(after.agent.status, "deleting");
+    assert.equal(after.agent.desiredRuntimeState, agent.desiredRuntimeState);
+    assert.deepEqual(
+      after.bindings.map((binding) => binding.id).sort(),
+      bindings.map((binding) => binding.id).sort(),
     );
   },
 );
