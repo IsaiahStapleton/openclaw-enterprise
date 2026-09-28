@@ -114,8 +114,24 @@ example Helm values render, after the real production bootstrap:
   past the ten-second deadline. GitHub sign-in fails closed, passwords keep
   working, and the recovery administrator signs in while the shared lane is full.
 
-`tests/integration/password-default-chart.test.mjs` (Images and Packaging lane,
-Helm and yq) checks that the chart renders exactly those settings.
+The same composition covers the GitHub profile against the fixture provider:
+
+- `postgres-github-admin-attach.test.mjs`: administrators attach, detach and
+  re-attach GitHub identities, and disable and enable accounts.
+- `postgres-github-tab-binding.test.mjs`: Playwright over the HTTPS Origin. A tab
+  signed in with GitHub signs out after another tab's password sign-in, and the
+  login receipt is one-use and needs the exact Origin.
+- `postgres-github-recovery-replacement.test.mjs`: online recovery replacement
+  moves the reserved password lane and survives a restart with the original seed.
+- `postgres-break-glass-auth-maintain.test.mjs`: also needs
+  `OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL`. With the API stopped,
+  `auth:maintain` resets the recovery password and deactivates GitHub sign-in.
+
+`tests/integration/password-default-chart.test.mjs` and
+`sign-in-chart-parity.test.mjs` (Images and Packaging lane, Helm and yq) check
+that the chart renders exactly those settings, and that the API starts with
+every trusted-proxy preset, with and without GitHub, and refuses what the chart
+refuses.
 
 ## Authentication maintenance
 

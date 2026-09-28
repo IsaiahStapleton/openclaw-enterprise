@@ -1,74 +1,19 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import {
   defaultInstallSettings,
   githubUpgradeSettings,
   githubUpgradeValues,
 } from "../helpers/production-sign-in.mjs";
+import {
+  chartTooling,
+  deploymentEnv,
+  renderChart as render,
+  signInSettings,
+} from "../helpers/sign-in-chart.mjs";
 
-const execute = promisify(execFile);
-const repository = fileURLToPath(new URL("../../", import.meta.url));
-const helm = process.env.OCC_HELM_BIN ?? "helm";
 const recoveryUserId = "Xk3u9pQ2rT7vW1yZ";
-
-let tooling;
-try {
-  await execute(helm, ["version", "--short"], { cwd: repository });
-  await execute("yq", ["--version"], { cwd: repository });
-  tooling = { skip: false };
-} catch {
-  tooling = { skip: "Install Helm and yq, or set OCC_HELM_BIN, to render the production chart." };
-}
-
-async function render(overrides = {}) {
-  const args = [
-    "template",
-    "oce",
-    "deploy/helm/openclaw-enterprise",
-    "--namespace",
-    "openclaw-system",
-    "--values",
-    "deploy/examples/production/values.yaml",
-  ];
-  for (const [key, value] of Object.entries(overrides)) {
-    args.push("--set", `${key}=${value}`);
-  }
-  const { stdout } = await execute(helm, args, { cwd: repository, maxBuffer: 2_000_000 });
-  const parsed = await new Promise((resolve, reject) => {
-    const child = execFile(
-      "yq",
-      ["eval-all", "-o=json", "-I=0", ".", "-"],
-      { cwd: repository, maxBuffer: 2_000_000 },
-      (error, output) => (error ? reject(error) : resolve(output)),
-    );
-    child.stdin.end(stdout);
-  });
-  return parsed.trim().split("\n").map(JSON.parse);
-}
-
-function deploymentEnv(objects, component) {
-  const deployment = objects.find(
-    ({ kind, metadata }) =>
-      kind === "Deployment" && metadata.labels?.["app.kubernetes.io/component"] === component,
-  );
-  assert.ok(deployment, component);
-  return deployment.spec.template.spec.containers[0].env;
-}
-
-// The sign-in settings the PostgreSQL proofs compose the API from, as the chart renders them.
-function signInSettings(env) {
-  return Object.fromEntries(
-    env
-      .filter(({ name }) => /^OCC_(AUTH_|AGENT_NATIVE_ADMIN_|GATEWAY_API_KEY_PATH$)/.test(name))
-      .map(({ name, value, valueFrom }) => [
-        name,
-        value ?? { secretKeyRef: valueFrom.secretKeyRef },
-      ]),
-  );
-}
+const tooling = await chartTooling();
 
 const githubEgress = ({ kind, metadata }) =>
   kind === "NetworkPolicy" && metadata.name.endsWith("-api-github-login-egress");
