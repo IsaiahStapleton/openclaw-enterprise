@@ -5450,14 +5450,26 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     assert.equal(await link.getAttribute("target"), "_blank");
     assert.equal(await link.getAttribute("rel"), "noopener noreferrer");
   }
-  // Access guidance is visible before opening details, with a separate actionable link.
+  // Unavailable guidance stays out of the row layout and is reachable without opening details.
   const unavailableRow = dialog.locator(".plugin-list-row").filter({
     has: page.getByRole("button", { name: "Admin-disabled", exact: true }),
   });
-  assert.match(
-    await unavailableRow.locator(".plugin-unavailable").textContent(),
-    /Disabled by a ChatGPT workspace administrator/,
+  const rowReason = unavailableRow.locator(".plugin-unavailable");
+  assert.equal(await rowReason.isVisible(), false);
+  const rowPopover = unavailableRow.locator(".plugin-unavailable-popover");
+  const unavailableHelp = unavailableRow.getByRole("button", {
+    name: "Why Admin-disabled is unavailable",
+    exact: true,
+  });
+  const rowHeight = await unavailableRow.evaluate((node) => node.getBoundingClientRect().height);
+  await unavailableHelp.focus();
+  await unavailableHelp.press("Enter");
+  await rowPopover.waitFor({ state: "visible" });
+  assert.equal(
+    await unavailableRow.evaluate((node) => node.getBoundingClientRect().height),
+    rowHeight,
   );
+  assert.match(await rowReason.textContent(), /Disabled by a ChatGPT workspace administrator/);
   const rowHelp = unavailableRow.getByRole("link", {
     name: "Manage workspace plugins",
     exact: true,
@@ -5466,7 +5478,23 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     await rowHelp.getAttribute("href"),
     "https://chatgpt.com/admin/plugins?catalog=GLOBAL",
   );
+  assert.equal(await rowHelp.getAttribute("target"), "_blank");
+  assert.equal(await rowHelp.getAttribute("rel"), "noopener noreferrer");
   assert.equal(await rowHelp.evaluate((node) => node.closest("button") === null), true);
+  await page.keyboard.press("Tab");
+  assert.equal(await rowHelp.evaluate((node) => node === node.ownerDocument.activeElement), true);
+  await page.keyboard.press("Escape");
+  await rowPopover.waitFor({ state: "hidden" });
+  assert.equal(await dialog.isVisible(), true);
+  assert.equal(
+    await unavailableHelp.evaluate((node) => node === node.ownerDocument.activeElement),
+    true,
+  );
+  await unavailableHelp.click();
+  await rowPopover.waitFor({ state: "visible" });
+  await dialog.getByRole("heading", { name: "Configure plugins", exact: true }).click();
+  await rowPopover.waitFor({ state: "hidden" });
+  assert.equal(await dialog.isVisible(), true);
   const listLogo = calendar.locator(".plugin-logo img");
   await listLogo.evaluate((image) => image.decode());
   assert.ok(await listLogo.evaluate((image) => image.naturalWidth > 0));

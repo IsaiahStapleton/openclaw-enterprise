@@ -209,13 +209,18 @@ switch to **Configuration** for Harness authentication. Values never appear.
 ### Discover and configure plugins
 
 **Create Agent / Discover plugins with a service account token** uses a dummy
-token and simulated OCC discovery. Open **Configure plugins** and select Calendar
-to load its details. **Add Calendar** exposes policies; expand a tool to edit an
+token and simulated OCC discovery. Open **Configure plugins**, then Calendar.
+**Add Calendar** exposes policies; expand a tool to edit an
 override. **Done** returns to the form; **Plugin selections JSON** shows the draft.
 **Filter this page** searches plugins; **Filter tools** narrows tool rows without
 moving the caret. Credential, provider, or Harness changes clear the catalog but
 preserve selections. Companion stories cover empty,
 loading, rejection, failure, and pagination states.
+
+In **Components/Plugins → Unavailable reason popover**, open reasons with the
+information button, then dismiss with Escape or an outside click. Rows stay
+compact; details retain guidance and disabled **Add**. Follow its keyboard and
+help-link walkthrough.
 
 **Create Agent / Discover plugins with a selected PAT Secret** uses simulated
 Secret metadata and discovery responses. Choose Calendar to inspect details, then
@@ -223,9 +228,8 @@ change the selected Secret to clear the catalog. **Selected PAT Secret discovery
 denied** shows a simulated permission failure. Preset PAT Secrets enable discovery;
 API keys do not. Catalog visibility does not prove a plugin can be invoked.
 
-**Components/Plugins** covers the modal with simulated catalogs and capabilities:
-available plugins, selected overrides, unknown tools, and empty, loading, denied,
-and capability-unavailable states. Expand a tool to inspect inherited enablement
+**Components/Plugins** uses simulated catalogs and capabilities.
+Expand a tool to inspect inherited enablement
 and approval. Its reviewer shortcut opens the plugin default when per-tool review
 is unsupported. New plugins omit tool defaults; an omitted reviewer inherits the
 Harness reviewer. Codex offers reviewer selection at the plugin default scope

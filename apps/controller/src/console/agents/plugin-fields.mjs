@@ -55,10 +55,10 @@ function catalogLink(label, url) {
   return element("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, label);
 }
 
-function unavailableMessage(entry, id) {
+function unavailableMessage(entry) {
   return element(
     "p",
-    { className: "hint plugin-unavailable", ...(id ? { id } : {}) },
+    { className: "hint plugin-unavailable" },
     entry.unavailableReason ?? "This plugin cannot be enabled by the selected Driver.",
     entry.unavailableHelp
       ? element(
@@ -432,7 +432,7 @@ export function createPluginFields({
                 : "Not selected",
           ),
         );
-        const reasonId = `plugin-unavailable-${index}`;
+        const reasonId = `${input.id}-plugin-unavailable-${index}`;
         if (entry.available === false) {
           item.setAttribute("aria-describedby", reasonId);
         }
@@ -440,7 +440,25 @@ export function createPluginFields({
           "div",
           { className: "plugin-list-row" },
           item,
-          entry.available === false ? unavailableMessage(entry, reasonId) : null,
+          entry.available === false
+            ? element(
+                "button",
+                {
+                  type: "button",
+                  className: "plugin-unavailable-trigger",
+                  "aria-label": `Why ${entry.name} is unavailable`,
+                  popovertarget: reasonId,
+                },
+                element("span", { "aria-hidden": "true" }, "i"),
+              )
+            : null,
+          entry.available === false
+            ? element(
+                "div",
+                { id: reasonId, className: "plugin-unavailable-popover", popover: "auto" },
+                unavailableMessage(entry),
+              )
+            : null,
         );
       }),
     );
