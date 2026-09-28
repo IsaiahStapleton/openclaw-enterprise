@@ -483,10 +483,11 @@ test(
       async function request(method, path, payload, caller = session) {
         const response = await fetch(`${endpoint}${path}`, {
           method,
-          headers: authenticatedHeaders(
-            caller,
-            payload === undefined ? {} : { "content-type": "application/json" },
-          ),
+          headers: authenticatedHeaders(caller, {
+            // This fixture configures port 0 before listening on an ephemeral port.
+            origin: authBaseURL,
+            ...(payload === undefined ? {} : { "content-type": "application/json" }),
+          }),
           ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
         });
         return {

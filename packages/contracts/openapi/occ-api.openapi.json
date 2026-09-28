@@ -12074,6 +12074,7 @@
                                     "type": "object"
                                   },
                                   "name": { "$ref": "#/components/schemas/def-0" },
+                                  "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                                   "plugins": { "$ref": "#/components/schemas/def-0" }
                                 },
                                 "type": "object"
@@ -12280,6 +12281,7 @@
                             "type": "object"
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
+                          "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                           "plugins": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
@@ -12425,6 +12427,7 @@
                                   "type": "object"
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
+                                "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
@@ -12745,6 +12748,7 @@
                                   "type": "object"
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
+                                "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
@@ -12955,6 +12959,7 @@
                             "type": "object"
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
+                          "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                           "plugins": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
@@ -13099,6 +13104,7 @@
                                   "type": "object"
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
+                                "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
