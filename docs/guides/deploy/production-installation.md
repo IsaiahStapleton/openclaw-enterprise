@@ -17,20 +17,19 @@ To install the current example, select a verified release or custom controller
 image supporting `catalogSource: openai-curated` and the
 [origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
 plus a compatible runtime. Export their immutable digests as `CONTROLLER_IMAGE`
-and `RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images)
+and `RUNTIME_IMAGE` for installation, or [build and publish images](#build-and-publish-production-images)
 from this checkout.
 
-The published controller below supports the curated catalog but predates the
-current origin check for cookie-authenticated mutations. No release meeting current
-production requirements has been verified for this guide. Do not use these exports
-for the current installation; they remain available for image tests and workflows
-targeting their recorded source revision.
+The published controller supports the curated catalog but predates the current
+origin check. No release meeting current production requirements has been verified
+for this guide. Use these images only for image tests or workflows targeting their
+recorded source revision.
 
-Both images were built from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc`,
-passed startup checks on matching-architecture runners, and had their remote
-digests verified in [publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
-The multi-platform indexes let Docker and Kubernetes pull the host or node variant.
-Publication does not establish production deployment readiness.
+Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
+matching-architecture startup checks and remote digest verification in
+[publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
+Their multi-platform indexes select the host or node variant. Publication does not
+establish production deployment readiness.
 
 You need read access to both GHCR packages. At publication, they inherited access
 from `openclaw/openclaw-enterprise`. Authenticate locally with a GitHub personal
@@ -41,14 +40,18 @@ password prompt. Do not paste the token into the command itself. See
 
 ```bash
 docker login ghcr.io --username '<your-github-username>'
+```
 
-export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
-export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
+For historical [image tests](../../testing/images.md#check-published-images), export:
+
+```bash
+export HISTORICAL_CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
+export HISTORICAL_RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
 ```
 
 Configure approved pull credentials for **control-plane and tenant Pods**;
-local `docker login` does not authenticate cluster nodes. After exporting the
-digests, return to your calling guide.
+`docker login` does not authenticate cluster nodes. To install, continue with the
+verified current pair.
 
 ## Build and publish production images
 

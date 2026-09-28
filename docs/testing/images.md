@@ -25,18 +25,19 @@ GitHub permissions, or hosted publication. Without the selector the test skips.
 ### Check published images
 
 On a `linux/amd64` or `linux/arm64` host, follow [Use published images](../guides/deploy/production-installation.md#use-published-images)
-to authenticate to private GHCR and export `CONTROLLER_IMAGE` and `RUNTIME_IMAGE`.
-Docker pulls the variant matching the host. These commands check that variant;
+to authenticate to private GHCR and export `HISTORICAL_CONTROLLER_IMAGE` and
+`HISTORICAL_RUNTIME_IMAGE`. To check a different pair, set these variables to
+its digests. Docker pulls the variant matching the host. These commands check that variant;
 they do not test both architectures in one invocation. Run from the repository
 root with the [local test prerequisites](local.md).
 To reproduce the published release's checks, use its recorded source revision;
 when validating source changes, build images from that checkout instead.
 
 ```bash
-docker pull "$CONTROLLER_IMAGE"
-docker pull "$RUNTIME_IMAGE"
-OCC_TEST_PRODUCTION_IMAGE="$CONTROLLER_IMAGE" \
-OCC_TEST_RUNTIME_IMAGE="$RUNTIME_IMAGE" \
+docker pull "$HISTORICAL_CONTROLLER_IMAGE"
+docker pull "$HISTORICAL_RUNTIME_IMAGE"
+OCC_TEST_PRODUCTION_IMAGE="$HISTORICAL_CONTROLLER_IMAGE" \
+OCC_TEST_RUNTIME_IMAGE="$HISTORICAL_RUNTIME_IMAGE" \
   node --test tests/integration/production-image-startup.test.mjs \
     tests/integration/runtime-image-startup.test.mjs \
     tests/integration/repository-runtime-volume.test.mjs
