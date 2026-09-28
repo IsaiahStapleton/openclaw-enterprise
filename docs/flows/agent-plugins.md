@@ -1,6 +1,6 @@
 ---
 created: 2026-09-08
-updated: 2026-09-27
+updated: 2026-09-28
 last_updated_session: 01a0d4f7-8085-70e0-9d0c-69a465a81fe3
 ---
 
@@ -76,19 +76,21 @@ cursors, or plugin IDs. Hosted discovery resolves bound `codex_pat` and rechecks
 binding and caller/Agent Secret `operate` inside
 [`SecretDriver.withValue`](../reference/drivers/secret.md). Curated discovery needs
 no Secret. Missing, denied, or unavailable Secrets fail before discovery.
-Nontransactional reads use current values but may precede rotation; discovery
-persists no state or credentials.
+Nontransactional reads may precede rotation; discovery persists neither state nor
+credentials.
 
 The [Codex Driver](../../apps/controller/src/drivers/plugin/index.ts) hydrates
-hosted identity, then searches `q` or lists GLOBAL entries with opaque cursors.
+hosted identity, searches `q`, and pages GLOBAL entries with opaque cursors.
 [Console discovery](../../apps/controller/src/console/agents/plugin-discovery.mjs)
-invalidates responses and aborts requests on input before the
-[search delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
-Enter/paging run immediately; closing, configured view, or credential changes cancel
-searches. Request signals retain view cancellation.
-Tools (`null`: unknown) load on demand; supported entries become selectable after
-details. Unsupported releases stay unavailable. Curated catalogs filter bundled
-entries; tools/account access remain unknown.
+preloads page one for Create Agent PATs and bound PATs in editable Agent Plugins
+tabs. The picker reuses prefetch; credential changes clear discovery, preserving
+selections. Search marks loading and invalidates old responses before the
+[delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+Enter/paging bypass the delay. Closing, configured view, credential changes, and
+view cancellation abort requests.
+Tools (`null`: unknown) show loading on demand; supported entries become selectable
+afterward. Unsupported releases remain unavailable.
+Curated catalogs filter bundled entries without verifying tools/account access.
 
 Bounded hosted reads forbid redirects. OCC returns `no-store` metadata, rejects
 credential echoes, and suppresses upstream errors/artifacts. Selections exclude
@@ -156,24 +158,23 @@ recorded integrity, and the runtime source's containment in the install path.
 Verification failure prevents gateway readiness. Confirmed install rejection
 disables the optional selection and removes its managed tool allowance before startup.
 
-Dedicated Codex enables apps, plugins, and remote plugins in isolated `CODEX_HOME`
-only for nonempty selections; `apps._default.enabled:false` always applies.
-For nonempty selections, Compute configures the OpenClaw bridge with
-`codexPlugins.enabled:true`,
-`allow_all_plugins:false`, and an entry per selection. Disabled selections cannot
-execute hosted app tools.
+For nonempty selections, dedicated Codex enables apps, plugins, and remote plugins
+in isolated `CODEX_HOME`; Compute configures its OpenClaw bridge with
+`codexPlugins.enabled:true`, `allow_all_plugins:false`, and an entry per selection.
+`apps._default.enabled:false` always applies. Disabled selections cannot execute
+hosted app tools.
 
-Startup discovers the marketplace with `plugin/list` and resolves selections with
-`plugin/read`. `codexRuntimeArtifact` uses concrete `detail.apps`, excluding
+`plugin/list` discovers the marketplace; `plugin/read` resolves selections.
+`codexRuntimeArtifact` uses concrete `detail.apps`, excluding
 `appTemplates`; see [Driver limits](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
 `codexInstallPlan` validates policy and detail before `plugin/install`. Native
-Codex loads the selected bundle's skills alongside its concrete apps. Hooks, native MCP servers,
-scheduled tasks, and plugins without concrete apps remain unsupported. Hosted
-app tool policies remain unchanged. Restricting other account-enabled plugin
-skills requires separate native default enablement support and OCE integration.
+Codex loads bundled skills. Hooks, native MCP servers, scheduled tasks, and plugins
+without concrete apps remain unsupported.
+Restricting other account-enabled skills requires native default enablement
+support and OCE integration.
 Install rejections or missing app authentication warn. Explicit tool policies
 require `mcpServerStatus/list`'s `codex_apps` inventory; `codexAppToolSettings`
-binds catalog action IDs through `_meta._codex_apps.resource_uri`. Native IDs also
+binds catalog action IDs through `_meta._codex_apps.resource_uri`. Native IDs
 work. Unknown, unowned, ambiguous, or duplicate IDs fail startup.
 
 `codexRuntimeArtifact` writes app defaults and explicit tools separately:
@@ -295,6 +296,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 23:40: Catalog prefetch and loading feedback. (01a0e53a-f2be-7bd1-a9c1-36e827b2ee47 - b38554ac)
 
 - 2026-09-27 22:17: Document native Codex bundled skill support and pending account-plugin activation restriction. (01a0d4f7-8085-70e0-9d0c-69a465a81fe3 - 19f72841c3aed621137bd438ae91fa016c39b292)
 

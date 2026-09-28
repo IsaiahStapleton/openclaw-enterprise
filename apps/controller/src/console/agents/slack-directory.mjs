@@ -119,6 +119,7 @@ export function createSlackNameResolver({
           `${namespacePath(context.namespaceId)}/channel-directory/lookup`,
           {
             method: "POST",
+            readOnly: true,
             body: {
               secretId,
               kind,
@@ -299,7 +300,7 @@ export function createSlackDirectoryField({
     search.setAttribute("aria-expanded", "false");
     search.removeAttribute("aria-activedescendant");
     activeOption = -1;
-    nameStatus.hidden = false;
+    nameStatus.style.visibility = "visible";
   }
   function renderValues() {
     chips.replaceChildren(
@@ -418,7 +419,7 @@ export function createSlackDirectoryField({
   function prepareSearch() {
     cancelSearch();
     panel.hidden = false;
-    nameStatus.hidden = true;
+    nameStatus.style.visibility = "hidden";
     search.setAttribute("aria-expanded", "true");
     search.removeAttribute("aria-activedescendant");
     activeOption = -1;
@@ -466,6 +467,7 @@ export function createSlackDirectoryField({
         const requestPage = (selection) =>
           context.request(`${namespacePath(context.namespaceId)}/channel-directory/lookup`, {
             method: "POST",
+            readOnly: true,
             signal,
             body: {
               secretId,
@@ -620,7 +622,9 @@ export function createSlackDirectoryField({
     }
   });
   field.addEventListener("focusout", (event) => {
-    if (!field.contains(event.relatedTarget)) {
+    // Access revalidation makes this view inert before restoring input focus.
+    // Keep the open search through that blur or a browser tab switch.
+    if (!field.contains(event.relatedTarget) && !field.closest("[inert]") && document.hasFocus()) {
       close();
     }
   });

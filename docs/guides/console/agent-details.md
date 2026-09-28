@@ -127,11 +127,11 @@ Configuration JSON. See the [Configuration reference](../../reference/configurat
 
 ## Plugins tab
 
-Open **Create new version** → **Plugins** to change this Agent's plugin selections and
-tool policies. Existing selections load from the Agent. **Configure plugins**
-opens the same policy editor used when creating an Agent; **Plugin selections
-JSON** also shows the complete selection map. Dedicated Codex browsing requires
-exact active Agent `read`/`update` and a catalog-capable Plugin Driver. The
+In **Create new version** → **Plugins**, edit the Agent's existing selections and
+tool policies with **Configure plugins** or **Plugin selections JSON**. With a bound
+Service Accounts token Secret, the tab preloads the first catalog page for the
+picker. Search and tool lookups show loading indicators. Dedicated Codex browsing
+requires exact active Agent `read`/`update` and a catalog-capable Plugin Driver. The
 curated catalog needs no Secret. Hosted discovery uses the bound Service Accounts
 token Secret server-side and requires caller and Agent ServicePrincipal Secret
 `operate`; the browser never receives the token. Other execution modes cannot
@@ -140,6 +140,11 @@ from the running revision's; neither catalog proves installation or runtime
 access. Existing
 selections and **Plugin selections JSON** remain editable when browsing is
 unavailable.
+
+An open Slack approver search keeps its query and results when you return to the
+browser tab and still have Agent access. Moving to another Console control closes
+the results; focus the search field to open them again. Switching Agent tabs and
+returning keeps a completed query.
 
 Select **Save plugin selections** to update the Agent's desired plugin map, then
 **Deploy new version** to apply it. Saving does not alter an admitted revision
