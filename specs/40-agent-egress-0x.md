@@ -1,4 +1,4 @@
-# Basic Agent egress proxy
+# Agent egress for 0.x
 
 <a id="current-disposition"></a>
 
@@ -12,8 +12,8 @@ egress proxy. Verify these protections before release.
 OpenShell gives the Agent a placeholder; its network proxy substitutes the real
 credential for an allowed HTTP request to a bound destination. The trusted proxy
 may hold the credential. OCE's Credential Gateway Driver for OpenShell shipped in #461
-([reference](../docs/reference/drivers/credential-gateway.md); design in
-`specs/39-sandbox-credential-injection.md`, proposed in #452); it is optional,
+([reference](../docs/reference/drivers/credential-gateway.md); design proposed
+in #452); it is optional,
 not selected by production installations, and OpenShell v0.1.0 is not a
 supported production runtime. Compute refuses repository credentials when a
 SandboxDriver is selected (`validateRepositoryCredentialSupport`), so no combined
@@ -77,7 +77,12 @@ Dashed arrows show intended integration, not installed behavior.
 
 - **OpenShell:** Apply network policy and credential injection inside the
   sandbox. Credential binding does not grant network access. Opaque TLS cannot
-  support injection and needs a separately qualified path.
+  support injection and needs a separately qualified path. On main this fence
+  is not yet enforced: Compute's additive NetworkPolicies still grant OpenShell
+  workload Pods DNS and public TCP/443, and Kubernetes unions them with
+  OpenShell's deny-all egress policy. Harness Pods outside OpenShell keep
+  public IPv4 TCP/443 except private and link-local ranges until the
+  `TODO(model-egress-proxy)` in Compute is resolved.
 - **OpenClaw Gateway:** For commands hosted on the Gateway, use OpenClaw's
   [secret proxy](https://docs.openclaw.ai/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
   Direct sockets can bypass its traffic allowlist. Sandboxed and remote tools do
