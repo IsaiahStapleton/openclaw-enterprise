@@ -51,8 +51,28 @@ export SOURCE_RUNTIME='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:<64-h
 export ECR_CONTROLLER="$ECR_REGISTRY/openclaw-enterprise/controller"
 export ECR_RUNTIME="$ECR_REGISTRY/openclaw-enterprise/runtime"
 export ECR_TAG='<unique-release-tag>'
+```
+
+Start a dedicated Bash shell for registry authentication and copying. Its
+cleanup trap removes the credential file when the shell exits or is interrupted;
+do not run this in a shell with other work or traps:
+
+```bash
+bash
+```
+
+In that shell, create the private auth file, register cleanup immediately, and
+authenticate. If an operation fails unexpectedly, exit this shell before
+investigating or retrying; start a fresh one and authenticate again. The tag
+lookup below can return the expected `ImageNotFoundException`.
+
+```bash
+set -o pipefail
 umask 077
 export REGISTRY_AUTH="$(mktemp "${TMPDIR:-/tmp}/oce-registry-auth.XXXXXXXX")"
+trap 'rm -f -- "$REGISTRY_AUTH"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 printf '{"auths":{}}\n' > "$REGISTRY_AUTH"
 skopeo login --authfile "$REGISTRY_AUTH" --username '<github-username>' ghcr.io
 aws ecr get-login-password --region "$AWS_REGION" | \
@@ -61,8 +81,8 @@ aws ecr get-login-password --region "$AWS_REGION" | \
 
 Enter the GitHub token at the prompt. Run `aws sts get-caller-identity` and
 confirm the selected account before writing to ECR. The temporary auth file
-contains registry credentials; keep it private and remove it when finished. The ECR login expires;
-renew it before retrying if necessary. Before copying, inspect each target tag
+contains registry credentials. The ECR login expires; renew it before retrying
+if necessary. Before copying, inspect each target tag
 using `aws ecr describe-images` in the approved account and Region. An
 `ImageNotFoundException` establishes that the tag is absent; permission,
 network, and other errors do not. For each repository, read its policy and the
@@ -79,8 +99,8 @@ aws ecr describe-images --region "$AWS_REGION" \
 
 Repeat the tag lookup for `openclaw-enterprise/runtime`. If a tag exists,
 compare its digest with the source and use it only if it matches. Stop on a
-conflicting digest. The repository's immutability policy protects against overwrites but does not
-replace this readback or coordination with other writers.
+conflicting digest. The repository's immutability policy protects against
+overwrites but does not replace this readback or coordination with other writers.
 
 Copy each absent tag and verify the destination digest before continuing. Run
 each command separately and stop on an error:
@@ -91,28 +111,32 @@ skopeo copy --all --preserve-digests --authfile "$REGISTRY_AUTH" \
 skopeo copy --all --preserve-digests --authfile "$REGISTRY_AUTH" \
   "docker://$SOURCE_RUNTIME" "docker://$ECR_RUNTIME:$ECR_TAG"
 
-skopeo inspect --authfile "$REGISTRY_AUTH" --format '{{.Digest}}' \
-  "docker://$ECR_CONTROLLER:$ECR_TAG"
-skopeo inspect --authfile "$REGISTRY_AUTH" --format '{{.Digest}}' \
-  "docker://$ECR_RUNTIME:$ECR_TAG"
+skopeo inspect --raw --authfile "$REGISTRY_AUTH" \
+  "docker://$ECR_CONTROLLER:$ECR_TAG" | sha256sum
+skopeo inspect --raw --authfile "$REGISTRY_AUTH" \
+  "docker://$ECR_RUNTIME:$ECR_TAG" | sha256sum
 ```
 
-Require each printed index digest to equal the corresponding source digest from
-the receipt. `--all` copies the platform manifests, and `--preserve-digests`
-fails if the registry cannot preserve them. If a copy times out or fails, read
+Compare each printed hash, prefixed with `sha256:`, to the corresponding
+index digest in the receipt. Hashing the raw manifest checks the index itself,
+rather than selecting a platform-specific manifest. `--all` copies the
+platform manifests, and `--preserve-digests` fails if the registry cannot preserve them. If a copy times out or fails, read
 back that exact target tag before retrying: accept a matching digest, stop on
 a different digest, and retry only an absent tag after resolving the error.
 If readback itself fails, the outcome is unknown. Inspect both destinations,
 since one copy can succeed while the other fails.
 
-Set the values below using the verified readback digests, record the source and
-destination references with the chart and receipt, then remove the auth file:
+Record the source and destination references with the chart and receipt. Exit
+the dedicated shell; its trap removes the auth file. In the original shell,
+export the verified readback digests:
+
+```bash
+exit
+```
 
 ```bash
 export CONTROLLER_IMAGE="$ECR_CONTROLLER@sha256:<verified-controller-digest>"
 export RUNTIME_IMAGE="$ECR_RUNTIME@sha256:<verified-runtime-digest>"
-rm -- "$REGISTRY_AUTH"
-unset REGISTRY_AUTH
 ```
 
 Configure node pull permissions separately. EKS managed nodes use their node
