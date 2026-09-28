@@ -387,8 +387,15 @@ async function auditActions(controller) {
 }
 
 test("credential source writes refuse active and stale borrowed transactions before effects", async () => {
-  const { controller, gateway, makeReady, modelSecret, namespace, passRegistrationFence, secretDriver } =
-    await fixture();
+  const {
+    controller,
+    gateway,
+    makeReady,
+    modelSecret,
+    namespace,
+    passRegistrationFence,
+    secretDriver,
+  } = await fixture();
   await makeReady();
   const secret = await modelSecret();
   const input = {
@@ -417,13 +424,16 @@ test("credential source writes refuse active and stale borrowed transactions bef
     auditCallbacks += 1;
     return auditEvent(namespace.id, source.id, "openclaw.credential_sources.delete");
   };
-  const snapshot = async (unit) => structuredClone({
-    sources: await unit.credentialSources.listCredentialSources(namespace.id),
-    audit: await unit.audit.list(),
-  });
+  const snapshot = async (unit) =>
+    structuredClone({
+      sources: await unit.credentialSources.listCredentialSources(namespace.id),
+      audit: await unit.audit.list(),
+    });
   const before = await controller.transact(snapshot);
   const gatewayCalls = gateway.calls.length;
-  const secretReads = secretDriver.calls.filter(({ operation }) => operation === "withValue").length;
+  const secretReads = secretDriver.calls.filter(
+    ({ operation }) => operation === "withValue",
+  ).length;
   const stored = structuredClone(gateway.stored);
   const assertRefused = async (operation) =>
     assert.rejects(operation, (error) => {
