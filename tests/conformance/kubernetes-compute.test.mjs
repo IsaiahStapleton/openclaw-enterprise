@@ -7136,6 +7136,17 @@ function workspaceSetupFixture(embedded, runtime = true) {
   const state = { ready: false, secretFailure: false, failedInitializer: false };
   const driver = new KubernetesComputeDriver(
     routedOptions({
+      resources: {
+        gateway: {
+          requests: { cpu: "200m", memory: "256Mi" },
+          limits: { cpu: "1", memory: "1Gi" },
+        },
+        agent: {
+          requests: { cpu: "100m", memory: "128Mi" },
+          limits: { cpu: "500m", memory: "512Mi" },
+        },
+        namespace: options().resources.namespace,
+      },
       runtime: runtime
         ? { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" }
         : undefined,
@@ -7411,6 +7422,7 @@ for (const embedded of [true, false]) {
     }
     const initializer = pod.initContainers.find(({ name }) => name === "initialize-workspace");
     assert.equal(initializer.image, driver.options.images.gateway);
+    assert.deepEqual(initializer.resources, driver.options.resources.gateway);
     // Container restarts do not rerun initContainers; the workspace owner checks its marker.
     assert.equal(pod.containers[0].args[0].includes(setup.id), true);
     assert.equal(
