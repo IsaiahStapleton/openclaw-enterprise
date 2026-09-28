@@ -114,7 +114,7 @@ Use `repository-credentials-k3d-real.test.mjs` for the joined installed path:
 fresh Helm controller/PostgreSQL, API-created Namespace and Agent, worker-opened
 session, private Kubernetes runtime material and the model's own
 clone/edit/commit/push/native-PR task in both embedded OpenClaw and Dedicated
-Codex. The Dedicated case creates a draft PR. One explicitly authorized disposable
+Codex. Each case creates a ready-for-review PR. One explicitly authorized disposable
 repository is sufficient; two-repository deterministic coverage remains in the
 controlled platform case.
 
@@ -191,7 +191,7 @@ the command's denial and independently reads both files. It verifies the selecte
 Localhost profile on the Agent container. This is local k3d evidence, not a
 production-node seccomp qualification.
 
-The full-access binding must clone, fetch, commit, push and create a draft PR.
+The full-access binding must clone, fetch, commit, push and create a ready-for-review PR.
 A separate `git-read` Agent must clone and fetch the same repository, then
 receive the broker's HTTP 400 denial on one push; independent provider readback
 must show no new branch. Both bind native command completions to the Gateway's
