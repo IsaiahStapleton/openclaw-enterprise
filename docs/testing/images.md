@@ -33,11 +33,19 @@ On each check host, authenticate Docker to the selected private registry with
 pull access to both repositories. The temporary Skopeo auth file used for
 [private image delivery](../guides/deploy/private-registry-images.md) does not
 authenticate Docker. For ECR, set `AWS_REGION` and `ECR_REGISTRY` to the target
-Region and registry, then run:
+Region and registry. Run this block on its own and stop if it fails:
 
 ```bash
-aws ecr get-login-password --region "$AWS_REGION" | \
-  docker login --username AWS --password-stdin "$ECR_REGISTRY"
+if [[ -n "${AWS_REGION:-}" && -n "${ECR_REGISTRY:-}" ]]; then
+  (
+    set -o pipefail
+    aws ecr get-login-password --region "$AWS_REGION" | \
+      docker login --username AWS --password-stdin "$ECR_REGISTRY"
+  )
+else
+  printf 'Set AWS_REGION and ECR_REGISTRY before logging in to ECR.\n' >&2
+  false
+fi
 ```
 
 ECR credentials expire; authenticate again if needed. For GHCR, follow
