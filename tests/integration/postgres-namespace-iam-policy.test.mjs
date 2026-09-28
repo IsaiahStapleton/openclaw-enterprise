@@ -307,6 +307,77 @@ test(
 );
 
 test(
+  "PostgreSQL native IAM binds Agent ServicePrincipals only while their Agent owns them",
+  requiresPostgres,
+  async (context) => {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: databaseUrl });
+    context.after(() => pool.end());
+    const state = new PostgresPlatformState(pool);
+    const iam = new NativeIAMDriver(state, { id: "postgres-namespace-iam-agent-subject" });
+    const { namespace, secret, agent } = await createNamespaceAgentState(state);
+    const localService = await createNamespaceServicePrincipal(state, namespace.id);
+    const role = await state.transact((unit) =>
+      iam.createNamespaceRole(
+        { policy: unit.iamPolicy },
+        {
+          id: identifier("role"),
+          namespaceId: namespace.id,
+          permissions: [{ action: "operate", resourceKind: "secret" }],
+        },
+      ),
+    );
+    const bindingInput = (subjectId) => ({
+      id: identifier("binding"),
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId,
+      roleId: role.id,
+      resourceKind: "secret",
+      resourceId: secret.id,
+    });
+
+    // The live Agent's ServicePrincipal and a non-Agent local service remain bindable.
+    await state.transact(async (unit) => {
+      for (const subjectId of [agent.servicePrincipalId, localService]) {
+        await iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, bindingInput(subjectId));
+      }
+    });
+
+    // The Agent owner key is deferred, so a unit can hold an Agent-owned ServicePrincipal
+    // without a live Agent. State must reject it as the in-memory adapter does, rather than
+    // accept it and leave the commit to fail. Observe the rejection inside the unit,
+    // because the deferred key failure at commit is also reported as a ScopeViolation.
+    const orphan = `service-agent-${randomUUID()}`;
+    let bindingError;
+    await assert.rejects(
+      state.transact(async (unit) => {
+        await state.queryInTransaction(
+          unit,
+          `INSERT INTO occ.iam_identities (id, kind, namespace_id, agent_id)
+           VALUES ($1, 'service_principal', $2, $3)`,
+          [orphan, namespace.id, identifier("agt")],
+        );
+        try {
+          await iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, bindingInput(orphan));
+        } catch (error) {
+          bindingError = error;
+          throw error;
+        }
+      }),
+      { name: "ScopeViolationError" },
+    );
+    assert.equal(bindingError?.name, "ScopeViolationError", "State must reject the orphan subject");
+    assert.equal(
+      (await state.read((unit) => unit.iamPolicy.listAccessBindings(namespace.id))).filter(
+        (binding) => binding.subjectId === orphan,
+      ).length,
+      0,
+    );
+  },
+);
+
+test(
   "PostgreSQL native IAM serializes AccessBinding creation before target deletion",
   requiresPostgres,
   async (context) => {
