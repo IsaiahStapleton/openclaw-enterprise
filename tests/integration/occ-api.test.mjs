@@ -2942,9 +2942,11 @@ test("administrator-created auth accounts sign in and receive only provisioned I
     permissions: [{ action: "read", resourceKind: "installation" }],
   };
   fixture.state.roles.push(readOnlyRole);
+  const { id: namespaceId } = await defaultNamespace(controller);
 
   const noGrantEmail = `no-grant-${randomUUID()}@example.com`;
   const noGrantPassword = `generated-password-${randomUUID()}`;
+  const noGrantAuditCount = fixture.auditSink.events.length;
   const noGrant = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
     body: {
       email: noGrantEmail,
@@ -2955,6 +2957,15 @@ test("administrator-created auth accounts sign in and receive only provisioned I
   assert.equal(noGrant.status, 201, JSON.stringify(noGrant.body));
   assert.deepEqual(provisionedSeed.roles, []);
   assert.deepEqual(provisionedSeed.bindings, []);
+  const noGrantEvents = fixture.auditSink.events.slice(noGrantAuditCount);
+  assert.equal(noGrantEvents.length, 1);
+  assert.equal(noGrantEvents[0].kind, "mutation");
+  assert.equal(noGrantEvents[0].action, "openclaw.auth.accounts.create");
+  assert.equal(noGrantEvents[0].outcome, "success");
+  assert.deepEqual(noGrantEvents[0].resource, {
+    kind: "installation",
+    id: fixture.installationId,
+  });
   const noGrantSession = await signInWithEmailPassword({
     fetch: fixture.app.fetch.bind(fixture.app),
     email: noGrantEmail,
@@ -2964,6 +2975,41 @@ test("administrator-created auth accounts sign in and receive only provisioned I
     session: noGrantSession,
   });
   assert.equal(noGrantInstallation.status, 403);
+  // A zero-grant human is authenticated but sees nothing and can change nothing until an
+  // administrator binds a Role; list reads filter to an empty set, everything else is denied.
+  const noGrantNamespaces = await injectedRequest(fixture.app, "GET", "/namespaces", {
+    session: noGrantSession,
+  });
+  assert.equal(noGrantNamespaces.status, 200);
+  assert.deepEqual(noGrantNamespaces.data, []);
+  for (const [method, pathname, body] of [
+    ["POST", "/namespaces", { name: "zero-grant-namespace" }],
+    ["GET", `/namespaces/${namespaceId}`],
+    ["DELETE", `/namespaces/${namespaceId}`],
+    ["GET", `/namespaces/${namespaceId}/agents`],
+    ["GET", `/namespaces/${namespaceId}/iam/roles`],
+    [
+      "POST",
+      `/namespaces/${namespaceId}/iam/roles`,
+      { permissions: [{ action: "read", resourceKind: "namespace" }] },
+    ],
+    [
+      "POST",
+      "/api/auth/accounts",
+      {
+        email: `zero-grant-escalation-${randomUUID()}@example.com`,
+        password: `generated-password-${randomUUID()}`,
+        name: "Zero Grant Escalation",
+      },
+    ],
+  ]) {
+    const denied = await injectedRequest(fixture.app, method, pathname, {
+      session: noGrantSession,
+      ...(body === undefined ? {} : { body }),
+    });
+    assert.equal(denied.status, 403, `${method} ${pathname}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.body.error.code, "FORBIDDEN");
+  }
 
   const unknownRole = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
     body: {

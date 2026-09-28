@@ -289,6 +289,16 @@ test(
     });
 
     const iamBeforeNoGrant = await state.loadNativeIAMState(installation.id);
+    const adminNamespaces = await appA.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+    });
+    assert.equal(adminNamespaces.statusCode, 200, adminNamespaces.body);
+    const deniedNamespaceId = adminNamespaces.json().data[0].id;
+    const noGrantAuditBefore = await observerPool.query(
+      `SELECT id FROM occ.audit_events WHERE action = 'openclaw.auth.accounts.create'`,
+    );
     const noGrantEmail = `postgres-no-grant-${randomUUID()}@example.com`;
     const noGrantPassword = `generated-password-${randomUUID()}`;
     const noGrant = await appA.inject({
@@ -309,6 +319,68 @@ test(
       headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
     });
     assert.equal(noGrantInstallation.statusCode, 403, noGrantInstallation.body);
+    // The zero-grant create is audited exactly once as an administrator mutation.
+    const noGrantAudit = await observerPool.query(
+      `SELECT id, kind, actor_id, resource_kind, resource_id, outcome
+       FROM occ.audit_events
+       WHERE action = 'openclaw.auth.accounts.create' AND NOT (id = ANY($1::text[]))`,
+      [noGrantAuditBefore.rows.map(({ id }) => id)],
+    );
+    assert.equal(noGrantAudit.rows.length, 1);
+    assert.deepEqual(
+      {
+        kind: noGrantAudit.rows[0].kind,
+        actorId: noGrantAudit.rows[0].actor_id,
+        resourceKind: noGrantAudit.rows[0].resource_kind,
+        resourceId: noGrantAudit.rows[0].resource_id,
+        outcome: noGrantAudit.rows[0].outcome,
+      },
+      {
+        kind: "mutation",
+        actorId: installationPrincipal(iamBeforeNoGrant).id,
+        resourceKind: "installation",
+        resourceId: installation.id,
+        outcome: "success",
+      },
+    );
+    // Before any grant the human sees an empty Namespace list and is denied everywhere else.
+    const noGrantNamespaces = await appB.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(noGrantNamespaces.statusCode, 200, noGrantNamespaces.body);
+    assert.deepEqual(noGrantNamespaces.json().data, []);
+    for (const [method, url, payload] of [
+      ["POST", "/namespaces", { name: "postgres-zero-grant-namespace" }],
+      ["GET", `/namespaces/${deniedNamespaceId}`],
+      ["DELETE", `/namespaces/${deniedNamespaceId}`],
+      ["GET", `/namespaces/${deniedNamespaceId}/agents`],
+      ["GET", `/namespaces/${deniedNamespaceId}/iam/roles`],
+      [
+        "POST",
+        `/namespaces/${deniedNamespaceId}/iam/roles`,
+        { permissions: [{ action: "read", resourceKind: "namespace" }] },
+      ],
+      [
+        "POST",
+        "/api/auth/accounts",
+        {
+          email: `postgres-zero-grant-escalation-${randomUUID()}@example.com`,
+          password: `generated-password-${randomUUID()}`,
+          name: "Postgres Zero Grant Escalation",
+        },
+      ],
+    ]) {
+      const denied = await appB.inject({
+        method,
+        url,
+        headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+        ...(payload === undefined ? {} : { payload }),
+      });
+      assert.equal(denied.statusCode, 403, `${method} ${url}: ${denied.body}`);
+      assert.equal(denied.json().error.code, "FORBIDDEN");
+    }
     const iamBefore = await state.loadNativeIAMState(installation.id);
     assert.equal(iamBefore.identities.length, iamBeforeNoGrant.identities.length + 1);
     assert.equal(iamBefore.bindings.length, iamBeforeNoGrant.bindings.length);
