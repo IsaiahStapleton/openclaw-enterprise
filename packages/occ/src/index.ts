@@ -214,6 +214,7 @@ export { PostgresHumanAuthentication } from "./state/human-authentication.ts";
 export type {
   HumanAuthenticationActor,
   HumanAuthenticationAccount,
+  HumanAuthenticationRecovery,
   HumanAuthenticationUser,
   HumanAuthenticationProof,
   HumanAuthenticationSnapshot,

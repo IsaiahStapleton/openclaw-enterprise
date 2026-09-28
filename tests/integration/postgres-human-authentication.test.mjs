@@ -633,5 +633,200 @@ test(
         );
       },
     );
+
+    await context.test(
+      "repair enrolment admits only a provisioned single-password account",
+      async () => {
+        const orphan = await auth.createAccount({
+          email: `orphan-${suffix}@example.test`,
+          password,
+        });
+        await assert.rejects(persistence.enrolAccount(orphan.id, admin), {
+          name: "ScopeViolationError",
+        });
+        assert.equal(
+          (
+            await pool.query("SELECT 1 FROM occ.human_authentication_accounts WHERE user_id=$1", [
+              orphan.id,
+            ])
+          ).rowCount,
+          0,
+        );
+        await pool.query('DELETE FROM occ."user" WHERE id=$1', [orphan.id]);
+        const stale = { ...admin, sessionId: randomUUID() };
+        await assert.rejects(persistence.enrolAccount(recoveryUser.id, stale), {
+          name: "AuthorizationDeniedError",
+        });
+        const again = await persistence.enrolAccount(person.id, admin);
+        assert.equal(again.created, false);
+        assert.equal(again.principalId, seed.principal.id);
+      },
+    );
+
+    await context.test(
+      "recovery replacement moves the one designation and the credential guard with it",
+      async () => {
+        await signInAdmin();
+        const successor = await auth.createAccount({
+          email: `successor-${suffix}@example.test`,
+          password,
+        });
+        const successorSeed = auth.principalSeed(successor, { roleId });
+        await state.appendNativeIAMPrincipal(successorSeed);
+        const successorPrincipal = successorSeed.principal.id;
+        assert.deepEqual(await persistence.readRecovery(admin), {
+          userId: recoveryUser.id,
+          principalId: recoveryPrincipal.id,
+          methodId: (
+            await pool.query(
+              "SELECT id FROM occ.account WHERE user_id=$1 AND provider_id='credential'",
+              [recoveryUser.id],
+            )
+          ).rows[0].id,
+        });
+        // An unenrolled account cannot hold the designation until it is repaired.
+        await assert.rejects(
+          persistence.replaceRecovery(successor.id, successorPrincipal, recoveryUser.id, admin, 1),
+          { name: "ScopeViolationError" },
+        );
+        const enrolled = await persistence.enrolAccount(successor.id, admin);
+        assert.deepEqual(enrolled, { principalId: successorPrincipal, version: 1, created: true });
+        const disabled = await persistence.readAccount(person.id, admin);
+        assert.equal(disabled.disabled, true);
+        await assert.rejects(
+          persistence.replaceRecovery(
+            person.id,
+            seed.principal.id,
+            recoveryUser.id,
+            admin,
+            disabled.version,
+          ),
+          /recovery account is unavailable/,
+        );
+        await assert.rejects(
+          persistence.replaceRecovery(successor.id, successorPrincipal, successor.id, admin, 1),
+          { name: "ResourceConflictError" },
+        );
+        await assert.rejects(
+          persistence.replaceRecovery(successor.id, successorPrincipal, recoveryUser.id, admin, 2),
+          { name: "ResourceConflictError" },
+        );
+        await assert.rejects(
+          persistence.replaceRecovery(successor.id, seed.principal.id, recoveryUser.id, admin, 1),
+          /recovery account is unavailable/,
+        );
+        await assert.rejects(
+          persistence.replaceRecovery(
+            successor.id,
+            successorPrincipal,
+            recoveryUser.id,
+            { ...admin, sessionId: randomUUID() },
+            1,
+          ),
+          { name: "AuthorizationDeniedError" },
+        );
+        const results = await Promise.allSettled([
+          persistence.replaceRecovery(successor.id, successorPrincipal, recoveryUser.id, admin, 1),
+          peer.replaceRecovery(successor.id, successorPrincipal, recoveryUser.id, admin, 1),
+        ]);
+        const replaced = results.filter((result) => result.status === "fulfilled");
+        assert.equal(replaced.length, 1, "the expected current designation admits one replacement");
+        assert.equal(replaced[0].value.changed, true);
+        assert.equal(
+          results.find((result) => result.status === "rejected").reason.name,
+          "ResourceConflictError",
+        );
+        const designations = (
+          await pool.query(
+            "SELECT r.user_id, r.principal_id, m.user_id AS method_user FROM occ.human_authentication_recovery r JOIN occ.account m ON m.id = r.method_id",
+          )
+        ).rows;
+        assert.deepEqual(designations, [
+          { user_id: successor.id, principal_id: successorPrincipal, method_user: successor.id },
+        ]);
+        assert.deepEqual(await persistence.recoveryDesignation(), {
+          userId: successor.id,
+          principalId: successorPrincipal,
+        });
+        const current = await persistence.readAccount(successor.id, admin);
+        assert.equal(
+          (
+            await persistence.replaceRecovery(
+              successor.id,
+              successorPrincipal,
+              successor.id,
+              admin,
+              current.version,
+            )
+          ).changed,
+          false,
+        );
+        // The trigger guard follows the designation to the new password.
+        await assert.rejects(
+          pool.query("UPDATE occ.account SET password=NULL WHERE user_id=$1", [successor.id]),
+          /recovery credential cannot be removed/,
+        );
+        await assert.rejects(pool.query('DELETE FROM occ."user" WHERE id=$1', [successor.id]), {
+          code: "23001",
+        });
+        const previousHash = (
+          await pool.query(
+            "SELECT password FROM occ.account WHERE user_id=$1 AND provider_id='credential'",
+            [recoveryUser.id],
+          )
+        ).rows[0].password;
+        await pool.query(
+          "UPDATE occ.account SET password=NULL WHERE user_id=$1 AND provider_id='credential'",
+          [recoveryUser.id],
+        );
+        await pool.query(
+          "UPDATE occ.account SET password=$2 WHERE user_id=$1 AND provider_id='credential'",
+          [recoveryUser.id, previousHash],
+        );
+        await signInAdmin();
+        await assert.rejects(
+          changeAccount(successor.id, "disable"),
+          /recovery account cannot be disabled/,
+        );
+        // The application role cannot delete the designation, only move it.
+        await assert.rejects(
+          pool.query("DELETE FROM occ.human_authentication_recovery WHERE installation_id=$1", [
+            installation.id,
+          ]),
+          { code: "42501" },
+        );
+        await assert.rejects(
+          persistence.activateRecovery(recoveryUser.id, recoveryPrincipal.id),
+          /designation cannot be changed/,
+        );
+        const audits = await state.transact((unit) => unit.audit.list());
+        const audit = audits.find((event) => event.action === "authentication.recovery.replace");
+        assert.equal(audit.actorId, recoveryPrincipal.id);
+        assert.deepEqual(audit.details, {
+          userId: successor.id,
+          principalId: successorPrincipal,
+          previousUserId: recoveryUser.id,
+          previousPrincipalId: recoveryPrincipal.id,
+        });
+        assert.ok(
+          audits.some(
+            (event) =>
+              event.action === "authentication.account.enrol" &&
+              event.details?.userId === successor.id,
+          ),
+        );
+        // Replace back so the original recovery account holds the guard again.
+        const original = await persistence.readAccount(recoveryUser.id, admin);
+        await persistence.replaceRecovery(
+          recoveryUser.id,
+          recoveryPrincipal.id,
+          successor.id,
+          admin,
+          original.version,
+        );
+        await changeAccount(successor.id, "disable");
+        assert.equal((await persistence.recoveryDesignation()).userId, recoveryUser.id);
+      },
+    );
   },
 );
