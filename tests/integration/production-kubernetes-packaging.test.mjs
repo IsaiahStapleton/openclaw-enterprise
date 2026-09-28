@@ -1825,6 +1825,17 @@ test(
         "fd00:10::/64",
         { value: "x-client-address" },
       ],
+      [
+        // The controller's header token allows at most 64 characters.
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "10.42.0.0/16",
+          "api.trustedProxy.clientAddressHeader": `x-${"a".repeat(62)}`,
+        },
+        "generic",
+        "10.42.0.0/16",
+        { value: `x-${"a".repeat(62)}` },
+      ],
     ]) {
       const { selected, apiEnv, egress } = await signInObjects(overrides);
       assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, { value: cidrs });
@@ -1980,6 +1991,15 @@ test(
           "api.trustedProxy.clientAddressHeader": "x-real-ip x-forwarded-for",
         },
         /single HTTP header name/,
+      ],
+      [
+        "a client-address header longer than the controller accepts",
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "10.42.0.0/16",
+          "api.trustedProxy.clientAddressHeader": `x-${"a".repeat(63)}`,
+        },
+        /single HTTP header name of at most 64 characters/,
       ],
       [
         "an API key header as a client address",
