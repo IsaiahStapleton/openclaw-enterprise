@@ -779,6 +779,7 @@
               }
             ],
             "hidden": [
+              "guides/deploy/local-repository-credentials",
               "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
