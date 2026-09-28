@@ -454,7 +454,7 @@ unsupported; see [rollback](production-upgrade.md#roll-back-across-human-sign-in
    later). Register
    the GitHub App callback and protect its **client ID** (not App ID) and secret
    as the [reference](../../reference/authentication.md#github-sign-in-for-existing-accounts) describes.
-   Signed in as the recovery administrator, read `data.user.id` from
+   As the recovery administrator, read `data.user.id` from
    `GET /api/auth/session`.
 2. Create the Secret, then set `auth.github.enabled: true`, that ID as
    `auth.recoveryUserId`, and `agentNativeAdmin.enabled: false` in protected
