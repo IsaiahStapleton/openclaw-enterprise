@@ -181,9 +181,11 @@ Edit the protected YAML copies:
   to disjoint Ready pools; Helm does not place runtimes.
   Do not set `network.gatewayClients` with routing enabled; Compute derives the
   Envoy peer from `gatewayRouting`.
-  If enabling Agent plugins, set one compatible bundled `drivers.plugin` selector
-  and any required Codex catalog-reader configuration. See the
+  The example selects the curated Codex PluginDriver catalog. To use a different
+  catalog or Driver, follow the
   [PluginDriver reference](../../reference/drivers/plugin.md#selection-and-catalogs).
+  For Slack Agents, configure the separate gateway and API proxy inputs in the
+  [Slack guide](../integrations/slack.md#configure-both-slack-proxies).
   If the default syscall policy blocks Codex user namespaces, follow
   [Codex sandbox setup](codex-sandbox.md): install a reviewed profile on every
   eligible node, set `runtime.codexSeccompProfile` to its relative kubelet path,
