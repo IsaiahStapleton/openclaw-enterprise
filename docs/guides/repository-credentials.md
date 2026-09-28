@@ -104,9 +104,11 @@ AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(j
 export AGENT_ID
 ```
 
-Select Reader (`git-read`) for read-only work, Contributor (`git-write`) for
-pushes and PRs, or Collaborator (`git-full`) for issue management too. Send the
-profile explicitly; omitting it selects Contributor.
+Select an [access level](../reference/repository-credentials/access-levels.md):
+Read-only (`git-read`), Contributor with issue management off (`git-write`), or
+Contributor (`git-full`). Send the profile explicitly; omitting it in an API
+binding selects `git-write`. The Console's Contributor choice defaults to
+`git-full` when approved.
 Add distinct approved references to the array for more repositories. API
 creation uses `POST /namespaces/$NAMESPACE_ID/agents`; the CLI returns the
 unwrapped Agent. Bindings confer no model access: before deploying, complete the
@@ -175,9 +177,9 @@ for configuration overrides and credential retention.
 The `gh` router selects from an explicit target or effective Git remotes. Ambiguous
 implicit targets require an explicit repository. `gh api` accepts supported relative
 paths such as `repos/example/project/pulls/1`; absolute API URLs are refused.
-Reader supports selected API reads. Contributor adds PR writes; Collaborator
-adds ordinary issue writes. Both writable levels can permit GraphQL merges,
-subject to GitHub rules.
+Read-only supports selected API reads. Contributor with issue management off
+adds PR writes; Contributor also adds ordinary issue writes. Both writable levels
+can permit GraphQL merges, subject to GitHub rules.
 
 Inspect the actual remote commit and PR to confirm completion. If a push or
 mutation has an uncertain response, inspect remote state before repeating it.
@@ -239,8 +241,9 @@ outside the Agent's filesystem mounts.
 
 Keep duration within `maximumDurationSeconds` and select an `allowedProfiles`
 entry. Omitting `--profile` uses the configured default, `git-write` here.
-Use Reader (`git-read`) for reads and Contributor (`git-write`) for pushes and
-PR work. The example selects Collaborator (`git-full`) for issue management too.
+Use Read-only (`git-read`) for reads and Contributor with issue management off
+(`git-write`) for pushes and PR work. The example selects Contributor (`git-full`)
+for issue management too.
 
 The output directory must not exist, and its parent must be owned and mode 0700. The command writes private
 files atomically and prints the session identifier, deadline and directory,
