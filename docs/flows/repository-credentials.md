@@ -276,7 +276,7 @@ capacity wakes cleanup; queue rejection alone does not mark an action uncertain.
 stops admission, closes sessions and bounds cleanup with an independent timer.
 Grace expiry reports unresolved obligations without proving disposal. The original
 broker writes `DISPOSED` to the worker's receipt journal before reporting it,
-and joins pending terminal writes before graceful exit. The Helm worker is a
+and gives pending terminal writes a separate bounded window before graceful exit. The Helm worker is a
 restartable init container so its receipt listener outlives broker shutdown.
 Only a committed observation survives restart. Uncommitted or uncertain
 provider inventory remains unknown. The process closes the shared App key after

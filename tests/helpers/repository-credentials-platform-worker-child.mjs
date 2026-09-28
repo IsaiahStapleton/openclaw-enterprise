@@ -1,6 +1,6 @@
 import pg from "pg";
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
-import { PostgresPlatformState } from "@openclaw-enterprise/occ";
+import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { startRepositoryReceiptServer } from "../../apps/controller/src/backends/repository-credentials/receipt-server.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 

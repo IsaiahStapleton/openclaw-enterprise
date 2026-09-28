@@ -596,6 +596,18 @@ test(
       namespaceId: fixture.namespace.id,
       bindings: [{ repositoryRef: "repo-a", profile: "git-read" }],
     });
+    // Bound admissions require the worker-owned receipt transport and its real
+    // PostgreSQL state; without it the broker correctly refuses the session.
+    const { startRepositoryReceiptServer } =
+      await import("../../apps/controller/src/backends/repository-credentials/receipt-server.ts");
+    const receiptServer = await startRepositoryReceiptServer({
+      state: fixture.state,
+      controlSocket: credentials.config.gateway.controlSocket,
+      driverId: driver.id,
+      implementation: driver.implementation,
+      backendId: credentials.backendId,
+    });
+    context.after(() => receiptServer.close());
     const owner = await fixture.agent("repository-concrete-driver");
     const candidate = await fixture.revision(owner, 1, undefined, {
       driver: { id: driver.id, implementation: driver.implementation },

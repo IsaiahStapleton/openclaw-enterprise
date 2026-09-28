@@ -16,6 +16,7 @@ import {
   sessionAttempt,
 } from "../conformance/repository-sessions.contract.mjs";
 import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
+import { startServiceProcessFixture } from "../fixtures/repository-credentials/service-process.mjs";
 import { run, temporaryDirectory } from "../fixtures/repository-credentials/process.mjs";
 import { appRoot, appExtension } from "../fixtures/repository-credentials/runtime.mjs";
 
@@ -407,5 +408,146 @@ test(
       driver.open({ ...openInput, admissionId: knownId, recoverOnly: true }, signal),
       DependencyUnavailableError,
     );
+  },
+);
+
+test(
+  "broker shutdown waits for receipts and loss of unconfirmed authority stays unknown",
+  {
+    skip: databaseUrl
+      ? false
+      : "Set OCC_TEST_DATABASE_URL to a disposable migrated PostgreSQL database.",
+    timeout: 45_000,
+  },
+  async (t) => {
+    for (const mode of ["delayed-commit", "unavailable", "abrupt-death"]) {
+      await t.test(mode, async (context) => {
+        const namespaceId = `ns_${randomUUID()}`;
+        const fixture = await startServiceProcessFixture(context, {
+          bound: true,
+          shutdownGraceMs: 100,
+          namespaceId,
+        });
+        const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+        context.after(() => pool.end());
+        const state = new PostgresPlatformState(pool);
+        const binding = {
+          repositoryRef: fixture.input.repositoryRef,
+          profile: fixture.input.profile,
+          backendId: "github-fixture",
+          grant: fixture.input.expectedBinding,
+        };
+        const { revision } = await seedSessionRevision(
+          state,
+          {
+            driver: { id: "repository-credentials", implementation: "github" },
+            deadlineWallMs: fixture.input.deadlineWallMs,
+            bindings: [binding],
+          },
+          { namespaceId },
+        );
+        const admissionId = fixture.admissionId();
+        await state.transact((unit) =>
+          unit.repositorySessions.createAttempt(
+            sessionAttempt(revision, {
+              admissionId,
+              repositoryRef: binding.repositoryRef,
+              durationSeconds: fixture.input.durationSeconds,
+              brokerProtocol: 1,
+            }),
+          ),
+        );
+        const listener = await startRepositoryReceiptServer({
+          state,
+          controlSocket: fixture.config.gateway.controlSocket,
+          driverId: "repository-credentials",
+          implementation: "github",
+          backendId: "github-fixture",
+        });
+        let listenerOpen = true;
+        context.after(async () => {
+          if (listenerOpen) {
+            await listener.close();
+          }
+        });
+        const opened = await fixture.open(admissionId, false, true);
+        assert.equal(opened.session.state, "OPEN");
+        assert.equal((await fixture.request(opened)).status, 200);
+
+        if (mode === "abrupt-death") {
+          // Forced death loses the original broker's in-memory cleanup outcome.
+          // Neither a restarted broker nor a durable active receipt proves disposal.
+          await fixture.kill();
+          await fixture.start();
+          const receipt = await state.read((view) =>
+            view.repositorySessions.findBrokerReceipt(admissionId),
+          );
+          assert.equal(receipt.state, "active");
+          assert.deepEqual(await fixture.open(admissionId, true, true), { error: "unavailable" });
+          assert.deepEqual(await fixture.status(opened.session.sessionId), {
+            error: "unavailable",
+          });
+          assert.equal(fixture.github.tokenState()[0].revoked, false);
+          return;
+        }
+
+        if (mode === "unavailable") {
+          // No acknowledgment can be obtained after the worker listener is lost.
+          await listener.close();
+          listenerOpen = false;
+          await fixture.shutdown(1);
+          const receipt = await state.read((view) =>
+            view.repositorySessions.findBrokerReceipt(admissionId),
+          );
+          assert.equal(receipt.state, "active");
+          return;
+        }
+
+        // A real row lock holds the terminal write past the original shutdown
+        // grace; the broker must stay alive for a separate acknowledgment window.
+        const lock = await pool.connect();
+        let completed = false;
+        let stopping;
+        try {
+          await lock.query("BEGIN");
+          await lock.query(
+            "SELECT admission_id FROM occ.repository_broker_receipts WHERE admission_id=$1 FOR UPDATE",
+            [admissionId],
+          );
+          stopping = fixture.shutdown().then(() => {
+            completed = true;
+          });
+          void stopping.catch(() => {});
+          let blocked = false;
+          for (let i = 0; i < 100; i++) {
+            const result = await pool.query(
+              "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%repository_broker_receipts%') AS blocked",
+            );
+            if (result.rows[0].blocked) {
+              blocked = true;
+              break;
+            }
+            await delay(20);
+          }
+          assert.equal(blocked, true, "the original broker must attempt the terminal write");
+          await delay(300);
+          assert.equal(
+            completed,
+            false,
+            "the broker must outlive the original grace while flushing",
+          );
+        } finally {
+          await lock.query("ROLLBACK");
+          lock.release();
+        }
+        await stopping;
+        const receipt = await state.read((view) =>
+          view.repositorySessions.findBrokerReceipt(admissionId),
+        );
+        assert.equal(receipt.state, "disposed");
+        assert.equal(receipt.sessionId, opened.session.sessionId);
+        assert.ok(receipt.revoked > 0);
+      });
+    }
   },
 );

@@ -71,8 +71,9 @@ GitHub. With the [CI runner prerequisites](ci.md) prepared, run:
 Preparation supplies the explicit kubeconfig/context, database URL, immutable
 `OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE`, and private fixture relay
 `OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS` through prepared state. The runner
-selects `tests/integration/repository-credentials-platform.test.mjs` with
-`OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM=1`. The lane belongs to the normal `ci`
+selects both `repository-credentials-platform.test.mjs` and
+`repository-credentials-platform-recovery.test.mjs` with
+`OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM=1` and a fresh database per file. The lane belongs to the normal `ci`
 and `full` groups. The fixture image contains a substituted Harness and makes no
 model-execution claim.
 

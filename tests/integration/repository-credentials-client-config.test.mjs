@@ -452,7 +452,9 @@ test("operator rejects unsafe or conflicting bound request files before admissio
     admitted.stderr,
     /^credential-admission [0-9]{13}-[0-9a-f-]{36}; recover with open --admission-id and the same inputs\ncredential-operator-not-found\n$/,
   );
-  assert.deepEqual(requests, [{ method: "POST", path: "/v1/sessions", body: request }]);
+  assert.deepEqual(requests, [
+    { method: "POST", path: "/v1/sessions", body: { ...request, durableAdmission: true } },
+  ]);
   requests.length = 0;
   const refused = (result) => {
     failed(result);

@@ -68,7 +68,11 @@ function launchService(resources) {
     assert.equal(result.signal, "SIGKILL");
     return result;
   };
-  resources.after(stop);
+  resources.after(async () => {
+    if (!receipt) {
+      await stop();
+    }
+  });
   const collect = (chunk) => {
     outputBytes += chunk.length;
     if (outputBytes > 65536) {
@@ -91,6 +95,12 @@ function launchService(resources) {
   });
   return {
     stop,
+    async stopGracefully() {
+      if (!receipt) {
+        assert.equal(child.kill("SIGTERM"), true, "owned service termination must be sent");
+      }
+      return within(closed, "service fixture graceful shutdown was not joined", 15000);
+    },
     async call(command, input) {
       const id = ++sequence;
       const response = new Promise((resolve, reject) => {
@@ -113,7 +123,13 @@ function launchService(resources) {
 
 export async function startServiceProcessFixture(
   t,
-  { holdIssuance = false, revokeStatus = 204, bound = false } = {},
+  {
+    holdIssuance = false,
+    revokeStatus = 204,
+    bound = false,
+    shutdownGraceMs,
+    namespaceId = "namespace-fixture",
+  } = {},
 ) {
   const resources = createResourceScope();
   const ownedDirectories = [];
@@ -126,7 +142,10 @@ export async function startServiceProcessFixture(
   const clock = createControlledClock(1_800_000_000_000);
   const tls = await createTlsMaterial(resources);
   ownedDirectories.push(dirname(tls.keyFile));
-  const base = await createServiceConfiguration(resources, { sessions: 1 });
+  const base = await createServiceConfiguration(resources, {
+    sessions: 1,
+    ...(shutdownGraceMs === undefined ? {} : { shutdownGraceMs }),
+  });
   ownedDirectories.push(dirname(base.gateway.controlSocket));
   const config = { ...base, gateway: { ...base.gateway, listen: "127.0.0.1:0" } };
   let accepted;
@@ -146,7 +165,7 @@ export async function startServiceProcessFixture(
             repositoryId: fixtureRepositoryId,
           },
         ],
-        namespaceId: "namespace-fixture",
+        namespaceId,
         backendId: "github-fixture",
         maximumDurationSeconds: 172800,
       })
@@ -177,13 +196,13 @@ export async function startServiceProcessFixture(
       "github-fixture",
     );
     const binding = resolveGitHubRepositoryBinding(registry, {
-      namespaceId: "namespace-fixture",
+      namespaceId,
       repositoryRef: "repo-a",
       profile: "git-full",
     });
     input = {
       ...input,
-      namespaceId: "namespace-fixture",
+      namespaceId,
       repositoryRef: binding.repositoryRef,
       expectedBinding: binding.grant,
       deadlineWallMs: clock.wallNow() + 86400000,
@@ -227,6 +246,18 @@ export async function startServiceProcessFixture(
     await unlink(config.gateway.controlSocket);
     return death;
   }
+  async function shutdown(expectedCode = 0) {
+    const result = await processOwner.stopGracefully();
+    assert.equal(
+      result.code,
+      expectedCode,
+      "the fixture must observe the expected shutdown outcome",
+    );
+    assert.equal(result.signal, null);
+    assert.equal(result.pid, generation.pid);
+    processOwner = undefined;
+    return result;
+  }
   const admissionId = () => `${clock.wallNow()}-${randomUUID()}`;
   const control = (method, path, body, id = admissionId()) =>
     callControl(
@@ -238,8 +269,11 @@ export async function startServiceProcessFixture(
   return {
     github,
     clock,
+    config,
+    input,
     start,
     kill,
+    shutdown,
     generation: () => generation,
     admissionId,
     open: (id, recoverOnly = false, durableAdmission = false) =>

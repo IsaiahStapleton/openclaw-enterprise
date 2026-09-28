@@ -51,16 +51,23 @@ export async function runService(
     const grace = loaded.config.limits.shutdownGraceMs;
     // Wall-time process guard is independent of provider callbacks and injected clocks.
     const pending = service.shutdown(grace);
-    const forced = setTimeout(() => {
+    const forceExit = () => {
       process.stderr.write(
         `${JSON.stringify({ event: "shutdown", graceExpired: true, unresolved: true })}\n`,
       );
       loaded.close();
       process.exit(1);
-    }, grace);
+    };
+    let forced = setTimeout(forceExit, grace);
     void (async () => {
       try {
         const summary = await pending;
+        if (!summary.graceExpired) {
+          // Provider ownership has drained. Reserve a separate bounded window
+          // for committing the original broker's terminal observations.
+          clearTimeout(forced);
+          forced = setTimeout(forceExit, 10_000);
+        }
         await listeners.close();
         loaded.close();
         process.stdout.write(`${JSON.stringify({ event: "shutdown", ...summary })}\n`);
