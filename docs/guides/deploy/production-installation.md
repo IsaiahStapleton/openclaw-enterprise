@@ -13,15 +13,24 @@ Run from the repository root; retain this shell and protected files for
 
 ## Use published images
 
-For an authorized trial on `linux/amd64` or `linux/arm64`, use the private images
-below instead of building them. Both were built from source
-`e3b28515f30523eede3cd905e589c1ab9063dbda`, passed image startup checks, and had
+To install the current example, select a verified release or custom controller
+image that supports `catalogSource: openai-curated` and a compatible runtime
+image. Export their immutable digests as `CONTROLLER_IMAGE` and `RUNTIME_IMAGE`,
+or [build and publish images](#build-and-publish-production-images) from the
+current checkout.
+
+The published controller image below does not support the curated Codex catalog
+in the current example. Do not use these exports for that installation. They
+remain available for image tests and workflows targeting their recorded source
+revision.
+
+Both images were built from source `e3b28515f30523eede3cd905e589c1ab9063dbda`,
+passed image startup checks, and had
 their remote digests verified in [publication run 35680912119](https://github.com/openclaw/openclaw-enterprise/actions/runs/35680912119).
 Both digest references select multi-platform indexes; Docker and Kubernetes
 pull the variant matching the host or node. Startup checks passed for both
 architectures, with ARM64 checked under QEMU. Publication does not establish
-production deployment readiness. To change the image contents,
-[build your own images](#build-and-publish-production-images).
+production deployment readiness.
 
 You need read access to both GHCR packages. At publication, they inherited access
 from `openclaw/openclaw-enterprise`. Authenticate locally with a GitHub personal
@@ -37,15 +46,10 @@ export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:
 export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:792f0ffe88ec9f935b55c36f41ee646a828e3d83df21427cf7955a5beef52460'
 ```
 
-Use the controller image for API, worker, migration, and bootstrap, and one
-runtime image for gateways and Agents. Keep the tested digest references.
-
-For Kubernetes, configure approved cluster/node pull credentials for **both
-control-plane and tenant Pods**. Local `docker login` does not authenticate
-cluster nodes. Both images support amd64 and arm64 nodes. Continue at [Configure the Installation](#configure-the-installation)
-with these exports; skip the build-and-publish block below. Local quickstart and
-image-test readers should return to their calling guide after authentication
-and exporting the image references.
+For a compatible Kubernetes workflow, configure approved cluster/node pull
+credentials for **both control-plane and tenant Pods**. Local `docker login`
+does not authenticate cluster nodes. Return to your calling guide after
+authentication and exporting the image references.
 
 ## Build and publish production images
 
@@ -114,9 +118,9 @@ Set the production shell inputs before the first Kubernetes command. For a local
 Kubernetes trial, [build and import the test images](local-operations.md#build-images-for-local-kubernetes)
 to produce YAML copies with real image digests, then set
 `OCC_INPUT_DIRECTORY` to that generated directory and keep those files.
-For a registry-backed installation, keep the digest exports from either
-[Use published images](#use-published-images) or
-[Build and publish production images](#build-and-publish-production-images).
+For a registry-backed installation, retain the digest exports for your verified
+release or custom images, including images you
+[build and publish](#build-and-publish-production-images).
 
 ```bash
 umask 077
@@ -150,7 +154,7 @@ configures Drivers, runtime images, identity, networking, storage, and logging.
 For `logging.level`, follow [Choose the log level](../observability.md#1-choose-the-log-level),
 including when to restart OCC and deploy a new AgentRevision.
 
-If you built the production images above, write their digest references into
+For a registry-backed installation, write the image digest references into
 the protected copies (skip this block for the local Kubernetes import path):
 
 ```bash
