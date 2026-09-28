@@ -140,7 +140,7 @@ context. Docker archive import can produce a different platform-manifest digest:
 retain the private preparation state and record its source references, host image
 IDs and imported references alongside the separately observed worker and broker
 Pod image IDs. The worker image comes from its actual container status, including
-restartable init-container status in the recovery chart. Agent-stop disposal is
+restartable init-container status when present. Agent-stop disposal is
 not evidence of graceful broker shutdown or recovery after forced termination.
 This local import does not prove that a production registry serves an identical manifest;
 verify production pull and deployed image identity separately. Preparation also

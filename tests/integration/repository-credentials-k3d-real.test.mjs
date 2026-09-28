@@ -444,8 +444,8 @@ function installedRepositoryJourney(mode, profile = "git-full") {
             p.status.conditions?.some((c) => c.type === "Ready" && c.status === "True"),
         );
         assert.ok(pod, `${component} must be installed and Ready`);
-        // The recovery chart runs the worker as a restartable init container;
-        // the current chart runs it as an ordinary container.
+        // Match the status list to the selected chart's worker placement,
+        // including a restartable init container when repository access is enabled.
         const matches = [
           ...(pod.spec.containers ?? [])
             .filter((c) => c.name === component)
