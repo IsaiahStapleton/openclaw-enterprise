@@ -1195,7 +1195,8 @@ export async function createPostgresControllerAuth(
     if (!designation) {
       throw new Error("Recovery designation is unavailable.");
     }
-    // The recovery account's password lane stays admitted under sign-in floods.
+    // The recovery account's password lane stays admitted under sign-in floods. It follows the
+    // stored designation, never the environment seed, which may name a replaced holder.
     humanLogin!.designateRecovery(designation.email);
   }
   return {
@@ -1234,18 +1235,17 @@ export async function createPostgresControllerAuth(
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => {
-            const replaced = await persistence!.replaceRecovery(
+            const { email, ...replaced } = await persistence!.replaceRecovery(
               userId,
               principalId,
               expectedCurrentUserId,
               actor,
               expectedVersion,
             );
-            // Move the reserved password lane to the new holder's email.
-            const designation = await persistence!.recoveryDesignation();
-            if (designation !== undefined) {
-              humanLogin.designateRecovery(designation.email);
-            }
+            // Move the reserved password lane to the committed holder's email. The email comes
+            // from the replacing transaction, so no later read can fail and leave the old holder
+            // on the lane.
+            humanLogin.designateRecovery(email);
             return replaced;
           },
           enrolAccount: (userId: string, actor: HumanAuthenticationActor) =>

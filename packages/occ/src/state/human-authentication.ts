@@ -858,7 +858,7 @@ export class PostgresHumanAuthentication {
     expectedCurrentUserId: string,
     actor: HumanAuthenticationActor,
     expectedVersion: number,
-  ): Promise<HumanAuthenticationRecovery & { changed: boolean }> {
+  ): Promise<HumanAuthenticationRecovery & { changed: boolean; email: string }> {
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
       throw new ResourceConflictError("A current account version is required.");
     }
@@ -897,11 +897,14 @@ export class PostgresHumanAuthentication {
       if (methods.length !== 1 || method === undefined) {
         throw new ScopeViolationError("The recovery account requires exactly one password.");
       }
+      // The holder's email keys the reserved password lane; guardActor locked this row, so the
+      // email is read in the same transaction that commits the designation.
+      const email = (await this.lockUser(unit, userId)).email as string;
       if (designation.user_id === userId) {
         if (designation.principal_id !== principalId || designation.method_id !== method.id) {
           throw new ScopeViolationError("The recovery designation is inconsistent.");
         }
-        return { userId, principalId, methodId: method.id as string, changed: false };
+        return { userId, principalId, methodId: method.id as string, changed: false, email };
       }
       const [updated] = await this.query(
         unit,
@@ -920,7 +923,7 @@ export class PostgresHumanAuthentication {
         previousUserId: designation.user_id,
         previousPrincipalId: designation.principal_id,
       });
-      return { userId, principalId, methodId: method.id as string, changed: true };
+      return { userId, principalId, methodId: method.id as string, changed: true, email };
     });
   }
 

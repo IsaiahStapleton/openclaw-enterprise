@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -893,6 +893,88 @@ test(
         payload: body,
       });
     }
+    // Proves which account holds the reserved password lane on one controller: four held
+    // password checks fill the shared lane, a fresh account and the former holder are refused,
+    // and the current holder is still admitted and signs in once the checks are released.
+    async function waitForLockWaiters(count) {
+      const deadline = performance.now() + 10_000;
+      for (;;) {
+        const { rows } = await pool.query(
+          `SELECT count(*)::int AS waiting FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+        );
+        if (rows[0].waiting >= count) {
+          return;
+        }
+        assert.ok(performance.now() < deadline, `expected ${count} password checks to be held`);
+        await delay(20);
+      }
+    }
+    async function assertRecoveryLane(target, holderEmail, formerEmail, label) {
+      const fillers = (
+        await pool.query(
+          `INSERT INTO occ."user" (id, name, email, email_verified, created_at, updated_at)
+           SELECT 'lane-' || $1 || '-' || n, 'Lane filler', 'lane-' || $1 || '-' || n || '@example.test',
+                  true, now(), now()
+           FROM generate_series(1, 2) AS n RETURNING id, email`,
+          [label],
+        )
+      ).rows;
+      const holderId = (
+        await pool.query('SELECT id FROM occ."user" WHERE email = $1', [holderEmail])
+      ).rows[0].id;
+      const signIn = (address, signInEmail) =>
+        target.inject({
+          method: "POST",
+          url: "/api/auth/sign-in/email",
+          remoteAddress: address,
+          headers: { origin },
+          payload: { email: signInEmail, password },
+        });
+      const blocker = await pool.connect();
+      let open = false;
+      try {
+        await blocker.query("BEGIN");
+        open = true;
+        // Password checks lock their user row, so these locks hold admitted checks in flight.
+        await blocker.query('SELECT id FROM occ."user" WHERE id = ANY($1) FOR UPDATE', [
+          [...fillers.map((filler) => filler.id), holderId],
+        ]);
+        // Two per filler email and one per address stay inside every per-key budget.
+        const held = fillers.flatMap((filler, index) => [
+          signIn(`10.77.${index}.1`, filler.email),
+          signIn(`10.77.${index}.2`, filler.email),
+        ]);
+        await waitForLockWaiters(4);
+        assert.equal(
+          (await signIn("10.77.9.1", `lane-${label}-fresh@example.test`)).statusCode,
+          429,
+          "the shared password lane is full",
+        );
+        assert.equal(
+          (await signIn("10.77.9.2", formerEmail)).statusCode,
+          429,
+          "the former recovery holder no longer has the reserved lane",
+        );
+        const holder = signIn("10.77.9.3", holderEmail);
+        await waitForLockWaiters(5);
+        await blocker.query("COMMIT");
+        open = false;
+        for (const response of await Promise.all(held)) {
+          assert.equal(response.statusCode, 401, response.body);
+        }
+        const admitted = await holder;
+        assert.equal(admitted.statusCode, 200, "the current holder used the reserved lane");
+      } finally {
+        if (open) {
+          await blocker.query("ROLLBACK");
+        }
+        blocker.release();
+        await pool.query('DELETE FROM occ."user" WHERE id = ANY($1)', [
+          fillers.map((filler) => filler.id),
+        ]);
+      }
+    }
     assert.equal((await readRecovery(adminHeaders)).userId, recovery);
     assert.equal(
       (await app.inject({ url: "/api/auth/recovery", headers: { cookie: browserCookies } }))
@@ -982,7 +1064,10 @@ test(
     assert.equal(replaced.statusCode, 200, replaced.body);
     assert.equal(replaced.json().data.userId, limited.id);
     assert.equal(replaced.json().data.changed, true);
+    assert.equal(replaced.json().data.email, undefined, "the holder email stays internal");
     assert.equal((await readRecovery(adminHeaders)).userId, limited.id);
+    // The running controller moves the reserved lane without a restart.
+    await assertRecoveryLane(app, "github-limited@example.test", email, "replaced");
     assert.equal(
       (
         await app.inject({
@@ -1030,8 +1115,13 @@ test(
       },
       drivers(),
     );
-    await seeded.close();
-    assert.ok(logLines.some((line) => line.includes("authentication.recovery-seed-warning")));
+    try {
+      assert.ok(logLines.some((line) => line.includes("authentication.recovery-seed-warning")));
+      // Startup designates the lane from the stored holder, not the mismatched seed.
+      await assertRecoveryLane(seeded, "github-limited@example.test", email, "restarted");
+    } finally {
+      await seeded.close();
+    }
     assert.equal((await readRecovery(adminHeaders)).userId, limited.id);
     const restored = await replaceRecovery({
       userId: recovery,

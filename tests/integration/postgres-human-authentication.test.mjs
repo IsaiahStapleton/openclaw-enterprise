@@ -894,6 +894,8 @@ test(
         const replaced = results.filter((result) => result.status === "fulfilled");
         assert.equal(replaced.length, 1, "the expected current designation admits one replacement");
         assert.equal(replaced[0].value.changed, true);
+        // The committed holder's email is what the controller moves the reserved lane to.
+        assert.equal(replaced[0].value.email, `successor-${suffix}@example.test`);
         assert.equal(
           results.find((result) => result.status === "rejected").reason.name,
           "ResourceConflictError",
