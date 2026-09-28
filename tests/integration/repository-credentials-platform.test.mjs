@@ -623,15 +623,42 @@ test(
       return { revision: next, pod: nextPod, material };
     }
 
-    // Graceful shutdown settles the service's tracked tokens, but destroying its
-    // inventory leaves the worker without surviving disposition evidence.
+    // Graceful shutdown commits the original broker's terminal observations.
+    // A new process recovers those receipts, so maintenance may replace the
+    // exact sessions without creating another revision or losing workspace data.
     const gracefulAttempts = await fixture.attempts(revision);
     const gracefulService = credentials.process;
     await credentials.restart();
     assert.notEqual(credentials.process.pid, gracefulService.pid);
     assert.equal(credentials.process.generation, gracefulService.generation + 1);
-    const gracefulRefusal = await assertRefused(revision, pod, gracefulAttempts);
-    const restarted = await deployAfterLoss(revision, pod, repaired);
+    for (const binding of repaired.bindings) {
+      assert.equal((await credentials.status(binding.sessionId)).state, "DISPOSED");
+    }
+    const gracefulPod = await fixture.readyPod(agent, revision, pod.metadata.uid);
+    await assertWorkspaceReplacement(pod, gracefulPod);
+    const gracefulMaterial = await fixture.material(gracefulPod);
+    assert.notEqual(gracefulMaterial.generation, repaired.generation);
+    for (const binding of gracefulMaterial.bindings) {
+      const previous = repaired.bindings.find(
+        (entry) => entry.repositoryRef === binding.repositoryRef,
+      );
+      assert.notEqual(binding.sessionId, previous.sessionId);
+      assert.equal((await credentials.status(binding.sessionId)).state, "OPEN");
+    }
+    const gracefulSettled = (await fixture.attempts(revision)).filter((attempt) =>
+      gracefulAttempts.some(({ admission_id }) => admission_id === attempt.admission_id),
+    );
+    assert.equal(gracefulSettled.length, gracefulAttempts.length);
+    for (const attempt of gracefulAttempts) {
+      const settled = gracefulSettled.find(
+        ({ admission_id }) => admission_id === attempt.admission_id,
+      );
+      assert.deepEqual(
+        settled,
+        attempt.phase === "open" ? { ...attempt, phase: "disposed" } : attempt,
+      );
+    }
+    const restarted = { revision, pod: gracefulPod, material: gracefulMaterial };
     await fixture.tool(restarted.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
     await fixture.tool(restarted.pod, "git", ["-C", secondCheckout, "fetch", "origin"]);
 
@@ -752,7 +779,7 @@ test(
       recoveredAfterCrash.material.generation,
     );
     context.diagnostic(
-      "Worker survival, material repair, graceful restart and SIGKILL refusal, explicit new revisions, and controlled hour-thirteen renewal traversed the real platform path.",
+      "Worker survival, material repair, graceful restart with durable receipts, SIGKILL refusal, an explicit new revision, and controlled hour-thirteen renewal traversed the real platform path.",
     );
 
     await fixture.request("POST", `${path}/stop`, undefined, 202);
@@ -777,18 +804,21 @@ test(
     for (const binding of recoveredAfterCrash.material.bindings) {
       assert.notEqual((await credentials.status(binding.sessionId))?.state, "OPEN");
     }
-    // Neither a new revision nor later token expiry rewrites lost custody as disposal.
-    for (const [lostRevision, retained] of [
-      [revision, gracefulRefusal],
-      [restarted.revision, crashRefusal],
-    ]) {
-      assert.deepEqual(await fixture.attempts(lostRevision), retained.attempts);
-      const cleanup = (await revisionWork(lostRevision)).find(
-        ({ idempotency_key }) => idempotency_key === retained.retirementKey,
+    // Neither a new revision nor later token expiry rewrites crash-lost custody
+    // as disposal. The earlier confirmed graceful disposals also stay durable.
+    const afterCrash = await fixture.attempts(restarted.revision);
+    assert.deepEqual(afterCrash, crashRefusal.attempts);
+    for (const attempt of gracefulSettled) {
+      assert.deepEqual(
+        afterCrash.find(({ admission_id }) => admission_id === attempt.admission_id),
+        attempt,
       );
-      assert.ok(["queued", "claimed"].includes(cleanup.state));
-      assert.notEqual(cleanup.state, "succeeded");
     }
+    const cleanup = (await revisionWork(restarted.revision)).find(
+      ({ idempotency_key }) => idempotency_key === crashRefusal.retirementKey,
+    );
+    assert.ok(["queued", "claimed"].includes(cleanup.state));
+    assert.notEqual(cleanup.state, "succeeded");
     const remaining = await kube.resources(
       "secrets",
       placement,

@@ -94,10 +94,12 @@ controlled provider inventories. After the crash, the replacement service reject
 the old bearer through HTTPS without provider authentication, while the exact
 previously observed provider tokens remain unrevoked and unexpired.
 
-Lost exposed sessions refuse automatic continuation of that revision. The case
-checks actual Pod/container and Secret retirement alongside the retained session
-attempts and their exact unresolved cleanup Work owner. A new authorized HTTP
-deploy creates a distinct revision; its replacement Pod retains the workspace
+After graceful broker restart, the worker recovers confirmed disposal receipts
+and replaces those sessions within the same revision while retaining the workspace.
+Sessions lost in an abrupt crash refuse automatic continuation of that revision.
+The case checks actual Pod/container and Secret retirement alongside the retained
+session attempts and their exact unresolved cleanup Work owner. A new authorized
+HTTP deploy creates a distinct revision; its replacement Pod retains the workspace
 PVC, unpushed commit and dirty files. This does not establish disposal of lost
 provider obligations or replay Git/PR operations. Controlled service/provider
 clocks then advance past hour thirteen to check fresh tokens with unchanged
