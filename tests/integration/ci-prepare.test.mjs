@@ -82,6 +82,21 @@ function finish(stdout = "") {
 
 if (command === "docker" || command === "podman") {
   if (equals(args, ["version", "--format", "{{.Server.Version}}"])) finish("29.4.0\n");
+  for (const [list, format] of [
+    [["ps", "-a"], "{{.Names}}"],
+    [["network", "ls"], "{{.Name}}"],
+    [["volume", "ls"], "{{.Name}}"],
+  ]) {
+    if (equals(args.slice(0, list.length), list)) {
+      assert.ok(state.clusterDeleted, "cluster inventory is checked after deletion");
+      assert.ok([
+        "label=k3d.cluster=" + state.cluster,
+        "name=k3d-" + state.cluster,
+      ].includes(args[list.length + 1]));
+      assert.deepEqual(args.slice(list.length), ["--filter", args[list.length + 1], "--format", format]);
+      finish();
+    }
+  }
   if ((scenario.startsWith("nodes-unready") || scenario === "cluster-create-failed") &&
       ["server-0", "agent-0"].some((suffix) => args.at(-1) === "k3d-" + state.cluster + "-" + suffix)) {
     if (state.containersAvailable === false) {
