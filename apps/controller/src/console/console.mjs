@@ -248,6 +248,9 @@ function showLogin(message = "", returnPath = null) {
   const loginView = resetReads();
   clearPrivate();
   pinSessionKey(null);
+  // A pending exchange runs before any login view; an abandoned attempt must not
+  // turn a later password sign-in into a GitHub failure.
+  takeGithubAttempt();
   const url = new URL("/console/login", location.origin);
   const destination = safeReturn(returnPath);
   if (destination) {
@@ -331,6 +334,7 @@ function showLogin(message = "", returnPath = null) {
     submit.disabled = true;
     github.disabled = true;
     feedback.textContent = "";
+    takeGithubAttempt();
     const active = lifetime.capture();
     try {
       const signedIn = await request("/api/auth/sign-in/email", {

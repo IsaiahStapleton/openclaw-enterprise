@@ -683,6 +683,24 @@ test("a session replaced by another tab signs this tab out instead of being adop
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
 });
 
+test("an abandoned GitHub attempt does not turn password sign-in into a GitHub failure", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  const requests = [];
+  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+  await page.goto(`${fixture.origin}/console/login`);
+  await page.getByLabel("Username").waitFor();
+  // Models returning from github.com without completing the callback.
+  await page.evaluate(() => sessionStorage.setItem("occ.console.githubAttempt", "a".repeat(43)));
+  await page.getByLabel("Username").fill(fixture.credentials.email);
+  await page.getByLabel("Password").fill(fixture.credentials.password);
+  await page.getByRole("button", { name: "Login" }).click();
+  await page.waitForURL(/\/console\/agents/);
+  assert.equal(requests.includes("/api/auth/providers/github/result"), false);
+  await expectNoText(page, /Could not sign in with GitHub/);
+});
+
 test("known Namespace revocation invalidates a cached global collection with another selection", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
