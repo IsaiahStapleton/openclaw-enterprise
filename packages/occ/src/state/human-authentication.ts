@@ -182,16 +182,25 @@ export class PostgresHumanAuthentication {
     });
   }
 
-  async recoveryDesignation(): Promise<{ userId: string; principalId: string } | undefined> {
+  async recoveryDesignation(): Promise<
+    { userId: string; principalId: string; email: string } | undefined
+  > {
     return this.state.transact(async (unit) => {
       const [row] = await this.query(
         unit,
-        `SELECT user_id, principal_id FROM occ.human_authentication_recovery WHERE installation_id = $1`,
+        `SELECT r.user_id, r.principal_id, u.email
+         FROM occ.human_authentication_recovery r
+         JOIN occ."user" u ON u.id = r.user_id
+         WHERE r.installation_id = $1`,
         [this.installationId],
       );
       return row === undefined
         ? undefined
-        : { userId: row.user_id as string, principalId: row.principal_id as string };
+        : {
+            userId: row.user_id as string,
+            principalId: row.principal_id as string,
+            email: row.email as string,
+          };
     });
   }
 

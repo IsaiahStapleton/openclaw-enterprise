@@ -1040,6 +1040,12 @@ export async function createPostgresControllerAuth(
       throw new Error("Recovery account must administer the Installation.");
     }
     await persistence!.activateRecovery(github.recoveryUserId, principal.id);
+    const designation = await persistence!.recoveryDesignation();
+    if (!designation) {
+      throw new Error("Recovery designation is unavailable.");
+    }
+    // The recovery account's password lane stays admitted under sign-in floods.
+    humanLogin!.designateRecovery(designation.email);
   }
   return {
     ...auth,

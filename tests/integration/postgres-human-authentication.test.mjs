@@ -160,6 +160,7 @@ test(
         assert.deepEqual(await persistence.recoveryDesignation(), {
           userId: recoveryUser.id,
           principalId: recoveryPrincipal.id,
+          email: recoveryEmail,
         });
         assert.equal(
           (await pool.query("SELECT id FROM occ.session WHERE id=$1", [legacySession.id])).rowCount,
