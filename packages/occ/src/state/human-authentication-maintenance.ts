@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { ScopeViolationError } from "../errors.ts";
+import {
+  PostgresHumanAuthentication,
+  type HumanAuthenticationActivationHooks,
+} from "./human-authentication.ts";
 import type { PlatformUnitOfWork } from "./platform-state.ts";
 import type { PostgresPlatformState } from "./postgres-state.ts";
 
@@ -30,6 +34,7 @@ export interface HumanAuthenticationMaintenanceStatus {
 }
 
 export type HumanAuthenticationMaintenanceRefusal =
+  | "ACTIVATION_REFUSED"
   | "NOT_ACTIVATED"
   | "USER_NOT_FOUND"
   | "PRINCIPAL_MISSING"
@@ -158,25 +163,50 @@ export class PostgresHumanAuthenticationMaintenance {
       }
       await this.assertWritersStopped(unit);
       const { result, details } = await work(unit);
-      const [role] = await this.query(unit, `SELECT current_user AS role`);
-      const actorId = `maintenance:${role!.role as string}`;
-      await unit.audit.append({
-        id: `aud_${randomUUID()}`,
-        installationId: this.installationId,
-        occurredAt: new Date().toISOString(),
-        kind: "mutation",
-        actorId,
-        actor: { id: actorId },
-        source: "occ",
-        action,
-        resource: { kind: "installation", id: this.installationId },
-        outcome: "success",
-        details: { source: "auth-maintain", ...details },
-      });
+      await this.appendAudit(unit, action, details);
       // A client that connected during the operation voids the proof; roll back.
       await this.assertWritersStopped(unit);
       return result;
     });
+  }
+
+  private async appendAudit(
+    unit: PlatformUnitOfWork,
+    action: string,
+    details: Record<string, unknown>,
+  ): Promise<void> {
+    const [role] = await this.query(unit, `SELECT current_user AS role`);
+    const actorId = `maintenance:${role!.role as string}`;
+    await unit.audit.append({
+      id: `aud_${randomUUID()}`,
+      installationId: this.installationId,
+      occurredAt: new Date().toISOString(),
+      kind: "mutation",
+      actorId,
+      actor: { id: actorId },
+      source: "occ",
+      action,
+      resource: { kind: "installation", id: this.installationId },
+      outcome: "success",
+      details: { source: "auth-maintain", ...details },
+    });
+  }
+
+  /**
+   * Hooks for PostgresHumanAuthentication.activateRecovery: the writer check runs
+   * after its activation lock and again before commit, and a designation it makes
+   * is also audited as this maintenance role.
+   */
+  activationHooks(): HumanAuthenticationActivationHooks {
+    return {
+      exclusive: (unit) => this.assertWritersStopped(unit),
+      activated: (unit, activation) =>
+        this.appendAudit(unit, "authentication.recovery.activate", {
+          userId: activation.userId,
+          principalId: activation.principalId,
+          skipped: activation.skipped,
+        }),
+    };
   }
 
   private async designation(unit: PlatformUnitOfWork): Promise<Row> {
@@ -283,40 +313,31 @@ export class PostgresHumanAuthenticationMaintenance {
           "The account is already enrolled.",
         );
       }
-      const [principal] = await this.query(
-        unit,
-        `SELECT id FROM occ.iam_identities WHERE kind = 'principal' AND issuer = $1 AND subject = $2
-         AND namespace_id IS NULL AND agent_id IS NULL`,
-        [this.issuer, userId],
-      );
-      if (principal === undefined) {
-        throw new HumanAuthenticationMaintenanceRefusedError(
-          "PRINCIPAL_MISSING",
-          "The account has no provisioned Principal.",
-        );
+      // The same rules as activation-time enrolment (PostgresHumanAuthentication.enrolUser).
+      const enrolment = await new PostgresHumanAuthentication(
+        this.state,
+        this.installationId,
+        this.issuer,
+      ).enrolUser(unit, userId);
+      if (!enrolment.enrolled) {
+        throw enrolment.reason === "PRINCIPAL_MISSING"
+          ? new HumanAuthenticationMaintenanceRefusedError(
+              "PRINCIPAL_MISSING",
+              "The account has no provisioned Principal.",
+            )
+          : new HumanAuthenticationMaintenanceRefusedError(
+              "PASSWORD_METHOD_COUNT",
+              "Enrolment requires exactly one password method.",
+            );
       }
-      const methods = await this.query(
+      const [enrolledRow] = await this.query(
         unit,
-        `SELECT id FROM occ.account WHERE user_id = $1 AND provider_id = 'credential'
-         AND password IS NOT NULL AND password <> '' FOR SHARE`,
+        `SELECT principal_id FROM occ.human_authentication_accounts WHERE user_id = $1`,
         [userId],
-      );
-      if (methods.length !== 1) {
-        throw new HumanAuthenticationMaintenanceRefusedError(
-          "PASSWORD_METHOD_COUNT",
-          "Enrolment requires exactly one password method.",
-          { passwordMethods: methods.length },
-        );
-      }
-      await this.query(
-        unit,
-        `INSERT INTO occ.human_authentication_accounts (user_id, installation_id, principal_id)
-         VALUES ($1, $2, $3)`,
-        [userId, this.installationId, principal.id],
       );
       // Sessions an older controller issued for this account were never bound.
       await this.query(unit, `DELETE FROM occ.session WHERE user_id = $1`, [userId]);
-      const principalId = principal.id as string;
+      const principalId = enrolledRow!.principal_id as string;
       return { result: { userId, principalId }, details: { userId, principalId } };
     });
   }

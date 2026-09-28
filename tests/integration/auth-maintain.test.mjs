@@ -189,6 +189,17 @@ test(
       const status = await maintain(["status"]);
       assert.equal(status.output.profile, "legacy");
 
+      // A failed activation precondition is a refusal (exit 3), not a failure.
+      const unknown = await maintain([
+        "activate",
+        "--recovery-user",
+        "missing-user",
+        "--writers-stopped",
+      ]);
+      assert.equal(unknown.code, 3, unknown.stderr);
+      assert.equal(unknown.output.reason, "ACTIVATION_REFUSED");
+      assert.equal((await maintain(["status"])).output.profile, "legacy");
+
       const activated = await maintain([
         "activate",
         "--recovery-user",
@@ -198,6 +209,15 @@ test(
       assert.equal(activated.code, 0, activated.stderr);
       assert.equal(activated.output.designation.userId, recoveryUserId);
       assert.equal(activated.output.enrolled, 2);
+      // Re-running for the designated account changes nothing and writes no audit.
+      const repeated = await maintain([
+        "activate",
+        "--recovery-user",
+        recoveryUserId,
+        "--writers-stopped",
+      ]);
+      assert.equal(repeated.code, 0, repeated.stderr);
+      assert.equal(repeated.output.designation.userId, recoveryUserId);
       // The activated profile now refuses a controller started without GitHub configuration.
       await withPool(databaseUrl, async (pool) => {
         await assert.rejects(
@@ -232,10 +252,8 @@ test(
           installationId,
           betterAuthIssuer(installationId),
         );
-        // The guarded profile refuses unenrolled accounts until they are repaired.
-        await assert.rejects(persistence.snapshotPassword(orphan.email), {
-          name: "ScopeViolationError",
-        });
+        // The guarded profile refuses unenrolled accounts like bad credentials until repaired.
+        assert.equal(await persistence.snapshotPassword(orphan.email), undefined);
       });
       const before = await maintain(["status"]);
       assert.deepEqual(
@@ -399,8 +417,9 @@ test(
             'authentication.recovery.password-reset', 'authentication.sessions.purge',
             'authentication.recovery.deactivate') ORDER BY occurred_at, action`,
           );
+          const maintenance = audit.rows.filter((row) => row.actor_id.startsWith("maintenance:"));
           assert.deepEqual(
-            audit.rows.map((row) => row.action),
+            maintenance.map((row) => row.action),
             [
               "authentication.recovery.activate",
               "authentication.account.enrol",
@@ -410,9 +429,12 @@ test(
               "authentication.recovery.deactivate",
             ],
           );
-          for (const row of audit.rows.slice(1)) {
-            assert.match(row.actor_id, /^maintenance:/);
-          }
+          // Activation also records startup's own event, attributed to the recovery Principal.
+          const others = audit.rows.filter((row) => !row.actor_id.startsWith("maintenance:"));
+          assert.deepEqual(
+            others.map((row) => row.action),
+            ["authentication.recovery.activate"],
+          );
         });
       },
     );

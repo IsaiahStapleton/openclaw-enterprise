@@ -6,6 +6,7 @@ import {
   PostgresHumanAuthentication,
   PostgresHumanAuthenticationMaintenance,
   PostgresPlatformState,
+  ScopeViolationError,
   WritersNotStoppedError,
 } from "../packages/occ/src/index.ts";
 import {
@@ -24,6 +25,7 @@ const EXIT_FAILED = 1;
 const EXIT_WRITERS_RUNNING = 2;
 const EXIT_REFUSED = 3;
 const EXIT_USAGE = 64;
+const NATIVE_IAM_DRIVER = { id: "native-iam", implementation: "native" };
 
 function output(event, fields = {}) {
   process.stdout.write(`${JSON.stringify({ event, ...fields })}\n`);
@@ -41,17 +43,32 @@ async function run(options, maintenance, state, installationId) {
     case "status":
       return maintenance.status();
     case "activate": {
-      // activateRecovery takes the activation lock itself; prove no other client first.
+      // Fail fast before waiting on the activation lock; the hooks repeat the check
+      // after the lock and again before commit, and audit the designation.
       await maintenance.requireWritersStopped();
-      const iamDriver = new NativeIAMDriver(state, { id: "native-iam", implementation: "native" });
-      await activateRecoveryAccount(
-        new PostgresHumanAuthentication(state, installationId, issuer),
-        iamDriver,
-        installationId,
-        options.recoveryUserId,
-      );
+      // Controller startup only activates with the bundled native IAM Driver, whose
+      // decisions carry its own id; the documented recovery authority is native IAM.
+      const iamDriver = new NativeIAMDriver(state, NATIVE_IAM_DRIVER);
+      try {
+        await activateRecoveryAccount(
+          new PostgresHumanAuthentication(state, installationId, issuer),
+          iamDriver,
+          installationId,
+          options.recoveryUserId,
+          maintenance.activationHooks(),
+        );
+      } catch (error) {
+        if (error instanceof ScopeViolationError) {
+          throw new HumanAuthenticationMaintenanceRefusedError("ACTIVATION_REFUSED", error.message);
+        }
+        throw error;
+      }
       const status = await maintenance.status();
-      return { designation: status.designation, enrolled: status.enrolled };
+      return {
+        designation: status.designation,
+        enrolled: status.enrolled,
+        unenrolled: status.unenrolled,
+      };
     }
     case "enrol":
       return maintenance.enrol(options.userId);

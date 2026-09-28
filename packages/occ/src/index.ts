@@ -216,6 +216,7 @@ export {
 } from "./state/human-authentication.ts";
 export type {
   HumanAuthenticationActivation,
+  HumanAuthenticationActivationHooks,
   HumanAuthenticationEnrolment,
   PreparedPasswordAccount,
   HumanAuthenticationActor,

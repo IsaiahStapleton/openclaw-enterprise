@@ -18,7 +18,9 @@ import {
 } from "@openclaw-enterprise/iam";
 import {
   PostgresHumanAuthentication,
+  ScopeViolationError,
   type HumanAuthenticationActivation,
+  type HumanAuthenticationActivationHooks,
   type HumanAuthenticationActor,
   type HumanAuthenticationAccount,
   type PostgresPool,
@@ -1108,19 +1110,24 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   };
 }
 
-/** Startup and stopped maintenance share this one-way activation path. */
+/**
+ * Startup and stopped maintenance share this one-way activation path. GitHub sign-in
+ * requires the native IAM Driver, so both authorize through it. Refused preconditions
+ * throw ScopeViolationError.
+ */
 export async function activateRecoveryAccount(
   persistence: PostgresHumanAuthentication,
-  iamDriver: IAMDriver,
+  iamDriver: NativeIAMDriver,
   installationId: string,
   recoveryUserId: string,
+  hooks?: HumanAuthenticationActivationHooks,
 ): Promise<HumanAuthenticationActivation> {
   const principal = await iamDriver.lookupIdentity({
     issuer: betterAuthIssuer(installationId),
     subject: recoveryUserId,
   });
   if (!principal || principal.kind !== "principal") {
-    throw new Error("Recovery Principal is unavailable.");
+    throw new ScopeViolationError("Recovery Principal is unavailable.");
   }
   const decision = await iamDriver.authorize({
     principalId: principal.id,
@@ -1128,9 +1135,9 @@ export async function activateRecoveryAccount(
     resource: { kind: "installation", id: installationId },
   });
   if (!decision.allowed || decision.driverId !== iamDriver.id) {
-    throw new Error("Recovery account must administer the Installation.");
+    throw new ScopeViolationError("Recovery account must administer the Installation.");
   }
-  return persistence.activateRecovery(recoveryUserId, principal.id);
+  return persistence.activateRecovery(recoveryUserId, principal.id, hooks);
 }
 
 /** Hash a local password exactly as the controller's password sign-in verifies it. */
@@ -1187,7 +1194,8 @@ export async function createPostgresControllerAuth(
     activationSkipped = (
       await activateRecoveryAccount(
         persistence!,
-        iamDriver!,
+        // Checked above: GitHub sign-in requires the native IAM Driver.
+        iamDriver as NativeIAMDriver,
         options.installationId,
         github.recoveryUserId,
       )
