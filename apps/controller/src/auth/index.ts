@@ -119,6 +119,8 @@ export interface ControllerAuth {
   readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
   readonly githubEnabled: boolean;
+  /** Provider-instance key for GitHub identities; set only while GitHub sign-in is configured. */
+  readonly githubProviderId?: string;
   /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
   readonly activationSkipped?: readonly string[];
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
@@ -1170,6 +1172,7 @@ export async function createPostgresControllerAuth(
     ...(humanLogin === undefined
       ? {}
       : {
+          githubProviderId: humanLogin.providerId,
           readAccount: (userId: string, actor: HumanAuthenticationActor) =>
             persistence!.readAccount(userId, actor),
           attachGitHub: (

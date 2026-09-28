@@ -132,11 +132,12 @@ export async function composeProduction(config: ProductionConfig) {
       seed: AuthPrincipalSeed,
       auditEvent: AuditEvent,
       prepared: PreparedAuthAccount,
+      external?: { readonly providerId: string; readonly subject: string },
     ) => {
       const current = await state.loadNativeIAMState(persistedInstallation.id);
       validateAuthAccountPrincipalSeed(seed, current, persistedInstallation.id);
       // The account, its Principal and bindings, and its enrolment commit together.
-      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent);
+      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent, external);
     };
 
     const principal = iamState.identities.find((identity) => identity.kind === "principal");

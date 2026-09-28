@@ -91,7 +91,7 @@ Create an administrator-controlled local auth account
 
 **Operation ID:** `createAuthAccount`
 
-**Permissions:** Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role; public signup remains disabled.
+**Permissions:** Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -106,6 +106,8 @@ Create an administrator-controlled local auth account
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `email` | `string` | Yes | min length: 3; max length: 320 |
+| `github` | `object` | No | — |
+| `github.subject` | `string` | Yes | pattern: `^[1-9][0-9]{0,19}$` |
 | `name` | `string` | No | min length: 1; max length: 200 |
 | `password` | `string` | Yes | min length: 12; max length: 128 |
 | `roleId` | `string` | Yes | min length: 1; max length: 200 |

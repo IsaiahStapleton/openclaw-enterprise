@@ -159,6 +159,7 @@ export interface ControllerAppOptions {
     seed: AuthPrincipalSeed,
     auditEvent: AuditEvent,
     prepared: PreparedAuthAccount,
+    external?: { readonly providerId: string; readonly subject: string },
   ) => Promise<void>;
   readonly auditEventFactory?: AuditEventFactory;
   readonly logger?: FastifyBaseLogger;
@@ -1051,6 +1052,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           password: { type: "string", minLength: 12, maxLength: 128 },
           name: { type: "string", minLength: 1, maxLength: 200 },
           roleId: { type: "string", minLength: 1, maxLength: 200 },
+          github: {
+            type: "object",
+            additionalProperties: false,
+            required: ["subject"],
+            properties: { subject: { type: "string", pattern: "^[1-9][0-9]{0,19}$" } },
+          },
         },
       },
     },
@@ -3816,7 +3823,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: createAuthAccountOperation.operationId,
           summary: createAuthAccountOperation.summary,
           description:
-            "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role; public signup remains disabled.",
+            "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
           tags: [...createAuthAccountOperation.tags],
           security: [{ sessionCookie: [] }],
           "x-openclaw-permissions": [
@@ -3854,11 +3861,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         const password = body?.password;
         const name = body?.name;
         const roleId = body?.roleId;
+        const github = body?.github as { subject?: unknown } | undefined;
         if (
           !isNonEmptyString(email) ||
           !isNonEmptyString(password) ||
           !isNonEmptyString(roleId) ||
-          (name !== undefined && !isNonEmptyString(name))
+          (name !== undefined && !isNonEmptyString(name)) ||
+          (github !== undefined && !isNonEmptyString(github.subject))
         ) {
           throw failure(
             400,
@@ -3873,6 +3882,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           context,
         );
 
+        const githubProviderId = options.auth.githubEnabled
+          ? options.auth.githubProviderId
+          : undefined;
+        if (github !== undefined && githubProviderId === undefined) {
+          throw failure(409, "RESOURCE_CONFLICT", "GitHub sign-in is not configured.");
+        }
+        const external =
+          github === undefined
+            ? undefined
+            : { providerId: githubProviderId!, subject: github.subject as string };
         const prepared = await options.auth.prepareAccount({
           email,
           password,
@@ -3888,21 +3907,23 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           decision.evidence,
         );
         try {
-          await options.provisionAuthAccount(seed, auditEvent, prepared);
+          await options.provisionAuthAccount(seed, auditEvent, prepared, external);
         } catch (error) {
           throw error instanceof RequestFailure
             ? error
             : error instanceof UserAlreadyExistsError
               ? failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.")
-              : error instanceof AuthAccountRoleNotFoundError
-                ? failure(
-                    400,
-                    "INVALID_REQUEST",
-                    "The request does not match the operation contract.",
-                  )
-                : new DependencyUnavailableError(
-                    error instanceof Error ? error.message : "Auth account provisioning failed.",
-                  );
+              : external !== undefined && error instanceof ResourceConflictError
+                ? failure(409, "RESOURCE_CONFLICT", "The external identity is already assigned.")
+                : error instanceof AuthAccountRoleNotFoundError
+                  ? failure(
+                      400,
+                      "INVALID_REQUEST",
+                      "The request does not match the operation contract.",
+                    )
+                  : new DependencyUnavailableError(
+                      error instanceof Error ? error.message : "Auth account provisioning failed.",
+                    );
         }
         const account = prepared;
         reply.status(201).send({

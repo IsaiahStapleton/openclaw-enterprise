@@ -505,7 +505,7 @@
   "paths": {
     "/api/auth/accounts": {
       "post": {
-        "description": "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role; public signup remains disabled.",
+        "description": "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
         "operationId": "createAuthAccount",
         "requestBody": {
           "content": {
@@ -514,6 +514,14 @@
                 "additionalProperties": false,
                 "properties": {
                   "email": { "maxLength": 320, "minLength": 3, "type": "string" },
+                  "github": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "subject": { "pattern": "^[1-9][0-9]{0,19}$", "type": "string" }
+                    },
+                    "required": ["subject"],
+                    "type": "object"
+                  },
                   "name": { "maxLength": 200, "minLength": 1, "type": "string" },
                   "password": { "maxLength": 128, "minLength": 12, "type": "string" },
                   "roleId": { "maxLength": 200, "minLength": 1, "type": "string" }

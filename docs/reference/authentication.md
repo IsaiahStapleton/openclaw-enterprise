@@ -283,8 +283,9 @@ activity does not renew the console session.
 
 `POST /api/auth/accounts` requires a human session and `administer` on the
 singleton Installation, and stays available with GitHub sign-in enabled. One
-transaction writes the account, its Principal and grant, and its enrollment;
-attach GitHub afterwards with the attach operation.
+transaction writes the account, its Principal and grant, its enrollment and, with
+an optional `"github":{"subject":"<numeric id>"}`, its GitHub identity (`409`
+when GitHub is off or the identity is taken).
 
 The request must supply the `roleId` of an existing Role; the endpoint cannot
 create a Role or infer a grant from the account's email or session.

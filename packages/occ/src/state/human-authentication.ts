@@ -351,9 +351,13 @@ export class PostgresHumanAuthentication {
     prepared: PreparedPasswordAccount,
     seed: PersistedNativeIAMPrincipalSeed,
     auditEvent?: AuditEvent,
+    external?: { readonly providerId: string; readonly subject: string },
   ): Promise<void> {
     if (seed.principal.issuer !== this.issuer || seed.principal.subject !== prepared.id) {
       throw new ScopeViolationError("The account Principal must identify the new account.");
+    }
+    if (external?.providerId === "credential") {
+      throw new ScopeViolationError("An external method cannot replace a password.");
     }
     await this.state.transact(async (unit) => {
       try {
@@ -392,6 +396,34 @@ export class PostgresHumanAuthentication {
         [prepared.id, this.installationId, seed.principal.id],
       );
       await this.enrolled(unit, prepared.id);
+      if (external !== undefined) {
+        // The optional external identity attaches in the same transaction as the account.
+        const methodId = randomUUID();
+        try {
+          await this.query(
+            unit,
+            `INSERT INTO occ.account (id, account_id, provider_id, user_id, created_at, updated_at, identity_only)
+             VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp(), true)`,
+            [methodId, external.subject, external.providerId, prepared.id],
+          );
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "23505" &&
+            "constraint" in error &&
+            error.constraint === "account_provider_account_unique"
+          ) {
+            throw new ResourceConflictError("The external identity is already assigned.");
+          }
+          throw error;
+        }
+        await this.audit(unit, "authentication.method.attach", auditEvent?.actorId ?? prepared.id, {
+          userId: prepared.id,
+          methodId,
+          principalId: seed.principal.id,
+        });
+      }
       if (auditEvent !== undefined) {
         await unit.audit.append(auditEvent);
       }

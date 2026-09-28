@@ -111,6 +111,23 @@ test(
         (permission) => permission.action === "read" && permission.resourceKind === "installation",
       ),
     );
+    assert.equal(
+      (
+        await unconfigured.inject({
+          method: "POST",
+          url: "/api/auth/accounts",
+          headers: legacyHeaders,
+          payload: {
+            email: "github-off@example.test",
+            password,
+            roleId: role.id,
+            github: { subject: "55555555" },
+          },
+        })
+      ).statusCode,
+      409,
+      "a GitHub subject needs GitHub sign-in",
+    );
     const created = await unconfigured.inject({
       method: "POST",
       url: "/api/auth/accounts",
@@ -720,6 +737,63 @@ test(
         (method) => method.subject === "33333333",
       ),
     );
+    // Creation can attach a GitHub identity in the same transaction; a taken
+    // identity rolls the whole account back.
+    const userCount = async () =>
+      (await pool.query('SELECT count(*)::int AS count FROM occ."user"')).rows[0].count;
+    const usersBefore = await userCount();
+    const takenSubject = await app.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: adminHeaders,
+      payload: {
+        email: "created-taken@example.test",
+        password,
+        roleId: role.id,
+        github: { subject: "33333333" },
+      },
+    });
+    assert.equal(takenSubject.statusCode, 409, takenSubject.body);
+    assert.equal(await userCount(), usersBefore);
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/auth/accounts",
+          headers: adminHeaders,
+          payload: {
+            email: "created-invalid@example.test",
+            password,
+            roleId: role.id,
+            github: { subject: "not-numeric" },
+          },
+        })
+      ).statusCode,
+      400,
+    );
+    const createdGitHub = await app.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: adminHeaders,
+      payload: {
+        email: "created-github@example.test",
+        password,
+        roleId: role.id,
+        github: { subject: "44444444" },
+      },
+    });
+    assert.equal(createdGitHub.statusCode, 201, createdGitHub.body);
+    const createdGitHubAccount = await readAccount(createdGitHub.json().data.id, adminHeaders);
+    assert.equal(createdGitHubAccount.version, 1);
+    assert.equal(createdGitHubAccount.methods.length, 2);
+    assert.ok(createdGitHubAccount.methods.some((method) => method.providerId === "credential"));
+    assert.ok(createdGitHubAccount.methods.some((method) => method.subject === "44444444"));
+    const attachAudits = (await state.transact((unit) => unit.audit.list())).filter(
+      (event) =>
+        event.action === "authentication.method.attach" &&
+        event.details?.userId === createdGitHub.json().data.id,
+    );
+    assert.equal(attachAudits.length, 1);
     assert.equal(
       (
         await app.inject({
