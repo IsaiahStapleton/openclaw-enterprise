@@ -262,6 +262,7 @@ export async function createInstalledRepositoryFixture(
     gatewayImage: images.runtime,
     codexImage: images.runtime,
     cluster: system,
+    codexSeccompProfile: process.env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE,
   });
   // Match production Gateway headroom; real plugin startup can exceed the generic 1 GiB fixture limit.
   configuration.drivers.compute.configuration.resources.gateway.limits.memory = "2Gi";

@@ -1991,6 +1991,21 @@ async function prepareLane({ lane, statePath }) {
           "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
         )
       ).reference;
+      progress(name, "Deriving and installing the dedicated Codex seccomp profile.");
+      const seccomp = await prepareCodexSeccompProfile({
+        cluster,
+        image: env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
+        execFile,
+        kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
+        codexVersion:
+          env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
+          process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
+          "0.156.0",
+      });
+      env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
+      cluster.codexSeccompProfile = seccomp.profileName;
+      cluster.codexSeccompProfiles = seccomp.nodes;
+      await writeState(resolvedStatePath, state);
       if (process.env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY) {
         env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY =
           process.env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY;

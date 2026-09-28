@@ -67,8 +67,9 @@ GitHub. With the [CI runner prerequisites](ci.md) prepared, run:
 ```
 
 The command exits unsuccessfully if preparation, tests, or cleanup fails. Cleanup
-verifies that the owned cluster is absent; on an inventory or deletion failure,
-retain the private state and rerun the cleanup command after investigating. A
+verifies that the owned cluster and its matching Docker resources are absent;
+on an inventory or deletion failure, retain the private state and investigate
+any partially created containers, networks, or volumes before retrying cleanup. A
 missing state file after preflight alone does not prove a cluster was created.
 
 Preparation supplies the explicit kubeconfig/context, database URL, immutable
@@ -159,18 +160,19 @@ The installed case additionally uses these variables with prefix
 
 The runner sets `OCC_TEST_REPOSITORY_CREDENTIALS_REAL=1` and runs
 `tests/integration/repository-credentials-k3d-real.test.mjs` from prepared state;
-both execution modes must pass. To select only Dedicated against an already
+all three scenarios must pass. To select only Dedicated against an already
 prepared disposable cluster, supply the same protected inputs and immutable
 image variables, then run:
 
 ```sh
 OCC_TEST_REPOSITORY_CREDENTIALS_REAL=1 node --test \
-  --test-name-pattern='^installed dedicated Agent' \
+  --test-name-pattern='^installed dedicated ' \
   tests/integration/repository-credentials-k3d-real.test.mjs
 ```
 
-This selected command proves only Dedicated. The full lane retains the embedded
-case and rejects skips.
+This selected command exercises both Dedicated scenarios. The full lane retains
+the embedded case and rejects skips. A selected run must supply the prepared
+`OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE` and use the same owned cluster.
 
 Before cleanup after a failure, the test records container readiness, restart
 counts, the plugin-ready marker state, and allowlisted runtime startup failure
@@ -178,21 +180,28 @@ codes. These diagnostics distinguish login and model-probe failures from later
 readiness failures without exporting Pod logs, credentials, or model responses.
 An unavailable diagnostic never replaces the original failure or prevents cleanup.
 
-Dedicated uses the supported Codex `mode: yolo`, `approvalPolicy: never` and
-`sandbox: danger-full-access` configuration, with `tools.exec.mode: full`, for this
-authorized unattended task.
-Its nonroot container, read-only root filesystem, private volume mounts and
-Kubernetes NetworkPolicies remain the isolation boundary. This mode does not
-prove native Codex sandbox or seccomp enforcement, or a denied Git write. The case checks separate
-Gateway/Codex Pod identities, repository material and model-key delivery to Codex
-only, and credential-service connectivity from Codex with denial from Gateway.
-It pairs the Gateway's mirrored task with read-only native Codex thread evidence,
-requiring completed commands, zero exit codes and matching remote commit/PR
-readback. It does not start a second turn or execute repository commands from
-the test runner. Dedicated task submission uses the private authenticated route
-from the installed worker, which already holds its Gateway key and CA for node
-enrollment. Console file transfer and Slack remain outside this shell-task proof;
-see [Kubernetes testing](kubernetes.md).
+Preparation derives the reviewed, version-pinned Codex seccomp profile from
+each disposable k3d node's RuntimeDefault policy. It verifies that RuntimeDefault
+blocks the sandbox and that the derived Localhost profile permits the actual
+sandbox probe; an unsupported Codex version fails preparation. The Dedicated
+Agents use `mode: guardian`, `approvalPolicy: never`, and
+`sandbox: workspace-write`. Each model turn runs a native workspace write and
+an attempted write to a separately seeded outside-workspace file; the test checks
+the command's denial and independently reads both files. It verifies the selected
+Localhost profile on the Agent container. This is local k3d evidence, not a
+production-node seccomp qualification.
+
+The full-access binding must clone, fetch, commit, push and create a draft PR.
+A separate `git-read` Agent must clone and fetch the same repository, then
+receive the broker's HTTP 400 denial on one push; independent provider readback
+must show no new branch. Both bind native command completions to the Gateway's
+mirrored turn. The full-access case also matches the remote commit and PR.
+The fixture checks separate Gateway/Codex Pod identities, repository material and
+model-key delivery to Codex only, and credential-service connectivity from Codex
+with denial from Gateway. The test runner observes and cleans up but does not
+execute the repository task. Dedicated task submission uses the private
+authenticated route from the installed worker. Console file transfer and Slack
+remain outside this shell-task proof; see [Kubernetes testing](kubernetes.md).
 
 The fixture installs OCC before constructing the registry, because its exact
 Namespace ID comes from the API. It then enables the optional sidecar and

@@ -211,6 +211,35 @@ async function cleanupK3dCluster(resource, state) {
   if ((await listClusters()).some((cluster) => cluster.name === resource.name)) {
     throw new Error(`Owned k3d cluster remains after deletion: ${resource.name}`);
   }
+  // k3d can leave Docker resources before a cluster appears in its inventory.
+  // Only exact cluster-labelled resources are safe to remove automatically.
+  const docker = process.env.OCC_DOCKER_BIN ?? "docker";
+  for (const [kind, command, remove, format] of [
+    ["containers", ["ps", "-a"], ["rm", "-f", "-v"], "{{.Names}}"],
+    ["networks", ["network", "ls"], ["network", "rm"], "{{.Name}}"],
+    ["volumes", ["volume", "ls"], ["volume", "rm"], "{{.Name}}"],
+  ]) {
+    const list = async (filter) =>
+      (await execFile(docker, [...command, "--filter", filter, "--format", format])).stdout
+        .split(/\r?\n/)
+        .filter(Boolean);
+    const labelled = await list(`label=k3d.cluster=${resource.name}`);
+    if (
+      labelled.length > 1000 ||
+      labelled.some((value) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(value))
+    ) {
+      throw new Error(`Invalid k3d ${kind} inventory: ${resource.name}`);
+    }
+    if (labelled.length) {
+      await execFile(docker, [...remove, ...labelled]);
+    }
+    if (
+      (await list(`label=k3d.cluster=${resource.name}`)).length ||
+      (await list(`name=k3d-${resource.name}`)).length
+    ) {
+      throw new Error(`Possible owned k3d ${kind} remain after deletion: ${resource.name}`);
+    }
+  }
   await rm(resource.directory, { recursive: true, force: true });
 }
 

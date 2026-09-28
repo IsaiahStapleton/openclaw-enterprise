@@ -178,7 +178,14 @@ test("cleanup removes an owned k3d cluster resource through the CLI", async (t) 
   await assert.rejects(() => stat(clusterDirectory), { code: "ENOENT" });
 });
 
-for (const scenario of ["surviving", "invalid-inventory", "already-absent"]) {
+for (const scenario of [
+  "surviving",
+  "invalid-inventory",
+  "already-absent",
+  "partial-network",
+  "partial-volume",
+  "failed-volume-removal",
+]) {
   test(`cleanup verifies owned cluster absence: ${scenario}`, async (t) => {
     const root = await fixture(t);
     const clusterName = "openclaw-k8s-readback-123abc456def";
@@ -195,10 +202,38 @@ for (const scenario of ["surviving", "invalid-inventory", "already-absent"]) {
         'if [ "$2" = "list" ]; then',
         scenario === "invalid-inventory"
           ? "  printf '{}\\n'"
-          : scenario === "already-absent"
+          : [
+                "already-absent",
+                "partial-network",
+                "partial-volume",
+                "failed-volume-removal",
+              ].includes(scenario)
             ? "  printf '[]\\n'"
             : `  printf '[{"name":"%s"}]\\n' ${JSON.stringify(clusterName)}`,
         "fi",
+        "",
+      ].join("\n"),
+    );
+    // An unlabelled network is ambiguous; a labelled image volume is owned.
+    const dockerLog = join(root, "docker.log");
+    const removed = join(root, "volume-removed");
+    const partialVolume = ["partial-volume", "failed-volume-removal"].includes(scenario);
+    await writeExecutable(
+      join(root, "bin/docker"),
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$*" >> ${JSON.stringify(dockerLog)}`,
+        scenario === "partial-network"
+          ? 'if [ "$1" = "network" ] && [ "$2" = "ls" ]; then case "$*" in *name=*) printf "k3d-owned-network\\n";; esac; fi'
+          : "",
+        partialVolume
+          ? `if [ "$1" = "volume" ] && [ "$2" = "ls" ] && [ ! -e ${JSON.stringify(removed)} ]; then printf '%s\\n' ${JSON.stringify(`k3d-${clusterName}-images`)}; fi`
+          : "",
+        partialVolume
+          ? scenario === "partial-volume"
+            ? `if [ "$1" = "volume" ] && [ "$2" = "rm" ]; then touch ${JSON.stringify(removed)}; fi`
+            : 'if [ "$1" = "volume" ] && [ "$2" = "rm" ]; then exit 7; fi'
+          : "",
         "",
       ].join("\n"),
     );
@@ -219,16 +254,31 @@ for (const scenario of ["surviving", "invalid-inventory", "already-absent"]) {
       ],
     };
     await writeState(statePath, state);
-    const result = runCleanup(statePath, { OPENCLAW_CI_K3D_BIN: join(root, "bin/k3d") });
-    if (scenario === "already-absent") {
+    const result = runCleanup(statePath, {
+      OPENCLAW_CI_K3D_BIN: join(root, "bin/k3d"),
+      OCC_DOCKER_BIN: join(root, "bin/docker"),
+    });
+    if (scenario === "already-absent" || scenario === "partial-volume") {
       assert.equal(result.status, 0, result.stderr);
+      if (scenario === "partial-volume") {
+        assert.match(
+          await readFile(dockerLog, "utf8"),
+          new RegExp(`volume rm k3d-${clusterName}-images`),
+        );
+      }
       assert.doesNotMatch(await readFile(log, "utf8"), /cluster delete/);
       await assert.rejects(() => stat(statePath), { code: "ENOENT" });
     } else {
       assert.notEqual(result.status, 0);
       assert.match(
         result.stderr,
-        scenario === "surviving" ? /remains after deletion/ : /invalid cluster inventory/,
+        scenario === "surviving"
+          ? /remains after deletion/
+          : scenario === "partial-network"
+            ? /Possible owned k3d networks remain/
+            : scenario === "failed-volume-removal"
+              ? /volume rm/
+              : /invalid cluster inventory/,
       );
       assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")), state);
       assert.equal((await stat(clusterDirectory)).isDirectory(), true);
