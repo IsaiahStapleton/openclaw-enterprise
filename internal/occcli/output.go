@@ -62,6 +62,15 @@ func (app *application) printCredentialSource(value any, collection bool) error 
 	})
 }
 
+func (app *application) printCredentialWithdrawal(value any) error {
+	return app.printItems(value, false, []column{
+		{title: "AGENT", key: "agentId"},
+		{title: "REVISION", key: "revisionId"},
+		{title: "CREDENTIAL SOURCE", key: "credentialSourceId"},
+		{title: "STATE", key: "state"},
+	})
+}
+
 func (app *application) printIAMRole(value any, collection bool) error {
 	return app.printItems(value, collection, []column{
 		{title: "ID", key: "id"},

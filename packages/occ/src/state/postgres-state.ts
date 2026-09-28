@@ -17,6 +17,7 @@ import type {
   AgentRevision,
   AuditEvent,
   CredentialSource,
+  CredentialWithdrawal,
   Group,
   GroupMembership,
   Identity,
@@ -371,6 +372,27 @@ const CREDENTIAL_SOURCE_COLUMNS = `cs.id, cs.namespace_id, cs.name, cs.type, cs.
     FROM occ.credential_source_secrets AS css
     WHERE css.credential_source_id = cs.id
   ), '{}'::jsonb) AS secret_ids`;
+
+const CREDENTIAL_WITHDRAWAL_COLUMNS = `namespace_id, agent_id, revision_id, credential_source_id,
+  state, requested_by, requested_at, completed_at`;
+
+function credentialWithdrawalFromRow(row: PostgresRow): Readonly<CredentialWithdrawal> {
+  const state = text(row, "state");
+  if (state !== "pending" && state !== "revoked") {
+    throw new DependencyUnavailableError("Persisted credential withdrawal state is invalid.");
+  }
+  const completedAt = row.completed_at === null ? undefined : timestamp(row, "completed_at");
+  return Object.freeze({
+    namespaceId: text(row, "namespace_id"),
+    agentId: text(row, "agent_id"),
+    revisionId: text(row, "revision_id"),
+    credentialSourceId: text(row, "credential_source_id"),
+    state,
+    requestedBy: text(row, "requested_by"),
+    requestedAt: timestamp(row, "requested_at"),
+    ...(completedAt === undefined ? {} : { completedAt }),
+  });
+}
 
 function credentialSourceFromRow(row: PostgresRow): Readonly<CredentialSource> {
   const namespaceId = text(row, "namespace_id");
@@ -2040,8 +2062,85 @@ export class PostgresPlatformState implements PlatformStateStore {
       return found === undefined ? undefined : credentialSourceFromRow(found);
     };
 
+    const findCredentialWithdrawal = async (
+      namespaceId: string,
+      revisionId: string,
+      credentialSourceId: string,
+    ): Promise<Readonly<CredentialWithdrawal> | undefined> => {
+      const found = rows(
+        (
+          await client.query(
+            `SELECT ${CREDENTIAL_WITHDRAWAL_COLUMNS} FROM occ.credential_withdrawals
+             WHERE namespace_id = $1 AND revision_id = $2 AND credential_source_id = $3`,
+            [namespaceId, revisionId, credentialSourceId],
+          )
+        ).rows,
+      )[0];
+      return found === undefined ? undefined : credentialWithdrawalFromRow(found);
+    };
+
     const credentialSources: CredentialSourceRepository = {
       findCredentialSource,
+      findCredentialWithdrawal,
+      listCredentialWithdrawals: async (namespaceId, revisionId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                `SELECT ${CREDENTIAL_WITHDRAWAL_COLUMNS} FROM occ.credential_withdrawals
+                 WHERE namespace_id = $1 AND revision_id = $2
+                 ORDER BY credential_source_id`,
+                [namespaceId, revisionId],
+              )
+            ).rows,
+          ).map(credentialWithdrawalFromRow),
+        ),
+      requestCredentialWithdrawal: async (withdrawal) => {
+        await this.requireInitialized(context);
+        // Replays return the recorded withdrawal; the primary key admits one per revision and source.
+        await client.query(
+          `INSERT INTO occ.credential_withdrawals
+           (namespace_id, agent_id, revision_id, credential_source_id, state, requested_by,
+            requested_at, completed_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (namespace_id, revision_id, credential_source_id) DO NOTHING`,
+          [
+            withdrawal.namespaceId,
+            withdrawal.agentId,
+            withdrawal.revisionId,
+            withdrawal.credentialSourceId,
+            withdrawal.state,
+            withdrawal.requestedBy,
+            withdrawal.requestedAt,
+            withdrawal.completedAt ?? null,
+          ],
+        );
+        const saved = await findCredentialWithdrawal(
+          withdrawal.namespaceId,
+          withdrawal.revisionId,
+          withdrawal.credentialSourceId,
+        );
+        if (saved === undefined || saved.agentId !== withdrawal.agentId) {
+          throw new ResourceConflictError("The credential withdrawal could not be recorded.");
+        }
+        return saved;
+      },
+      markCredentialWithdrawalRevoked: async (
+        namespaceId,
+        revisionId,
+        credentialSourceId,
+        completedAt,
+      ) => {
+        const updated = await client.query(
+          `UPDATE occ.credential_withdrawals SET state = 'revoked', completed_at = $4
+           WHERE namespace_id = $1 AND revision_id = $2 AND credential_source_id = $3
+             AND state = 'pending'`,
+          [namespaceId, revisionId, credentialSourceId, completedAt],
+        );
+        return updated.rowCount === 1
+          ? findCredentialWithdrawal(namespaceId, revisionId, credentialSourceId)
+          : undefined;
+      },
       listCredentialSources: async (namespaceId) =>
         Object.freeze(
           rows(
@@ -2112,6 +2211,43 @@ export class PostgresPlatformState implements PlatformStateStore {
           );
         }
         return immutableCopy(source);
+      },
+      replaceCredentialSourceSecrets: async (namespaceId, credentialSourceId, secrets) => {
+        const current = await findCredentialSource(namespaceId, credentialSourceId);
+        if (current === undefined || current.state !== "ready") {
+          return undefined;
+        }
+        const inputs = Object.entries(secrets);
+        if (
+          inputs.some(
+            ([, reference]) => reference.kind !== "secret" || reference.namespaceId !== namespaceId,
+          )
+        ) {
+          throw new ScopeViolationError(
+            "Credential source Secret inputs must reference exact Secrets.",
+          );
+        }
+        // The Secret foreign key rejects a missing or foreign Secret; the row count rejects a
+        // changed field set.
+        const updated = await client.query(
+          `UPDATE occ.credential_source_secrets AS css SET secret_id = input.secret_id
+           FROM unnest($3::text[], $4::text[]) AS input(field, secret_id)
+           WHERE css.namespace_id = $1 AND css.credential_source_id = $2
+             AND css.field = input.field`,
+          [
+            namespaceId,
+            credentialSourceId,
+            inputs.map(([field]) => field),
+            inputs.map(([, reference]) => reference.id),
+          ],
+        );
+        if (
+          updated.rowCount !== inputs.length ||
+          inputs.length !== Object.keys(current.secrets).length
+        ) {
+          throw new ScopeViolationError("Credential source Secret fields cannot change.");
+        }
+        return findCredentialSource(namespaceId, credentialSourceId);
       },
       markCredentialSourceReady: async (namespaceId, credentialSourceId) => {
         const updated = await client.query(
@@ -3625,7 +3761,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           let agentId: string | undefined;
           let revisionId: string | undefined;
           let namespaceTarget: "ready" | "deleted" | undefined;
-          let agentTarget: "stopped" | "deleted" | undefined;
+          let agentTarget: "stopped" | "deleted" | "credentials_withdrawn" | undefined;
           if (operation.kind === "namespace") {
             if (namespaceId !== operation.resourceId) {
               throw new ScopeViolationError("Namespace work does not match its exact owner.");
@@ -3645,6 +3781,7 @@ export class PostgresPlatformState implements PlatformStateStore {
               throw new ScopeViolationError("AgentRevision work does not match its exact owner.");
             }
             agentId = text(owner, "agent_id");
+            agentTarget = operation.target;
           } else if (operation.kind === "agent") {
             // Validate the Agent-wide target before resolving its exact owner.
             if (namespaceId === operation.resourceId) {
@@ -3673,9 +3810,13 @@ export class PostgresPlatformState implements PlatformStateStore {
                 ? operation.target === "stopped"
                   ? `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
                   : `agent:${operation.resourceId}:${operation.action}:${operation.target}`
-                : `${operation.kind}:${operation.resourceId}:${operation.action}${
-                    namespaceTarget === undefined ? "" : `:${namespaceTarget}`
-                  }`,
+                : operation.kind === "agent_revision" &&
+                    operation.target === "credentials_withdrawn"
+                  ? // Distinct from the revision's deployment key, which it must never replace.
+                    `agent_revision:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
+                  : `${operation.kind}:${operation.resourceId}:${operation.action}${
+                      namespaceTarget === undefined ? "" : `:${namespaceTarget}`
+                    }`,
             namespaceId,
             ...(agentId === undefined ? {} : { agentId }),
             ...(revisionId === undefined ? {} : { revisionId }),
@@ -3744,7 +3885,27 @@ export class PostgresPlatformState implements PlatformStateStore {
                   operationId: key.slice(prefix.length),
                 });
               }
-              return immutableCopy({ ...base, kind: "agent_revision" });
+              const revisionTarget = optionalText(row, "agent_target");
+              if (revisionTarget === undefined) {
+                return immutableCopy({ ...base, kind: "agent_revision" });
+              }
+              const key = text(row, "idempotency_key");
+              const prefix = `agent_revision:${revisionId}:reconcile:credentials_withdrawn:`;
+              if (
+                revisionTarget !== "credentials_withdrawn" ||
+                !key.startsWith(prefix) ||
+                key.length === prefix.length
+              ) {
+                throw new DependencyUnavailableError(
+                  "Persisted AgentRevision work has an invalid target.",
+                );
+              }
+              return immutableCopy({
+                ...base,
+                kind: "agent_revision",
+                target: revisionTarget,
+                operationId: key.slice(prefix.length),
+              });
             }),
           );
         },

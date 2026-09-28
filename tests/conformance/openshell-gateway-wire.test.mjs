@@ -266,3 +266,93 @@ test("OpenShell client serializes v0.1.0 credential providers, profiles, and att
     await new Promise((resolve) => server.tryShutdown(resolve));
   }
 });
+
+test("OpenShell client serializes v0.1.0 provider updates and detach receipts", async () => {
+  const proto = await loader.load(
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
+  );
+  const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
+  const requests = { updates: [], detaches: [], statuses: [] };
+  const server = new grpc.Server();
+  server.addService(OpenShell.service, {
+    UpdateProvider(call, callback) {
+      requests.updates.push(call.request);
+      callback(null, { provider: { metadata: { name: call.request.provider.metadata.name } } });
+    },
+    DetachSandboxProvider(call, callback) {
+      requests.detaches.push(call.request);
+      callback(null, {
+        detached: true,
+        receipt: { receipt_id: "receipt-detach", kind: "PROVIDER_MUTATION_KIND_DETACH" },
+      });
+    },
+    GetSandboxProviderStatus(call, callback) {
+      requests.statuses.push(call.request);
+      callback(null, {
+        status: {
+          receipt: { receipt_id: call.request.receipt_id },
+          state: "PROVIDER_READINESS_STATE_REVOKED",
+          reason: "PROVIDER_READINESS_REASON_UNSPECIFIED",
+        },
+      });
+    },
+  });
+  const port = await new Promise((resolve, reject) =>
+    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
+      error ? reject(error) : resolve(value),
+    ),
+  );
+  const client = new GrpcOpenShellGatewayClient({
+    endpoint: `http://127.0.0.1:${port}`,
+    auth: { mode: "unauthenticated" },
+  });
+  try {
+    await client.updateProviderCredentials(
+      "tenant-workspace",
+      "oce-cs-000000000000000000000000",
+      { OPENAI_API_KEY: "wire-rotated-value" },
+      AbortSignal.timeout(2_000),
+    );
+    const detached = await client.detachSandboxProvider(
+      "tenant-workspace",
+      "sandbox-wire",
+      "oce-cs-000000000000000000000000",
+      AbortSignal.timeout(2_000),
+    );
+    const status = await client.getSandboxProviderStatus(
+      "tenant-workspace",
+      "sandbox-wire",
+      "oce-cs-000000000000000000000000",
+      AbortSignal.timeout(2_000),
+      detached.receiptId,
+    );
+
+    // UpdateProvider merges only the named credential into the provider in this workspace.
+    const [update] = requests.updates;
+    assert.equal(update.workspace_scope.workspace, "tenant-workspace");
+    assert.equal(update.provider.metadata.name, "oce-cs-000000000000000000000000");
+    assert.deepEqual(update.provider.credentials, { OPENAI_API_KEY: "wire-rotated-value" });
+    assert.match(update.request_id, /^[0-9a-f-]{36}$/);
+    // Detach names the exact Sandbox and provider; status then follows the detach receipt.
+    assert.equal(requests.detaches[0].workspace_scope.workspace, "tenant-workspace");
+    assert.equal(requests.detaches[0].sandbox, "sandbox-wire");
+    assert.equal(requests.detaches[0].provider, "oce-cs-000000000000000000000000");
+    assert.deepEqual(detached, { detached: true, receiptId: "receipt-detach" });
+    assert.equal(requests.statuses[0].receipt_id, "receipt-detach");
+    assert.equal(status.state, "PROVIDER_READINESS_STATE_REVOKED");
+    // An empty value would leave the old credential in place, so the client refuses it.
+    await assert.rejects(
+      client.updateProviderCredentials(
+        "tenant-workspace",
+        "oce-cs-000000000000000000000000",
+        { OPENAI_API_KEY: "" },
+        AbortSignal.timeout(2_000),
+      ),
+      /must be nonempty/,
+    );
+  } finally {
+    client.close();
+    await new Promise((resolve) => server.tryShutdown(resolve));
+  }
+});

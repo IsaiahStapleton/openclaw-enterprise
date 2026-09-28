@@ -719,7 +719,42 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, deleteCommand)
+	var updateFile string
+	update := &cobra.Command{
+		Use:   "update ID",
+		Short: "Push current or replacement Secret values to the gateway copy",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			body := jsontext.Value("{}")
+			if updateFile != "" {
+				body, err = readJSON(updateFile)
+				if err != nil {
+					return err
+				}
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			source, err := client.UpdateCredentialSource(namespace, args[0], body)
+			if err != nil {
+				return err
+			}
+			return app.printCredentialSource(source, false)
+		},
+	}
+	update.Flags().StringVar(
+		&updateFile,
+		"file",
+		"",
+		"JSON document with replacement secrets; omit to re-send the current Secret values",
+	)
+
+	command.AddCommand(create, list, get, update, deleteCommand)
 	return command
 }
 
@@ -915,7 +950,60 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent)
+	withdraw := &cobra.Command{
+		Use:   "withdraw-credential-source AGENT_ID SOURCE_ID",
+		Short: "Revoke a credential source from an Agent's active revision",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			withdrawal, err := client.WithdrawAgentCredentialSource(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printCredentialWithdrawal(withdrawal)
+		},
+	}
+
+	withdrawal := &cobra.Command{
+		Use:   "credential-withdrawal AGENT_ID SOURCE_ID",
+		Short: "Show whether a credential source is revoked from an Agent's active revision",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			found, err := client.GetAgentCredentialWithdrawal(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printCredentialWithdrawal(found)
+		},
+	}
+
+	command.AddCommand(
+		create,
+		list,
+		get,
+		update,
+		deploy,
+		deploymentStatus,
+		stop,
+		withdraw,
+		withdrawal,
+		deleteAgent,
+	)
 	return command
 }
 

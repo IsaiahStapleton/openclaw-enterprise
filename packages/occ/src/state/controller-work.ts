@@ -39,7 +39,8 @@ export interface ControllerWork {
   readonly revisionId?: string;
   readonly actorId: string;
   readonly namespaceTarget?: "ready" | "deleted";
-  readonly agentTarget?: "stopped" | "deleted" | "provisioned";
+  /** `credentials_withdrawn` is revision-scoped and never deploys that revision. */
+  readonly agentTarget?: "stopped" | "deleted" | "provisioned" | "credentials_withdrawn";
   readonly state: ControllerWorkState;
   readonly availableAt: Date;
   readonly attemptCount: number;
@@ -66,7 +67,8 @@ export interface EnqueueWork {
   readonly revisionId?: string;
   readonly actorId: string;
   readonly namespaceTarget?: "ready" | "deleted";
-  readonly agentTarget?: "stopped" | "deleted" | "provisioned";
+  /** `credentials_withdrawn` is revision-scoped and never deploys that revision. */
+  readonly agentTarget?: "stopped" | "deleted" | "provisioned" | "credentials_withdrawn";
   readonly availableAt?: Date | string;
 }
 

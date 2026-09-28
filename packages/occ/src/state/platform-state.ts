@@ -21,6 +21,8 @@ import type {
   AgentRevision,
   AuditEvent,
   CredentialSource,
+  CredentialWithdrawal,
+  SecretReference,
   HarnessExecutionMode,
   HarnessAuthBinding,
   HarnessAuthSnapshot,
@@ -249,6 +251,15 @@ export interface CredentialSourceReadRepository {
     credentialSourceId: string,
   ): Promise<Readonly<CredentialSource> | undefined>;
   listCredentialSources(namespaceId: string): Promise<readonly Readonly<CredentialSource>[]>;
+  findCredentialWithdrawal(
+    namespaceId: string,
+    revisionId: string,
+    credentialSourceId: string,
+  ): Promise<Readonly<CredentialWithdrawal> | undefined>;
+  listCredentialWithdrawals(
+    namespaceId: string,
+    revisionId: string,
+  ): Promise<readonly Readonly<CredentialWithdrawal>[]>;
 }
 
 export interface CredentialSourceRepository extends CredentialSourceReadRepository {
@@ -257,6 +268,15 @@ export interface CredentialSourceRepository extends CredentialSourceReadReposito
     credentialSourceId: string,
   ): Promise<Readonly<CredentialSource> | undefined>;
   createCredentialSource(source: CredentialSource): Promise<Readonly<CredentialSource>>;
+  /**
+   * Points each existing Secret input field at a replacement same-Namespace Secret. The field
+   * set is fixed by the source type; only the referenced Secret IDs change.
+   */
+  replaceCredentialSourceSecrets(
+    namespaceId: string,
+    credentialSourceId: string,
+    secrets: Readonly<Record<string, SecretReference>>,
+  ): Promise<Readonly<CredentialSource> | undefined>;
   /** Moves a registering source to `ready` once the gateway confirms its copy. */
   markCredentialSourceReady(
     namespaceId: string,
@@ -270,6 +290,17 @@ export interface CredentialSourceRepository extends CredentialSourceReadReposito
   deleteCredentialSource(namespaceId: string, credentialSourceId: string): Promise<boolean>;
   /** True while an Agent draft, active revision, or pending deployment references the source. */
   hasReferences(namespaceId: string, credentialSourceId: string): Promise<boolean>;
+  /** Records a pending withdrawal, or returns the existing one for the same revision and source. */
+  requestCredentialWithdrawal(
+    withdrawal: CredentialWithdrawal,
+  ): Promise<Readonly<CredentialWithdrawal>>;
+  /** Moves a pending withdrawal to `revoked`; a revoked withdrawal never changes again. */
+  markCredentialWithdrawalRevoked(
+    namespaceId: string,
+    revisionId: string,
+    credentialSourceId: string,
+    completedAt: string,
+  ): Promise<Readonly<CredentialWithdrawal> | undefined>;
 }
 
 export interface ServiceAccountReadRepository {
@@ -573,6 +604,12 @@ export type PlatformOperation =
       readonly target?: never;
     })
   | (PlatformOperationBase & {
+      /** Revokes pending credential withdrawals from an active revision; never deploys it. */
+      readonly kind: "agent_revision";
+      readonly target: "credentials_withdrawn";
+      readonly operationId: string;
+    })
+  | (PlatformOperationBase & {
       readonly kind: "agent";
       readonly target: "stopped";
       readonly operationId: string;
@@ -665,6 +702,7 @@ interface PlatformSnapshot {
   readonly presets: Map<string, Readonly<Preset>>;
   readonly secrets: Map<string, Readonly<Secret>>;
   readonly credentialSources: Map<string, Readonly<CredentialSource>>;
+  readonly credentialWithdrawals: Map<string, Readonly<CredentialWithdrawal>>;
   readonly serviceAccounts: Map<string, Readonly<ServiceAccount>>;
   readonly agents: Map<string, Readonly<Agent>>;
   readonly workspaceSetups: Map<string, Readonly<WorkspaceSetup>>;
@@ -684,6 +722,9 @@ function agentKey(namespaceId: string, agentId: string): string {
 function operationIdempotencyKey(operation: Readonly<PlatformOperation>): string {
   if (operation.kind === "agent") {
     return `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`;
+  }
+  if (operation.kind === "agent_revision" && operation.target === "credentials_withdrawn") {
+    return `agent_revision:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`;
   }
   return `${operation.kind}:${operation.resourceId}:${operation.action}${
     operation.kind === "namespace" ? `:${operation.target}` : ""
@@ -705,6 +746,12 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
     ),
     presets: new Map(Array.from(snapshot.presets, ([key, preset]) => [key, immutableCopy(preset)])),
     secrets: new Map(Array.from(snapshot.secrets, ([key, secret]) => [key, immutableCopy(secret)])),
+    credentialWithdrawals: new Map(
+      Array.from(snapshot.credentialWithdrawals, ([key, withdrawal]) => [
+        key,
+        immutableCopy(withdrawal),
+      ]),
+    ),
     credentialSources: new Map(
       Array.from(snapshot.credentialSources, ([key, source]) => [key, immutableCopy(source)]),
     ),
@@ -1375,8 +1422,88 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     return source === undefined ? undefined : immutableCopy(source);
   };
 
+  const withdrawalKey = (namespaceId: string, revisionId: string, credentialSourceId: string) =>
+    JSON.stringify([namespaceId, revisionId, credentialSourceId]);
+  // Mirrors the database cascades: a withdrawal ends with its revision or its source.
+  const liveWithdrawal = (withdrawal: Readonly<CredentialWithdrawal>) =>
+    snapshot.credentialSources.has(
+      agentKey(withdrawal.namespaceId, withdrawal.credentialSourceId),
+    ) &&
+    (snapshot.revisions.get(agentKey(withdrawal.namespaceId, withdrawal.agentId)) ?? []).some(
+      (revision) => revision.id === withdrawal.revisionId,
+    );
+  const findCredentialWithdrawal = async (
+    namespaceId: string,
+    revisionId: string,
+    credentialSourceId: string,
+  ) => {
+    const found = snapshot.credentialWithdrawals.get(
+      withdrawalKey(namespaceId, revisionId, credentialSourceId),
+    );
+    return found === undefined || !liveWithdrawal(found) ? undefined : immutableCopy(found);
+  };
+
   const credentialSources: CredentialSourceRepository = {
     findCredentialSource,
+    findCredentialWithdrawal,
+    listCredentialWithdrawals: async (namespaceId, revisionId) =>
+      Object.freeze(
+        Array.from(snapshot.credentialWithdrawals.values())
+          .filter(
+            (withdrawal) =>
+              withdrawal.namespaceId === namespaceId &&
+              withdrawal.revisionId === revisionId &&
+              liveWithdrawal(withdrawal),
+          )
+          .sort((left, right) => left.credentialSourceId.localeCompare(right.credentialSourceId))
+          .map((withdrawal) => immutableCopy(withdrawal)),
+      ),
+    requestCredentialWithdrawal: async (withdrawal) => {
+      assertInitialized(snapshot);
+      const existing = await findCredentialWithdrawal(
+        withdrawal.namespaceId,
+        withdrawal.revisionId,
+        withdrawal.credentialSourceId,
+      );
+      if (existing !== undefined) {
+        return existing;
+      }
+      if (
+        withdrawal.state !== "pending" ||
+        withdrawal.completedAt !== undefined ||
+        !isNonEmptyString(withdrawal.requestedBy)
+      ) {
+        throw new ScopeViolationError("A new credential withdrawal must be pending.");
+      }
+      if (!liveWithdrawal(withdrawal)) {
+        throw new ScopeViolationError(
+          "The credential withdrawal must name an existing revision and source.",
+        );
+      }
+      const saved = immutableCopy(withdrawal);
+      snapshot.credentialWithdrawals.set(
+        withdrawalKey(withdrawal.namespaceId, withdrawal.revisionId, withdrawal.credentialSourceId),
+        saved,
+      );
+      return immutableCopy(saved);
+    },
+    markCredentialWithdrawalRevoked: async (
+      namespaceId,
+      revisionId,
+      credentialSourceId,
+      completedAt,
+    ) => {
+      const current = await findCredentialWithdrawal(namespaceId, revisionId, credentialSourceId);
+      if (current === undefined || current.state !== "pending") {
+        return undefined;
+      }
+      const saved = immutableCopy({ ...current, state: "revoked" as const, completedAt });
+      snapshot.credentialWithdrawals.set(
+        withdrawalKey(namespaceId, revisionId, credentialSourceId),
+        saved,
+      );
+      return immutableCopy(saved);
+    },
     listCredentialSources: async (namespaceId) => {
       if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) {
         return Object.freeze([]);
@@ -1431,6 +1558,28 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
       }
       const saved = immutableCopy(source);
       snapshot.credentialSources.set(key, saved);
+      return immutableCopy(saved);
+    },
+    replaceCredentialSourceSecrets: async (namespaceId, credentialSourceId, secrets) => {
+      const current = await findCredentialSource(namespaceId, credentialSourceId);
+      if (current === undefined || current.state !== "ready") {
+        return undefined;
+      }
+      const fields = Object.keys(current.secrets).sort();
+      if (JSON.stringify(Object.keys(secrets).sort()) !== JSON.stringify(fields)) {
+        throw new ScopeViolationError("Credential source Secret fields cannot change.");
+      }
+      for (const reference of Object.values(secrets)) {
+        if (
+          reference.kind !== "secret" ||
+          reference.namespaceId !== namespaceId ||
+          !snapshot.secrets.has(agentKey(namespaceId, reference.id))
+        ) {
+          throw new ScopeViolationError("The credential source references an unavailable Secret.");
+        }
+      }
+      const saved = immutableCopy({ ...current, secrets: { ...secrets } });
+      snapshot.credentialSources.set(agentKey(namespaceId, credentialSourceId), saved);
       return immutableCopy(saved);
     },
     markCredentialSourceReady: async (namespaceId, credentialSourceId) => {
@@ -2209,6 +2358,12 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
             existing.action === operation.action &&
             (existing.kind !== "namespace" ||
               (operation.kind === "namespace" && existing.target === operation.target)) &&
+            (existing.kind !== "agent_revision" ||
+              (operation.kind === "agent_revision" &&
+                existing.target === operation.target &&
+                (existing.target === undefined ||
+                  (operation.target === "credentials_withdrawn" &&
+                    existing.operationId === operation.operationId)))) &&
             (existing.kind !== "agent" ||
               (operation.kind === "agent" &&
                 existing.target === operation.target &&
@@ -2265,6 +2420,9 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
           actorId: operation.actorId,
           ...(operation.kind === "namespace" ? { namespaceTarget: operation.target } : {}),
           ...(operation.kind === "agent" ? { agentTarget: operation.target } : {}),
+          ...(operation.kind === "agent_revision" && operation.target !== undefined
+            ? { agentTarget: operation.target }
+            : {}),
           state: "queued",
           availableAt: now,
           attemptCount: 0,
@@ -2285,6 +2443,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
     presets: new Map(),
     secrets: new Map(),
     credentialSources: new Map(),
+    credentialWithdrawals: new Map(),
     serviceAccounts: new Map(),
     agents: new Map(),
     workspaceSetups: new Map(),

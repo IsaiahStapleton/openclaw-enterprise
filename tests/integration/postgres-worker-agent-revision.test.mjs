@@ -2394,6 +2394,121 @@ test(
 );
 
 test(
+  "credential withdrawal work revokes from the active revision without redeploying it",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("withdraw-target");
+    const active = await fixture.revision(owner, 1);
+    const prepared = [];
+    const withdrawn = [];
+    let pendingOnce = true;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision, revisionContext) {
+          if (revision.namespaceId === fixture.namespace.id) {
+            prepared.push(revision.id);
+          }
+          return fixture.compute.prepareRevision(revision, revisionContext);
+        },
+        async withdrawCredentialSource(revision, source) {
+          withdrawn.push([revision.id, source.id]);
+          // The first observation is still pending, so the worker must retry, not report success.
+          if (pendingOnce) {
+            pendingOnce = false;
+            return { sourceId: source.id, state: "pending" };
+          }
+          return { sourceId: source.id, state: "revoked" };
+        },
+      },
+      () => {},
+      50,
+    );
+    await fixture.work(active, "succeeded");
+    const deployments = prepared.length;
+
+    // Record the withdrawal the way the API does: a pending row plus revision-scoped work.
+    const source = {
+      id: `cs_${randomUUID()}`,
+      namespaceId: fixture.namespace.id,
+      name: `withdrawn-${randomUUID()}`,
+      type: "openai",
+      config: {},
+      secrets: {},
+      driverId: "credential-gateway-worker-fixture",
+      state: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    const operationId = randomUUID();
+    await fixture.state.transact(async (unit) => {
+      await unit.credentialSources.createCredentialSource(source);
+      await unit.credentialSources.requestCredentialWithdrawal({
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        revisionId: active.id,
+        credentialSourceId: source.id,
+        state: "pending",
+        requestedBy: fixture.actor.id,
+        requestedAt: new Date().toISOString(),
+      });
+      await unit.operations.append({
+        kind: "agent_revision",
+        action: "reconcile",
+        target: "credentials_withdrawn",
+        operationId,
+        namespaceId: fixture.namespace.id,
+        resourceId: active.id,
+        actorId: fixture.actor.id,
+      });
+    });
+    const withdrawal = {
+      idempotencyKey: `agent_revision:${active.id}:reconcile:credentials_withdrawn:${operationId}`,
+      id: active.id,
+    };
+    const completed = await fixture.work(withdrawal, "succeeded");
+    assert.equal(completed.attempt_count, 2, "a pending revocation retries until confirmed");
+    assert.deepEqual(withdrawn, [
+      [active.id, source.id],
+      [active.id, source.id],
+    ]);
+
+    // Withdrawal never redeploys or replaces the active revision.
+    assert.equal(prepared.length, deployments);
+    const [agent, recorded] = await fixture.state.read(async (view) =>
+      Promise.all([
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+        view.credentialSources.findCredentialWithdrawal(fixture.namespace.id, active.id, source.id),
+      ]),
+    );
+    assert.equal(agent.activeRevisionId, active.id);
+    assert.equal(recorded.state, "revoked");
+    assert.ok(recorded.completedAt);
+    const deployment = await fixture.observerPool.query(
+      "SELECT state, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
+      [active.idempotencyKey],
+    );
+    assert.deepEqual(deployment.rows[0], { state: "succeeded", attempt_count: 1 });
+    const audit = await fixture.observerPool.query(
+      `SELECT resource_id, outcome, details->>'reasonCode' AS reason_code,
+              details->>'revisionId' AS revision_id, details->'credentialSourceIds' AS sources
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.credentials_withdraw'`,
+      [fixture.namespace.id],
+    );
+    assert.deepEqual(audit.rows, [
+      {
+        resource_id: owner.id,
+        outcome: "success",
+        reason_code: "CREDENTIALS_WITHDRAWN",
+        revision_id: active.id,
+        sources: [source.id],
+      },
+    ]);
+  },
+);
+
+test(
   "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
   requiresPostgres,
   async (context) => {

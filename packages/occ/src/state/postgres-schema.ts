@@ -522,6 +522,50 @@ export const credentialSourceSecrets = occSchema.table(
   ],
 );
 
+export const credentialWithdrawals = occSchema.table(
+  "credential_withdrawals",
+  {
+    namespaceId: text("namespace_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    revisionId: text("revision_id").notNull(),
+    credentialSourceId: text("credential_source_id").notNull(),
+    state: text("state").$type<"pending" | "revoked">().notNull(),
+    requestedBy: text("requested_by").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table): PgTableExtraConfigValue[] => [
+    primaryKey({
+      name: "credential_withdrawals_pkey",
+      columns: [table.namespaceId, table.revisionId, table.credentialSourceId],
+    }),
+    foreignKey({
+      name: "credential_withdrawals_revision_owner",
+      columns: [table.namespaceId, table.agentId, table.revisionId],
+      foreignColumns: [agentRevisions.namespaceId, agentRevisions.agentId, agentRevisions.id],
+    })
+      .onUpdate("restrict")
+      .onDelete("cascade"),
+    foreignKey({
+      name: "credential_withdrawals_source_owner",
+      columns: [table.namespaceId, table.credentialSourceId],
+      foreignColumns: [credentialSources.namespaceId, credentialSources.id],
+    })
+      .onUpdate("restrict")
+      .onDelete("cascade"),
+    check("credential_withdrawals_state_valid", sql`${table.state} IN ('pending', 'revoked')`),
+    check(
+      "credential_withdrawals_completion",
+      sql`(${table.state} = 'revoked') = (${table.completedAt} IS NOT NULL)`,
+    ),
+    check(
+      "credential_withdrawals_requested_by_valid",
+      sql`char_length(${table.requestedBy}) BETWEEN 1 AND 256 AND ${table.requestedBy} = btrim(${table.requestedBy})`,
+    ),
+    index("credential_withdrawals_source_idx").on(table.namespaceId, table.credentialSourceId),
+  ],
+);
+
 export const agentRevisions = occSchema.table(
   "agent_revisions",
   {
@@ -1007,7 +1051,8 @@ export const controllerWork = occSchema.table(
           AND ${table.agentTarget} IS NOT NULL
           AND ${table.agentTarget} IN ('stopped', 'deleted'))
         OR (${table.workKind} = 'lifecycle' AND ${table.agentId} IS NOT NULL AND ${table.revisionId} IS NOT NULL
-          AND ${table.namespaceTarget} IS NULL AND ${table.agentTarget} IS NULL)
+          AND ${table.namespaceTarget} IS NULL
+          AND (${table.agentTarget} IS NULL OR ${table.agentTarget} = 'credentials_withdrawn'))
         OR (${table.workKind} = 'provisioning' AND ${table.agentId} IS NULL
           AND ${table.revisionId} IS NULL AND ${table.namespaceTarget} IS NULL
           AND ${table.agentTarget} IS NULL)

@@ -39,6 +39,7 @@ import type {
   ComputeReadiness,
   ComputePreflightResult,
   ComputeRevisionContext,
+  CredentialAttachmentStatus,
   CredentialGatewayDriver,
   CredentialSource,
   CredentialSourceAttachment,
@@ -3479,6 +3480,57 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }),
       { mutating: true },
     );
+  }
+
+  /**
+   * Revokes one credential source from the revision's paired Sandbox. The Sandbox identity is
+   * derived exactly as provisioning created it; a missing Namespace or Sandbox has nothing left
+   * to revoke.
+   */
+  async withdrawCredentialSource(
+    revision: Readonly<AgentRevision>,
+    source: Readonly<CredentialSource>,
+    signal: AbortSignal,
+  ): Promise<CredentialAttachmentStatus> {
+    if (
+      revision.compute.id !== this.id ||
+      revision.compute.implementation !== this.implementation
+    ) {
+      throw new Error(
+        "Refusing to withdraw from an AgentRevision pinned to another Compute Driver.",
+      );
+    }
+    const sandboxDriver = this.sandboxDriverForRevision(revision);
+    if (sandboxDriver?.harnessResource === undefined) {
+      throw new ConfigurationFailure(
+        "Credential withdrawal requires a SandboxDriver that identifies the revision's Harness.",
+      );
+    }
+    const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
+    const existingNamespace = await this.getNamespace(namespace);
+    if (existingNamespace === undefined) {
+      return Object.freeze({ sourceId: source.id, state: "absent" });
+    }
+    this.verifyNamespaceOwnership(
+      existingNamespace,
+      { namespaceId: revision.namespaceId },
+      external,
+    );
+    const sandboxNamespace = this.sandboxNamespaceForRevision(revision, namespace);
+    const sandbox = sandboxDriver.harnessResource({ namespace: sandboxNamespace, revision });
+    this.verifySandboxResourceRef(sandbox, revision, namespace);
+    const status = await this.requireCredentialGateway().withdraw({
+      namespace: sandboxNamespace,
+      revision,
+      sources: [source],
+      sandbox,
+      sourceId: source.id,
+      signal,
+    });
+    if (status.sourceId !== source.id) {
+      throw new OwnershipFailure("The Credential Gateway withdrew another credential source.");
+    }
+    return status;
   }
 
   async stopRevision(revision: AgentRevision): Promise<void> {

@@ -90,11 +90,51 @@ While a Credential Gateway is selected, deployment rejects `api_key`,
 provisioning does not yet accept credential sources; create the Agent, then
 deploy it.
 
-## Replace or delete a source
+## Update a source
 
-There is no update operation. To change the credential, register a new source,
-update and redeploy each Agent, and delete the old source after its revisions
-retire. Updating the underlying Secret does not change the gateway's copy.
+Updating the underlying Secret does not change the gateway's copy. To push a new
+value, send
+`PATCH /namespaces/:namespaceId/credential-sources/:credentialSourceId`. The
+caller needs exact `credential_source:update` and `secret:operate` on every
+Secret the update reads:
+
+- An empty body `{}` re-reads the source's current Secrets.
+- `{ "secrets": { "api_key": <SecretReference> } }` switches each named field to
+  a replacement same-Namespace Secret. The field set stays the source type's
+  catalog fields, and non-secret `config` cannot change; register a new source
+  instead.
+
+A successful update returns `200` with the source and its live gateway `status`.
+Only a `ready` source can be updated. A gateway failure returns `503` and leaves
+the Secret references unchanged; repeating the same request converges.
+
+A running Agent keeps the previous value until its Harness restarts, because the
+gateway gives updated values only to new processes. Redeploy each Agent to use
+the new value.
+
+## Withdraw a source from an Agent
+
+Withdrawal revokes a source from an Agent's active revision while the revision
+keeps running. Send
+`POST /namespaces/:namespaceId/agents/:agentId/credential-sources/:credentialSourceId/withdraw`.
+The caller needs `agent:operate`, and the active revision must authenticate with
+that source. The request returns `202` with the withdrawal in state `pending`;
+a replay returns the same withdrawal and queues another attempt.
+
+The worker detaches the source from the revision's Sandbox and records
+`revoked` only after the gateway confirms that the revision's placeholders no
+longer resolve, even in running processes. Requests already forwarded upstream
+are not undone. Read the state with
+`GET /namespaces/:namespaceId/agents/:agentId/credential-sources/:credentialSourceId/withdrawal`,
+which requires `agent:read`.
+
+A withdrawn source never re-attaches to that revision; if its Sandbox is
+recreated, provisioning fails with `CREDENTIAL_WITHDRAWN`. The revision still
+references the source, so the source cannot be deleted until a redeploy
+replaces the revision. Redeploy the Agent without the source, or with a
+replacement.
+
+## Delete a source
 
 `DELETE /namespaces/:namespaceId/credential-sources/:credentialSourceId`
 requires exact `delete` and returns `204`:
@@ -113,14 +153,14 @@ deleted, and its referenced Secrets cannot be deleted.
 
 ## Errors
 
-| Status                       | Meaning                                                                                              |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `400 INVALID_REQUEST`        | The body or a field name is malformed.                                                               |
-| `403 FORBIDDEN`              | A required `credential_source` or `secret` permission is missing.                                    |
-| `404 NOT_FOUND`              | The source, Secret, or type is not in the exact Namespace or catalog, or a catalog field is invalid. |
-| `409 NAMESPACE_NOT_READY`    | The Namespace is not `ready`.                                                                        |
-| `409 RESOURCE_CONFLICT`      | The source is still referenced, or it changed during deletion.                                       |
-| `503 DEPENDENCY_UNAVAILABLE` | No Credential Gateway is selected, the Secret Driver cannot read values, or the gateway call failed. |
+| Status                       | Meaning                                                                                                                                         |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400 INVALID_REQUEST`        | The body or a field name is malformed.                                                                                                          |
+| `403 FORBIDDEN`              | A required `credential_source` or `secret` permission is missing.                                                                               |
+| `404 NOT_FOUND`              | The source, Secret, or type is not in the exact Namespace or catalog, or a catalog field is invalid.                                            |
+| `409 NAMESPACE_NOT_READY`    | The Namespace is not `ready`.                                                                                                                   |
+| `409 RESOURCE_CONFLICT`      | The source is still referenced, not `ready` for an update, or changed during the request; or the Agent has no active revision to withdraw from. |
+| `503 DEPENDENCY_UNAVAILABLE` | No Credential Gateway is selected, the Secret Driver cannot read values, or the gateway call failed.                                            |
 
 ## Related
 

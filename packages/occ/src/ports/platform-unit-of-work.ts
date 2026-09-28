@@ -57,8 +57,13 @@ export function bindPlatformUnitOfWork(
       "createCredentialSource",
       "markCredentialSourceDeleting",
       "markCredentialSourceReady",
+      "replaceCredentialSourceSecrets",
       "deleteCredentialSource",
       "hasReferences",
+      "findCredentialWithdrawal",
+      "listCredentialWithdrawals",
+      "requestCredentialWithdrawal",
+      "markCredentialWithdrawalRevoked",
     ]),
     serviceAccounts: bindRepository(repositories.serviceAccounts, lifetime, [
       "findServiceAccount",

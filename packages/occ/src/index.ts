@@ -18,6 +18,7 @@ import type {
   CredentialSource,
   CredentialSourceMetadata,
   CredentialSourceStatus,
+  CredentialWithdrawal,
   CredentialSourceType,
   AuditEvent,
   Driver,
@@ -356,6 +357,19 @@ export interface CreateCredentialSourceInput {
   readonly name: string;
   readonly type: string;
   readonly config?: Readonly<Record<string, string>>;
+  readonly secrets?: Readonly<Record<string, SecretReference>>;
+}
+
+export interface AgentCredentialSourceInput {
+  readonly namespaceId: string;
+  readonly agentId: string;
+  readonly credentialSourceId: string;
+}
+
+export interface UpdateCredentialSourceInput {
+  readonly namespaceId: string;
+  readonly credentialSourceId: string;
+  /** Replacement references for the same fields; omit to re-send the current Secret values. */
   readonly secrets?: Readonly<Record<string, SecretReference>>;
 }
 
@@ -1126,7 +1140,8 @@ export class OpenClawController {
     return this.read(async (state) => {
       const deploymentsInProgress = new Set<string>();
       for (const operation of await state.operations.list()) {
-        if (operation.kind !== "agent_revision") {
+        // Credential withdrawal work targets an active revision without deploying it.
+        if (operation.kind !== "agent_revision" || operation.target !== undefined) {
           continue;
         }
         const work = await state.operations.findWork(
@@ -2731,25 +2746,7 @@ export class OpenClawController {
       const type = await this.credentialSourceType(selected, input.type);
       credentialSourceFieldsMatch("config", type.config, config);
       credentialSourceFieldsMatch("secrets", type.secrets, secretRefs);
-      const read: Record<string, string> = {};
-      for (const [field, reference] of Object.entries(secretRefs)) {
-        if (reference.namespaceId !== locked.id) {
-          throw new ScopeViolationError("Credential source Secrets cannot cross Namespaces.");
-        }
-        await this.authorize(principalId, "operate", reference);
-        const secret = await state.secrets.lockSecret(locked.id, reference.id);
-        if (secret === undefined) {
-          throw new ScopeViolationError("The credential source Secret is unavailable.");
-        }
-        const secretDriver = this.secretDriver(secret.driverId);
-        if (secretDriver.withValue === undefined) {
-          throw new DependencyUnavailableError(
-            "The selected Secret Driver cannot supply values to a Credential Gateway.",
-          );
-        }
-        const withValue = secretDriver.withValue.bind(secretDriver);
-        read[field] = await this.secretOperation(() => withValue(secret, async (value) => value));
-      }
+      const read = await this.readCredentialSourceSecrets(state, principalId, locked, secretRefs);
       const registering = await state.credentialSources.createCredentialSource(
         Object.freeze({
           id: this.nextIdentifier("credential_source"),
@@ -2806,6 +2803,109 @@ export class OpenClawController {
       throw new ResourceConflictError("The credential source changed during registration.");
     }
     return this.credentialSourceMetadata(ready, status);
+  }
+
+  /**
+   * Authorizes `operate` on each referenced same-Namespace Secret and reads its current value
+   * for a Credential Gateway call. Values stay in memory for that call only.
+   */
+  private async readCredentialSourceSecrets(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    namespace: Readonly<Namespace>,
+    references: Readonly<Record<string, SecretReference>>,
+  ): Promise<Record<string, string>> {
+    const values: Record<string, string> = {};
+    for (const [field, reference] of Object.entries(references)) {
+      if (reference.namespaceId !== namespace.id) {
+        throw new ScopeViolationError("Credential source Secrets cannot cross Namespaces.");
+      }
+      await this.authorize(principalId, "operate", reference);
+      const secret = await state.secrets.lockSecret(namespace.id, reference.id);
+      if (secret === undefined) {
+        throw new ScopeViolationError("The credential source Secret is unavailable.");
+      }
+      const secretDriver = this.secretDriver(secret.driverId);
+      if (secretDriver.withValue === undefined) {
+        throw new DependencyUnavailableError(
+          "The selected Secret Driver cannot supply values to a Credential Gateway.",
+        );
+      }
+      const withValue = secretDriver.withValue.bind(secretDriver);
+      values[field] = await this.secretOperation(() => withValue(secret, async (value) => value));
+    }
+    return values;
+  }
+
+  /**
+   * Pushes current, or replacement, Secret values to the gateway copy. The gateway call runs
+   * under the source lock, like a Secret update; a failed commit leaves the gateway newer, and
+   * repeating the same request converges. Running Harness processes keep the previous value.
+   */
+  async updateCredentialSource(
+    principalId: string,
+    input: UpdateCredentialSourceInput,
+  ): Promise<Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>> {
+    return this.mutate(async (state) => {
+      const namespace = await this.lockNamespace(state, input.namespaceId);
+      await this.authorize(principalId, "update", {
+        kind: "credential_source",
+        id: input.credentialSourceId,
+        namespaceId: namespace.id,
+      });
+      if (namespace.status !== "ready") {
+        throw new NamespaceNotReadyError();
+      }
+      const source = await state.credentialSources.lockCredentialSource(
+        namespace.id,
+        input.credentialSourceId,
+      );
+      if (!source) {
+        throw new ScopeViolationError(
+          "The credential source does not belong to the exact Namespace.",
+        );
+      }
+      if (source.state !== "ready") {
+        throw new ResourceConflictError("Only a ready credential source can be updated.");
+      }
+      const gateway = this.credentialGatewayDriver(source.driverId);
+      const type = await this.credentialSourceType(gateway, source.type);
+      const secretRefs = Object.freeze({ ...(input.secrets ?? source.secrets) });
+      credentialSourceFieldsMatch("secrets", type.secrets, secretRefs);
+      const values = await this.readCredentialSourceSecrets(
+        state,
+        principalId,
+        namespace,
+        secretRefs,
+      );
+      // The gateway sees Compute's runtime placement, the same Workspace as the paired Sandbox.
+      const placed = await this.credentialNamespace(namespace);
+      const status = await this.credentialGatewayOperation(() =>
+        gateway.updateSource(
+          {
+            namespace: placed,
+            source,
+            signal: AbortSignal.timeout(CREDENTIAL_GATEWAY_TIMEOUT_MS),
+          },
+          { type: source.type, config: source.config, secrets: values },
+        ),
+      );
+      if (status.state === "failed" || status.state === "absent") {
+        throw new DependencyUnavailableError("The Credential Gateway did not update the source.");
+      }
+      const updated =
+        input.secrets === undefined
+          ? source
+          : await state.credentialSources.replaceCredentialSourceSecrets(
+              namespace.id,
+              source.id,
+              secretRefs,
+            );
+      if (updated === undefined) {
+        throw new ResourceConflictError("The credential source changed during the update.");
+      }
+      return this.credentialSourceMetadata(updated, status);
+    });
   }
 
   /**
@@ -4254,6 +4354,110 @@ export class OpenClawController {
       });
       return Object.freeze({ revision, authorization });
     });
+  }
+
+  /**
+   * Records a withdrawal of `credentialSourceId` from the Agent's active revision and queues
+   * worker work to revoke it. A replay of a pending withdrawal queues another attempt; a
+   * revoked withdrawal is returned unchanged.
+   */
+  async withdrawAgentCredentialSource(
+    principalId: string,
+    input: AgentCredentialSourceInput,
+  ): Promise<Readonly<CredentialWithdrawal>> {
+    return this.mutate(async (state) => {
+      await this.lockNamespace(state, input.namespaceId);
+      const agent = await state.agents.lockAgent(input.namespaceId, input.agentId);
+      if (agent === undefined) {
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      }
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: agent.id,
+        namespaceId: agent.namespaceId,
+      });
+      const revision = await this.activeCredentialSourceRevision(state, agent, input);
+      const withdrawal = await state.credentialSources.requestCredentialWithdrawal(
+        Object.freeze({
+          namespaceId: agent.namespaceId,
+          agentId: agent.id,
+          revisionId: revision.id,
+          credentialSourceId: input.credentialSourceId,
+          state: "pending",
+          requestedBy: principalId,
+          requestedAt: this.timestamp(),
+        }),
+      );
+      if (withdrawal.state === "pending") {
+        await this.record(state, {
+          kind: "agent_revision",
+          action: "reconcile",
+          target: "credentials_withdrawn",
+          namespaceId: agent.namespaceId,
+          resourceId: revision.id,
+          actorId: principalId,
+          operationId: crypto.randomUUID(),
+        });
+      }
+      return withdrawal;
+    });
+  }
+
+  async readAgentCredentialWithdrawal(
+    principalId: string,
+    input: AgentCredentialSourceInput,
+  ): Promise<Readonly<CredentialWithdrawal>> {
+    await this.authorize(principalId, "read", {
+      kind: "agent",
+      id: input.agentId,
+      namespaceId: input.namespaceId,
+    });
+    return this.read(async (state) => {
+      await this.exactNamespace(state, input.namespaceId);
+      const agent = await state.agents.findAgent(input.namespaceId, input.agentId);
+      if (agent === undefined || agent.activeRevisionId === undefined) {
+        throw new ScopeViolationError("The Agent has no active revision.");
+      }
+      const withdrawal = await state.credentialSources.findCredentialWithdrawal(
+        agent.namespaceId,
+        agent.activeRevisionId,
+        input.credentialSourceId,
+      );
+      if (withdrawal === undefined) {
+        throw new ScopeViolationError(
+          "The credential source was not withdrawn from the Agent's active revision.",
+        );
+      }
+      return withdrawal;
+    });
+  }
+
+  /** The active revision must hold the source as its frozen Harness authentication. */
+  private async activeCredentialSourceRevision(
+    state: PlatformUnitOfWork,
+    agent: Readonly<Agent>,
+    input: AgentCredentialSourceInput,
+  ): Promise<Readonly<AgentRevision>> {
+    if (agent.status !== "active" || agent.activeRevisionId === undefined) {
+      throw new ResourceConflictError("The Agent has no active revision to withdraw from.");
+    }
+    const revision = await state.revisions.findRevision(
+      agent.namespaceId,
+      agent.id,
+      agent.activeRevisionId,
+    );
+    if (
+      revision === undefined ||
+      revision.harnessAuth.method !== "credential_source" ||
+      revision.harnessAuth.sourceId !== input.credentialSourceId
+    ) {
+      throw new ScopeViolationError(
+        "The Agent's active revision does not use this credential source.",
+      );
+    }
+    return revision;
   }
 
   async stopAgent(

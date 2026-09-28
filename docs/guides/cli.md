@@ -159,8 +159,9 @@ for binding shape and delivery boundaries.
 
 When the Installation selects a Credential Gateway, register the Secret as a
 credential source and bind the source instead. `occ credential-source create`,
-`list`, `get`, and `delete` follow the same `--file` pattern; `get` also shows
-the gateway's live status. See [credential sources](../reference/credential-sources.md)
+`list`, `get`, `update`, and `delete` follow the same `--file` pattern; `get` also
+shows the gateway's live status. `occ agent withdraw-credential-source` revokes a
+source from a running Agent. See [credential sources](../reference/credential-sources.md)
 and the [local OpenShell walkthrough](deploy/openshell-credential-sources.md).
 
 ## Manage Namespace IAM

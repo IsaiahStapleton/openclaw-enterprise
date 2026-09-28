@@ -9,8 +9,9 @@ last_updated_session: "authoring-run/5da74b2e-b249-44da-87e4-ca85f018c832"
 ## Overview
 
 An authorized caller registers a Namespace Secret with the selected Credential
-Gateway, binds the resulting credential source to an Agent, deploys it, and
-later deletes the source. The API copies the Secret value into the gateway once,
+Gateway, binds the resulting credential source to an Agent, deploys it, can
+update its value or withdraw it from one running Agent, and later deletes the
+source. The API copies the Secret value into the gateway once,
 at registration; OCC stores only metadata and Secret references. Admission
 freezes the source identity in the AgentRevision, and the worker hands the live
 source record to Kubernetes Compute. This flow stops when Compute receives the
@@ -20,8 +21,9 @@ attachment, provisioning, and attachment readiness.
 
 ## Entry Points
 
-- Trigger: `POST` or `DELETE /namespaces/:namespaceId/credential-sources[/:credentialSourceId]`,
-  then Agent create or PATCH and `POST …/agents/:agentId/deploy`.
+- Trigger: `POST`, `PATCH`, or `DELETE /namespaces/:namespaceId/credential-sources[/:credentialSourceId]`,
+  Agent create or PATCH and `POST …/agents/:agentId/deploy`, and
+  `POST …/agents/:agentId/credential-sources/:credentialSourceId/withdraw`.
 - Source: `apps/controller/src/http/credential-sources.ts:createCredentialSource`
 - Source: `packages/occ/src/index.ts:createCredentialSource`
 - Source: `packages/occ/src/index.ts:deleteCredentialSource`
@@ -167,6 +169,44 @@ record and appends the handler's audit event, so a completed deletion is always
 audited; if the append fails, the record stays `deleting` for a retry. Namespace deletion returns
 `NAMESPACE_NOT_EMPTY` while any record remains.
 
+### 8. Update a source
+
+`packages/occ/src/index.ts:updateCredentialSource`,
+`apps/controller/src/drivers/credential-gateway/openshell.ts:updateSource`
+
+One transaction locks the Namespace and source, authorizes
+`credential_source:update`, and requires a `ready` source. It validates any
+replacement references against the catalog's Secret fields, authorizes
+`secret:operate` on each Secret it reads, and reads the values with
+`withValue`. It calls `updateSource` with Compute's placement while holding the
+source lock; the OpenShell Driver requires the OCC-owned provider and calls
+`UpdateProvider`. It then replaces the Secret references, and the handler
+appends the audit event in the same transaction. A gateway failure rolls back
+the references. OpenShell gives the new value only to processes started after the
+update.
+
+### 9. Withdraw a source from an Agent
+
+`packages/occ/src/index.ts:withdrawAgentCredentialSource`,
+`apps/controller/src/worker.ts:processCredentialWithdrawal`,
+`apps/controller/src/drivers/compute/kubernetes/index.ts:withdrawCredentialSource`,
+`apps/controller/src/drivers/credential-gateway/openshell.ts:withdraw`
+
+The API authorizes `agent:operate` and requires the active revision to
+authenticate with the source. It inserts a `pending` `credential_withdrawals`
+row keyed by revision and source, or returns the existing one, and queues
+revision-scoped work with target `credentials_withdrawn`. That work has its own
+idempotency key, never deploys the revision, and owns no repository cleanup.
+
+The worker rechecks `agent:operate`, loads the revision's pending withdrawals,
+and calls Compute's `withdrawCredentialSource`. Compute derives the Sandbox with
+the Sandbox Driver's `harnessResource`, and the OpenShell Driver calls
+`DetachSandboxProvider` and reads the receipt's status. `revoked` or `absent`
+marks the row `revoked` in the same transaction that completes the work and
+appends `openclaw.agents.lifecycle.credentials_withdraw`; any other state
+retries with backoff. If the revision's Sandbox is later provisioned again,
+dispatch finds the withdrawal and fails with `CREDENTIAL_WITHDRAWN`.
+
 ## Debugging and Verification
 
 - `node --test tests/conformance/credential-source-occ.test.mjs` covers catalog
@@ -176,7 +216,14 @@ audited; if the append fails, the record stays `deleting` for a retry. Namespace
   methods with a gateway selected. It uses an in-process gateway double, not
   OpenShell.
 - `node --test tests/conformance/openshell-gateway-wire.test.mjs` checks the
-  provider and profile RPC encoding against the pinned `v0.1.0` wire fixture.
+  provider, profile, update, and detach RPC encoding against the pinned `v0.1.0`
+  wire fixture.
+- The `credential withdrawal work revokes from the active revision without
+redeploying it` case in `tests/integration/postgres-worker-agent-revision.test.mjs`
+  runs the real queue and worker against PostgreSQL with a Compute double.
+- The real OpenShell test updates the source through the API, withdraws it from
+  the running Agent, and checks that a model turn in the same Codex process
+  then fails.
 - `OCC_TEST_OPENSHELL_K3D_REAL=1 node --env-file="$TEST_ENV_FILE" --test tests/integration/sandbox-driver-openshell-k3d-real.test.mjs`
   registers an `openai` source through the production API against a real
   gateway and reads its live `ready` status. See [OpenShell tests](../testing/openshell.md).
@@ -184,7 +231,9 @@ audited; if the append fails, the record stays `deleting` for a retry. Namespace
   reachable; `GET` shows its live `status`.
 - Worker reason codes `CREDENTIAL_GATEWAY_MISMATCH` and
   `HARNESS_AUTH_SOURCE_UNAVAILABLE` identify a changed selection or an
-  unavailable source.
+  unavailable source; `CREDENTIAL_WITHDRAWN` means the revision's source was
+  withdrawn, and `CREDENTIAL_WITHDRAWAL_PENDING` means the gateway has not yet
+  confirmed revocation.
 
 ## Related docs
 
@@ -200,5 +249,6 @@ audited; if the append fails, the record stays `deleting` for a retry. Namespace
 
 ## Changelog
 
+- 2026-09-28 18:00: Added source update and per-Agent withdrawal through worker-executed revocation. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 7cd4a210)
 - 2026-09-28 05:13: Documented the controller transaction boundary for credential source writes. (authoring-run/5da74b2e-b249-44da-87e4-ca85f018c832 - 646b067220f6b7f8f3059eaa0710db2654b61499)
 - 2026-09-26 14:29: Documented credential source registration, Agent binding, admission, dispatch resolution, and retried deletion for the uncommitted Credential Gateway change. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 849b2b24111fe237b12da5be1d4b411d3146cefb)

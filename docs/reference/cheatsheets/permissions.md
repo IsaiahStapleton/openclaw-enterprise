@@ -32,7 +32,7 @@ principal. Rerunning bootstrap does not add missing permissions to existing Role
 | [`preset`](../presets.md)                       | `create`, `read`, `update`, `delete`                                    | Namespace for create; exact Preset otherwise.                                                                                                                               |
 | [`service_account`](../api.md#service-accounts) | `create`, `read`, `update`, `delete`                                    | Namespace for create; exact ServiceAccount otherwise. Credential creation also uses `update`.                                                                               |
 | [`secret`](../api.md#secrets)                   | `create`, `read`, `update`, `delete`, `operate`                         | Namespace collection for create/list; list also filters by exact Secret `read`. Other actions target the exact Secret. `operate` is checked when a Secret is bound or used. |
-| [`credential_source`](../credential-sources.md) | `create`, `read`, `delete`, `operate`                                   | Namespace collection for create/list; list also filters by exact `read`. Other actions target the exact source. `operate` is checked when a source is bound or deployed.    |
+| [`credential_source`](../credential-sources.md) | `create`, `read`, `update`, `delete`, `operate`                         | Namespace collection for create/list; list also filters by exact `read`. Other actions target the exact source. `operate` is checked when a source is bound or deployed.    |
 | [`agent`](../api.md#agents)                     | `create`, `read`, `update`, `delete`, `deploy`, `operate`, `administer` | Namespace for create; exact Agent otherwise. Native admin requires a human session.                                                                                         |
 | [`agent_revision`](../api.md#agent-revisions)   | `read`                                                                  | Exact AgentRevision; deployment-status reads use this permission too.                                                                                                       |
 
@@ -65,8 +65,11 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
   for a bound credential source. At deployment the Agent’s own service principal
   also needs `secret:operate` on each bound Secret and `credential_source:operate`
   on its source.
-- [Registering a credential source](../api.md#post-namespacesnamespaceidcredentialsources)
-  also requires `secret:operate` on each referenced Secret.
+- [Registering](../api.md#post-namespacesnamespaceidcredentialsources) or
+  [updating a credential source](../api.md#patch-namespacesnamespaceidcredentialsourcescredentialsourceid)
+  also requires `secret:operate` on each Secret it reads.
+- [Withdrawing a credential source](../api.md#post-namespacesnamespaceidagentsagentidcredentialsourcescredentialsourceidwithdraw)
+  from an Agent requires `agent:operate`; the worker rechecks it before revoking.
 - [Create](../api.md#post-namespacesnamespaceidconfigurations) or
   [update a Configuration](../api.md#patch-namespacesnamespaceidconfigurationsconfigurationid)
   with Secret bindings requires `secret:operate` on each bound Secret.

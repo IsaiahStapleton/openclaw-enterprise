@@ -23,6 +23,8 @@ export function createPlatformReadView(
     credentialSources: bindRepository(repositories.credentialSources, lifetime, [
       "findCredentialSource",
       "listCredentialSources",
+      "findCredentialWithdrawal",
+      "listCredentialWithdrawals",
     ]),
     serviceAccounts: bindRepository(repositories.serviceAccounts, lifetime, [
       "findServiceAccount",

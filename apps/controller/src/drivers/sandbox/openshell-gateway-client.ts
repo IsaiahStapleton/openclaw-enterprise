@@ -103,6 +103,12 @@ export interface OpenShellSandboxProviderStatus {
   readonly reason?: string;
 }
 
+export interface OpenShellProviderDetachResult {
+  /** False when the provider was not attached to the Sandbox. */
+  readonly detached: boolean;
+  readonly receiptId?: string;
+}
+
 export interface OpenShellGatewayClient {
   health(signal: AbortSignal): Promise<void>;
   getWorkspace(name: string, signal: AbortSignal): Promise<OpenShellWorkspaceResponse | undefined>;
@@ -148,11 +154,26 @@ export interface OpenShellGatewayClient {
     signal: AbortSignal,
   ): Promise<readonly OpenShellProviderResponse[]>;
   deleteProvider(workspace: string, name: string, signal: AbortSignal): Promise<void>;
+  /** Merges the given credential values into an existing provider. */
+  updateProviderCredentials(
+    workspace: string,
+    name: string,
+    credentials: Readonly<Record<string, string>>,
+    signal: AbortSignal,
+  ): Promise<void>;
+  /** Undefined when the Sandbox no longer exists, so nothing remains to revoke. */
+  detachSandboxProvider(
+    workspace: string,
+    sandbox: string,
+    provider: string,
+    signal: AbortSignal,
+  ): Promise<OpenShellProviderDetachResult | undefined>;
   getSandboxProviderStatus(
     workspace: string,
     sandbox: string,
     provider: string,
     signal: AbortSignal,
+    receiptId?: string,
   ): Promise<OpenShellSandboxProviderStatus>;
   close(): void;
 }
@@ -166,6 +187,8 @@ type OpenShellMethod =
   | "DeleteSandbox"
   | "GetSandboxProviderStatus"
   | "CreateProvider"
+  | "UpdateProvider"
+  | "DetachSandboxProvider"
   | "GetProvider"
   | "ListProviders"
   | "DeleteProvider"
@@ -821,17 +844,74 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
     }
   }
 
+  async updateProviderCredentials(
+    workspace: string,
+    name: string,
+    credentials: Readonly<Record<string, string>>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (Object.values(credentials).some((value) => !isNonEmptyString(value))) {
+      // An empty value would leave the existing credential in place instead of replacing it.
+      throw new OpenShellGatewayFailure("OpenShell provider credential updates must be nonempty.");
+    }
+    await this.unary(
+      "UpdateProvider",
+      {
+        provider: {
+          metadata: { name: nonempty(name, "OpenShell provider name") },
+          credentials: { ...credentials },
+        },
+        workspace_scope: { workspace },
+        request_id: randomUUID(),
+      },
+      signal,
+    );
+  }
+
+  async detachSandboxProvider(
+    workspace: string,
+    sandbox: string,
+    provider: string,
+    signal: AbortSignal,
+  ): Promise<OpenShellProviderDetachResult | undefined> {
+    let response: RecordValue;
+    try {
+      response = await this.unary(
+        "DetachSandboxProvider",
+        {
+          sandbox: nonempty(sandbox, "OpenShell Sandbox name"),
+          provider: nonempty(provider, "OpenShell provider name"),
+          workspace_scope: { workspace },
+          request_id: randomUUID(),
+        },
+        signal,
+      );
+    } catch (error) {
+      if (await this.isStatus(error, "NOT_FOUND")) {
+        return undefined;
+      }
+      throw error;
+    }
+    const receiptId = asRecord(response.receipt)?.receipt_id;
+    return Object.freeze({
+      detached: response.detached === true,
+      ...(isNonEmptyString(receiptId) ? { receiptId } : {}),
+    });
+  }
+
   async getSandboxProviderStatus(
     workspace: string,
     sandbox: string,
     provider: string,
     signal: AbortSignal,
+    receiptId?: string,
   ): Promise<OpenShellSandboxProviderStatus> {
     const response = await this.unary(
       "GetSandboxProviderStatus",
       {
         sandbox: nonempty(sandbox, "OpenShell Sandbox name"),
         provider: nonempty(provider, "OpenShell provider name"),
+        ...(receiptId === undefined ? {} : { receipt_id: receiptId }),
         workspace_scope: { workspace },
       },
       signal,
