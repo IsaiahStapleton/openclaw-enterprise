@@ -910,6 +910,26 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
           diagnostic: { kind: "runtime-image-stock-broker", stage: `${secret}-stage` },
         },
         {
+          name: "retains safe monitoring readiness evidence",
+          diagnostic: {
+            kind: "metrics-monitoring",
+            stage: "prometheus-up",
+            reason: "container-exited",
+            container: "agent",
+            exitCode: 2,
+            lastHttpStatus: 503,
+            logs: secret,
+          },
+        },
+        {
+          name: "rejects unsafe monitoring stage",
+          diagnostic: {
+            kind: "metrics-monitoring",
+            stage: secret,
+            reason: "timeout",
+          },
+        },
+        {
           name: "allowlisted repository platform setup diagnostic",
           diagnostic: {
             kind: "repository-platform-setup",
@@ -1064,6 +1084,21 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     (entry) => entry.name === "rejects unsafe runtime stock broker stage",
   );
   assert.equal(unsafeStockBroker.error.diagnostic, undefined);
+  const monitoringFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "retains safe monitoring readiness evidence",
+  );
+  assert.deepEqual(monitoringFailure.error.diagnostic, {
+    kind: "metrics-monitoring",
+    stage: "prometheus-up",
+    reason: "container-exited",
+    container: "agent",
+    exitCode: 2,
+    lastHttpStatus: 503,
+  });
+  const unsafeMonitoring = summary.files[0].tests.find(
+    (entry) => entry.name === "rejects unsafe monitoring stage",
+  );
+  assert.equal(unsafeMonitoring.error.diagnostic, undefined);
   const setupFailure = summary.files[0].tests.find(
     (entry) => entry.name === "allowlisted repository platform setup diagnostic",
   );

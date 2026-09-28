@@ -30,19 +30,65 @@ async function port() {
   return value;
 }
 
-async function waitFor(read) {
+function monitoringFailure(stage, reason, details = {}) {
+  const error = new Error(`Monitoring ${stage} failed: ${reason}`);
+  error.openclawCiDiagnostic = { kind: "metrics-monitoring", stage, reason, ...details };
+  return error;
+}
+
+async function containerState(name) {
+  const { stdout } = await run(engine, ["inspect", "--format", "{{json .State}}", name]);
+  return JSON.parse(stdout);
+}
+
+async function waitFor(stage, read, containers) {
   const end = Date.now() + 60_000;
+  let lastHttpStatus;
   while (Date.now() < end) {
+    // A detached container can exit successfully from `run -d` before its
+    // listener binds; waiting for a scrape would hide that setup failure.
+    for (const [role, name] of containers) {
+      let state;
+      try {
+        state = await containerState(name);
+      } catch {
+        throw monitoringFailure(stage, "query-error", { container: role, lastHttpStatus });
+      }
+      if (!state.Running) {
+        throw monitoringFailure(stage, "container-exited", {
+          container: role,
+          exitCode: state.ExitCode,
+          lastHttpStatus,
+        });
+      }
+    }
     try {
       if (await read()) {
         return;
       }
-    } catch {
-      // Monitoring services can reject requests while their listeners start.
+    } catch (error) {
+      if (error.openclawCiDiagnostic?.reason === "query-error") {
+        throw error;
+      }
+      const connectionError = ["ECONNREFUSED", "ECONNRESET", "UND_ERR_SOCKET"].includes(
+        error.cause?.code,
+      );
+      const serverError = error.httpStatus >= 500 && error.httpStatus <= 599;
+      const datasourceProvisioning = stage === "grafana-datasource" && error.httpStatus === 404;
+      if (
+        !connectionError &&
+        error.name !== "TimeoutError" &&
+        !serverError &&
+        !datasourceProvisioning
+      ) {
+        throw error;
+      }
+      // These outcomes can occur while the listeners and provisioning start.
+      lastHttpStatus = error.httpStatus ?? lastHttpStatus;
     }
     await delay(500);
   }
-  assert.fail("Monitoring did not become ready within 60 seconds.");
+  throw monitoringFailure(stage, "timeout", { lastHttpStatus });
 }
 
 test(
@@ -58,13 +104,13 @@ test(
     const directory = await mkdtemp(join(tmpdir(), "occ-metrics-monitoring-"));
     const names = [];
     t.after(async () => {
-      for (const name of names.reverse()) {
+      for (const [role, name] of names.reverse()) {
         if (!t.passed) {
           const logs = await run(engine, ["logs", "--tail=20", name]).catch(() => ({
             stdout: "",
             stderr: "",
           }));
-          t.diagnostic(`${name}: ${logs.stdout}${logs.stderr}`);
+          t.diagnostic(`${role}: ${logs.stdout}${logs.stderr}`);
         }
         await run(engine, ["rm", "-f", "-v", name]);
       }
@@ -75,9 +121,9 @@ test(
     const listener = await startMetricsListener(metrics, { host: "127.0.0.1", port: 0 });
     t.after(() => listener.close());
     await fixture.bootstrap();
+    // Select each candidate port as late as possible; Docker still owns the
+    // final bind, so an exited container is reported by the readiness wait.
     const promPort = await port();
-    const grafanaPort = await port();
-    const agentPort = await port();
     const promURL = `http://127.0.0.1:${promPort}`;
     await writeFile(
       join(directory, "prometheus.yaml"),
@@ -111,7 +157,7 @@ test(
 
     async function container(role, image, args, extra = []) {
       const name = `occ-metrics-${role}-${randomUUID().slice(0, 8)}`;
-      names.push(name);
+      names.push([role, name]);
       await run(
         engine,
         [
@@ -134,10 +180,11 @@ test(
         ],
         { timeout: 60_000 },
       );
+      return name;
     }
     // Containers use host networking solely to reach this test's real loopback
     // listener. The checked-in Compose overlay instead shares OCC namespaces.
-    await container(
+    const server = await container(
       "server",
       prometheusImage,
       [
@@ -148,7 +195,8 @@ test(
       ],
       ["--tmpfs", "/tmp:rw,mode=1777"],
     );
-    await container(
+    const agentPort = await port();
+    const agent = await container(
       "agent",
       prometheusImage,
       [
@@ -159,22 +207,55 @@ test(
       ],
       ["--tmpfs", "/tmp:rw,mode=1777"],
     );
-    const query = async (expression) => {
+    const query = async (stage, expression) => {
       const response = await fetch(
         `${promURL}/api/v1/query?query=${encodeURIComponent(expression)}`,
+        { signal: AbortSignal.timeout(3_000) },
       );
-      const body = await response.json();
-      assert.equal(body.status, "success");
+      if (!response.ok) {
+        if (response.status < 500) {
+          throw monitoringFailure(stage, "query-error", { lastHttpStatus: response.status });
+        }
+        const error = new Error(`Prometheus query returned HTTP ${response.status}`);
+        error.httpStatus = response.status;
+        throw error;
+      }
+      let body;
+      try {
+        body = await response.json();
+      } catch {
+        throw monitoringFailure(stage, "query-error", { lastHttpStatus: response.status });
+      }
+      if (body.status !== "success" || !Array.isArray(body.data?.result)) {
+        throw monitoringFailure(stage, "query-error", { lastHttpStatus: response.status });
+      }
       return body.data.result;
     };
-    await waitFor(async () =>
-      (await query('up{job="occ-api"}')).some((series) => series.value[1] === "1"),
+    await waitFor(
+      "prometheus-up",
+      async () =>
+        (await query("prometheus-up", 'up{job="occ-api"}')).some(
+          (series) => series.value[1] === "1",
+        ),
+      [
+        ["server", server],
+        ["agent", agent],
+      ],
     );
     await fixture.request("GET", "/installation");
-    await waitFor(async () =>
-      (await query('sum(occ_http_requests_total{route="/installation",method="GET"})')).some(
-        (series) => Number(series.value[1]) >= 1,
-      ),
+    await waitFor(
+      "occ-request",
+      async () =>
+        (
+          await query(
+            "occ-request",
+            'sum(occ_http_requests_total{route="/installation",method="GET"})',
+          )
+        ).some((series) => Number(series.value[1]) >= 1),
+      [
+        ["server", server],
+        ["agent", agent],
+      ],
     );
     const dashboard = JSON.parse(
       await readFile("deploy/helm/openclaw-observability-demo/files/dashboard.json", "utf8"),
@@ -182,10 +263,11 @@ test(
     // Every shipped panel must be valid PromQL, even when a quiet/absent worker
     // has no samples. A real server, not a string matcher, checks the queries.
     for (const panel of dashboard.panels) {
-      await query(panel.targets[0].expr);
+      await query("occ-request", panel.targets[0].expr);
     }
 
-    await container(
+    const grafanaPort = await port();
+    const grafana = await container(
       "grafana",
       grafanaImage,
       [],
@@ -214,7 +296,21 @@ test(
         "GF_PLUGINS_PREINSTALL_DISABLED=true",
       ],
     );
-    await waitFor(async () => (await fetch(`http://127.0.0.1:${grafanaPort}/api/health`)).ok);
+    await waitFor(
+      "grafana-health",
+      async () => {
+        const response = await fetch(`http://127.0.0.1:${grafanaPort}/api/health`, {
+          signal: AbortSignal.timeout(3_000),
+        });
+        if (!response.ok) {
+          const error = new Error(`Grafana health returned HTTP ${response.status}`);
+          error.httpStatus = response.status;
+          throw error;
+        }
+        return true;
+      },
+      [["grafana", grafana]],
+    );
     const provisioned = await fetch(
       `http://127.0.0.1:${grafanaPort}/api/dashboards/uid/occ-development`,
     ).then((response) => response.json());
@@ -222,12 +318,25 @@ test(
     assert.deepEqual(provisioned.dashboard.panels, dashboard.panels);
     // Grafana's HTTP listener can be ready before its datasource backend. Wait
     // for the actual Grafana-to-Prometheus query to succeed within the same bound.
-    await waitFor(async () => {
-      const response = await fetch(
-        `http://127.0.0.1:${grafanaPort}/api/datasources/uid/occ-prometheus/health`,
-      );
-      const datasource = await response.json();
-      return response.ok && datasource.status === "OK";
-    });
+    await waitFor(
+      "grafana-datasource",
+      async () => {
+        const response = await fetch(
+          `http://127.0.0.1:${grafanaPort}/api/datasources/uid/occ-prometheus/health`,
+          { signal: AbortSignal.timeout(3_000) },
+        );
+        if (!response.ok) {
+          const error = new Error(`Grafana datasource returned HTTP ${response.status}`);
+          error.httpStatus = response.status;
+          throw error;
+        }
+        const datasource = await response.json();
+        return datasource.status === "OK";
+      },
+      [
+        ["grafana", grafana],
+        ["server", server],
+      ],
+    );
   },
 );
