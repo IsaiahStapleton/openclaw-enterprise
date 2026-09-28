@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chartPackage, chartPushParent, writeBootstrapChart } from "./chart-package.mjs";
+import { chartPackage, chartPushParent, pushChart, writeBootstrapChart } from "./chart-package.mjs";
 import {
   ghcrPackageName,
   github,
@@ -152,13 +152,7 @@ async function main(env) {
         { input: env.GH_TOKEN, stdio: ["pipe", "ignore", "pipe"] },
       );
       const chartArchive = join(directory, `openclaw-enterprise-${version}.tgz`);
-      const output = execFileSync(
-        env.OCC_HELM_BIN ?? "helm",
-        ["push", chartArchive, chartPushParent],
-        { encoding: "utf8" },
-      );
-      const pushedDigest = output.match(/Digest: (sha256:[a-f0-9]{64})/u)?.[1];
-      assert.ok(pushedDigest, "Helm did not report the bootstrap chart digest.");
+      const pushedDigest = pushChart(chartArchive, chartPushParent);
       validatePackage(await github(chartPath, { retryNotFound: true }), chartPackage, {
         allowMissingRepository: true,
       });

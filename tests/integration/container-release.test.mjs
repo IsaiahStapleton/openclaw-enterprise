@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -18,7 +18,7 @@ import {
   validatePreparedImage,
   verifyGhcr,
 } from "../../scripts/ci/container-release.mjs";
-import { writeBootstrapChart } from "../../scripts/ci/chart-package.mjs";
+import { pushChart, writeBootstrapChart } from "../../scripts/ci/chart-package.mjs";
 import {
   chartArchiveContent,
   stageReleaseChart,
@@ -177,6 +177,28 @@ test("chart bootstrap package is valid OCI chart content but cannot be installed
     () => execFileSync(helm, ["template", "oce", archive], { stdio: "pipe" }),
     (error) => error.stderr?.toString().includes("This bootstrap marker is not a deployable"),
   );
+});
+
+test("chart push accepts a digest on stderr only after a successful exit", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "oce-chart-push-stream-"));
+  const helm = join(directory, "helm");
+  const previous = process.env.OCC_HELM_BIN;
+  t.after(async () => {
+    if (previous === undefined) {
+      delete process.env.OCC_HELM_BIN;
+    } else {
+      process.env.OCC_HELM_BIN = previous;
+    }
+    await rm(directory, { recursive: true, force: true });
+  });
+  process.env.OCC_HELM_BIN = helm;
+  const reported = `sha256:${"f".repeat(64)}`;
+  // Helm writes the successful push digest to stderr, so stdout-only parsing fails.
+  await writeFile(helm, `#!/bin/sh\nprintf 'Digest: ${reported}\\n' >&2\n`);
+  await chmod(helm, 0o700);
+  assert.equal(pushChart("chart.tgz", "oci://registry.invalid/charts"), reported);
+  await writeFile(helm, `#!/bin/sh\nprintf 'Digest: ${reported}\\n' >&2\nexit 1\n`);
+  assert.throws(() => pushChart("chart.tgz", "oci://registry.invalid/charts"));
 });
 
 test("container release requires manual execution of the trusted main workflow", () => {

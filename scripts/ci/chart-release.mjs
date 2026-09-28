@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
-import { chartPackage, chartPushParent } from "./chart-package.mjs";
+import { chartPackage, chartPushParent, pushChart } from "./chart-package.mjs";
 import {
   ghcrPackageName,
   github,
@@ -320,6 +320,7 @@ async function publish(directory, env) {
         image.digest,
       );
     }
+    let pushedChartDigest;
     if (!existingChartDigest) {
       await verifyReleaseContext(env, packagePath);
       const refreshed = await githubPages(`${packagePath}/versions`);
@@ -332,7 +333,7 @@ async function publish(directory, env) {
         null,
         "Chart version appeared before publication.",
       );
-      helmCommand(["push", archive, chartPushParent], { stdio: "inherit" });
+      pushedChartDigest = pushChart(archive, chartPushParent);
     }
     const pulled = join(temporary, "verified");
     await mkdir(pulled);
@@ -353,6 +354,13 @@ async function publish(directory, env) {
     await verifyReleaseContext(env, packagePath);
     const chartDigest = inspectDigest(`docker://${chartPackage}:${version}`, authfile);
     assert.match(chartDigest, digestPattern);
+    if (pushedChartDigest) {
+      assert.equal(
+        chartDigest,
+        pushedChartDigest,
+        "Published chart digest differs from Helm push.",
+      );
+    }
     if (existingChartDigest) {
       assert.equal(chartDigest, existingChartDigest, "Chart version changed during the retry.");
     }

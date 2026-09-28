@@ -13,17 +13,15 @@ Run from the repository root; retain this shell and protected files for
 
 ## Use published images
 
-To install the current example, select a verified release or custom controller
-image supporting `catalogSource: openai-curated` and the
-[origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
+To install the current example, select a controller supporting
+`catalogSource: openai-curated` and the
+[cookie mutation origin check](../../reference/authentication.md#browser-request-origin),
 plus a compatible runtime. Export their immutable digests as `CONTROLLER_IMAGE`
-and `RUNTIME_IMAGE` for installation, or [build and publish images](#build-and-publish-production-images)
-from this checkout.
+and `RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images).
 
-The published controller supports the curated catalog but predates the current
-origin check. No release meeting current production requirements has been verified
-for this guide. Use these images only for image tests or workflows targeting their
-recorded source revision.
+The published controller predates the current origin check. No release meeting
+current production requirements has been verified. Use these images only for
+tests or workflows targeting their recorded source revision.
 
 Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
 matching-architecture startup checks and remote digest verification in
