@@ -877,8 +877,23 @@ async function revalidateMountedAgent(current) {
   }
 }
 
+// A pristine sharing form is always mounted on Agent detail; it must not disable
+// the access recheck. Any other form, or a sharing form with input, still does.
+function hasUnfinishedForm() {
+  if (app.querySelector("dialog[open]")) {
+    return true;
+  }
+  return Array.from(app.querySelectorAll("form")).some(
+    (form) =>
+      !form.classList.contains("agent-access-form") ||
+      Array.from(form.elements).some((field) =>
+        field.type === "checkbox" ? field.checked : Boolean(field.value),
+      ),
+  );
+}
+
 function resumePage() {
-  if (document.hidden || !session || loggingOut || app.querySelector("form, dialog[open]")) {
+  if (document.hidden || !session || loggingOut || hasUnfinishedForm()) {
     return;
   }
   if (resumePending) {
