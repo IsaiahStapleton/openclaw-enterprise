@@ -300,7 +300,7 @@ export function createSlackDirectoryField({
     search.setAttribute("aria-expanded", "false");
     search.removeAttribute("aria-activedescendant");
     activeOption = -1;
-    nameStatus.hidden = false;
+    nameStatus.style.visibility = "visible";
   }
   function renderValues() {
     chips.replaceChildren(
@@ -419,7 +419,7 @@ export function createSlackDirectoryField({
   function prepareSearch() {
     cancelSearch();
     panel.hidden = false;
-    nameStatus.hidden = true;
+    nameStatus.style.visibility = "hidden";
     search.setAttribute("aria-expanded", "true");
     search.removeAttribute("aria-activedescendant");
     activeOption = -1;

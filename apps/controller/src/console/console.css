@@ -1144,6 +1144,7 @@ summary:focus-visible {
   margin: 0;
 }
 .slack-directory-field {
+  position: relative;
   display: grid;
   gap: 0.5rem;
   margin-block: 1rem;
@@ -1200,6 +1201,10 @@ summary:focus-visible {
   line-height: 1.2;
 }
 .slack-directory-panel {
+  position: absolute;
+  z-index: 20;
+  inset: calc(100% + 4px) 0 auto;
+  background: var(--surface);
   display: grid;
   gap: 0.6rem;
   border: 1px solid var(--line);

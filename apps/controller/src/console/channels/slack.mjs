@@ -368,6 +368,23 @@ function appendFields(body, config, context) {
   });
   updateDmControls();
   body.append(
+    element("h2", {}, "Slack credentials"),
+    element(
+      "p",
+      { className: "hint" },
+      "First, select or create a Slack bot token Secret to search channels and people by name. Then choose an app token for Socket Mode and configure access below. Both tokens are required before deployment.",
+    ),
+    ...SLACK_SECRET_BINDINGS.toReversed().map((binding) =>
+      credentialReferenceField(binding, context, (key) => {
+        if (key === "SLACK_BOT_TOKEN") {
+          for (const picker of [channelPicker, allowedUsersPicker, dmUsersPicker]) {
+            picker.refreshNames();
+          }
+        }
+      }),
+    ),
+    credentialNavigation(context),
+    element("h2", {}, "Channel access"),
     element(
       "p",
       { className: "hint" },
@@ -412,22 +429,6 @@ function appendFields(body, config, context) {
           ),
         ]
       : []),
-    element("h2", {}, "Credential references"),
-    element(
-      "p",
-      { className: "hint" },
-      "Slack channels use fixed environment names. Secret links show metadata only, never token values.",
-    ),
-    ...SLACK_SECRET_BINDINGS.map((binding) =>
-      credentialReferenceField(binding, context, (key) => {
-        if (key === "SLACK_BOT_TOKEN") {
-          for (const picker of [channelPicker, allowedUsersPicker, dmUsersPicker]) {
-            picker.refreshNames();
-          }
-        }
-      }),
-    ),
-    credentialNavigation(context),
   );
 }
 

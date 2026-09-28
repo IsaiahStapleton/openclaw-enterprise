@@ -30,15 +30,19 @@ go to the Agent's gateway; model credentials are configured separately.
 ## Connect and verify
 
 1. Open the Agent's **Create new version** draft in the console, then open
-   **Channels**. Enable Slack, enter the channel IDs, then either enter
-   **Allowed channel user IDs** or select **Allow everyone in these channels to
-   mention the agent**. Leave **Require mention** enabled for this setup. New Slack setups use
+   **Channels** and **Configure Slack** (or **Edit Slack** for an existing setup).
+   Start with **Slack credentials** at the top: select a Namespace Secret or
+   **Create new Secret...** for each token. The bot token enables channel and
+   people name lookup; the app token is used for Socket Mode. Both are required
+   before deployment. Exact-ID entry remains available without name lookup.
+   Enable Slack and choose **Channels**, then select **Specific people** or
+   **Everyone in these channels** under channel access. Leave **Require a mention**
+   enabled for this setup. New Slack setups use
    [threaded channel replies](../../reference/configuration/secrets.md#native-channel-configuration).
    Choose **Disabled** under **Direct-message policy** for channel-only access,
-   or keep **Allowlist** and enter **Allowed DM user IDs**.
-   For each token menu, select a
-   Namespace Secret or **Create new Secret...**.
-   The modal prefills the token key and accepts its value in a password field.
+   or keep **Allowlist** and select **Allowed people in direct messages**.
+   When creating a Secret, the modal prefills the token key and accepts its value
+   in a password field.
    **Create Secret** stores it immediately; **Save configuration** saves the
    selected bindings. Cancelling the drawer discards selections but keeps any
    newly created Secrets. If multiple Agents use this Configuration, the edit
