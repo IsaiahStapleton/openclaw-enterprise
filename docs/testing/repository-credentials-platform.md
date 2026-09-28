@@ -96,12 +96,12 @@ previously observed provider tokens remain unrevoked and unexpired.
 
 After graceful broker restart, the worker recovers confirmed disposal receipts
 and replaces those sessions within the same revision while retaining the workspace.
-Sessions lost in an abrupt crash refuse automatic continuation of that revision.
-The case checks actual Pod/container and Secret retirement alongside the retained
-session attempts and their exact unresolved cleanup Work owner. A new authorized
-HTTP deploy creates a distinct revision; its replacement Pod retains the workspace
-PVC, unpushed commit and dirty files. This does not establish disposal of lost
-provider obligations or replay Git/PR operations. Controlled service/provider
+After an abrupt crash, active receipts remain unavailable and maintenance retains
+the original sessions without issuing replacements. A new authorized HTTP deploy
+creates a distinct revision and retires the predecessor runtime; the unresolved
+sessions remain in closing with their durable cleanup Work. The replacement Pod
+retains the workspace PVC, unpushed commit and dirty files. This does not establish
+disposal of lost provider obligations or replay Git/PR operations. Controlled service/provider
 clocks then advance past hour thirteen to check fresh tokens with unchanged
 material. This is a simulated
 elapsed-time test, not a thirteen-hour wait or provider soak. The case skips
