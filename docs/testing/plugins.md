@@ -22,6 +22,13 @@ The Kubernetes provisioning fixture also exercises selected-PAT discovery using
 the bundled Kubernetes Secret Driver and a real cluster, with simulated upstream
 responses. Neither test verifies the live hosted provider.
 
+`node --test tests/integration/device-authorization-api.test.mjs` exercises device
+login, authenticated discovery, and revision submission through the real HTTP/OCC
+workflow. It verifies exact actor and Agent scope, cancellation during an exchange,
+and credential redaction using simulated provider transport and a test Secret
+Driver. `tests/conformance/harness-device-auth.test.mjs` checks the native protocol
+adapter. These cases do not prove live OAuth, token refresh, or runtime deployment.
+
 Skipped infrastructure or native-runtime cases are not evidence. Record the exact
 commit, selected suite, nonsecret image references, native runtime versions,
 model, pass/fail/skip counts, and relevant sanitized log path for every claimed

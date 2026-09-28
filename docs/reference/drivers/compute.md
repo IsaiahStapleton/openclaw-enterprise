@@ -36,13 +36,15 @@ Commits must be full lowercase Git SHAs. Missing IDs or provenance remain `null`
 These observations do not inventory separate Sandbox Driver workloads.
 
 The optional `discoverHarnessModels({provider, apiKey})` method returns native
-model IDs and names for Agent setup without persisting credentials. OCC checks
-Agent creation authority before calling it. Bundled Kubernetes and Docker use
-the official OpenAI and Anthropic model-list APIs with bounded requests and no
-redirects. Discovery does not provision runtime credentials or establish model
-compatibility; unsupported or unavailable discovery permits manual model entry.
-The call runs in the OCC API process and requires its egress access to the
-selected provider; see [Agent setup](../console/create-and-deploy.md).
+model IDs and names after OCC checks Agent creation authority. Bundled Drivers
+call official model APIs without persisting credentials. Discovery requires OCC
+API egress and does not establish compatibility; unavailable discovery permits
+manual entry. See [Agent setup](../console/create-and-deploy.md).
+
+Optional `startHarnessDeviceAuthorization(harnessId)` returns a public challenge
+and opaque private state; `pollHarnessDeviceAuthorization(privateState)` returns
+pending or a native credential bundle. OCC owns authorization, scope, and Secret
+custody. See the [device login flow](../../flows/native-service-account-credential-delivery.md).
 
 ### Core lifecycle operations
 
