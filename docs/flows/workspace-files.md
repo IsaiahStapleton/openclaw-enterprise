@@ -153,16 +153,15 @@ root Secret and receive only its public certificate. They do not receive the
 CA signing key. An explicit external issuer uses the configured public CA
 bundle, or Node's existing trust store when no bundle is configured.
 
-Kubernetes derives endpoints from admitted Namespace/Agent IDs and Installation
-routing settings. Drivers without endpoint support cannot serve workspace files.
+Kubernetes derives endpoints from admitted IDs and Installation routing. Drivers without endpoint support cannot serve workspace files.
 
 ### 5. OCC admits one exact-Agent file operation
 
 `apps/controller/src/index.ts:createFastifyApp` requires a valid user
 session or scoped service API key. Native Agent credentials cannot invoke this
 administration surface. `GET` needs Agent `read`; `PUT` needs Agent `operate`
-and, for session callers, passes the browser CSRF boundary. OCC then resolves
-the active AgentRevision.
+and, for session callers, passes the browser CSRF boundary. OCC resolves the
+active AgentRevision before Compute endpoint resolution.
 
 Only the four names are accepted. `PUT` accepts only `{ "content": "..." }`,
 rejects NUL and unpaired UTF-16 surrogates, enforces 16 KiB of UTF-8 content,
@@ -174,8 +173,8 @@ admission and native access.
 `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
 uses `ComputeDriver.getGatewayEndpoint(revision)` to resolve
 `wss://<hostname>[:<endpointPort>]/namespaces/<namespaceId>/agents/<agentId>`.
-The default hostname matches Helm's Service DNS and port `443`. Resolution does
-not prove readiness.
+Hostname defaults to Helm's Service DNS, port to `443`; resolution does not
+prove readiness.
 
 `kubernetes/index.ts:reconcileGatewayRoute` provisions operator routing and a
 separate exact `/node` HTTPRoute and SecurityPolicy for dedicated runtimes.

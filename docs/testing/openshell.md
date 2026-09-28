@@ -90,7 +90,6 @@ OpenShell prerequisites, and export the lane environment before
 
 ```sh
 export OCC_TEST_OPENSHELL_SECRET_PROJECTION=1
-export OCC_TEST_OPENSHELL_HARNESS=openclaw
 node scripts/ci/prepare.mjs \
   --lane openshell \
   --state "$RUNNER_TEMP/state/openshell.json" \
@@ -99,6 +98,9 @@ node scripts/ci/run-tests.mjs run openshell \
   --state "$RUNNER_TEMP/state/openshell.json" \
   --results "$RUNNER_TEMP/results/openshell.json"
 ```
+
+Hosted CI runs the default Codex case. To run the native case the same way,
+also export `OCC_TEST_OPENSHELL_HARNESS=openclaw`.
 
 For manual setup, prepare these inputs using the
 [OpenShell test settings](#openshell-test-environment) and
@@ -173,6 +175,9 @@ the native case with `--harness openclaw`:
 ./scripts/k3d demo --harness openclaw
 ```
 
+`test` and `demo` use the same verification-only compatibility bridge; it does
+not promote that bridge into a supported production path.
+
 This selection prepares the pinned OpenShell lane, builds the sibling
 `../openclaw` checkout, and records its commit with the prepared environment.
 Set `OCC_K3D_OPENCLAW_SOURCE` to another absolute source checkout. Codex and
@@ -185,9 +190,7 @@ receiving the Harness's model credential.
 
 Without `--harness`, `copy` selects the one active demo and `down` removes both
 helper-owned Harness environments; pass `--harness codex` or
-`--harness openclaw` to select one. Both commands use the same
-verification-only compatibility bridge; it does not promote that bridge into a
-supported production path.
+`--harness openclaw` to select one.
 
 ### Test bridge and upstream prerequisite
 
