@@ -42,7 +42,7 @@ OCC_TEST_RUNTIME_IMAGE="$RUNTIME_IMAGE" \
 ```
 
 All three image suites must run without skips before installation. Use these same
-digest references in the Installation; rebuilding or changing them requires new
+digest references for installation; rebuilding or changing them requires new
 checks. If GHCR denies a pull, check the account's package access and token scope;
 successful `git clone` alone does not establish `read:packages` token scope.
 These checks verify the selected images, not unbuilt changes in the working tree.
