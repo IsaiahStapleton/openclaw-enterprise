@@ -94,7 +94,7 @@ aws ecr get-login-password --region "$AWS_REGION" | \
 ```
 
 Retain these exports for the shared image-build procedure. To copy already
-verified GHCR images without rebuilding, follow [private image delivery](private-registry-images.md#copy-the-verified-images-to-ecr).
+verified GHCR images without rebuilding, follow [private image delivery](private-registry-images.md#select-a-release-and-chart).
 Configure node pull permissions separately; builder login does not authorize EKS nodes.
 
 ## Configure network enforcement and storage

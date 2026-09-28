@@ -22,22 +22,21 @@ plus a compatible runtime. Export their immutable digests as `CONTROLLER_IMAGE`
 and `RUNTIME_IMAGE` for installation, or [build and publish images](#build-and-publish-production-images)
 from this checkout.
 
-The published controller supports the curated catalog but predates the current
-origin check. No release meeting current production requirements has been verified
-for this guide. Use these images only for image tests or workflows targeting their
-recorded source revision.
+The published controller supports the curated catalog but predates the origin
+check. No current production-ready release is verified here. Use these images
+only for image tests or workflows targeting their source revision.
 
 Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
-matching-architecture startup checks and remote digest verification in
+matching-architecture startup and remote digest checks in
 [publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
-Their multi-platform indexes select the host or node variant. Publication does not
-establish production deployment readiness.
+Their multi-platform indexes select the host or node variant; publication does
+not establish production readiness.
 
-You need read access to both GHCR packages. At publication, they inherited access
-from `openclaw/openclaw-enterprise`. Authenticate locally with a GitHub personal
-access token **(classic)** with `read:packages`; authorize it for organization
-SSO if required. Replace the username below and enter the token at Docker's
-password prompt. Do not paste the token into the command itself. See
+Both GHCR packages require read access; at publication, they inherited access
+from `openclaw/openclaw-enterprise`. Authenticate with a GitHub personal access
+token **(classic)** with `read:packages` and organization SSO if required.
+Replace the username and enter the token at Docker's password prompt, not in the
+command. See
 [GitHub's registry authentication instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry).
 
 ```bash
@@ -52,8 +51,8 @@ export HISTORICAL_RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sh
 ```
 
 Configure approved pull credentials for **control-plane and tenant Pods**;
-`docker login` does not authenticate cluster nodes. To install, continue to
-[Configure the Installation](#configure-the-installation) with the verified current pair.
+`docker login` does not authenticate nodes. Install with the verified current
+pair at [Configure the Installation](#configure-the-installation).
 
 ## Build and publish production images
 
@@ -75,37 +74,44 @@ run `docker login <registry-host>` using your approved credentials; for private
 ECR, follow [ECR authentication](eks.md#authenticate-the-image-builder-to-ecr).
 Keep any registry and platform exports from that step.
 
-The commands below push candidate images; verify them before installation. Stop
-on failure and retain the build metadata. The standard runtime packages Slack and Codex. Use the same verified runtime for both
-slots unless you have separately verified the gateway/Codex image pair. Runtime
-package installation at gateway startup is not supported.
+These commands push candidate images. Run the block alone in a fresh Bash shell,
+stop on failure, and retain the metadata. Verify the images before installation.
+The standard runtime packages Slack and Codex; use it for both slots unless you
+have separately verified a gateway/Codex pair. Installing packages at gateway
+startup is unsupported.
 
 ```bash
 # Build from a clean checkout.
 export OCC_IMAGE_REGISTRY="${OCC_IMAGE_REGISTRY:-registry.example.com}"
 export OCC_IMAGE_REPOSITORY="${OCC_IMAGE_REPOSITORY:-$OCC_IMAGE_REGISTRY/your-team/openclaw-enterprise}"
-export OCC_IMAGE_TAG="$(git rev-parse HEAD)"
 export OCC_IMAGE_PLATFORM="${OCC_IMAGE_PLATFORM:-linux/amd64}"
 export NODE_BASE_IMAGE='docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584'
-OCC_IMAGE_METADATA="$(mktemp -d)"
-
-docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
-  --metadata-file "$OCC_IMAGE_METADATA/controller.json" \
-  --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
-  --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
-  --label "org.opencontainers.image.revision=$OCC_IMAGE_TAG" \
-  -t "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" .
-docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" \
-  --metadata-file "$OCC_IMAGE_METADATA/runtime.json" \
-  --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
-  --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
-  -f deploy/runtime/Dockerfile \
-  -t "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" .
-
-CONTROLLER_DIGEST="$(yq -p=json -e -r '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' "$OCC_IMAGE_METADATA/controller.json")"
-RUNTIME_DIGEST="$(yq -p=json -e -r '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' "$OCC_IMAGE_METADATA/runtime.json")"
-export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
-export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
+if unset CONTROLLER_IMAGE RUNTIME_IMAGE OCC_IMAGE_METADATA &&
+  OCC_IMAGE_TAG="$(git rev-parse HEAD)" &&
+  OCC_IMAGE_METADATA="$(mktemp -d)" &&
+  export OCC_IMAGE_TAG &&
+  docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
+    --metadata-file "$OCC_IMAGE_METADATA/controller.json" \
+    --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
+    --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
+    --label "org.opencontainers.image.revision=$OCC_IMAGE_TAG" \
+    -t "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" . &&
+  docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" \
+    --metadata-file "$OCC_IMAGE_METADATA/runtime.json" \
+    --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
+    --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
+    -f deploy/runtime/Dockerfile \
+    -t "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" . &&
+  CONTROLLER_DIGEST="$(yq -p=json -e -r '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' "$OCC_IMAGE_METADATA/controller.json")" &&
+  RUNTIME_DIGEST="$(yq -p=json -e -r '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' "$OCC_IMAGE_METADATA/runtime.json")" &&
+  [[ "$CONTROLLER_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] &&
+  [[ "$RUNTIME_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+  export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
+  export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
+else
+  printf 'Build or digest extraction failed; stop. Metadata: %s\n' "${OCC_IMAGE_METADATA:-unavailable}" >&2
+  false
+fi
 ```
 
 Before installation, run the [image checks](../../testing/images.md#check-published-images)
