@@ -14,22 +14,25 @@ Run from the repository root; retain this shell and protected files for
 ## Use published images
 
 To install the current example, select a verified release or custom controller
-image that supports `catalogSource: openai-curated` and a compatible runtime
-image. Export their immutable digests as `CONTROLLER_IMAGE` and `RUNTIME_IMAGE`,
-or [build and publish images](#build-and-publish-production-images) from the
-current checkout.
+image that supports `catalogSource: openai-curated` and the
+[origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
+along with a compatible runtime image. Export
+their immutable digests as `CONTROLLER_IMAGE` and `RUNTIME_IMAGE`, or
+[build and publish images](#build-and-publish-production-images) from the current
+checkout.
 
-The published controller image below does not support the curated Codex catalog
-in the current example. Do not use these exports for that installation. They
-remain available for image tests and workflows targeting their recorded source
-revision.
+The published controller below supports the curated catalog but predates the
+current origin check for cookie-authenticated mutations. A release matching the
+current production requirements has not been verified for this guide. Do not use
+these exports for the current installation; they remain available for image tests
+and workflows targeting their recorded source revision.
 
-Both images were built from source `e3b28515f30523eede3cd905e589c1ab9063dbda`,
+Both images were built from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc`,
 passed image startup checks, and had
-their remote digests verified in [publication run 35680912119](https://github.com/openclaw/openclaw-enterprise/actions/runs/35680912119).
+their remote digests verified in [publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
 Both digest references select multi-platform indexes; Docker and Kubernetes
 pull the variant matching the host or node. Startup checks passed for both
-architectures, with ARM64 checked under QEMU. Publication does not establish
+architectures on matching-architecture runners. Publication does not establish
 production deployment readiness.
 
 You need read access to both GHCR packages. At publication, they inherited access
@@ -42,8 +45,8 @@ password prompt. Do not paste the token into the command itself. See
 ```bash
 docker login ghcr.io --username '<your-github-username>'
 
-export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:9aa430eb19553a35ccafd5dafff58984ec1264e7c77b1440f56a893cf8e993e1'
-export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:792f0ffe88ec9f935b55c36f41ee646a828e3d83df21427cf7955a5beef52460'
+export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
+export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
 ```
 
 For a compatible Kubernetes workflow, configure approved cluster/node pull
