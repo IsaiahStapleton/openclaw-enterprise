@@ -124,10 +124,16 @@ export interface ControllerAuth {
   ): Promise<unknown>;
   changeAccount?(
     userId: string,
-    operation: "disable" | "revoke",
+    operation: "disable" | "enable" | "revoke",
     actor: HumanAuthenticationActor,
     expectedVersion: number,
   ): Promise<void>;
+  detachMethod?(
+    userId: string,
+    methodId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<{ methodId: string; providerId: string }>;
   /** "guarded" once State-owned human sign-in admission is active. */
   readonly humanProfile: "password" | "guarded";
   prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount>;
@@ -1130,7 +1136,7 @@ export async function createPostgresControllerAuth(
             ),
           changeAccount: (
             userId: string,
-            operation: "disable" | "revoke",
+            operation: "disable" | "enable" | "revoke",
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),

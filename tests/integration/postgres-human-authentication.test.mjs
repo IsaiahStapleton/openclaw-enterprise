@@ -794,5 +794,81 @@ test(
         );
       },
     );
+
+    await context.test("enable restores a disabled account under a new version", async () => {
+      const disabled = await persistence.readAccount(person.id, admin);
+      assert.equal(disabled.disabled, true);
+      await persistence.changeAccount(person.id, "enable", admin, disabled.version);
+      const enabled = await peer.readAccount(person.id, admin);
+      assert.equal(enabled.disabled, false);
+      assert.equal(enabled.version, disabled.version + 1);
+      assert.ok(await persistence.snapshotPassword(person.email));
+      await assert.rejects(peer.changeAccount(person.id, "enable", admin, enabled.version), {
+        name: "ResourceConflictError",
+      });
+      await assert.rejects(peer.changeAccount(person.id, "enable", admin, disabled.version), {
+        name: "ResourceConflictError",
+      });
+    });
+
+    await context.test(
+      "detach removes only an external identity and invalidates its sessions",
+      async () => {
+        const external = await persistence.snapshotExternal(providerId, subject);
+        const session = await persistence.issueSession(external.proof, sessionRecord(person.id));
+        const target = await persistence.readAccount(person.id, admin);
+        const credential = target.methods.find((method) => method.providerId === "credential");
+        const recoveryCredential = (await persistence.readAccount(recoveryUser.id, admin))
+          .methods[0];
+        for (const [userId, methodId] of [
+          [person.id, credential.methodId],
+          [recoveryUser.id, recoveryCredential.methodId],
+          [recoveryUser.id, external.proof.methodId],
+        ]) {
+          const version = (await persistence.readAccount(userId, admin)).version;
+          await assert.rejects(persistence.detachExternal(userId, methodId, admin, version), {
+            name: "ResourceConflictError",
+          });
+        }
+        await assert.rejects(
+          persistence.detachExternal(person.id, external.proof.methodId, admin, target.version - 1),
+          { name: "ResourceConflictError" },
+        );
+        assert.deepEqual(
+          await peer.detachExternal(person.id, external.proof.methodId, admin, target.version),
+          { methodId: external.proof.methodId, providerId },
+        );
+        const detached = await persistence.readAccount(person.id, admin);
+        assert.equal(detached.version, target.version + 1);
+        assert.deepEqual(
+          detached.methods.map((method) => method.methodId),
+          [credential.methodId],
+        );
+        assert.equal(await persistence.currentSession(session.token), undefined);
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT count(*)::int AS count FROM occ.human_authentication_sessions WHERE method_id=$1",
+              [external.proof.methodId],
+            )
+          ).rows[0].count,
+          0,
+        );
+        assert.equal(await persistence.snapshotExternal(providerId, subject), undefined);
+        await assert.rejects(
+          persistence.issueSession(external.proof, sessionRecord(person.id)),
+          /no longer current/,
+        );
+        assert.ok(await persistence.snapshotPassword(person.email));
+        const audits = await state.transact((unit) => unit.audit.list());
+        assert.ok(
+          audits.some(
+            (event) =>
+              event.action === "authentication.method.detach" &&
+              event.details.methodId === external.proof.methodId,
+          ),
+        );
+      },
+    );
   },
 );

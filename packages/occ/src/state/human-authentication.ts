@@ -690,9 +690,53 @@ export class PostgresHumanAuthentication {
     });
   }
 
+  /** Removes one external identity; the password method and recovery credential stay. */
+  async detachExternal(
+    userId: string,
+    methodId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<{ methodId: string; providerId: string }> {
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+      throw new ResourceConflictError("A current account version is required.");
+    }
+    return this.state.transact(async (unit) => {
+      const account = await this.guardAccounts(unit, userId, actor, expectedVersion);
+      const [method] = await this.query(
+        unit,
+        `SELECT id, provider_id, user_id, identity_only FROM occ.account WHERE id = $1 FOR UPDATE`,
+        [methodId],
+      );
+      if (
+        method === undefined ||
+        method.user_id !== userId ||
+        method.identity_only !== true ||
+        method.provider_id === "credential"
+      ) {
+        throw new ResourceConflictError("Only an attached external identity can be detached.");
+      }
+      // Bindings cascade with the method; the recovery credential is never identity-only.
+      await this.query(unit, `DELETE FROM occ.account WHERE id = $1`, [methodId]);
+      await this.query(
+        unit,
+        `UPDATE occ.human_authentication_accounts SET version = version + 1, changed_at = clock_timestamp() WHERE user_id = $1`,
+        [userId],
+      );
+      await this.query(unit, `DELETE FROM occ.session WHERE user_id = $1`, [userId]);
+      const providerId = method.provider_id as string;
+      await this.audit(unit, "authentication.method.detach", actor.principalId, {
+        userId,
+        methodId,
+        providerId,
+        principalId: account.principal_id,
+      });
+      return { methodId, providerId };
+    });
+  }
+
   async changeAccount(
     userId: string,
-    operation: "disable" | "revoke",
+    operation: "disable" | "enable" | "revoke",
     actor: HumanAuthenticationActor,
     expectedVersion: number,
   ): Promise<void> {
@@ -700,7 +744,7 @@ export class PostgresHumanAuthentication {
       throw new ResourceConflictError("A current account version is required.");
     }
     await this.state.transact(async (unit) => {
-      await this.guardAccounts(unit, userId, actor, expectedVersion);
+      const account = await this.guardAccounts(unit, userId, actor, expectedVersion);
       if (operation === "disable") {
         const [recovery] = await this.query(
           unit,
@@ -711,10 +755,15 @@ export class PostgresHumanAuthentication {
           throw new ScopeViolationError("The recovery account cannot be disabled.");
         }
       }
+      if (operation === "enable" && account.disabled !== true) {
+        throw new ResourceConflictError("The authentication account is not disabled.");
+      }
       await this.query(
         unit,
-        `UPDATE occ.human_authentication_accounts SET disabled = disabled OR $2, version = version + 1, changed_at = clock_timestamp() WHERE user_id = $1`,
-        [userId, operation === "disable"],
+        `UPDATE occ.human_authentication_accounts SET disabled = CASE $2::text
+           WHEN 'disable' THEN true WHEN 'enable' THEN false ELSE disabled END,
+         version = version + 1, changed_at = clock_timestamp() WHERE user_id = $1`,
+        [userId, operation],
       );
       await this.query(unit, `DELETE FROM occ.session WHERE user_id = $1`, [userId]);
       await this.audit(unit, `authentication.account.${operation}`, actor.principalId, { userId });
