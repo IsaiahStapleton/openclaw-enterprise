@@ -320,7 +320,7 @@ function codexReadResponse(options = {}) {
         interface: null,
       },
       description: null,
-      skills: [],
+      skills: options.skills ?? [],
       apps: options.apps ?? [{ id: CODEX_LINEAR_APP_ID, name: "Linear", needsAuth: false }],
       appTemplates: options.appTemplates ?? [],
       hooks: [],
@@ -623,7 +623,7 @@ test("compute serializes selected OpenClaw plugins for startup-time resolution",
   });
 });
 
-test("Codex runtime helper installs plugin and applies write action approval without tool inventory", async () => {
+test("Codex runtime helper installs a plugin with skills and applies write action approval without tool inventory", async () => {
   const state = codexLinearPluginState({
     toolDefaults: { approval: "write_actions", reviewer: "auto" },
   });
@@ -648,6 +648,7 @@ test("Codex runtime helper installs plugin and applies write action approval wit
       return codexReadResponse({
         installed: readCount > 1,
         enabled: readCount > 1,
+        skills: [{ name: "linear-workflow" }],
         // Template-only IDs must not enter the concrete app policy written below.
         appTemplates: [
           {
