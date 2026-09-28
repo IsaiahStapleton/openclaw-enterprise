@@ -272,7 +272,13 @@ if (command === "k3d") {
     finish();
   }
   if (equals(args, ["kubeconfig", "get", state.cluster])) finish("apiVersion: v1\n");
-  if (equals(args, ["cluster", "delete", state.cluster])) finish();
+  if (equals(args, ["cluster", "list", "-o", "json"])) {
+    finish(JSON.stringify(state.clusterDeleted ? [] : [{ name: state.cluster }]));
+  }
+  if (equals(args, ["cluster", "delete", state.cluster])) {
+    state.clusterDeleted = true;
+    finish();
+  }
 }
 if (command === "kubectl") {
   if (equals(args, ["version", "--client=true"])) finish("{}\n");
@@ -1034,6 +1040,34 @@ test("installed repository preparation requires explicit authorization and prote
   assert.equal(invalidScope.status, 1);
   assert.match(invalidScope.stderr, /approved public IPv4/);
   await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  const releaseEnv = {
+    ...env,
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
+    OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "release",
+    OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: immutableImage,
+    OCC_TEST_KUBERNETES_RUNTIME_IMAGE: immutableImage,
+    NODE_BASE_IMAGE: "",
+  };
+  for (const [override, expected] of [
+    [{ OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: "" }, /OCC_TEST_PRODUCTION_CONTROLLER_IMAGE/],
+    [{ OCC_TEST_KUBERNETES_RUNTIME_IMAGE: "runtime:latest" }, /OCC_TEST_KUBERNETES_RUNTIME_IMAGE/],
+    [{ OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "unexpected" }, /must be source or release/],
+    [{ OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "source" }, /NODE_BASE_IMAGE/],
+  ]) {
+    const rejected = runPrepare(args, { ...releaseEnv, ...override });
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, expected);
+    await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+  }
+
+  // A complete release selection reaches tool discovery without a build base;
+  // no cluster or image is created by this preflight check.
+  const admitted = runPrepare(args, { ...releaseEnv, OCC_HELM_BIN: join(root, "missing-helm") });
+  assert.equal(admitted.status, 1);
+  assert.match(admitted.stderr, /missing-helm/);
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(state.resources, []);
 });
 
 test("ordinary CI groups require platform proof and exclude installed live repository writes", async () => {

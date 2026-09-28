@@ -607,6 +607,17 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
     );
   }
   if (name === "repository-credentials-installed") {
+    const imageMode = effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE || "source";
+    if (imageMode === "release") {
+      assertImmutableEnvImages(
+        ["OCC_TEST_PRODUCTION_CONTROLLER_IMAGE", "OCC_TEST_KUBERNETES_RUNTIME_IMAGE"],
+        effectiveEnv,
+      );
+    } else if (imageMode === "source") {
+      assertNodeBaseImage(effectiveEnv.NODE_BASE_IMAGE);
+    } else {
+      throw new Error("OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE must be source or release.");
+    }
     if (effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED !== "1") {
       throw new Error(
         "Installed repository qualification requires explicit write and cleanup authorization.",
@@ -1625,15 +1636,19 @@ async function prepareProductionImages(
   state,
   cluster,
   env,
-  { localStore = false } = {},
+  { localStore = false, sourceImages } = {},
 ) {
-  const built = await buildRuntimeImages(statePath, state, {
-    controller: true,
-    runtime: true,
-    nodeBaseImage: effectiveLaneEnv(state.lane, env).NODE_BASE_IMAGE,
-    localStore,
-  });
-  Object.assign(env, built.env);
+  if (sourceImages) {
+    Object.assign(env, sourceImages);
+  } else {
+    const built = await buildRuntimeImages(statePath, state, {
+      controller: true,
+      runtime: true,
+      nodeBaseImage: effectiveLaneEnv(state.lane, env).NODE_BASE_IMAGE,
+      localStore,
+    });
+    Object.assign(env, built.env);
+  }
   env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = (
     await registerImageInK3d(
       statePath,
@@ -1955,7 +1970,18 @@ async function prepareLane({ lane, statePath }) {
       Object.assign(env, routing.env);
       env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
-      await prepareProductionImages(resolvedStatePath, state, cluster, env, { localStore: true });
+      const inputs = effectiveLaneEnv(name, env);
+      const sourceImages =
+        inputs.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE === "release"
+          ? {
+              OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: inputs.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE,
+              OCC_TEST_KUBERNETES_RUNTIME_IMAGE: inputs.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
+            }
+          : undefined;
+      await prepareProductionImages(resolvedStatePath, state, cluster, env, {
+        localStore: true,
+        sourceImages,
+      });
       env.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE = (
         await registerImageInK3d(
           resolvedStatePath,

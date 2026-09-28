@@ -445,6 +445,8 @@ function emptyFileResult(path, issues) {
 function imageDigests(env) {
   const names = {
     controller: "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+    runtime: "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+    repositoryCredentials: "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
     postgres: "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
     node: "OCC_TEST_PRODUCTION_NODE_IMAGE",
     fixture: "OCC_TEST_KUBERNETES_IMAGE",

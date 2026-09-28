@@ -57,7 +57,7 @@ GitHub. With the [CI runner prerequisites](ci.md) prepared, run:
   set -e
   CREDENTIAL_TEST_RUN="$(mktemp -d)"
   printf 'Evidence directory: %s\n' "$CREDENTIAL_TEST_RUN"
-  trap 'node scripts/ci/cleanup.mjs --state "$CREDENTIAL_TEST_RUN/state.json"' EXIT
+  trap 'cleanup_exit_code=$?; trap - EXIT; node scripts/ci/cleanup.mjs --state "$CREDENTIAL_TEST_RUN/state.json" || cleanup_exit_code=1; exit "$cleanup_exit_code"' EXIT
   node scripts/ci/prepare.mjs --lane repository-credentials-platform \
     --state "$CREDENTIAL_TEST_RUN/state.json"
   node scripts/ci/run-tests.mjs run repository-credentials-platform \
@@ -65,6 +65,11 @@ GitHub. With the [CI runner prerequisites](ci.md) prepared, run:
     --results "$CREDENTIAL_TEST_RUN/results.json"
 )
 ```
+
+The command exits unsuccessfully if preparation, tests, or cleanup fails. Cleanup
+verifies that the owned cluster is absent; on an inventory or deletion failure,
+retain the private state and rerun the cleanup command after investigating. A
+missing state file after preflight alone does not prove a cluster was created.
 
 Preparation supplies the explicit kubeconfig/context, database URL, immutable
 `OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE`, and private fixture relay
@@ -119,10 +124,23 @@ and hosted workflow dispatch. It requires explicit live authorization and never
 falls back to controlled evidence.
 
 Supply existing authorized `OPENAI_API_KEY`, `OCC_TEST_OPENAI_MODEL`, and immutable
-`NODE_BASE_IMAGE` (approved Node 24), `OCC_TEST_PRODUCTION_POSTGRES_IMAGE` and
-`OCC_TEST_PRODUCTION_NODE_IMAGE`. Preparation builds controller and runtime from
-current source, imports immutable references and supplies kubeconfig/context.
-It also installs the pinned Envoy Gateway and cert-manager controllers. Dedicated
+`OCC_TEST_PRODUCTION_POSTGRES_IMAGE` and `OCC_TEST_PRODUCTION_NODE_IMAGE`.
+By default, preparation builds controller and runtime from current source; supply
+an immutable `NODE_BASE_IMAGE` for approved Node 24. To select released images
+instead, set `OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE=release` and supply both
+`OCC_TEST_PRODUCTION_CONTROLLER_IMAGE` and `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`
+as immutable `image@sha256:` references. Missing or mutable selections fail
+before resources are created. Select a chart and credential-service image
+compatible with the release; this lane uses the chart in the checked-out source.
+
+Preparation verifies the supplied registry digests against Docker, imports the
+selected platform images into the disposable cluster, and supplies kubeconfig and
+context. Docker archive import can produce a different platform-manifest digest:
+retain the private preparation state and record its source references, host image
+IDs and imported references alongside the observed Pod image IDs. This local
+import does not prove that a production registry serves an identical manifest;
+verify production pull and deployed image identity separately. Preparation also
+installs the pinned Envoy Gateway and cert-manager controllers. Dedicated
 setup enables the production Helm private route and CA, admits only the observed
 Envoy proxy address, and uses stock local-path RWO Harness storage. OCC enrolls the native workspace node through that authenticated route.
 The Helm fixture creates its own PostgreSQL; no external test database is needed.
@@ -164,7 +182,8 @@ Dedicated uses the supported Codex `mode: yolo`, `approvalPolicy: never` and
 `sandbox: danger-full-access` configuration, with `tools.exec.mode: full`, for this
 authorized unattended task.
 Its nonroot container, read-only root filesystem, private volume mounts and
-Kubernetes NetworkPolicies remain the isolation boundary. The case checks separate
+Kubernetes NetworkPolicies remain the isolation boundary. This mode does not
+prove native Codex sandbox or seccomp enforcement, or a denied Git write. The case checks separate
 Gateway/Codex Pod identities, repository material and model-key delivery to Codex
 only, and credential-service connectivity from Codex with denial from Gateway.
 It pairs the Gateway's mirrored task with read-only native Codex thread evidence,

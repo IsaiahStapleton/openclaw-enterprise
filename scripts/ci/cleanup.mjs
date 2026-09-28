@@ -193,7 +193,24 @@ async function cleanupK3dCluster(resource, state) {
   assertResourceOwner(resource, state);
   assertOwnedName("openclaw-k8s-", resource.name, "k3d cluster");
   assertOwnedK3dFilesystem(resource);
-  await execFile(process.env.OPENCLAW_CI_K3D_BIN ?? "k3d", ["cluster", "delete", resource.name]);
+  const k3d = process.env.OPENCLAW_CI_K3D_BIN ?? "k3d";
+  const listClusters = async () => {
+    const result = await execFile(k3d, ["cluster", "list", "-o", "json"]);
+    const clusters = JSON.parse(result.stdout);
+    if (
+      !Array.isArray(clusters) ||
+      clusters.some((cluster) => typeof cluster?.name !== "string" || cluster.name.length === 0)
+    ) {
+      throw new Error("Cannot verify k3d cleanup from an invalid cluster inventory.");
+    }
+    return clusters;
+  };
+  if ((await listClusters()).some((cluster) => cluster.name === resource.name)) {
+    await execFile(k3d, ["cluster", "delete", resource.name]);
+  }
+  if ((await listClusters()).some((cluster) => cluster.name === resource.name)) {
+    throw new Error(`Owned k3d cluster remains after deletion: ${resource.name}`);
+  }
   await rm(resource.directory, { recursive: true, force: true });
 }
 

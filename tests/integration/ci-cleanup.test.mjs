@@ -110,13 +110,23 @@ test("cleanup removes an owned k3d cluster resource through the CLI", async (t) 
   const kubeconfig = join(clusterDirectory, "kubeconfig");
   await mkdir(clusterDirectory);
   await writeFile(kubeconfig, "apiVersion: v1\n", { mode: 0o600 });
+  const deletedMarker = join(root, "deleted");
   await writeExecutable(
     join(root, "bin/k3d"),
-    ["#!/bin/sh", `printf '%s\\n' \"$*\" >> ${JSON.stringify(k3dLog)}`, "exit 0", ""].join("\n"),
+    [
+      "#!/bin/sh",
+      `printf '%s\\n' "$*" >> ${JSON.stringify(k3dLog)}`,
+      'if [ "$2" = "list" ]; then',
+      `  if [ -e ${JSON.stringify(deletedMarker)} ]; then printf '[]\\n'; else printf '[{"name":"%s"}]\\n' ${JSON.stringify(clusterName)}; fi`,
+      'elif [ "$2" = "delete" ]; then',
+      `  touch ${JSON.stringify(deletedMarker)}`,
+      "fi",
+      "",
+    ].join("\n"),
   );
   await writeExecutable(
     join(root, "bin/docker"),
-    ["#!/bin/sh", `printf '%s\\n' \"$*\" >> ${JSON.stringify(dockerLog)}`, "exit 0", ""].join("\n"),
+    ["#!/bin/sh", `printf '%s\\n' "$*" >> ${JSON.stringify(dockerLog)}`, "exit 0", ""].join("\n"),
   );
 
   const statePath = join(root, "state.json");
@@ -152,7 +162,12 @@ test("cleanup removes an owned k3d cluster resource through the CLI", async (t) 
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(await readFile(k3dLog, "utf8"), new RegExp(`cluster delete ${clusterName}`));
+  const k3dCommands = (await readFile(k3dLog, "utf8")).trim().split("\n");
+  assert.deepEqual(k3dCommands, [
+    "cluster list -o json",
+    `cluster delete ${clusterName}`,
+    "cluster list -o json",
+  ]);
   const dockerCommands = await readFile(dockerLog, "utf8");
   assert.match(
     dockerCommands,
@@ -162,6 +177,64 @@ test("cleanup removes an owned k3d cluster resource through the CLI", async (t) 
   await assert.rejects(() => stat(statePath), { code: "ENOENT" });
   await assert.rejects(() => stat(clusterDirectory), { code: "ENOENT" });
 });
+
+for (const scenario of ["surviving", "invalid-inventory", "already-absent"]) {
+  test(`cleanup verifies owned cluster absence: ${scenario}`, async (t) => {
+    const root = await fixture(t);
+    const clusterName = "openclaw-k8s-readback-123abc456def";
+    const clusterDirectory = join(root, `${clusterName}-state`);
+    const kubeconfig = join(clusterDirectory, "kubeconfig");
+    const log = join(root, "k3d.log");
+    await mkdir(clusterDirectory);
+    await writeFile(kubeconfig, "apiVersion: v1\n", { mode: 0o600 });
+    await writeExecutable(
+      join(root, "bin/k3d"),
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`,
+        'if [ "$2" = "list" ]; then',
+        scenario === "invalid-inventory"
+          ? "  printf '{}\\n'"
+          : scenario === "already-absent"
+            ? "  printf '[]\\n'"
+            : `  printf '[{"name":"%s"}]\\n' ${JSON.stringify(clusterName)}`,
+        "fi",
+        "",
+      ].join("\n"),
+    );
+    const statePath = join(root, "state.json");
+    const state = {
+      version: 1,
+      repositoryRoot,
+      prefix: "openclaw-ci-local-abcdef1234567890",
+      resources: [
+        {
+          id: "cluster-1",
+          kind: "k3d-cluster",
+          owner: "openclaw-ci-local-abcdef1234567890",
+          name: clusterName,
+          directory: clusterDirectory,
+          kubeconfig,
+        },
+      ],
+    };
+    await writeState(statePath, state);
+    const result = runCleanup(statePath, { OPENCLAW_CI_K3D_BIN: join(root, "bin/k3d") });
+    if (scenario === "already-absent") {
+      assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(await readFile(log, "utf8"), /cluster delete/);
+      await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+    } else {
+      assert.notEqual(result.status, 0);
+      assert.match(
+        result.stderr,
+        scenario === "surviving" ? /remains after deletion/ : /invalid cluster inventory/,
+      );
+      assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")), state);
+      assert.equal((await stat(clusterDirectory)).isDirectory(), true);
+    }
+  });
+}
 
 test("cleanup retains state when a resource command fails", async (t) => {
   const root = await fixture(t);
@@ -210,7 +283,7 @@ test("cleanup rejects a k3d cluster directory outside the owned cluster prefix",
   await writeFile(kubeconfig, "apiVersion: v1\n", { mode: 0o600 });
   await writeExecutable(
     join(root, "bin/k3d"),
-    ["#!/bin/sh", `printf '%s\\n' \"$*\" >> ${JSON.stringify(k3dLog)}`, "exit 0", ""].join("\n"),
+    ["#!/bin/sh", `printf '%s\\n' "$*" >> ${JSON.stringify(k3dLog)}`, "exit 0", ""].join("\n"),
   );
 
   const statePath = join(root, "state.json");
@@ -252,7 +325,7 @@ test("cleanup rejects ownerless resources before invoking cleanup commands", asy
   await writeFile(kubeconfig, "apiVersion: v1\n", { mode: 0o600 });
   await writeExecutable(
     join(root, "bin/k3d"),
-    ["#!/bin/sh", `printf '%s\\n' \"$*\" >> ${JSON.stringify(k3dLog)}`, "exit 0", ""].join("\n"),
+    ["#!/bin/sh", `printf '%s\\n' "$*" >> ${JSON.stringify(k3dLog)}`, "exit 0", ""].join("\n"),
   );
 
   const statePath = join(root, "state.json");
