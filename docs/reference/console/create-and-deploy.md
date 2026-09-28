@@ -20,8 +20,8 @@ are insufficient. Presets and edited Configuration JSON retain their settings.
 1. Sign in, select the intended Namespace, open **Agents**, and select
    **Create Agent**.
 2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
-   **Use Preset**. Review defaults and choose an existing or new model Secret.
-   The form is editable. **Start with default Preset** loads the installed `default-codex` copy.
+   **Use Preset**. Review the editable defaults. **Start with default Preset**
+   loads the installed `default-codex` copy.
    To start independently of installed Presets, select **Start without Preset**.
 3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
    **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
@@ -68,12 +68,12 @@ are insufficient. Presets and edited Configuration JSON retain their settings.
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no
    update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
 
-Before saving, Preset variables and explicitly selected Preset forms survive
-navigation, including Back/Forward; passwords clear. Leaving a form started with
-the default Preset shortcut or without a Preset discards its unsaved state; the next
-visit shows the initial choices. Saved Agents and Secrets remain. **Start over** confirms discard.
+Before saving, explicitly selected Preset forms retain variables across Back/Forward;
+passwords clear. Leaving a form started with the default shortcut or without a
+Preset discards unsaved state and returns to the initial choices. Saved Agents and
+Secrets remain. **Start over** confirms discard.
 Reload, page exit, and sign-out clear local drafts. Once saving begins, navigation
-does not retain partial-save or uncertain-outcome form state; follow save recovery below.
+does not retain partial-save or uncertain-outcome state; follow save recovery below.
 
 For Codex plugins, open **Configure plugins**. With the
 [OpenAI curated catalog](../drivers/plugin-bundled.md#selection-and-catalogs),
@@ -165,8 +165,8 @@ all of them and always submits the chosen level explicitly. The server rechecks
 current Namespace policy when it creates the Agent and again when it admits a
 deployment.
 
-Failed rediscovery retains unsaved repository choices for retry. Explicitly selected
-Preset forms also retain them across navigation.
+Failed rediscovery retains unsaved repository choices for retry and across
+navigation in explicitly selected Preset forms.
 **Create Agent** stays blocked until discovery succeeds and filters choices against
 current policy. **Start over** discards selections.
 
@@ -201,14 +201,13 @@ ID, if available, to your operator.
 ## Use repositories and Slack on the same Agent
 
 Select **Dedicated**, the approved repositories and an explicit access level.
-Configure Slack and select its saved token Secrets in the creation form, then
-choose a compatible model-authentication source. With supported provisioning
-and successful repository discovery, **Create Agent** queues setup and follows
-the first deployment. The worker creates the Configuration and Agent, grants
-access to the final Secret references, and provisions transport credentials.
-Check that the returned revision belongs to this Agent and retains its repository
-selections. An ordinary draft requires model and channel credential setup and **Deploy new version**
-from its detail page.
+Configure Slack and select its saved token Secrets, then choose a compatible
+model-authentication source. With supported provisioning and successful repository
+discovery, **Create Agent** creates the Configuration and Agent, grants access to
+the final Secret references, provisions transport credentials, and follows the
+first deployment. Confirm the returned revision belongs to this Agent and retains
+repository selections. For an ordinary draft, set model and channel credentials, then
+**Deploy new version** from its detail page.
 
 Operators must prepare the
 [repository installation](../../guides/repository-credentials/installation.md),
@@ -221,11 +220,10 @@ approval policy; review both before demonstrating edits.
 
 ## Initial runtime credentials
 
-Select model authentication and bind any Slack tokens as Namespace Secrets.
-When Compute requires generated credentials, OCC creates missing transport
-credentials before first revision admission. Supported Dedicated Agent creation
-does so during provisioning. Neither path creates the selected `harnessAuth`
-model credential or channel tokens.
+Select model authentication and bind Slack tokens as Namespace Secrets. When
+Compute requires them, OCC creates missing transport credentials before first
+revision admission; supported Dedicated provisioning does so during creation.
+Neither path creates the selected `harnessAuth` model credential or channel tokens.
 
 The Kubernetes Driver generates an app-server token and local gateway password.
 Gateway authentication is trusted-proxy only. The password is projected only

@@ -1,7 +1,7 @@
 # Agent Presets
 
-A Preset stores reusable Agent launch settings and variables in one Namespace.
-Select it during creation, fill its variables, and edit the copied settings before
+A Preset stores reusable Agent launch settings and variables in a Namespace.
+Select it during Agent creation, fill its variables, and edit copied settings before
 saving. Later Preset edits or deletion cannot change the Agent, Configuration, or
 deployed revisions.
 See [Create an Agent from a Preset](../guides/topics/agent-presets.md).
@@ -72,9 +72,8 @@ credential; the ordinary form collects them. An operator-customized copy with
 variables opens the variable chooser first. Missing or unreadable defaults
 disable quick-start; other readable Presets remain selectable. Install the file
 through `includeDefaults`, `presets.files`, or Preset POST to enable it.
-**Start without Preset** remains available independently of Namespace Presets.
-It uses the console's shared configuration base, and ordinary creation permissions
-still apply.
+**Start without Preset** is independent of Namespace Presets; it uses the
+console's shared configuration base and ordinary creation permissions.
 
 The shipped default file also supplies the console's shared configuration base
 for empty templates, **Reset template**, and provider/Harness switches. It replaces
@@ -113,7 +112,7 @@ limits. A saved template does not prove live Codex policy enforcement.
 ## DevDay custom presets
 
 [`SWE Agent`](../../deploy/presets/devday.json) is based on **Standard Codex**,
-uses `approvalPolicy: never`, and adds Slack Socket Mode with six prefilled channels.
+uses `approvalPolicy: never`, and adds Slack Socket Mode.
 It uses the Codex harness with **Service Accounts** authentication (`codex_pat`).
 All four DevDay presets expose only `name` and `model` variables; `model` defaults
 to `gpt-6-astra` and remains editable. After **Use Preset**, choose an existing service account Secret or
@@ -154,10 +153,10 @@ choose allowed senders and bind Slack app/bot Secrets. Presets allow all channel
 members (`users: ["*"]`) without requiring mentions. Narrow the sender list if needed.
 Files contain no credentials. Workspace instructions in
 `template.agent.initialWorkspaceFiles.AGENTS.md` include draft decisions.
-`{{vars.name}}` expands in the heading, opening sentence, and other self-references
-when applying the Preset; later name edits do not re-render the copied file.
-To revise them, update that content and the existing Namespace Preset through the API. Restarting with a changed
-JSON file preserves already-installed same-name copies.
+`{{vars.name}}` expands in workspace-instruction self-references when applying the
+Preset; later name edits do not re-render the copied file. To revise them, update
+that content and the existing Namespace Preset through the API. Restarting with a
+changed JSON file preserves installed same-name copies.
 
 ## Contents
 
@@ -165,18 +164,18 @@ A Preset has `id`, `namespaceId`, a Namespace-unique `name`, `template`, and
 `createdAt`. OCC assigns the ID, Namespace, and creation time. An empty template
 is valid. Its optional fields are:
 
-| Field                          | Purpose                                                                                                   |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `variables`                    | Named scalar inputs, their types, descriptions, and optional defaults.                                    |
-| `agent.name`                   | Suggested Agent name; the saved Agent still needs a unique name.                                          |
-| `agent.executionMode`          | Embedded or dedicated execution.                                                                          |
-| `agent.backendId`              | Installation-configured Backend ID, or null.                                                              |
-| `agent.harnessAuth`            | Auth method default, credential binding, password variable token, or null; never stored credential bytes. |
-| `agent.initialWorkspaceFiles`  | Optional creation-time workspace contents keyed by supported filename.                                    |
-| `agent.plugins`                | Desired plugin selections and policies.                                                                   |
-| `agent.pluginApprovers`        | Agent-wide default plugin approvers copied into the editable draft.                                       |
-| `configuration.values`         | Native Agent Configuration JSON, including models, Harness settings, channels, and sandbox settings.      |
-| `configuration.secretBindings` | Bindings to Secrets in this Namespace.                                                                    |
+| Field                          | Purpose                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------- |
+| `variables`                    | Scalar inputs with types, descriptions, and optional defaults.                    |
+| `agent.name`                   | Suggested name; the saved Agent still needs a unique name.                        |
+| `agent.executionMode`          | Embedded or dedicated.                                                            |
+| `agent.backendId`              | Installation Backend ID, or null.                                                 |
+| `agent.harnessAuth`            | Auth method, credential binding, password token, or null; never credential bytes. |
+| `agent.initialWorkspaceFiles`  | Optional supported-file contents at creation.                                     |
+| `agent.plugins`                | Plugin selections and policies.                                                   |
+| `agent.pluginApprovers`        | Default plugin approvers for the editable draft.                                  |
+| `configuration.values`         | Native Configuration JSON for models, Harness, channels, and sandbox settings.    |
+| `configuration.secretBindings` | Namespace Secret bindings.                                                        |
 
 These use the existing [Agent](agents.md) and [Configuration](configuration.md)
 contracts. Installation-owned Driver selection, generated identities, runtime
