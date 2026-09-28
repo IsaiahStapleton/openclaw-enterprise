@@ -896,18 +896,22 @@ test("Harness admission rejects conflicting selections, mode mismatches, and una
     configurationId: openclawConfiguration.id,
     executionMode: "dedicated",
   });
-  const dedicatedNative = await controller.deployAgent(
-    administrator,
-    { namespaceId: namespace.id, agentId: agent.id },
-    resolveApprovedProductionHarness,
+  // Dedicated OpenClaw fails closed before any revision exists without a provisioning
+  // SandboxDriver that declares networking, filesystem, and process containment.
+  await assert.rejects(
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedProductionHarness,
+    ),
+    (error) =>
+      error instanceof DependencyUnavailableError &&
+      /requires a provisioning SandboxDriver with networking, filesystem, and process containment/.test(
+        error.message,
+      ),
   );
-  assert.deepEqual(dedicatedNative.harness, {
-    ...DEVELOPMENT_HARNESS_DESCRIPTOR,
-    mode: "dedicated",
-  });
   assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), [
     embedded,
-    dedicatedNative,
   ]);
 
   assert.throws(
