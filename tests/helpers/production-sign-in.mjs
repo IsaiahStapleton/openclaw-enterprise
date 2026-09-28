@@ -1,4 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import { composeProduction } from "../../apps/controller/src/composition/production.ts";
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
@@ -217,4 +219,213 @@ export async function signedInHeaders(app, origin, account, remoteAddress) {
 
 export async function currentSession(app, cookie) {
   return (await app.inject({ url: "/api/auth/session", headers: { cookie } })).json().data;
+}
+
+/** Distinct client addresses, so a suite's many sign-ins never meet the per-address limit. */
+export function clientAddresses(prefix = "198.18") {
+  let next = 0;
+  return () => {
+    next += 1;
+    return `${prefix}.${Math.floor(next / 250)}.${(next % 250) + 1}`;
+  };
+}
+
+/**
+ * The bootstrap policy's Installation administrator Role, and an Installation reader Role
+ * without administer that this fixture adds (the bootstrap policy has only the administrator).
+ */
+export async function installationRoles(state, pool) {
+  const installation = await state.loadInstallation();
+  const { roles } = await state.loadNativeIAMState(installation.id);
+  const admin = roles.find((role) =>
+    role.permissions.some(
+      ({ action, resourceKind }) => action === "administer" && resourceKind === "installation",
+    ),
+  );
+  if (admin === undefined) {
+    throw new Error("The bootstrap policy lacks an Installation administrator Role.");
+  }
+  const reader = { id: "role_installation_reader_fixture" };
+  await pool.query(
+    `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
+     VALUES ($1, NULL, 'Installation reader', $2::jsonb) ON CONFLICT (id) DO NOTHING`,
+    [reader.id, JSON.stringify([{ action: "read", resourceKind: "installation" }])],
+  );
+  return { admin, reader };
+}
+
+/**
+ * A local stand-in for github.com and api.github.com. The controller's fixed provider
+ * endpoints are redirected here by mocking fetch, as postgres-github-sign-in.test.mjs does.
+ * The authorization code names the GitHub subject: `subject-<id>`. Modes: "up", "error"
+ * (503) and "hang" (never answers).
+ */
+export async function startFakeGitHub(t) {
+  const server = createServer();
+  const fixture = { mode: "up", requests: 0 };
+  server.on("request", async (request, response) => {
+    fixture.requests += 1;
+    if (fixture.mode === "hang") {
+      return;
+    }
+    let body = "";
+    for await (const chunk of request) {
+      body += chunk;
+    }
+    if (fixture.mode === "error") {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end("{}");
+      return;
+    }
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/login/oauth/access_token") {
+      const subject = /^subject-([1-9][0-9]{0,15})$/.exec(
+        new URLSearchParams(body).get("code") ?? "",
+      )?.[1];
+      response.end(
+        JSON.stringify(
+          subject === undefined
+            ? { error: "bad_verification_code" }
+            : { access_token: `ghu_fixture_${subject}`, token_type: "bearer" },
+        ),
+      );
+    } else if (request.url === "/user") {
+      const subject = /^Bearer ghu_fixture_([0-9]+)$/.exec(request.headers.authorization ?? "");
+      if (subject === null) {
+        response.writeHead(401);
+        response.end("{}");
+        return;
+      }
+      response.end(JSON.stringify({ id: Number(subject[1]), login: `fixture-${subject[1]}` }));
+    } else {
+      response.writeHead(404);
+      response.end("{}");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const providerOrigin = `http://127.0.0.1:${server.address().port}`;
+  const originalFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin === "https://github.com" || url.origin === "https://api.github.com") {
+      return originalFetch(new URL(url.pathname + url.search, providerOrigin), init);
+    }
+    return originalFetch(input, init);
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  return fixture;
+}
+
+/** Starts GitHub sign-in and completes the callback as `subject`, from one client address. */
+export async function githubSignIn(app, origin, subject, remoteAddress = "192.0.2.50") {
+  const start = await app.inject({
+    method: "POST",
+    url: "/api/auth/providers/github/start",
+    remoteAddress,
+    headers: { origin },
+  });
+  if (start.statusCode !== 200) {
+    throw new Error(`GitHub start failed with ${start.statusCode}: ${start.body}`);
+  }
+  const { url, attemptId } = start.json().data;
+  const state = new URL(url).searchParams.get("state");
+  const callback = await app.inject({
+    url: `/api/auth/providers/github/callback?state=${state}&code=subject-${subject}`,
+    remoteAddress,
+    headers: { cookie: cookieHeaderFromSetCookie(start.headers["set-cookie"]) },
+  });
+  return { callback, attemptId };
+}
+
+/** The guarded account read an administrator uses for expectedVersion. */
+export async function readAccount(app, headers, userId) {
+  const response = await app.inject({ url: `/api/auth/accounts/${userId}`, headers });
+  if (response.statusCode !== 200) {
+    throw new Error(`Account read failed with ${response.statusCode}: ${response.body}`);
+  }
+  return response.json().data;
+}
+
+async function lockWaiters(pool) {
+  return (
+    await pool.query(
+      `SELECT count(*)::int AS count FROM pg_stat_activity
+       WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    )
+  ).rows[0].count;
+}
+
+/**
+ * Proves which account holds the reserved password lane on one controller: four password
+ * checks held on locked user rows fill the shared lane, so a fresh account and `former`
+ * are refused with 429 while `holder` is still admitted and signs in once the rows unlock.
+ */
+export async function assertReservedLane(app, pool, { origin, holder, former, label }) {
+  const fillers = (
+    await pool.query(
+      `INSERT INTO occ."user" (id, name, email, email_verified, created_at, updated_at)
+       SELECT 'lane-' || $1 || '-' || n, 'Lane filler', 'lane-' || $1 || '-' || n || '@example.test',
+              true, now(), now()
+       FROM generate_series(1, 2) AS n RETURNING id, email`,
+      [label],
+    )
+  ).rows;
+  const address = clientAddresses("10.77");
+  const blocker = await pool.connect();
+  let open = false;
+  async function waitForLockWaiters(count, settled = () => false) {
+    const deadline = performance.now() + 10_000;
+    while (!settled() && (await lockWaiters(pool)) < count) {
+      if (performance.now() > deadline) {
+        throw new Error(`Expected ${count} password checks to be held.`);
+      }
+      await delay(20);
+    }
+  }
+  try {
+    await blocker.query("BEGIN");
+    open = true;
+    await blocker.query('SELECT id FROM occ."user" WHERE id = ANY($1) FOR UPDATE', [
+      [...fillers.map((filler) => filler.id), holder.id],
+    ]);
+    // Two per filler email and one per address stay inside every per-key budget.
+    const held = fillers.flatMap((filler) => [
+      passwordSignIn(app, origin, { email: filler.email, password: holder.password }, address()),
+      passwordSignIn(app, origin, { email: filler.email, password: holder.password }, address()),
+    ]);
+    await waitForLockWaiters(4);
+    const fresh = await passwordSignIn(
+      app,
+      origin,
+      { email: `lane-${label}-fresh@example.test`, password: holder.password },
+      address(),
+    );
+    const refusedFormer = await passwordSignIn(app, origin, former, address());
+    let holderSettled = false;
+    const admitted = passwordSignIn(app, origin, holder, address()).finally(() => {
+      holderSettled = true;
+    });
+    // An admitted holder waits on its locked row; a refused one settles at once.
+    await waitForLockWaiters(5, () => holderSettled);
+    await blocker.query("COMMIT");
+    open = false;
+    const heldStatuses = (await Promise.all(held)).map(({ statusCode }) => statusCode);
+    return {
+      fresh: fresh.statusCode,
+      former: refusedFormer.statusCode,
+      holder: (await admitted).statusCode,
+      held: heldStatuses,
+    };
+  } finally {
+    if (open) {
+      await blocker.query("ROLLBACK");
+    }
+    blocker.release();
+    await pool.query('DELETE FROM occ."user" WHERE id = ANY($1)', [
+      fillers.map((filler) => filler.id),
+    ]);
+  }
 }
