@@ -37,9 +37,11 @@ Follow [PostgreSQL setup](postgresql.md) for a migrated disposable application-r
 database, then select `tests/integration/postgres-repository-sessions.test.mjs`
 with `OCC_TEST_DATABASE_URL`. Its SQL constraints and State operations cover exact
 revision ownership, immutable attempt inputs, phases and safe recovery identity.
-The `postgres-restart-recovery.test.mjs` and `postgres-worker-agent-revision.test.mjs`
-cases cover atomic terminal-retirement transfer, retries after Compute failure
-and restart, and session-only repair that preserves the healthy workload.
+The `postgres-repository-broker-receipts.test.mjs` case joins the real broker,
+private receipt listener and limited application role to verify confirmed disposal
+and fencing across service restart. The `postgres-restart-recovery.test.mjs` and
+`postgres-worker-agent-revision.test.mjs` cases cover terminal-retirement transfer,
+retries and session-only repair.
 These checks do not prove a running Kubernetes Pod or a model turn.
 
 ## Exercise the controlled platform path
@@ -79,8 +81,10 @@ destinations, concurrent real clients, native PR creation and read-only denial.
 With a push-ref policy configured, a mixed-ref push must leave upstream refs
 unchanged and send no receive-pack request. This does not imply denial before
 Git discovery or authentication.
-They also withhold a created admission response until the real PostgreSQL claim
-expires, then check recovery without bearer replay. Additional assertions inspect
+They withhold a created admission response until the real PostgreSQL claim
+expires, then check recovery without bearer replay. A separate Agent stop case
+withholds a committed disposal response, kills the broker, and checks that the
+worker recovers the exact receipt without issuing a replacement token. Additional assertions inspect
 private regular-file modes, retained material after worker replacement, exact
 missing-Secret repair, Reader write denial and ordinary stop cleanup without
 closing a sibling Agent's sessions. The credential service runs in a separate

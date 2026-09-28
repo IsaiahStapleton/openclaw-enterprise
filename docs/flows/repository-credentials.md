@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
-updated: "2026-09-23"
-last_updated_session: "authoring-run/0dffba8f-d16f-4f90-8fe2-893368f6926a"
+updated: "2026-09-28"
+last_updated_session: authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352
 ---
 
 # Repository credential service flow
@@ -103,11 +103,10 @@ bounded correlation registry from
 `apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`.
 Admission IDs bind the complete request: platform Namespace, repository reference,
 normalized profile, expected grant and absolute deadline. Registry mode requires
-this binding and independently resolves its fingerprint. `recoverOnly` returns
-status or absence without creation, fencing fresh missing IDs against delayed
-admission until their window closes. Known nondelivery before response transmission closes the
-session. Ambiguous loss permits same-ID status reconciliation without bearer
-recovery, binding/deadline changes or provider replay.
+this binding and independently resolves its fingerprint. A worker-owned private
+journal reserves the exact attempt before bearer delivery; recovery durably fences
+a missing admission. Known nondelivery closes the session. Reconciliation cannot
+recover a bearer, change its binding or replay provider work.
 
 Factory failure or an invalid binding closes construction admission before
 `apps/controller/src/drivers/repo/credentials/custody.ts:disposeAllRenewal`.
@@ -275,9 +274,13 @@ capacity wakes cleanup; queue rejection alone does not mark an action uncertain.
 
 `apps/controller/src/composition/repository-credentials/service.ts:runService`
 stops admission, closes sessions and bounds cleanup with an independent timer.
-Grace expiry reports unresolved obligations and exits without proving disposal
-or remote revocation. Restart loses provider cleanup inventory. The process
-closes the shared App key after shutdown disposition.
+Grace expiry reports unresolved obligations without proving disposal. The original
+broker writes `DISPOSED` to the worker's receipt journal before reporting it,
+and joins pending terminal writes before graceful exit. The Helm worker is a
+restartable init container so its receipt listener outlives broker shutdown.
+Only a committed observation survives restart. Uncommitted or uncertain
+provider inventory remains unknown. The process closes the shared App key after
+shutdown disposition.
 
 Failed construction custody also participates in shutdown drainage. Its
 pending obligation contributes to `pendingAuxiliary` without inventing a
@@ -331,6 +334,8 @@ module closure. Separate-container isolation and live-provider behavior require 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 08:12: Trace durable admission fencing and original-broker disposal acknowledgments. (authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352 - e06ff9625e72ff5ab3483a504a2f02a69a370cbb)
 
 - 2026-09-23 06:18: Trace accompanying profile-aligned REST permissions, token-bounded GraphQL and bounded raw replies. (authoring-run/0dffba8f-d16f-4f90-8fe2-893368f6926a - a2e94cf8ac2d94306f0701cee5457d1a9797e50a)
 

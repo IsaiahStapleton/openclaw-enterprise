@@ -97,6 +97,7 @@ export class GitHubRepoDriver implements RepoDriver {
   readonly capability = "repo" as const;
   readonly implementation = "github";
   readonly maintenanceIntervalMs = 30_000;
+  readonly durableBrokerReceipts = true as const;
   readonly id: string;
   readonly #backendId: string;
   readonly #registry: GitHubRepositoryRegistry;
@@ -207,6 +208,7 @@ export class GitHubRepoDriver implements RepoDriver {
           profile: input.binding.profile,
           durationSeconds: input.durationSeconds,
           deadlineWallMs: input.deadlineWallMs,
+          durableAdmission: true,
           ...(input.recoverOnly === true ? { recoverOnly: true } : {}),
         },
         input.admissionId,

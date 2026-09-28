@@ -58,22 +58,22 @@ export async function runService(
       loaded.close();
       process.exit(1);
     }, grace);
-    void pending.then(
-      async (summary) => {
+    void (async () => {
+      try {
+        const summary = await pending;
         await listeners.close();
         loaded.close();
         process.stdout.write(`${JSON.stringify({ event: "shutdown", ...summary })}\n`);
         clearTimeout(forced);
         process.exit(summary.graceExpired ? 1 : 0);
-      },
-      () => {
+      } catch {
         process.stderr.write(
           `${JSON.stringify({ event: "shutdown", graceExpired: true, unresolved: true })}\n`,
         );
         loaded.close();
         process.exit(1);
-      },
-    );
+      }
+    })();
   };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);

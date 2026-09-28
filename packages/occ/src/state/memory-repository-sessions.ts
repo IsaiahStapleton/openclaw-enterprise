@@ -4,6 +4,7 @@ import { ResourceConflictError, ScopeViolationError } from "../errors.ts";
 import type {
   RepositoryRevisionOwner,
   RepositorySessionAttempt,
+  RepositoryBrokerReceipt,
   RepositorySessionPhase,
   RepositorySessionRepository,
 } from "../ports/repository-sessions.ts";
@@ -41,6 +42,7 @@ function sameOwner(attempt: RepositorySessionAttempt, owner: RepositoryRevisionO
 /** The process-local adapter mirrors the database's constrained attempt lifecycle. */
 export function memoryRepositorySessions(
   attempts: Map<string, Readonly<RepositorySessionAttempt>>,
+  receipts: Map<string, Readonly<RepositoryBrokerReceipt>>,
   findRevision: (owner: RepositoryRevisionOwner) => Readonly<AgentRevision> | undefined,
   ownerAcceptsAdmission: (owner: RepositoryRevisionOwner) => boolean,
 ): RepositorySessionRepository {
@@ -75,6 +77,92 @@ export function memoryRepositorySessions(
   }
 
   return {
+    lockAttempt: async (admissionId) => {
+      const attempt = attempts.get(admissionId);
+      return attempt === undefined ? undefined : immutableCopy(attempt);
+    },
+    findBrokerReceipt: async (admissionId) => {
+      const receipt = receipts.get(admissionId);
+      return receipt === undefined ? undefined : immutableCopy(receipt);
+    },
+    findBrokerReceiptBySession: async (sessionId) => {
+      const receipt = Array.from(receipts.values()).find(
+        (candidate) => candidate.sessionId === sessionId,
+      );
+      return receipt === undefined ? undefined : immutableCopy(receipt);
+    },
+    createBrokerReceipt: async (input) => {
+      const attempt = attempts.get(input.admissionId);
+      if (
+        !attempt ||
+        attempt.brokerProtocol !== 1 ||
+        ["invalidated", "disposed"].includes(attempt.phase) ||
+        receipts.has(input.admissionId) ||
+        (input.state === "reserved" && (attempt.phase !== "opening" || !input.generation)) ||
+        (input.state === "fenced" &&
+          (input.generation !== undefined ||
+            attempt.phase === "open" ||
+            attempt.sessionId !== undefined))
+      ) {
+        throw new ScopeViolationError("The broker admission cannot be reserved or fenced.");
+      }
+      const receipt = immutableCopy(input);
+      receipts.set(input.admissionId, receipt);
+      return immutableCopy(receipt);
+    },
+    advanceBrokerReceipt: async (input) => {
+      const attempt = attempts.get(input.admissionId);
+      const current = receipts.get(input.admissionId);
+      if (
+        !current ||
+        current.state !== input.expectedState ||
+        current.generation !== input.generation
+      ) {
+        return undefined;
+      }
+      if (
+        !attempt ||
+        attempt.brokerProtocol !== 1 ||
+        ["invalidated", "disposed"].includes(attempt.phase) ||
+        !validIdentifier(input.sessionId) ||
+        !Number.isSafeInteger(input.deadlineWallMs) ||
+        input.deadlineWallMs <= 0 ||
+        input.deadlineWallMs > attempt.deadlineWallMs ||
+        (attempt.sessionId !== undefined && attempt.sessionId !== input.sessionId) ||
+        (current.sessionId !== undefined && current.sessionId !== input.sessionId) ||
+        (current.deadlineWallMs !== undefined && current.deadlineWallMs !== input.deadlineWallMs) ||
+        !(
+          (current.state === "reserved" &&
+            input.state === "active" &&
+            input.revoked === undefined &&
+            input.expired === undefined) ||
+          (current.state === "active" &&
+            input.state === "disposed" &&
+            typeof input.revoked === "number" &&
+            Number.isSafeInteger(input.revoked) &&
+            input.revoked >= 0 &&
+            typeof input.expired === "number" &&
+            Number.isSafeInteger(input.expired) &&
+            input.expired >= 0)
+        ) ||
+        Array.from(receipts.values()).some(
+          (other) => other.admissionId !== input.admissionId && other.sessionId === input.sessionId,
+        )
+      ) {
+        throw new ScopeViolationError("The broker receipt transition is invalid.");
+      }
+      const receipt = immutableCopy({
+        admissionId: input.admissionId,
+        state: input.state,
+        generation: input.generation,
+        sessionId: input.sessionId,
+        deadlineWallMs: input.deadlineWallMs,
+        ...(input.revoked === undefined ? {} : { revoked: input.revoked }),
+        ...(input.expired === undefined ? {} : { expired: input.expired }),
+      });
+      receipts.set(input.admissionId, receipt);
+      return immutableCopy(receipt);
+    },
     findAttempt: async (admissionId) => {
       const attempt = attempts.get(admissionId);
       return attempt === undefined ? undefined : immutableCopy(attempt);
@@ -123,6 +211,7 @@ export function memoryRepositorySessions(
         durationSeconds: input.durationSeconds,
         deadlineWallMs: input.deadlineWallMs,
         phase: "opening",
+        brokerProtocol: input.brokerProtocol ?? 0,
         createdAt,
         updatedAt: createdAt,
       };
@@ -138,6 +227,17 @@ export function memoryRepositorySessions(
       }
       const sessionId = input.sessionId === undefined ? current.sessionId : input.sessionId;
       const updatedAt = timestamp(input.updatedAt);
+      const receipt = receipts.get(input.admissionId);
+      if (
+        (receipt?.sessionId !== undefined &&
+          sessionId !== undefined &&
+          receipt.sessionId !== sessionId) ||
+        (current.brokerProtocol === 1 &&
+          input.phase === "disposed" &&
+          (receipt?.state !== "disposed" || receipt.sessionId !== sessionId))
+      ) {
+        throw new ScopeViolationError("The repository session does not match its broker receipt.");
+      }
       if (
         !transitions[current.phase].includes(input.phase) ||
         (sessionId !== undefined && !validIdentifier(sessionId)) ||

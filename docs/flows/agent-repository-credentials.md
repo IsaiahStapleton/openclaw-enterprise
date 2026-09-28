@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
-updated: 2026-09-26
-last_updated_session: authoring-run/c29b3860-d1f0-4a14-a264-49090586cb20
+updated: 2026-09-28
+last_updated_session: authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352
 ---
 
 # Agent repository credential flow
@@ -48,7 +48,8 @@ graph TD
   Worker -->|Denied or expired| Close["<b>Cleanup ownership</b><br/>Close exact attempts"]
   Worker --> Attempt["<b>Persist opening</b><br/>Before control request"]
   Attempt --> Service["<b>Private control</b><br/>Check bound registry grant"]
-  Service -->|Created once| New["<b>New material</b><br/>Record ID before delivery"]
+  Service --> Receipt["<b>Receipt journal</b><br/>Commit exact admission"]
+  Receipt -->|Acknowledged| New["<b>New material</b><br/>Record ID before delivery"]
   Service -->|Existing open session| Retained["<b>Retained material</b><br/>No bearer recovery"]
   Service -->|Lost response| Recover["<b>Recover only</b><br/>Find or fence, then close"]
   Recover -->|Never delivered or disposed| Attempt
@@ -72,7 +73,8 @@ graph TD
   Pod -->|Stop or retire| Close
   Close -->|Unavailable or pending| Queue["<b>Durable cleanup</b><br/>Retry without new admission"]
   Queue --> Close
-  Close -->|Disposed| Done["<b>Cleanup settled</b><br/>Retain immutable evidence"]
+  Close -->|Confirmed disposal| Terminal["<b>Terminal receipt</b><br/>Commit exact result"]
+  Terminal --> Done["<b>Cleanup settled</b><br/>Retain immutable evidence"]
   Pod -->|Delete Agent| Delete["<b>Agent deletion</b><br/>Close and retire Compute"]
   Delete --> Close
   Done -->|Deleting Agent| Finalize["<b>State finalizer</b><br/>Detach and remove live rows"]
@@ -80,7 +82,7 @@ graph TD
   classDef state fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
   classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
   classDef condition fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
-  class API,Revision,Attempt,Queue,FormLocked state
+  class API,Revision,Attempt,Queue,FormLocked,Receipt,Terminal state
   class Console,Options,Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
   class Recover,Repair,Refuse,Wait,ViewStop,CreateBlocked,OrdinaryRetry,Reselect,PushRefs,PushDenied condition
 ```
@@ -156,11 +158,8 @@ State stores recovery identifiers and phases, never bearers or client files.
 sends the bound request over the private socket. The service independently
 resolves and compares the grant through
 `apps/controller/src/drivers/repo/github/credentials/registry-factory.ts:createGitHubRegistryDriverFactory`.
-The client validates cleanup counts and terminal-state consistency before
-projecting private status and binding objects. `DISPOSED` permits historical
-revoked or expired counts, but no active uses, active/pending/uncertain
-credentials, or pending auxiliary work. Created-open, recovered-open, status and
-close all require validation before projection.
+The client validates each status before projection. `DISPOSED` permits historical
+revoked or expired counts, but no active, pending or uncertain obligations.
 
 Only a created control response contains the bearer. The concrete Driver encodes
 transient files with
@@ -179,8 +178,10 @@ the revision deadline. The admission transaction rechecks retained attempts unde
 Namespace/Agent locks. Validated `DISPOSED` observations persist without another
 close request, surviving service pruning.
 `apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`
-never reissues a bearer and records a cancellation fence for a missing fresh ID.
-Transport failure or overload cannot establish absence.
+reserves before releasing material. The worker's
+`apps/controller/src/backends/repository-credentials/receipt-store.ts:RepositoryReceiptStore`
+commits exact admission fences and original-broker terminal observations. Failure
+before terminal commit remains unknown; transport failure cannot establish absence.
 
 ### 4. Deliver and retain one complete runtime generation
 
@@ -280,8 +281,8 @@ fresh installation tokens under the same grant until the revision deadline.
 `apps/controller/src/worker.ts:ControllerWorker.completeActivatedRevision`
 commits completion and maintenance together, preserving the original actor.
 Repository revisions use the Driver's 30-second interval or a shorter Compute
-interval. Restart resumes queued work without inventing actors. After service
-restart, a missing known session is invalidated and cleanup Work remains.
+interval. Restart resumes queued work without inventing actors. A committed terminal
+receipt survives broker restart; a missing known session remains invalidated.
 `REPOSITORY_SESSION_RECOVERY_UNSAFE` permanently fails observation and queues
 runtime retirement; later workers cannot remint for that revision. An authorized user can
 deploy a new revision without settling old cleanup.
@@ -354,6 +355,8 @@ Slack or GitHub execution; Ready Pods and local commands do not prove live write
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 08:12: Trace durable broker terminal receipts and admission fencing. (authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352 - e06ff9625e72ff5ab3483a504a2f02a69a370cbb)
 
 - 2026-09-26 09:07: Replace the custom private-endpoint capability with stock Codex network settings and retain independent authorization boundaries. (authoring-run/c29b3860-d1f0-4a14-a264-49090586cb20 - 20123a3aa96021391616e918deee0ce60b009fa3)
   Removed the custom Codex private-endpoint requirement. (NOT_IN_SPEC)

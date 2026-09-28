@@ -422,6 +422,9 @@ export class RepositoryCredentialLifecycle {
         durationSeconds,
         deadlineWallMs,
         createdAt: new Date().toISOString(),
+        ...(this.driver(revision).durableBrokerReceipts === true
+          ? { brokerProtocol: 1 as const }
+          : {}),
       });
     });
     await this.authorize(claim, revision);

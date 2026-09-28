@@ -493,7 +493,7 @@ test(
     const api = named("Deployment", "openclaw-enterprise-api");
     const worker = named("Deployment", "openclaw-enterprise-worker");
     const workerPod = worker.spec.template.spec;
-    const controller = workerPod.containers.find(({ name }) => name === "worker");
+    const controller = workerPod.initContainers.find(({ name }) => name === "worker");
     const service = workerPod.containers.find(({ name }) => name === "repository-credentials");
     const mounts = (container) => container.volumeMounts.map(({ name }) => name);
 
@@ -543,7 +543,12 @@ test(
     assert.equal(workerPod.securityContext.runAsUser, 1000);
     assert.equal(workerPod.securityContext.runAsGroup, 1000);
     assert.equal(workerPod.securityContext.fsGroup, 1000);
-    assert.equal(workerPod.initContainers, undefined);
+    // Native sidecar termination follows broker termination, keeping receipt writes available.
+    assert.equal(controller.restartPolicy, "Always");
+    assert.deepEqual(
+      workerPod.initContainers.map(({ name }) => name),
+      ["worker"],
+    );
     const apiAccess = workerPod.volumes.find(({ name }) => name === "worker-api-access");
     assert.equal(apiAccess.projected.defaultMode, 0o440);
     assert.deepEqual(apiAccess.projected.sources, [
@@ -577,7 +582,7 @@ test(
         secretName: "repository-public-ca",
         items: [{ key: "ca.crt", path: "ca.crt" }],
       });
-      for (const container of pod.containers) {
+      for (const container of [...(pod.initContainers ?? []), ...pod.containers]) {
         assert.deepEqual(
           container.volumeMounts.find(({ name }) => name === "repository-registry"),
           {
@@ -587,7 +592,7 @@ test(
           },
         );
       }
-      const main = pod.containers[0];
+      const main = deployment === worker ? controller : pod.containers[0];
       assert.deepEqual(
         main.volumeMounts.find(({ name }) => name === "repository-public-ca"),
         {

@@ -99,6 +99,14 @@ const reviewedImports = {
   "drivers/repo/github/driver.ts": {
     "@openclaw-enterprise/occ": ["DependencyUnavailableError", "ScopeViolationError"],
   },
+  // The broker journal client writes only nonsecret receipts over a local Unix socket.
+  "drivers/repo/credentials/control.ts": { "node:crypto": ["randomUUID"] },
+  "drivers/repo/credentials/receipt-client.ts": { "node:http": ["request"] },
+  // The worker owns the private journal socket; parent and socket identity are checked.
+  "backends/repository-credentials/receipt-server.ts": {
+    "node:http": ["createServer"],
+    "node:fs/promises": ["chmod", "lstat", "mkdir", "realpath", "unlink"],
+  },
   "drivers/repo/credentials/lifecycle.ts": { "node:crypto": ["randomUUID"] },
   "drivers/repo/credentials/server.ts": {
     "node:fs/promises": ["chmod", "lstat", "realpath", "unlink"],
@@ -129,6 +137,9 @@ const senderConsumers = {
   },
   "drivers/repo/credentials/transport/upstream.ts": {
     "drivers/repo/credentials/transport/agent.ts": ["createUpstreamSender"],
+  },
+  "drivers/repo/credentials/receipt-client.ts": {
+    "drivers/repo/credentials/control.ts": ["RepositoryReceiptClient"],
   },
   "backends/repository-credentials/control-client.ts": {
     "composition/repository-credentials/platform.ts": ["UnixRepositoryCredentialControlClient"],
@@ -198,6 +209,7 @@ const reviewedProcessMembers = {
   "repository-credentials.ts": ["argv", "exitCode", "stderr", "stdout"],
   "repository-credentials.mjs": ["exitCode", "stderr"],
   "drivers/repo/credentials/server.ts": ["getuid"],
+  "backends/repository-credentials/receipt-server.ts": ["getuid"],
 };
 const runtimeTypeScript = new Set([
   "TSAsExpression",

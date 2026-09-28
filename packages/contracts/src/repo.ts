@@ -69,6 +69,8 @@ export type OpenRepositorySessionResult =
 export interface RepoDriver extends Driver {
   readonly capability: "repo";
   readonly maintenanceIntervalMs: number;
+  /** This Driver fences admission and retains confirmed terminal evidence durably. */
+  readonly durableBrokerReceipts?: true;
   listOptions(input: { readonly namespaceId: string }): readonly RepositoryOption[];
   resolve(input: {
     readonly namespaceId: string;

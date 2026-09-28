@@ -1,0 +1,411 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { createServer as createNetServer } from "node:net";
+import { request } from "node:https";
+import { setTimeout as delay } from "node:timers/promises";
+import test from "node:test";
+import pg from "pg";
+import { PostgresPlatformState, DependencyUnavailableError } from "../../packages/occ/src/index.ts";
+import { startRepositoryReceiptServer } from "../../apps/controller/src/backends/repository-credentials/receipt-server.ts";
+import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
+import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/backends/repository-credentials/control-client.ts";
+import {
+  seedSessionRevision,
+  sessionAttempt,
+} from "../conformance/repository-sessions.contract.mjs";
+import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
+import { run, temporaryDirectory } from "../fixtures/repository-credentials/process.mjs";
+import { appRoot, appExtension } from "../fixtures/repository-credentials/runtime.mjs";
+
+const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
+
+async function unusedPort() {
+  const server = createNetServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return port;
+}
+
+function useGateway(fixture, opened) {
+  return new Promise((resolve, reject) => {
+    const outgoing = request(
+      {
+        hostname: "127.0.0.1",
+        port: fixture.listeners.address.port,
+        path: "/repos/fixture/repository",
+        ca: fixture.tls.ca,
+        agent: false,
+        headers: {
+          host: "credentials.example.test",
+          authorization: `Bearer ${opened.files.bearer}`,
+        },
+      },
+      (incoming) => {
+        incoming.resume();
+        incoming.once("end", () => resolve(incoming.statusCode));
+      },
+    );
+    outgoing.once("error", reject);
+    outgoing.end();
+  });
+}
+
+test(
+  "confirmed broker disposal survives service restart in PostgreSQL",
+  {
+    skip: databaseUrl
+      ? false
+      : "Set OCC_TEST_DATABASE_URL to a disposable migrated PostgreSQL database.",
+    timeout: 60_000,
+  },
+  async (t) => {
+    const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+    t.after(() => pool.end());
+    const state = new PostgresPlatformState(pool);
+    const namespaceId = `ns_${randomUUID()}`;
+    const fixture = await startRegistryCredentialServiceFixture(t, {
+      namespaceId,
+      autoOpen: false,
+      gateway: { listen: `127.0.0.1:${await unusedPort()}` },
+    });
+    const client = new UnixRepositoryCredentialControlClient({
+      controlSocket: fixture.config.gateway.controlSocket,
+    });
+    const driver = new GitHubRepoDriver(
+      {
+        id: fixture.backendId,
+        client,
+        drivers: { repo: "repository-credentials" },
+      },
+      fixture.registry,
+      { sessionDurationSeconds: 3600, publicCa: fixture.tls.ca },
+    );
+    const binding = driver.resolve({
+      namespaceId,
+      bindings: [{ repositoryRef: "repo-a", profile: "git-full" }],
+    }).bindings[0];
+    const deadlineWallMs = fixture.clock.wallNow() + 3_600_000;
+    const { revision } = await seedSessionRevision(
+      state,
+      {
+        driver: { id: driver.id, implementation: driver.implementation },
+        deadlineWallMs,
+        bindings: [binding],
+      },
+      { namespaceId },
+    );
+    const admissionId = `${fixture.clock.wallNow()}-${randomUUID()}`;
+    const attempt = sessionAttempt(revision, {
+      repositoryRef: binding.repositoryRef,
+      admissionId,
+      durationSeconds: 3600,
+      brokerProtocol: 1,
+    });
+    await state.transact((unit) => unit.repositorySessions.createAttempt(attempt));
+    const receiptServer = await startRepositoryReceiptServer({
+      state,
+      controlSocket: fixture.config.gateway.controlSocket,
+      driverId: driver.id,
+      implementation: driver.implementation,
+      backendId: fixture.backendId,
+    });
+    t.after(() => receiptServer.close());
+    const signal = AbortSignal.timeout(30_000);
+    const openInput = { namespaceId, admissionId, binding, durationSeconds: 3600, deadlineWallMs };
+    const opened = await driver.open(openInput, signal);
+    assert.equal(opened.kind, "created");
+    const sessionId = opened.session.sessionId;
+    await state.transact((unit) =>
+      unit.repositorySessions.advanceAttempt({
+        admissionId,
+        expectedPhase: "opening",
+        phase: "open",
+        sessionId,
+        updatedAt: revision.createdAt,
+      }),
+    );
+    assert.equal(
+      (await state.read((view) => view.repositorySessions.findBrokerReceipt(admissionId))).state,
+      "active",
+    );
+    await assert.rejects(
+      pool.query(
+        "UPDATE occ.repository_broker_receipts SET generation = $2 WHERE admission_id = $1",
+        [admissionId, randomUUID()],
+      ),
+      { code: "42501" },
+    );
+    await assert.rejects(
+      pool.query("DELETE FROM occ.repository_broker_receipts WHERE admission_id = $1", [
+        admissionId,
+      ]),
+      { code: "42501" },
+    );
+    await assert.rejects(
+      pool.query("UPDATE occ.repository_broker_receipts SET session_id=$2 WHERE admission_id=$1", [
+        admissionId,
+        `replacement-${randomUUID()}`,
+      ]),
+      { code: "23514" },
+    );
+    // A genuine provider request creates revocable authority; cleanup must finish
+    // before the journal can publish the terminal observation.
+    assert.equal(await useGateway(fixture, opened), 200);
+    await state.transact((unit) =>
+      unit.repositorySessions.advanceAttempt({
+        admissionId,
+        expectedPhase: "open",
+        phase: "closing",
+        updatedAt: revision.createdAt,
+      }),
+    );
+    await assert.rejects(
+      pool.query(
+        "UPDATE occ.repository_session_attempts SET phase='disposed' WHERE admission_id=$1",
+        [admissionId],
+      ),
+      { code: "23514" },
+    );
+    await driver.close(sessionId, signal);
+    let confirmed;
+    for (let i = 0; i < 100; i++) {
+      confirmed = await driver.status(sessionId, signal);
+      if (confirmed?.state === "DISPOSED") {
+        break;
+      }
+      await delay(20);
+    }
+    assert.equal(confirmed?.state, "DISPOSED");
+    const beforeRestart = await state.read((view) =>
+      view.repositorySessions.findBrokerReceipt(admissionId),
+    );
+    assert.equal(beforeRestart.state, "disposed");
+    assert.equal(beforeRestart.sessionId, sessionId);
+    assert.ok(beforeRestart.revoked > 0);
+    const issued = fixture.repositories[0].github.issuesOfTokens.length;
+    await fixture.restart();
+    assert.deepEqual(await driver.status(sessionId, signal), confirmed);
+    const recovered = await driver.open({ ...openInput, recoverOnly: true }, signal);
+    assert.equal(recovered.kind, "recovered");
+    assert.deepEqual(recovered.status, confirmed);
+    // The supported operator's bound request uses the same durable protocol.
+    const directory = await temporaryDirectory(t, "receipt-operator-");
+    const requestFile = join(directory, "request.json");
+    await writeFile(
+      requestFile,
+      JSON.stringify({
+        namespaceId,
+        repositoryRef: binding.repositoryRef,
+        profile: binding.profile,
+        expectedBinding: binding.grant,
+        durationSeconds: 3600,
+        deadlineWallMs,
+        recoverOnly: true,
+      }),
+      { mode: 0o600 },
+    );
+    const operator = join(
+      appRoot,
+      "drivers/repo/github/credentials/client",
+      `operator.${appExtension}`,
+    );
+    const result = await run(process.execPath, [
+      operator,
+      "open",
+      "--socket",
+      fixture.config.gateway.controlSocket,
+      "--request-json",
+      requestFile,
+      "--output",
+      join(directory, "session"),
+      "--admission-id",
+      admissionId,
+    ]);
+    const operatorStatus = JSON.parse(result.stdout);
+    assert.equal(operatorStatus.recovered, true);
+    assert.equal(operatorStatus.state, "DISPOSED");
+    assert.equal(operatorStatus.sessionId, sessionId);
+    assert.equal(fixture.repositories[0].github.issuesOfTokens.length, issued);
+    await state.transact((unit) =>
+      unit.repositorySessions.advanceAttempt({
+        admissionId,
+        expectedPhase: "closing",
+        phase: "disposed",
+        sessionId,
+        updatedAt: revision.createdAt,
+      }),
+    );
+    await assert.rejects(
+      driver.open(
+        {
+          ...openInput,
+          binding: { ...binding, grant: { ...binding.grant, grantId: "wrong" } },
+          recoverOnly: true,
+        },
+        signal,
+      ),
+      DependencyUnavailableError,
+    );
+
+    // Graceful broker shutdown must join receipt writes after revoking authority,
+    // even when no caller requests terminal status before the service exits.
+    const shutdownId = `${fixture.clock.wallNow()}-${randomUUID()}`;
+    const shutdownInput = { ...openInput, admissionId: shutdownId };
+    await state.transact((unit) =>
+      unit.repositorySessions.createAttempt(
+        sessionAttempt(revision, {
+          repositoryRef: binding.repositoryRef,
+          admissionId: shutdownId,
+          durationSeconds: 3600,
+          brokerProtocol: 1,
+        }),
+      ),
+    );
+    const shutdownOpened = await driver.open(shutdownInput, signal);
+    assert.equal(shutdownOpened.kind, "created");
+    await state.transact((unit) =>
+      unit.repositorySessions.advanceAttempt({
+        admissionId: shutdownId,
+        expectedPhase: "opening",
+        phase: "open",
+        sessionId: shutdownOpened.session.sessionId,
+        updatedAt: revision.createdAt,
+      }),
+    );
+    assert.equal(await useGateway(fixture, shutdownOpened), 200);
+    const lock = await pool.connect();
+    let restartCompleted = false;
+    let restarting;
+    try {
+      // Hold the real receipt row so the terminal write cannot commit while the
+      // broker tries to exit; shutdown must wait for the durable acknowledgment.
+      await lock.query("BEGIN");
+      await lock.query(
+        "SELECT admission_id FROM occ.repository_broker_receipts WHERE admission_id = $1 FOR UPDATE",
+        [shutdownId],
+      );
+      restarting = fixture.restart().then(() => {
+        restartCompleted = true;
+      });
+      void restarting.catch(() => {});
+      let blocked = false;
+      for (let i = 0; i < 100; i++) {
+        const result = await pool.query(
+          "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%repository_broker_receipts%') AS blocked",
+        );
+        if (result.rows[0].blocked) {
+          blocked = true;
+          break;
+        }
+        await delay(20);
+      }
+      assert.equal(blocked, true, "the terminal receipt write must reach PostgreSQL");
+      assert.equal(restartCompleted, false, "broker shutdown must wait for receipt commit");
+    } finally {
+      await lock.query("ROLLBACK");
+      lock.release();
+    }
+    await restarting;
+    const shutdownReceipt = await state.read((view) =>
+      view.repositorySessions.findBrokerReceipt(shutdownId),
+    );
+    assert.equal(shutdownReceipt.state, "disposed");
+    assert.equal(shutdownReceipt.sessionId, shutdownOpened.session.sessionId);
+    assert.ok(shutdownReceipt.revoked > 0);
+    assert.equal((await driver.status(shutdownOpened.session.sessionId, signal)).state, "DISPOSED");
+    await state.transact((unit) =>
+      unit.repositorySessions.advanceAttempt({
+        admissionId: shutdownId,
+        expectedPhase: "open",
+        phase: "closing",
+        updatedAt: revision.createdAt,
+      }),
+    );
+    await state.transact((unit) =>
+      unit.repositorySessions.advanceAttempt({
+        admissionId: shutdownId,
+        expectedPhase: "closing",
+        phase: "disposed",
+        sessionId: shutdownOpened.session.sessionId,
+        updatedAt: revision.createdAt,
+      }),
+    );
+    const issuedAfterShutdown = fixture.repositories[0].github.issuesOfTokens.length;
+
+    // A recovery lookup that commits a fence first prevents a delayed open,
+    // including after the service owner is replaced.
+    const fencedId = `${fixture.clock.wallNow()}-${randomUUID()}`;
+    const fencedInput = { ...openInput, admissionId: fencedId };
+    await state.transact((unit) =>
+      unit.repositorySessions.createAttempt(
+        sessionAttempt(revision, {
+          repositoryRef: binding.repositoryRef,
+          admissionId: fencedId,
+          durationSeconds: 3600,
+          brokerProtocol: 1,
+        }),
+      ),
+    );
+    assert.deepEqual(await driver.open({ ...fencedInput, recoverOnly: true }, signal), {
+      kind: "missing",
+    });
+    assert.deepEqual(await driver.open(fencedInput, signal), { kind: "missing" });
+    assert.equal(
+      (await state.read((view) => view.repositorySessions.findBrokerReceipt(fencedId))).state,
+      "fenced",
+    );
+    await fixture.restart();
+    assert.deepEqual(await driver.open(fencedInput, signal), { kind: "missing" });
+    assert.equal(fixture.repositories[0].github.issuesOfTokens.length, issuedAfterShutdown);
+    await state.transact((unit) =>
+      unit.repositorySessions.advanceAttempt({
+        admissionId: fencedId,
+        expectedPhase: "opening",
+        phase: "invalidated",
+        updatedAt: revision.createdAt,
+      }),
+    );
+
+    // A persisted session identity with missing journal evidence is uncertain,
+    // even when a recovery lookup races with the original broker.
+    const knownId = `${fixture.clock.wallNow()}-${randomUUID()}`;
+    await state.transact((unit) =>
+      unit.repositorySessions.createAttempt(
+        sessionAttempt(revision, {
+          repositoryRef: binding.repositoryRef,
+          admissionId: knownId,
+          durationSeconds: 3600,
+          brokerProtocol: 1,
+        }),
+      ),
+    );
+    await state.transact((unit) =>
+      unit.repositorySessions.advanceAttempt({
+        admissionId: knownId,
+        expectedPhase: "opening",
+        phase: "open",
+        sessionId: `known-${randomUUID()}`,
+        updatedAt: revision.createdAt,
+      }),
+    );
+    await assert.rejects(
+      pool.query(
+        "INSERT INTO occ.repository_broker_receipts (admission_id,state) VALUES ($1,'fenced')",
+        [knownId],
+      ),
+      { code: "23514" },
+    );
+    await assert.rejects(
+      driver.open({ ...openInput, admissionId: knownId, recoverOnly: true }, signal),
+      DependencyUnavailableError,
+    );
+  },
+);

@@ -1,3 +1,5 @@
+import { startReceiptState } from "../fixtures/repository-credentials/receipt-state.mjs";
+import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
@@ -84,6 +86,7 @@ test(
   { timeout: 30000 },
   async (t) => {
     const fixture = await startRegistryCredentialServiceFixture(t, {
+      namespaceId: `ns_${randomUUID()}`,
       autoOpen: false,
       repositories: defaultRegistryRepositories.map((entry) =>
         entry.repositoryRef === "repo-b"
@@ -127,21 +130,26 @@ test(
     // This exact registry used to admit the narrower git-write grant under this
     // digest. The real Driver/control/service join must reject its stale authority
     // before either repository's provider sees acquisition or exchange traffic.
+    const deadlineWallMs = fixture.clock.wallNow() + 1800_000;
+    const receipts = await startReceiptState(t, fixture, resolution.bindings, deadlineWallMs);
+    const staleId = `${fixture.clock.wallNow()}-${randomUUID()}`;
+    await receipts.prepare(staleId, contributor.repositoryRef, 3600);
     const legacyGrant = "sha256:94c2dc4513de2fa4a6f885c7fd2f857110510100111cb4f4424db6ddf8d37ae5";
     assert.notEqual(contributor.grant.grantId, legacyGrant);
     await assert.rejects(
       driver.open(
         {
           namespaceId: fixture.namespaceId,
-          admissionId: `${fixture.clock.wallNow()}-${randomUUID()}`,
+          admissionId: staleId,
           binding: { ...contributor, grant: { ...contributor.grant, grantId: legacyGrant } },
           durationSeconds: 3600,
-          deadlineWallMs: fixture.clock.wallNow() + 1800_000,
+          deadlineWallMs,
         },
         signal,
       ),
-      ScopeViolationError,
+      DependencyUnavailableError,
     );
+    await receipts.advance(staleId, "opening", "invalidated");
     assert.ok(
       fixture.repositories.every(
         (entry) => entry.github.trace.length === 0 && entry.github.issuesOfTokens.length === 0,
@@ -152,9 +160,20 @@ test(
       admissionId: `${fixture.clock.wallNow()}-${randomUUID()}`,
       binding,
       durationSeconds: 3600,
-      deadlineWallMs: fixture.clock.wallNow() + 1800_000,
+      deadlineWallMs,
     }));
+    for (const input of inputs) {
+      await receipts.prepare(input.admissionId, input.binding.repositoryRef, input.durationSeconds);
+    }
     const opened = await Promise.all(inputs.map((input) => driver.open(input, signal)));
+    for (let index = 0; index < opened.length; index++) {
+      await receipts.advance(
+        inputs[index].admissionId,
+        "opening",
+        "open",
+        opened[index].session.sessionId,
+      );
+    }
     for (let index = 0; index < opened.length; index++) {
       assert.equal(opened[index].kind, "created");
       const result = opened[index];
@@ -220,7 +239,13 @@ test(
       driver.open({ ...inputs[0], durationSeconds: 3599 }, signal),
       ScopeViolationError,
     );
+    await receipts.advance(inputs[0].admissionId, "open", "closing");
     const fenced = { ...inputs[0], admissionId: `${fixture.clock.wallNow()}-${randomUUID()}` };
+    await receipts.prepare(
+      fenced.admissionId,
+      fenced.binding.repositoryRef,
+      fenced.durationSeconds,
+    );
     assert.deepEqual(await driver.open({ ...fenced, recoverOnly: true }, signal), {
       kind: "missing",
     });
@@ -237,17 +262,30 @@ test(
     );
     await assert.rejects(changedProvider.open(inputs[0], signal), ScopeViolationError);
 
+    await receipts.advance(inputs[1].admissionId, "open", "closing");
     for (let index = 0; index < opened.length; index++) {
       const closed = await driver.close(opened[index].session.sessionId, signal);
       assertPublicStatus(closed, inputs[index].binding.grant);
       assert.notEqual(closed.state, "OPEN");
     }
 
+    for (const result of opened) {
+      let status;
+      for (let index = 0; index < 100; index++) {
+        status = await driver.status(result.session.sessionId, signal);
+        if (status?.state === "DISPOSED") {
+          break;
+        }
+        await delay(20);
+      }
+      assert.equal(status?.state, "DISPOSED");
+    }
     await fixture.restart();
-    assert.equal(await driver.status(opened[0].session.sessionId, signal), undefined);
-    assert.deepEqual(await driver.open({ ...inputs[0], recoverOnly: true }, signal), {
-      kind: "missing",
-    });
+    assert.equal((await driver.status(opened[0].session.sessionId, signal)).state, "DISPOSED");
+    assert.equal(
+      (await driver.open({ ...inputs[0], recoverOnly: true }, signal)).kind,
+      "recovered",
+    );
     await assert.rejects(
       local.status(opened[0].session.sessionId, signal),
       DependencyUnavailableError,

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, isIPv4 } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { signInWithEmailPassword, authenticatedHeaders } from "./auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "./harness-configuration.mjs";
@@ -597,7 +597,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   });
   diagnostic.stage = "control-relay-startup";
   const control = await startControlResponseRelay(scope, {
-    directory,
+    directory: dirname(credentialsFixture.config.gateway.controlSocket),
     target: credentialsFixture.config.gateway.controlSocket,
   });
   scope.after(stopProcesses);

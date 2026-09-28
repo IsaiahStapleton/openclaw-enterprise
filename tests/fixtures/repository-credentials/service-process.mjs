@@ -9,7 +9,13 @@ import { createControlledClock } from "./clock.mjs";
 import { cleanEnvironment, createTlsMaterial } from "./process.mjs";
 import { createResourceScope } from "./resources.mjs";
 import { createServiceConfiguration } from "./service.mjs";
-import { startGitHubFixture, fixtureInstallationId } from "./github.mjs";
+import {
+  startGitHubFixture,
+  fixtureInstallationId,
+  fixtureRepository,
+  fixtureRepositoryId,
+} from "./github.mjs";
+import { createRegistryMaterial } from "./registry/material.mjs";
 
 async function within(promise, message, timeoutMs = 5000) {
   let timer;
@@ -105,7 +111,10 @@ function launchService(resources) {
   };
 }
 
-export async function startServiceProcessFixture(t, { holdIssuance = false } = {}) {
+export async function startServiceProcessFixture(
+  t,
+  { holdIssuance = false, revokeStatus = 204, bound = false } = {},
+) {
   const resources = createResourceScope();
   const ownedDirectories = [];
   t.after(async () => {
@@ -128,14 +137,58 @@ export async function startServiceProcessFixture(t, { holdIssuance = false } = {
   const gate = new Promise((resolve) => {
     release = resolve;
   });
+  const registryMaterial = bound
+    ? await createRegistryMaterial(resources, {
+        definitions: [
+          {
+            repositoryRef: "repo-a",
+            repository: fixtureRepository,
+            repositoryId: fixtureRepositoryId,
+          },
+        ],
+        namespaceId: "namespace-fixture",
+        backendId: "github-fixture",
+        maximumDurationSeconds: 172800,
+      })
+    : undefined;
+  if (registryMaterial) {
+    ownedDirectories.push(registryMaterial.directory);
+  }
   const github = await startGitHubFixture(resources, {
     clock,
     tls,
+    keyPair: registryMaterial?.keyPair,
+    revokeStatus,
     beforeIssueResponse: () => accepted(),
     issueResponseGate: holdIssuance ? () => gate : undefined,
   });
   resources.after(release);
   const { callControl } = await appModule("drivers/repo/github/credentials/client/operator");
+  let input = { durationSeconds: 86400, profile: "git-full" };
+  if (registryMaterial) {
+    const { loadGitHubRepositoryRegistry } = await appModule(
+      "composition/repository-credentials/registry",
+    );
+    const { resolveGitHubRepositoryBinding } = await appModule(
+      "drivers/repo/github/credentials/registry",
+    );
+    const registry = await loadGitHubRepositoryRegistry(
+      registryMaterial.registryFile,
+      "github-fixture",
+    );
+    const binding = resolveGitHubRepositoryBinding(registry, {
+      namespaceId: "namespace-fixture",
+      repositoryRef: "repo-a",
+      profile: "git-full",
+    });
+    input = {
+      ...input,
+      namespaceId: "namespace-fixture",
+      repositoryRef: binding.repositoryRef,
+      expectedBinding: binding.grant,
+      deadlineWallMs: clock.wallNow() + 86400000,
+    };
+  }
   let processOwner;
   let generation;
   let socketIdentity;
@@ -149,6 +202,12 @@ export async function startServiceProcessFixture(t, { holdIssuance = false } = {
       origin: github.origin,
       privateKey: github.privateKey.export({ type: "pkcs8", format: "pem" }),
       wallMs: clock.wallNow(),
+      ...(registryMaterial
+        ? {
+            registryFile: registryMaterial.registryFile,
+            privateKeyFile: registryMaterial.privateKeyFile,
+          }
+        : {}),
     });
     socketIdentity = await lstat(config.gateway.controlSocket);
     return generation;
@@ -168,11 +227,12 @@ export async function startServiceProcessFixture(t, { holdIssuance = false } = {
     await unlink(config.gateway.controlSocket);
     return death;
   }
-  const control = (method, path, body) =>
+  const admissionId = () => `${clock.wallNow()}-${randomUUID()}`;
+  const control = (method, path, body, id = admissionId()) =>
     callControl(
       config.gateway.controlSocket,
       { method, path, ...(body === undefined ? {} : { body }) },
-      `${clock.wallNow()}-${randomUUID()}`,
+      id,
     );
   await start();
   return {
@@ -181,7 +241,18 @@ export async function startServiceProcessFixture(t, { holdIssuance = false } = {
     start,
     kill,
     generation: () => generation,
-    open: () => control("POST", "/v1/sessions", { durationSeconds: 86400, profile: "git-full" }),
+    admissionId,
+    open: (id, recoverOnly = false, durableAdmission = false) =>
+      control(
+        "POST",
+        "/v1/sessions",
+        {
+          ...input,
+          ...(recoverOnly ? { recoverOnly } : {}),
+          ...(durableAdmission ? { durableAdmission } : {}),
+        },
+        id,
+      ),
     status: (id) => control("GET", `/v1/sessions/${id}`),
     close: (id) => control("POST", `/v1/sessions/${id}/close`),
     waitForIssuance: () => within(issuanceAccepted, "provider issuance gate was not reached"),
@@ -192,9 +263,9 @@ export async function startServiceProcessFixture(t, { holdIssuance = false } = {
       );
       release();
     },
-    async advance(milliseconds) {
-      await clock.advance(milliseconds);
-      const result = await processOwner.call("advance", { milliseconds });
+    async advance(milliseconds, wallDelta = milliseconds) {
+      await clock.advance(milliseconds, wallDelta);
+      const result = await processOwner.call("advance", { milliseconds, wallDelta });
       assert.equal(result.wallMs, clock.wallNow());
     },
     request(opened) {

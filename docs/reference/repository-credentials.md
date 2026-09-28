@@ -65,16 +65,12 @@ inventory and `invalidated` attempts retain cleanup Work and the deleting Agent.
 Deadlines do not settle provider cleanup. Evidence pruning and durable token
 recovery are unimplemented.
 
-Worker restart can retain surviving service sessions and Compute material.
-Known closing sessions block same-revision replacement, including Compute repair,
-with retryable `REPOSITORY_CLEANUP_PENDING` until confirmed `DISPOSED`. Existing
-Work bounds and the original revision deadline still apply. Missing exposed
-sessions remain irrecoverable: `REPOSITORY_SESSION_RECOVERY_UNSAFE` fails the
-revision and queues runtime retirement while retaining cleanup. Never-delivered openings
-without a recorded session ID remain recoverable; known sessions require disposal
-before replacement. Users may explicitly deploy a new authorized revision. This
-neither settles old cleanup nor replays Git/API mutations; credential disposal
-does not establish their outcomes.
+Worker restart can retain surviving sessions and Compute material. A broker may
+recover an exact `DISPOSED` observation committed by the original broker before
+it exited. Active or uncertain sessions lost before that commit remain unknown;
+missing exposed sessions fail the revision and retain cleanup. Closing sessions
+block replacement until disposal. Users may deploy a new authorized revision;
+this neither settles old cleanup nor replays Git/API mutations.
 
 ## Configuration
 
@@ -239,20 +235,19 @@ status only. Conflicts fail. Follow
 [lost-response recovery](../guides/repository-credentials.md#recover-an-admission)
 before explicitly requesting replacement material.
 
-Platform admission additionally requires `namespaceId`, `repositoryRef`,
-normalized `profile`, `expectedBinding` and `deadlineWallMs`. Replays must match
-all original fields. `recoverOnly: true` may return status or
-`admission-missing`, never create a session. A missing lookup fences a delayed
-first-open using that still-fresh ID. Capacity or transport failure remains an
-error, not evidence of absence.
+Platform admission binds `namespaceId`, `repositoryRef`, normalized `profile`,
+`expectedBinding` and `deadlineWallMs` to the persisted attempt. The worker's
+private receipt socket commits a reservation before the broker releases a bearer.
+A recovery-only lookup can durably fence a missing admission; a reservation or
+active session without a confirmed terminal receipt remains unknown. Only the
+original broker can record its exact `DISPOSED` result. Receipts contain no
+credentials and remain with attempt history. Journal failure prevents new bound
+admission and cannot establish absence or disposal.
 
-Unseen IDs must be less than 60 seconds old, never future-dated. Process-local
-correlations, including tombstones, are bounded to twice the session limit;
-churn can return `overloaded`. Existing correlations retain status beyond that
-window and session deadline while cleanup is unresolved. Disposal or authoritative
-absence permits reclamation. Unknown stale IDs cannot create sessions:
-lookup returns `admission-missing`; absent-session status returns `not-found`.
-Correlations retain no recoverable bearer and do not survive restart.
+Unseen IDs must be less than 60 seconds old and never future-dated. Process-local
+correlations are bounded to twice the session limit and can return `overloaded`.
+Existing correlations survive that window while cleanup remains unresolved.
+Standalone correlations do not survive service restart; no correlation recovers a bearer.
 
 Session duration is independent of token lifetime. On-demand replacement uses
 the original grant and requires validity through the remaining exchange budget
