@@ -859,15 +859,54 @@ test(
     const installation = join(directory, "installation.json");
     const kubeconfig = join(directory, "kubeconfig");
     const key = join(directory, "key");
-    for (const path of [installation, kubeconfig, key]) {
-      await writeFile(path, "{}", { mode: 0o600 });
+    // The upgrade helper compares the protected Installation with its live Secret.
+    const installationDocument = loadYaml(
+      await readFile(
+        new URL("../../deploy/examples/production/installation.yaml", import.meta.url),
+        "utf8",
+      ),
+    );
+    installationDocument.backend = [
+      {
+        id: "github-primary",
+        type: "github",
+        configuration: { registryPath: "/etc/openclaw/repository-registry/registry.json" },
+        drivers: { repo: "repository-credentials" },
+      },
+    ];
+    installationDocument.drivers.repo = {
+      id: "repository-credentials",
+      configuration: {
+        controlSocket: "/run/openclaw/repository-control/private/control.sock",
+        sessionDurationSeconds: 86400,
+        publicCaPath: "/etc/openclaw/repository-ca/ca.crt",
+      },
+    };
+    installationDocument.drivers.compute.configuration.network.repositoryCredentials = {
+      namespace: "openclaw-system",
+      podLabels: {
+        "app.kubernetes.io/name": "openclaw-enterprise",
+        "app.kubernetes.io/instance": "oce",
+        "app.kubernetes.io/component": "worker",
+      },
+      port: 8443,
+    };
+    await writeFile(installation, JSON.stringify(installationDocument), { mode: 0o600 });
+    for (const path of [kubeconfig, key]) {
+      await writeFile(path, "fixture", { mode: 0o600 });
     }
     const secret = join(directory, "secret.json");
     await writeFile(
       secret,
       JSON.stringify({
-        metadata: { annotations: { "openclaw.dev/installation-id": "ins_test" } },
-        data: { "installation.yaml": Buffer.from("{}").toString("base64") },
+        metadata: {
+          uid: "secret-uid",
+          resourceVersion: "1",
+          annotations: { "openclaw.dev/installation-id": "ins_test" },
+        },
+        data: {
+          "installation.yaml": Buffer.from(JSON.stringify(installationDocument)).toString("base64"),
+        },
       }),
       { mode: 0o600 },
     );
@@ -888,7 +927,7 @@ printf '{"id":"ins_test"}'
       helm: `#!/usr/bin/env bash
 case "$1 $2" in
   'get values') cat "$TEST_LIVE_VALUES" ;;
-  'status oce') printf 'deployed' ;;
+  'status oce') if [[ "$*" == *'--output json'* ]]; then printf '{"version":1,"info":{"status":"deployed"}}'; else printf 'deployed'; fi ;;
   'template oce') exec "$TEST_REAL_HELM" "$@" ;;
   'upgrade --install') exit 47 ;;
   *) exit 91 ;;
