@@ -392,6 +392,12 @@ export class RepositoryCredentialLifecycle {
     revision: Revision,
     binding: AdmittedRepositoryBinding,
   ): Promise<RepositoryCredentialRuntimeBinding> {
+    const driver = this.driver(revision);
+    if (driver.checkAdmissionReady !== undefined) {
+      await this.dependencies.effect(claim, (signal) =>
+        driver.checkAdmissionReady!(AbortSignal.any([signal, AbortSignal.timeout(2000)])),
+      );
+    }
     const attempt = await this.authorizedTransaction(claim, revision, async (unit) => {
       const attempts = await unit.repositorySessions.listRevisionAttempts(owner(revision));
       assertRepositorySessionCanOpen(attempts, binding.repositoryRef);
@@ -410,6 +416,9 @@ export class RepositoryCredentialLifecycle {
         durationSeconds,
         deadlineWallMs,
         createdAt: new Date().toISOString(),
+        ...(this.driver(revision).durableBrokerReceipts === true
+          ? { brokerProtocol: 1 as const }
+          : {}),
       });
     });
     await this.authorize(claim, revision);

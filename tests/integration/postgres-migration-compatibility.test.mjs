@@ -1472,6 +1472,7 @@ test(
       before.map(({ value }) => ({
         value: {
           ...value,
+          broker_protocol: 0,
           live_revision_id: revisionId,
           cleanup_context: { driver: snapshot.driver, binding: snapshot.bindings[0] },
         },

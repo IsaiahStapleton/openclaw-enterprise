@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
-updated: 2026-09-26
-last_updated_session: authoring-run/c29b3860-d1f0-4a14-a264-49090586cb20
+updated: 2026-09-28
+last_updated_session: "01a0e6ca-0480-79a1-ab5d-31a7cfb42228"
 ---
 
 # Agent repository credential flow
@@ -46,9 +46,12 @@ graph TD
   API --> Revision["<b>Deploy revision</b><br/>Freeze grants and deadline"]
   Revision --> Worker["<b>Claimed worker</b><br/>Recheck actor and policy"]
   Worker -->|Denied or expired| Close["<b>Cleanup ownership</b><br/>Close exact attempts"]
-  Worker --> Attempt["<b>Persist opening</b><br/>Before control request"]
+  Worker --> Capability["<b>Check capability</b><br/>Fresh admissions only"]
+  Capability -->|Available| Attempt["<b>Persist opening</b><br/>Before control request"]
+  Capability -->|Unavailable| Blocked["<b>Block new admission</b><br/>Worker stays unready"]
   Attempt --> Service["<b>Private control</b><br/>Check bound registry grant"]
-  Service -->|Created once| New["<b>New material</b><br/>Record ID before delivery"]
+  Service --> Receipt["<b>Receipt journal</b><br/>Commit exact admission"]
+  Receipt -->|Acknowledged| New["<b>New material</b><br/>Record ID before delivery"]
   Service -->|Existing open session| Retained["<b>Retained material</b><br/>No bearer recovery"]
   Service -->|Lost response| Recover["<b>Recover only</b><br/>Find or fence, then close"]
   Recover -->|Never delivered or disposed| Attempt
@@ -72,7 +75,8 @@ graph TD
   Pod -->|Stop or retire| Close
   Close -->|Unavailable or pending| Queue["<b>Durable cleanup</b><br/>Retry without new admission"]
   Queue --> Close
-  Close -->|Disposed| Done["<b>Cleanup settled</b><br/>Retain immutable evidence"]
+  Close -->|Confirmed disposal| Terminal["<b>Terminal receipt</b><br/>Commit exact result"]
+  Terminal --> Done["<b>Cleanup settled</b><br/>Retain immutable evidence"]
   Pod -->|Delete Agent| Delete["<b>Agent deletion</b><br/>Close and retire Compute"]
   Delete --> Close
   Done -->|Deleting Agent| Finalize["<b>State finalizer</b><br/>Detach and remove live rows"]
@@ -80,9 +84,9 @@ graph TD
   classDef state fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
   classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
   classDef condition fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
-  class API,Revision,Attempt,Queue,FormLocked state
+  class API,Revision,Attempt,Queue,FormLocked,Receipt,Terminal state
   class Console,Options,Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
-  class Recover,Repair,Refuse,Wait,ViewStop,CreateBlocked,OrdinaryRetry,Reselect,PushRefs,PushDenied condition
+  class Recover,Repair,Refuse,Wait,ViewStop,CreateBlocked,OrdinaryRetry,Reselect,PushRefs,PushDenied,Capability,Blocked condition
 ```
 
 ## Execution Trace
@@ -144,23 +148,20 @@ sidecar launch; the service validates protected inputs before listening.
 ### 3. Record ownership before opening a session
 
 `apps/controller/src/worker/repository-credentials.ts:RepositoryCredentialLifecycle.prepare`
-rechecks the original actor, ready Namespace, running Agent, exact revision,
-selected Driver, unchanged grant and deadline. Each fresh attempt commits its
-request identity in State under the live work claim and Namespace/Agent locks before
-dispatch. State derives immutable cleanup context from the admitted Driver and
-binding, and rejects new attempts for stopped or deleting owners.
-`RepositoryCredentialLifecycle.open` calls the Driver outside the transaction.
-State stores recovery identifiers and phases, never bearers or client files.
+rechecks actor, Namespace, Agent, revision, Driver, grant and deadline. Before a
+fresh attempt, `GitHubRepoDriver.checkAdmissionReady` checks the broker capability
+with a bounded request. The worker also checks it before refreshing readiness.
+An unavailable capability blocks fresh admission, but not recovery or cleanup.
+Under the live claim and Namespace/Agent locks, State records the attempt and
+immutable cleanup context before the Driver call. It rejects stopped or deleting
+owners and stores identifiers and phases, never bearers or client files.
 
 `apps/controller/src/backends/repository-credentials/control-client.ts:UnixRepositoryCredentialControlClient`
 sends the bound request over the private socket. The service independently
 resolves and compares the grant through
 `apps/controller/src/drivers/repo/github/credentials/registry-factory.ts:createGitHubRegistryDriverFactory`.
-The client validates cleanup counts and terminal-state consistency before
-projecting private status and binding objects. `DISPOSED` permits historical
-revoked or expired counts, but no active uses, active/pending/uncertain
-credentials, or pending auxiliary work. Created-open, recovered-open, status and
-close all require validation before projection.
+The client validates each status before projection. `DISPOSED` permits historical
+revoked or expired counts, but no active, pending or uncertain obligations.
 
 Only a created control response contains the bearer. The concrete Driver encodes
 transient files with
@@ -172,15 +173,14 @@ session ID before passing files through
 A confirmed open session yields a `retained` binding without files. Unfinished
 openings use `recoverOnly` to find or fence admission and close recovered sessions.
 Fresh material requires confirmed disposal or a missing opening without a recorded
-session ID. Invalidated known sessions block automatic same-revision replacement.
-Closing sessions raise retryable
-`REPOSITORY_CLEANUP_PENDING`; replacement awaits disposal within Work bounds and
-the revision deadline. The admission transaction rechecks retained attempts under
-Namespace/Agent locks. Validated `DISPOSED` observations persist without another
-close request, surviving service pruning.
+session ID; invalidated known sessions block automatic same-revision replacement.
+Closing sessions raise `REPOSITORY_CLEANUP_PENDING` until disposal, subject to Work
+bounds and the revision deadline. Validated `DISPOSED` observations survive service pruning.
 `apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`
-never reissues a bearer and records a cancellation fence for a missing fresh ID.
-Transport failure or overload cannot establish absence.
+reserves before releasing material. The worker's
+`apps/controller/src/backends/repository-credentials/receipt-store.ts:RepositoryReceiptStore`
+commits exact admission fences and original-broker terminal observations. Failure
+before terminal commit remains unknown; transport failure cannot establish absence.
 
 ### 4. Deliver and retain one complete runtime generation
 
@@ -240,13 +240,12 @@ Compute supplies CA trust; TLS verification stays enabled.
 
 ### 5. Authenticate native Git and route GitHub CLI commands
 
-Stock Git resolves commands, remotes, push URLs, worktrees and settings.
-Configuration rewrites canonical HTTPS hosts to their admitted gateway origin.
-The scoped helper checks effective host/path, pinned generation and deadline,
-then supplies the selected gateway bearer. `OCE_REPOSITORY_REF` disambiguates
-bindings, not connection destinations. Local identity, hooks, aliases, native
-overrides and additional helpers remain available; there is no whole-command
-preflight or egress confinement.
+Stock Git owns commands, remotes, push URLs, worktrees and settings. Configuration
+rewrites canonical HTTPS hosts to their gateway origin. The scoped helper checks
+host/path, generation and deadline before supplying the bearer. `OCE_REPOSITORY_REF`
+disambiguates bindings, not destinations. Local identity, hooks, aliases, overrides
+and other helpers remain available; there is no whole-command preflight or egress
+confinement.
 See the [routing limits](../reference/repository-credentials.md#client-routing-and-limits).
 `pushRefAllowlist` selects image-owned hooks.
 `apps/controller/src/drivers/repo/github/credentials/client/hook-dispatch.ts:checkPush`
@@ -261,8 +260,8 @@ API writes remain outside this [best-effort guardrail](../reference/repository-c
 
 `apps/controller/src/drivers/repo/github/credentials/client/router.ts:routeRepositoryClient`
 routes supported `gh` commands using explicit targets or effective Git remotes.
-It pins generation, reference and session for Git children, selects private `gh`
-configuration and preserves HOME. Concurrent commands never mutate shared selection.
+It pins generation, reference and session, selects private `gh` configuration
+and preserves HOME without mutating shared selection.
 
 `apps/controller/src/drivers/repo/github/credentials/profiles.ts` owns the exact
 Reader, Contributor and Collaborator permission maps. The GitHub route classifier
@@ -280,8 +279,8 @@ fresh installation tokens under the same grant until the revision deadline.
 `apps/controller/src/worker.ts:ControllerWorker.completeActivatedRevision`
 commits completion and maintenance together, preserving the original actor.
 Repository revisions use the Driver's 30-second interval or a shorter Compute
-interval. Restart resumes queued work without inventing actors. After service
-restart, a missing known session is invalidated and cleanup Work remains.
+interval. Restart resumes queued work without inventing actors. A committed terminal
+receipt survives broker restart; a missing known session remains invalidated.
 `REPOSITORY_SESSION_RECOVERY_UNSAFE` permanently fails observation and queues
 runtime retirement; later workers cannot remint for that revision. An authorized user can
 deploy a new revision without settling old cleanup.
@@ -354,6 +353,10 @@ Slack or GitHub execution; Ready Pods and local commands do not prove live write
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 12:09: Check broker capability before fresh admission and worker readiness. (01a0e6ca-0480-79a1-ab5d-31a7cfb42228 - 5b66ac97aa3b805099aeebfaadeb846eb957707d)
+
+- 2026-09-28 08:12: Trace durable broker terminal receipts and admission fencing. (authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352 - e06ff9625e72ff5ab3483a504a2f02a69a370cbb)
 
 - 2026-09-26 09:07: Replace the custom private-endpoint capability with stock Codex network settings and retain independent authorization boundaries. (authoring-run/c29b3860-d1f0-4a14-a264-49090586cb20 - 20123a3aa96021391616e918deee0ce60b009fa3)
   Removed the custom Codex private-endpoint requirement. (NOT_IN_SPEC)

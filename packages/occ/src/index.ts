@@ -212,6 +212,7 @@ export {
 export { createPostgresPool } from "./state/postgres-pool.ts";
 export type {
   RepositoryRevisionOwner,
+  RepositoryBrokerReceipt,
   RepositorySessionAttempt,
   RepositorySessionPhase,
   RepositorySessionReadRepository,
