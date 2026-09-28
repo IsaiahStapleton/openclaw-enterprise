@@ -136,8 +136,10 @@ OCC_PROBE_OLD_BROKER_IMAGE='<old-broker>@sha256:<digest>' \
 node --test tests/integration/production-image-real-qualification.test.mjs
 ```
 
-The old images exercise both incompatible version directions. Omitted image
-variables skip the corresponding real-image cases. To require both cases,
+The old images exercise both incompatible version directions. Select an old
+controller without the admission probe and an old broker without durable-admission
+capability; an older image alone may still support the required protocol. Omitted
+image variables skip the corresponding real-image cases. To require both cases,
 export all four variables and run the optional local suite lane:
 
 ```sh
