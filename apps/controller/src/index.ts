@@ -3385,12 +3385,33 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         summary: "Disable a human account",
       },
       {
+        operationName: "enable",
+        path: "/api/auth/accounts/:userId/enable",
+        operationId: "enableAuthAccount",
+        summary: "Re-enable a disabled human account",
+      },
+      {
         operationName: "revoke",
         path: "/api/auth/accounts/:userId/revoke",
         operationId: "revokeAuthAccountSessions",
         summary: "Revoke all sessions for a human account",
       },
+      {
+        operationName: "detach",
+        path: "/api/auth/accounts/:userId/methods/:methodId/detach",
+        operationId: "detachAuthMethod",
+        summary: "Detach an external sign-in identity from an account",
+      },
     ] as const;
+    const methodParams = {
+      type: "object",
+      additionalProperties: false,
+      required: ["userId", "methodId"],
+      properties: {
+        userId: { type: "string", minLength: 1, maxLength: 200 },
+        methodId: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    };
     for (const { operationName, path, operationId, summary } of accountOperations) {
       const operation = {
         operationId,
@@ -3417,7 +3438,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             "x-openclaw-permissions": [
               { action: "administer", resourceKind: "installation", scope: "requested" },
             ],
-            params: accountParams,
+            params: operationName === "detach" ? methodParams : accountParams,
             body: {
               type: "object",
               additionalProperties: false,
@@ -3446,15 +3467,24 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         },
         async (request, reply) => {
           const context = contexts.get(request);
-          if (!context || !options.auth.attachGitHub || !options.auth.changeAccount) {
+          if (!context || !options.auth.readAccount || !options.auth.changeAccount) {
             throw dependencyUnavailable();
           }
           const actor = await humanAccountActor(request, operation, context);
           const { expectedVersion } = request.body as { expectedVersion: number };
           const { userId } = request.params as { userId: string };
           if (operationName === "github") {
+            if (!options.auth.attachGitHub || !options.auth.githubEnabled) {
+              throw failure(409, "RESOURCE_CONFLICT", "GitHub sign-in is not configured.");
+            }
             const { subject } = request.body as { subject: string };
             await options.auth.attachGitHub(userId, subject, actor, expectedVersion);
+          } else if (operationName === "detach") {
+            if (!options.auth.detachMethod) {
+              throw dependencyUnavailable();
+            }
+            const { methodId } = request.params as { methodId: string };
+            await options.auth.detachMethod(userId, methodId, actor, expectedVersion);
           } else {
             await options.auth.changeAccount(userId, operationName, actor, expectedVersion);
           }

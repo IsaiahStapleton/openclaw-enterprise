@@ -172,9 +172,9 @@ not restrict it. Login uses only [`GET /user`](https://docs.github.com/en/rest/u
 then discards tokens, expiry, and scope data. It performs no refresh, creates no
 repository grants, and gives no provider credentials to repository consumers or Agents.
 
-A new client ID requires reattachment under a new provider instance. Secret
-rotation preserves enrollment and invalidates pending attempts. Emails and login
-names are not identity keys.
+A new client ID requires reattachment under a new provider instance; then detach
+old methods by `methodId`. Secret rotation preserves enrollment and invalidates
+pending attempts. Emails and login names are not identity keys.
 
 A human Installation administrator reads `GET /api/auth/accounts/:userId`
 ([requirements](#session-and-recovery-controls)). Its no-store response
@@ -225,18 +225,19 @@ the actor; a stale target version returns `409 RESOURCE_CONFLICT`.
 
 Send `{"expectedVersion":1}` with the version just read for these operations:
 
-| Operation                                 | Effect                                                                                                                    |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/accounts/:userId/disable` | Disables the account and invalidates its sessions and pending authentication proofs; rejects the protected recovery user. |
-| `POST /api/auth/accounts/:userId/revoke`  | Invalidates all account sessions and pending proofs while preserving fresh sign-in, including recovery password sign-in.  |
+| Operation                                                  | Effect                                                                                     |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `POST /api/auth/accounts/:userId/disable`                  | Disables the account, invalidating sessions and pending proofs; refuses the recovery user. |
+| `POST /api/auth/accounts/:userId/enable`                   | Re-enables a disabled account; users sign in again.                                        |
+| `POST /api/auth/accounts/:userId/revoke`                   | Invalidates all account sessions and pending proofs; fresh sign-in still works.            |
+| `POST /api/auth/accounts/:userId/methods/:methodId/detach` | Removes one attached external identity and its sessions; password methods return `409`.    |
 
 These operations serialize with session issuance and leave IAM grants unchanged.
 An unknown administrative COMMIT returns `503 DEPENDENCY_UNAVAILABLE` with an explicit unknown-outcome message;
 it never reports success or triggers automatic replay or compensation. An
 account read shows present state, **not a receipt**: the original transaction may
 still be running. Resolve uncertainty before choosing a new action and version.
-Account reenablement, password reset, deletion, and recovery replacement remain
-deferred.
+Password reset, deletion, and recovery replacement remain deferred.
 
 The controller admits at most 30 password requests per minute with four active,
 and 60 GitHub start/callback requests per minute with eight active. Invalid
@@ -283,9 +284,8 @@ singleton Installation, and stays available with GitHub sign-in enabled. One
 transaction writes the account, its Principal and grant, and its enrollment;
 attach GitHub afterwards with the attach operation.
 
-The endpoint creates a Better Auth account, its explicit IAM Principal, and an
-AccessBinding to an existing Role. The request must supply `roleId`; it cannot
-implicitly create a Role or infer a grant from the account's email or session.
+The request must supply the `roleId` of an existing Role; the endpoint cannot
+create a Role or infer a grant from the account's email or session.
 Creating an account does not sign it in or issue a session.
 
 A representative provisioning body is:

@@ -1140,6 +1140,12 @@ export async function createPostgresControllerAuth(
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
+          detachMethod: (
+            userId: string,
+            methodId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => persistence!.detachExternal(userId, methodId, actor, expectedVersion),
         }),
   };
 }
