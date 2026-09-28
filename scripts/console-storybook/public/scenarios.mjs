@@ -766,10 +766,10 @@ export const scenarios = {
     pluginCapabilities,
     actions: pluginDiscoveryForm,
     description:
-      "The actual form lists the first catalog page, places enableable plugins first, and retains unavailable entries with their reason. Selecting a plugin loads its tools before Add becomes available.",
+      "The actual form lists the first catalog page, places enableable plugins first, and keeps unavailable rows compact with reasons in popovers. Selecting a plugin loads its tools before Add becomes available.",
     steps: [
       "Review the Driver's workspace access and service account setup guidance. Connection status is unverified; catalog availability does not confirm linked credentials. External help links open separately from plugin navigation.",
-      "Compare the administrator, plan, and unsupported-runtime reasons in the list. Choose each unavailable plugin to see its reason and help link in detail; Add stays disabled.",
+      "Open the information button beside each unavailable plugin to compare its administrator, plan, or unsupported-runtime reason and help link. Escape or a click outside dismisses the popover. Choose the plugin row to see the same guidance in detail; Add stays disabled.",
       "Available and Configured share a compact sidebar; page controls stay below the scrolling list. Next page and Previous page navigate server pages.",
       "Choose Calendar to load its tools and inspect their IDs beneath the titles, then Add Calendar. Configure its plugin defaults and expand a tool to override them.",
       "Type create into Filter tools: only Create event remains, and the caret stays after the text. Clear it to restore the other tools. Search plugins for Documents before visiting its catalog page, then clear the query.",
@@ -1039,6 +1039,26 @@ export const scenarios = {
       "Review the Driver-specific policy fields supplied by the capability descriptor.",
       "Expand Create event, change a tool setting, then click Done and inspect Plugin selections JSON.",
       "Reopen Configure plugins, click inside its padding, then click the gray backdrop. Only the backdrop closes it; selections remain and focus returns to Configure plugins.",
+    ],
+    gap: pluginPreviewGap,
+  },
+  pluginsUnavailableReasonPopover: {
+    group: "Components/Plugins",
+    name: "Unavailable reason popover",
+    component: "plugins",
+    pluginCatalog,
+    pluginCapabilities,
+    actions: [
+      click("Configure plugins"),
+      { selector: 'button[aria-label="Why Team chat is unavailable"]', focus: true },
+    ],
+    description:
+      "Unavailable plugins keep compact rows. The information button opens the Driver's reason and help link without selecting the plugin or changing the list layout.",
+    steps: [
+      "Open Team chat's information button to review its administrator guidance and Manage workspace plugins link without following the external destination during fixture review.",
+      "Press Escape to dismiss the popover while keeping Configure plugins open. Focus the information button and press Enter to reopen it; click outside to dismiss it.",
+      "Open the information buttons for Analytics and Archive to compare plan and unsupported-runtime guidance. The list keeps its row heights as each popover opens.",
+      "Choose the Team chat row. Its detail pane retains the reason and help link, and Add Team chat stays disabled.",
     ],
     gap: pluginPreviewGap,
   },

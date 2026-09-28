@@ -228,9 +228,11 @@ Choose Calendar, then change the Secret to clear discovery.
 Preset PAT Secrets enable discovery; API keys do not. Catalog visibility does
 not prove invocation access.
 
-**Components/Plugins** covers the modal with simulated catalogs and capabilities:
-available plugins, selected overrides, unknown tools, and empty, loading, denied,
-and capability-unavailable states. Expand a tool to inspect inherited enablement
+**Components/Plugins → Unavailable reason popover** covers keyboard access,
+dismissal, compact rows, help links, detail guidance, and disabled **Add**.
+
+**Components/Plugins** uses simulated catalogs and capabilities.
+Expand a tool to inspect inherited enablement
 and approval. Its reviewer shortcut opens the plugin default when per-tool review
 is unsupported. New plugins omit tool defaults; an omitted reviewer inherits the
 Harness reviewer. Codex offers reviewer selection at the plugin default scope

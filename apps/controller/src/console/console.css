@@ -1733,9 +1733,55 @@ summary:focus-visible {
 .plugin-access-help {
   flex-shrink: 0;
 }
-.plugin-list-row .plugin-unavailable {
-  margin: 8px 4px 0;
-  font-size: 0.8125rem;
+.plugin-list-row {
+  position: relative;
+}
+.plugin-list-item:has(+ .plugin-unavailable-trigger) {
+  padding-right: 48px;
+}
+.plugin-unavailable-trigger {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.plugin-unavailable-trigger span {
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 13px;
+}
+.plugin-unavailable-popover {
+  inset: auto;
+  position-area: bottom span-right;
+  position-try-order: most-height;
+  position-try-fallbacks:
+    flip-inline,
+    flip-block,
+    flip-inline flip-block;
+  width: 20rem;
+  max-width: calc(100vw - 32px);
+  margin: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.plugin-unavailable-popover .plugin-unavailable {
+  margin: 0;
+  font-size: 0.875rem;
   overflow-wrap: anywhere;
 }
 .plugin-setup-reminder {
