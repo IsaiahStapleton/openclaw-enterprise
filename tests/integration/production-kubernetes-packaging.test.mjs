@@ -35,6 +35,11 @@ const chatgptValues = {
   "backend.chatgpt.enabled": "true",
   "backend.chatgpt.providerCidr": "198.51.100.25/32",
 };
+const slackProxyValues = {
+  "slackProxy.enabled": "true",
+  "slackProxy.upstreamCidrs[0]": "203.0.113.10/32",
+  "slackProxy.upstreamCidrs[1]": "203.0.113.11/32",
+};
 const repositoryCredentialValues = {
   "repositoryCredentials.enabled": "true",
   "repositoryCredentials.image": `registry.example.invalid/repository-credentials@sha256:${"b".repeat(64)}`,
@@ -1631,6 +1636,127 @@ test("Slack directory proxy grants only API egress to its exact endpoint", tooli
     );
   }
 });
+
+test(
+  "managed Slack proxy renders private Service DNS and restricted proxy policies",
+  tooling,
+  async () => {
+    const objects = await resources((await render(slackProxyValues)).stdout);
+    const named = (kind, name) =>
+      objects.find((object) => object.kind === kind && object.metadata.name === name);
+    const deployment = named("Deployment", "openclaw-enterprise-slack-proxy");
+    const service = named("Service", "openclaw-enterprise-slack-proxy");
+    const proxyPolicy = named("NetworkPolicy", "openclaw-enterprise-slack-proxy");
+    const apiPolicy = named("NetworkPolicy", "openclaw-enterprise-api-managed-slack-proxy-egress");
+    assert.ok(deployment);
+    assert.ok(service);
+    assert.ok(proxyPolicy);
+    assert.ok(apiPolicy);
+    assert.equal(
+      deployment.spec.template.spec.serviceAccountName,
+      "openclaw-enterprise-slack-proxy",
+    );
+    assert.equal(deployment.spec.template.spec.automountServiceAccountToken, false);
+    assert.equal(deployment.spec.template.spec.enableServiceLinks, false);
+    assert.deepEqual(
+      deployment.spec.template.spec.containers[0].env.find(
+        ({ name }) => name === "OCC_SLACK_PROXY_PORT",
+      ),
+      { name: "OCC_SLACK_PROXY_PORT", value: "3128" },
+    );
+    assert.deepEqual(service.spec.selector, {
+      "app.kubernetes.io/name": "openclaw-enterprise",
+      "app.kubernetes.io/instance": "oce",
+      "app.kubernetes.io/component": "slack-proxy",
+    });
+    const api = named("Deployment", "openclaw-enterprise-api").spec.template.spec.containers[0];
+    assert.deepEqual(
+      api.env.find(({ name }) => name === "OCC_CHANNEL_DIRECTORY_PROXY_URL"),
+      {
+        name: "OCC_CHANNEL_DIRECTORY_PROXY_URL",
+        value: "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128",
+      },
+    );
+    assert.deepEqual(
+      api.env.find(({ name }) => name === "OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST"),
+      {
+        name: "OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST",
+        value: "openclaw-enterprise-slack-proxy.openclaw-system.svc",
+      },
+    );
+    assert.deepEqual(apiPolicy.spec.egress, [
+      {
+        to: [
+          {
+            namespaceSelector: {
+              matchLabels: { "kubernetes.io/metadata.name": "openclaw-system" },
+            },
+            podSelector: {
+              matchLabels: {
+                "app.kubernetes.io/name": "openclaw-enterprise",
+                "app.kubernetes.io/instance": "oce",
+                "app.kubernetes.io/component": "slack-proxy",
+              },
+            },
+          },
+        ],
+        ports: [{ protocol: "TCP", port: 3128 }],
+      },
+    ]);
+    assert.deepEqual(proxyPolicy.spec.ingress, [
+      {
+        from: [
+          {
+            namespaceSelector: {
+              matchLabels: { "kubernetes.io/metadata.name": "openclaw-system" },
+            },
+            podSelector: {
+              matchLabels: {
+                "app.kubernetes.io/name": "openclaw-enterprise",
+                "app.kubernetes.io/instance": "oce",
+                "app.kubernetes.io/component": "api",
+              },
+            },
+          },
+          {
+            namespaceSelector: {
+              matchExpressions: [{ key: "openclaw.dev/namespace", operator: "Exists" }],
+            },
+            podSelector: {
+              matchLabels: {
+                "app.kubernetes.io/managed-by": "openclaw-enterprise",
+                "openclaw.dev/workload-role": "gateway",
+              },
+              matchExpressions: [{ key: "openclaw.dev/agent", operator: "Exists" }],
+            },
+          },
+        ],
+        ports: [{ protocol: "TCP", port: 3128 }],
+      },
+    ]);
+    assert.deepEqual(proxyPolicy.spec.egress.at(-1), {
+      to: [{ ipBlock: { cidr: "203.0.113.10/32" } }, { ipBlock: { cidr: "203.0.113.11/32" } }],
+      ports: [{ protocol: "TCP", port: 443 }],
+    });
+    assert.equal(
+      named("ServiceAccount", "openclaw-enterprise-slack-proxy").automountServiceAccountToken,
+      false,
+    );
+    await assert.rejects(render({ "slackProxy.enabled": "true" }), /slackProxy.upstreamCidrs/);
+    await assert.rejects(
+      render({ ...slackProxyValues, "api.channelDirectoryProxyUrl": "http://198.51.100.25:3128" }),
+      /api.channelDirectoryProxyUrl/,
+    );
+    for (const override of [
+      { "slackProxy.serviceName": "1proxy" },
+      { "slackProxy.port": "65536" },
+      { "slackProxy.upstreamCidrs[0]": "0.0.0.0/0" },
+      { "slackProxy.upstreamCidrs[0]": "999.1.1.1/32" },
+    ]) {
+      await assert.rejects(render({ ...slackProxyValues, ...override }), /slackProxy/);
+    }
+  },
+);
 
 test(
   "optional database CA Secret mounts into every production database client",

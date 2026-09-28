@@ -299,6 +299,10 @@ export interface KubernetesComputeDriverOptions {
     readonly codexSeccompProfile?: string;
     readonly channels?: {
       readonly proxyUrl: string;
+      readonly managedProxy?: KubernetesWorkloadPeer & {
+        readonly hostname: string;
+        readonly port: number;
+      };
     };
   };
   readonly gatewayRouting?: KubernetesGatewayRoutingOptions;
@@ -787,7 +791,14 @@ function labelsToSelector(labels: Readonly<Record<string, string>>): string {
     .join(",");
 }
 
-function channelProxy(value: unknown): { address: string; port: number } {
+type ChannelProxy =
+  | { readonly kind: "ip"; readonly address: string; readonly port: number }
+  | { readonly kind: "managed"; readonly peer: KubernetesWorkloadPeer; readonly port: number };
+
+function channelProxy(
+  value: unknown,
+  managedProxy?: KubernetesWorkloadPeer & { readonly hostname: string; readonly port: number },
+): ChannelProxy {
   const raw = required(value, "Channel proxy URL");
   let parsed: URL;
   try {
@@ -798,6 +809,42 @@ function channelProxy(value: unknown): { address: string; port: number } {
     );
   }
   const address = parsed.hostname.replace(/^\[|\]$/g, "");
+  const port = Number(parsed.port);
+  if (managedProxy !== undefined) {
+    validatePeer(managedProxy, "Managed channel proxy");
+    required(managedProxy.hostname, "Managed channel proxy hostname");
+    if (
+      !/^[a-z0-9]([-a-z0-9]*[a-z0-9])?\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\.svc$/.test(
+        managedProxy.hostname,
+      )
+    ) {
+      throw new ConfigurationFailure(
+        "Managed channel proxy hostname must be the exact namespace-qualified Service DNS name.",
+      );
+    }
+    if (
+      !Number.isInteger(managedProxy.port) ||
+      managedProxy.port < 1 ||
+      managedProxy.port > 65535
+    ) {
+      throw new ConfigurationFailure("Managed channel proxy port must be a valid TCP port.");
+    }
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      parsed.hostname !== managedProxy.hostname ||
+      port !== managedProxy.port ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new ConfigurationFailure(
+        "Managed channel proxy URL must match the exact configured Service host and port.",
+      );
+    }
+    return { kind: "managed", peer: managedProxy, port };
+  }
   if (
     !["http:", "https:"].includes(parsed.protocol) ||
     isIP(address) === 0 ||
@@ -812,7 +859,7 @@ function channelProxy(value: unknown): { address: string; port: number } {
       "Channel proxy URL must identify one credential-free HTTP(S) IP endpoint.",
     );
   }
-  return { address, port: Number(parsed.port) };
+  return { kind: "ip", address, port };
 }
 
 export function kubernetesNamespaceName(namespaceId: string): string {
@@ -1149,6 +1196,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
             additionalProperties: false,
             properties: {
               proxyUrl: { type: "string" },
+              managedProxy: {
+                type: "object",
+                required: ["hostname", "namespace", "podLabels", "port"],
+                additionalProperties: false,
+                properties: {
+                  hostname: { type: "string" },
+                  namespace: { type: "string" },
+                  podLabels: { type: "object", additionalProperties: { type: "string" } },
+                  port: { type: "integer" },
+                },
+              },
             },
           },
         },
@@ -1356,7 +1414,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         if (asRecord(channels) === undefined) {
           throw new ConfigurationFailure("Channel runtime proxy must be explicitly configured.");
         }
-        channelProxy(channels.proxyUrl);
+        channelProxy(channels.proxyUrl, channels.managedProxy);
       }
     }
     if (options.executionCluster !== undefined) {
@@ -7614,7 +7672,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
   ): ManagedKubernetesObject {
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const proxy = enabled.some(({ egress }) => egress === "https-proxy")
-      ? channelProxy(this.options.runtime?.channels?.proxyUrl)
+      ? channelProxy(
+          this.options.runtime?.channels?.proxyUrl,
+          this.options.runtime?.channels?.managedProxy,
+        )
       : undefined;
     return {
       ...this.manifest(
@@ -7637,9 +7698,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
             ? [
                 {
                   to: [
-                    {
-                      ipBlock: { cidr: `${proxy.address}/${isIP(proxy.address) === 4 ? 32 : 128}` },
-                    },
+                    proxy.kind === "managed"
+                      ? this.peer(proxy.peer)
+                      : {
+                          ipBlock: {
+                            cidr: `${proxy.address}/${isIP(proxy.address) === 4 ? 32 : 128}`,
+                          },
+                        },
                   ],
                   ports: [{ protocol: "TCP", port: proxy.port }],
                 },

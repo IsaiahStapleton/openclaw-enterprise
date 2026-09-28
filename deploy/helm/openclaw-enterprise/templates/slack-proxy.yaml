@@ -1,0 +1,127 @@
+{{- if .Values.slackProxy.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-enterprise-slack-proxy
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "slack-proxy") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: slack-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.labels" (dict "root" . "component" "slack-proxy") | nindent 8 }}
+      {{- with .Values.controlPlane.installationChecksum }}
+      annotations:
+        openclaw.dev/installation-checksum: {{ . | quote }}
+      {{- end }}
+    spec:
+      serviceAccountName: openclaw-enterprise-slack-proxy
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "openclaw.podSecurity" . | nindent 8 }}
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: slack-proxy
+          image: {{ .Values.images.controller | quote }}
+          args:
+            - apps/controller/src/slack-proxy.mjs
+          securityContext:
+            {{- include "openclaw.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.slackProxy.resources | nindent 12 }}
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: OCC_SLACK_PROXY_PORT
+              value: {{ .Values.slackProxy.port | quote }}
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.slackProxy.port }}
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openclaw.slackProxy.serviceName" . }}
+  labels:
+    {{- include "openclaw.labels" (dict "root" . "component" "slack-proxy") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: openclaw-enterprise
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: slack-proxy
+  ports:
+    - name: proxy
+      port: {{ .Values.slackProxy.port }}
+      targetPort: proxy
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-enterprise-slack-proxy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: slack-proxy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openclaw-enterprise
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: api
+        - namespaceSelector:
+            matchExpressions:
+              - key: openclaw.dev/namespace
+                operator: Exists
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: openclaw-enterprise
+              openclaw.dev/workload-role: gateway
+            matchExpressions:
+              - key: openclaw.dev/agent
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: {{ .Values.slackProxy.port }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.dns.podLabels | nindent 14 }}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        {{- range .Values.slackProxy.upstreamCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}

@@ -14,6 +14,8 @@ const REQUEST_TIMEOUT_MS = 8_000;
 const INFO_BATCH_SIZE = 5;
 const PROXY_ENDPOINT =
   /^https?:\/\/((?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}):([1-9][0-9]{0,4})$/;
+const MANAGED_SERVICE_PROXY_ENDPOINT =
+  /^https?:\/\/([a-z]([-a-z0-9]*[a-z0-9])?\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\.svc):([1-9][0-9]{0,4})$/;
 
 type SlackRecord = Record<string, unknown>;
 
@@ -74,20 +76,28 @@ export class SlackChannelDriver implements ChannelDriver {
   private readonly request: typeof fetch;
   private readonly proxy?: ProxyAgent;
 
-  constructor(request: typeof fetch = globalThis.fetch, proxyUrl?: string) {
+  constructor(
+    request: typeof fetch = globalThis.fetch,
+    proxyUrl?: string,
+    options: { readonly managedProxyHosts?: readonly string[] } = {},
+  ) {
     this.request = request;
     if (proxyUrl !== undefined) {
       const endpoint = PROXY_ENDPOINT.exec(proxyUrl);
+      const managedEndpoint = MANAGED_SERVICE_PROXY_ENDPOINT.exec(proxyUrl);
       const address = endpoint?.[1];
-      const port = endpoint?.[2];
-      if (
-        address === undefined ||
-        port === undefined ||
-        isIP(address) !== 4 ||
-        Number(port) > 65535
-      ) {
+      const managedHost = managedEndpoint?.[1];
+      const managedService =
+        managedHost !== undefined && (options.managedProxyHosts ?? []).includes(managedHost);
+      const port = endpoint?.[2] ?? managedEndpoint?.[4];
+      if (port === undefined || Number(port) > 65535) {
         throw new Error(
-          "Slack directory proxy must be an HTTP(S) literal IPv4 endpoint with an explicit port.",
+          "Slack directory proxy must be an HTTP(S) literal IPv4 endpoint or the exact managed Kubernetes Service endpoint with an explicit port.",
+        );
+      }
+      if (!managedService && (address === undefined || isIP(address) !== 4)) {
+        throw new Error(
+          "Slack directory proxy must be an HTTP(S) literal IPv4 endpoint or the exact managed Kubernetes Service endpoint with an explicit port.",
         );
       }
       this.proxy = new ProxyAgent(proxyUrl);

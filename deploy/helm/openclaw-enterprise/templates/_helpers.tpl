@@ -87,6 +87,26 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.slackProxy.enabled -}}
+{{- $proxy := .Values.slackProxy -}}
+{{- if .Values.api.channelDirectoryProxyUrl -}}{{- fail "api.channelDirectoryProxyUrl must be empty when slackProxy.enabled uses the chart-managed Service" -}}{{- end -}}
+{{- if not (kindIs "bool" $proxy.enabled) -}}{{- fail "slackProxy.enabled must be a boolean" -}}{{- end -}}
+{{- if or (gt (len $proxy.serviceName) 63) (not (regexMatch "^[a-z]([-a-z0-9]*[a-z0-9])?$" $proxy.serviceName)) -}}
+{{- fail "slackProxy.serviceName must be a DNS-1035 Service name" -}}
+{{- end -}}
+{{- if or (not (regexMatch "^[0-9]+$" (toString $proxy.port))) (lt (int $proxy.port) 1) (gt (int $proxy.port) 65535) -}}
+{{- fail "slackProxy.port must be an integer TCP port from 1 to 65535" -}}
+{{- end -}}
+{{- if not $proxy.upstreamCidrs -}}{{- fail "slackProxy.upstreamCidrs must contain reviewed Slack provider IPv4 CIDRs" -}}{{- end -}}
+{{- range $cidr := $proxy.upstreamCidrs -}}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$" $cidr) -}}
+{{- fail "slackProxy.upstreamCidrs requires explicit IPv4 CIDRs with prefixes 1 through 32" -}}
+{{- end -}}
+{{- range $octet := splitList "." (first (splitList "/" $cidr)) -}}
+{{- if gt (int $octet) 255 -}}{{- fail "slackProxy.upstreamCidrs contains an invalid IPv4 address" -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.repositoryCredentials.enabled -}}
 {{- $credentials := .Values.repositoryCredentials -}}
 {{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-fA-F0-9]{64}$" $credentials.image) -}}
@@ -237,6 +257,14 @@ capabilities:
     secretKeyRef:
       name: {{ .secretName }}
       key: {{ .key }}
+{{- end -}}
+
+{{- define "openclaw.slackProxy.serviceName" -}}
+{{- .Values.slackProxy.serviceName -}}
+{{- end -}}
+
+{{- define "openclaw.slackProxy.url" -}}
+{{- printf "http://%s.%s.svc:%v" (include "openclaw.slackProxy.serviceName" .) .Release.Namespace (int .Values.slackProxy.port) -}}
 {{- end -}}
 
 {{- define "openclaw.gatewayRouting.gatewayName" -}}

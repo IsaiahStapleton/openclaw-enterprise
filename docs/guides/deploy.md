@@ -70,6 +70,9 @@ Follow these pages in order in the same operator shell:
    Configure protected Installation YAML and Helm values, create system
    Secrets, prepare the fresh bootstrap PVC, install the chart, and authenticate
    to the production API.
+   Use [installation profiles](deploy/installation-profiles.md) when you want
+   the standard `openclaw` or `codex` profile defaults before editing those
+   protected files.
 2. [Prepare Namespaces and deploy Agents](deploy/production-agents.md).
    Grant tenant RoleBindings, choose embedded OpenClaw or dedicated Codex,
    provision exact-Agent credentials, and deploy an immutable revision.
@@ -141,6 +144,7 @@ runtime paths. See
 - [Troubleshoot the platform](operate/troubleshooting.md)
 - [Service API keys, rotation, and bootstrap recovery](../reference/authentication/service-api-keys.md)
 - [Credential renewal and revocation](deploy/credential-lifecycle.md)
+- [Render installation profiles](deploy/installation-profiles.md)
 - [Local Kubernetes, development TUI, and cleanup](deploy/local-operations.md)
 - [Local Kubernetes development inner loop](deploy/local-kubernetes-development.md)
 - [Configuration and settings](../reference/settings.md)

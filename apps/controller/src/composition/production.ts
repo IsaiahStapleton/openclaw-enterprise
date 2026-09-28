@@ -44,6 +44,7 @@ export interface ProductionConfig {
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
   readonly gatewayApiKeyPath?: string;
   readonly channelDirectoryProxyUrl?: string;
+  readonly channelDirectoryManagedProxyHost?: string;
   readonly nativeAdmin?: NativeAdminAccessConfig;
 }
 
@@ -160,6 +161,12 @@ export async function composeProduction(config: ProductionConfig) {
       const channelDriver = new SlackChannelDriver(
         globalThis.fetch,
         config.channelDirectoryProxyUrl,
+        {
+          managedProxyHosts:
+            config.channelDirectoryManagedProxyHost === undefined
+              ? []
+              : [config.channelDirectoryManagedProxyHost],
+        },
       );
       controller.registerDriver(channelDriver);
       controller.selectDriver("channel", channelDriver.id);

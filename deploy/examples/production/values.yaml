@@ -30,7 +30,8 @@ database:
 
 api:
   # For Slack directory lookup, set the approved proxy independently of the
-  # gateway proxy in installation.yaml. See docs/guides/integrations/slack.md.
+  # gateway proxy in installation.yaml, or enable slackProxy below.
+  # See docs/guides/integrations/slack.md.
   # channelDirectoryProxyUrl: http://198.51.100.25:3128
   # Optional; see model discovery in docs/reference/console/create-and-deploy.md.
   modelDiscoveryCidrs: []
@@ -69,6 +70,12 @@ repositoryCredentials:
   # publicCaSecretName: occ-repository-public-ca
   # serviceName: git
   # upstreamCidrs: [198.51.100.0/24]
+
+# Optional chart-managed CONNECT proxy for Slack directory lookup and future
+# gateway channel traffic. Enabling it requires reviewed Slack upstream CIDRs.
+slackProxy:
+  enabled: false
+  # upstreamCidrs: [203.0.113.10/32]
 
 # Metrics listeners are enabled privately. Set both selectors to admit your scraper.
 metrics:

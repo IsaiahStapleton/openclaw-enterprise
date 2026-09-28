@@ -152,6 +152,21 @@ api:
   # Operators maintain these addresses; Console model selection does not require it.
   modelDiscoveryCidrs: []
 
+slackProxy:
+  # Optional chart-managed HTTP CONNECT proxy for Slack channel traffic. It is
+  # inert until enabled; enabling requires reviewed upstream Slack CIDRs below.
+  enabled: false
+  serviceName: openclaw-enterprise-slack-proxy
+  port: 3128
+  upstreamCidrs: []
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
 cluster:
   cidrs: []
   port: 443
