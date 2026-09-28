@@ -274,6 +274,10 @@
       "path": "tests/conformance/postgres-transaction-commit.test.mjs"
     },
     {
+      "path": "tests/conformance/postgres-transaction-unknown-commit.test.mjs",
+      "expectedTests": ["lost COMMIT response returns unknown without waiting for a hung rollback"]
+    },
+    {
       "path": "tests/integration/native-admin-access.test.mjs",
       "expectedTests": [
         "native admin status requires exact Agent administer and reports lifecycle availability",
