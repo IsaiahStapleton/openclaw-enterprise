@@ -87,6 +87,7 @@ import {
 import {
   assertHarnessAuthAvailable,
   harnessAuthMatches,
+  namespaceRoleGrantsBeyondRead,
   validHarnessAuthSnapshot,
 } from "./platform-state.ts";
 import {
@@ -2843,6 +2844,9 @@ export class PostgresPlatformState implements PlatformStateStore {
         ) {
           throw new ScopeViolationError("The IAM Role must belong to an available Namespace.");
         }
+        if (namespaceRoleGrantsBeyondRead(role)) {
+          throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
+        }
         await client.query(
           "INSERT INTO occ.iam_roles (id, namespace_id, name, permissions) VALUES ($1, $2, $3, $4::jsonb)",
           [role.id, namespace.id, role.name ?? null, JSON.stringify(role.permissions)],
@@ -2923,8 +2927,12 @@ export class PostgresPlatformState implements PlatformStateStore {
             "The IAM AccessBinding subject does not belong to the exact Namespace.",
           );
         }
-        if ((await iamPolicy.getRole(namespace.id, binding.roleId)) === undefined) {
+        const role = await iamPolicy.getRole(namespace.id, binding.roleId);
+        if (role === undefined) {
           throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+        }
+        if (binding.resourceKind === "namespace" && namespaceRoleGrantsBeyondRead(role)) {
+          throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
         }
         if (!(await lockTarget(namespace.id, binding.resourceKind, binding.resourceId))) {
           throw new ScopeViolationError(

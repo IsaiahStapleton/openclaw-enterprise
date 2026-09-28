@@ -740,6 +740,17 @@ function iamPolicyKey(namespaceId: string, id: string): string {
   return `${namespaceId}\u0000${id}`;
 }
 
+/**
+ * Namespace IAM Roles may grant only `read` on the `namespace` kind. Any other
+ * action would let a Namespace-targeted binding authorize Namespace lifecycle
+ * operations such as deletion.
+ */
+export function namespaceRoleGrantsBeyondRead(role: Pick<Role, "permissions">): boolean {
+  return role.permissions.some(
+    (permission) => permission.resourceKind === "namespace" && permission.action !== "read",
+  );
+}
+
 const secretIdentifier =
   /^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const namespaceIdentifier =
@@ -2024,6 +2035,9 @@ function repositories(
       if (role.namespaceId !== namespace.id || role.permissions.length === 0) {
         throw new ScopeViolationError("The IAM Role must be Namespace-scoped and nonempty.");
       }
+      if (namespaceRoleGrantsBeyondRead(role)) {
+        throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
+      }
       const saved = immutableCopy(role);
       snapshot.roles.set(key, saved);
       return immutableCopy(saved);
@@ -2066,6 +2080,9 @@ function repositories(
       const role = await iamPolicy.getRole(namespace.id, binding.roleId);
       if (role === undefined) {
         throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+      }
+      if (binding.resourceKind === "namespace" && namespaceRoleGrantsBeyondRead(role)) {
+        throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
       }
       if (
         binding.subjectKind !== "identity" ||

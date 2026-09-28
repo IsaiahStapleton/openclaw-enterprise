@@ -627,6 +627,75 @@ test(
 );
 
 test(
+  "PostgreSQL native IAM grants Namespace Roles only Namespace read",
+  requiresPostgres,
+  async (context) => {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: databaseUrl });
+    context.after(() => pool.end());
+    const state = new PostgresPlatformState(pool);
+    const iam = new NativeIAMDriver(state);
+    const { namespace } = await createNamespaceAgentState(state);
+    const principal = await createHumanPrincipal(state);
+    const permissions = [
+      { action: "read", resourceKind: "namespace" },
+      { action: "delete", resourceKind: "namespace" },
+    ];
+    const roleId = identifier("role");
+    await assert.rejects(
+      state.transact((unit) =>
+        iam.createNamespaceRole(
+          { policy: unit.iamPolicy },
+          { id: roleId, namespaceId: namespace.id, permissions },
+        ),
+      ),
+      /managed Namespace Role permissions support only read/,
+    );
+    // The State writer refuses the Role even when a caller bypasses the IAM Driver.
+    await assert.rejects(
+      state.transact((unit) =>
+        unit.iamPolicy.createRole({ id: roleId, namespaceId: namespace.id, permissions }),
+      ),
+      { name: "ScopeViolationError", message: /support only Namespace read/ },
+    );
+    assert.equal(
+      await state.transact((unit) => unit.iamPolicy.getRole(namespace.id, roleId)),
+      undefined,
+    );
+
+    // A Role row written before this restriction cannot be bound to the Namespace.
+    await state.transact((unit) =>
+      state.queryInTransaction(
+        unit,
+        "INSERT INTO occ.iam_roles (id, namespace_id, name, permissions) VALUES ($1, $2, NULL, $3::jsonb)",
+        [roleId, namespace.id, JSON.stringify(permissions)],
+      ),
+    );
+    await assert.rejects(
+      state.transact((unit) =>
+        iam.createNamespaceAccessBinding(
+          { policy: unit.iamPolicy },
+          {
+            id: identifier("binding"),
+            namespaceId: namespace.id,
+            subjectKind: "identity",
+            subjectId: principal.id,
+            roleId,
+            resourceKind: "namespace",
+            resourceId: namespace.id,
+          },
+        ),
+      ),
+      { name: "ScopeViolationError", message: /support only Namespace read/ },
+    );
+    assert.deepEqual(
+      await state.transact((unit) => unit.iamPolicy.listAccessBindings(namespace.id)),
+      [],
+    );
+  },
+);
+
+test(
   "PostgreSQL exact Namespace grants serialize with Namespace deletion",
   requiresPostgres,
   async (context) => {

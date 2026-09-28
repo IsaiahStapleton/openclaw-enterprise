@@ -232,6 +232,93 @@ test("managed memory policy binds provisioned humans and local services to only 
   );
 });
 
+test("managed Namespace Roles grant only Namespace read so a Namespace binding cannot delete it", async () => {
+  const platform = new InMemoryPlatformState({ iamIdentities: identities });
+  const native = new NativeIAMDriver({
+    loadNativeIAMState: async () =>
+      platform.read(async (unit) => ({
+        identities,
+        groups: [],
+        memberships: [],
+        restrictions: [],
+        roles: await unit.iamPolicy.listRoles("namespace-a"),
+        bindings: await unit.iamPolicy.listAccessBindings("namespace-a"),
+      })),
+  });
+  await platform.transact(async (unit) => {
+    await unit.installations.createInstallation({
+      id: "installation",
+      name: "Test",
+      createdAt: new Date().toISOString(),
+    });
+    await unit.namespaces.createNamespace({
+      id: "namespace-a",
+      name: "local",
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    });
+  });
+  const role = (id, permissions) => ({ id, namespaceId: "namespace-a", permissions });
+  for (const action of ["create", "update", "delete", "deploy", "operate", "administer"]) {
+    const permissions = [
+      { action: "read", resourceKind: "namespace" },
+      { action, resourceKind: "namespace" },
+    ];
+    // The IAM Driver rejects the Role before it reaches State.
+    await assert.rejects(
+      platform.transact((unit) =>
+        native.createNamespaceRole(
+          { policy: unit.iamPolicy },
+          role(`namespace-${action}`, permissions),
+        ),
+      ),
+      /managed Namespace Role permissions support only read/,
+    );
+    // The State writer independently refuses to persist the Role.
+    await assert.rejects(
+      platform.transact((unit) =>
+        unit.iamPolicy.createRole(role(`namespace-${action}-state`, permissions)),
+      ),
+      { name: "ScopeViolationError", message: /support only Namespace read/ },
+    );
+  }
+  assert.deepEqual(await platform.read((unit) => unit.iamPolicy.listRoles("namespace-a")), []);
+  // Non-Namespace kinds keep every action.
+  await platform.transact((unit) =>
+    native.createNamespaceRole(
+      { policy: unit.iamPolicy },
+      role("namespace-reader-agent-deleter", [
+        { action: "read", resourceKind: "namespace" },
+        { action: "delete", resourceKind: "agent" },
+      ]),
+    ),
+  );
+  await platform.transact((unit) =>
+    native.createNamespaceAccessBinding(
+      { policy: unit.iamPolicy },
+      {
+        id: "binding-namespace-reader",
+        namespaceId: "namespace-a",
+        subjectKind: "identity",
+        subjectId: "principal-unbound",
+        roleId: "namespace-reader-agent-deleter",
+        resourceKind: "namespace",
+        resourceId: "namespace-a",
+      },
+    ),
+  );
+  const decide = async (action) =>
+    (
+      await native.authorize({
+        principalId: "principal-unbound",
+        action,
+        resource: { kind: "namespace", id: "namespace-a", namespaceId: "namespace-a" },
+      })
+    ).allowed;
+  assert.equal(await decide("read"), true);
+  assert.equal(await decide("delete"), false);
+});
+
 test("fresh bootstrap seed creates human and service administrators on one shared Role", async () => {
   const seed = createBootstrapAdministratorSeed("ins_bootstrap", "issuer", { id: "user-admin" });
   assert.match(seed.principal.id, /^prn_/);

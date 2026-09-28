@@ -207,8 +207,9 @@ The subject must be an existing human Principal or a ServicePrincipal in the
 path Namespace. A human does not need a separate Namespace ServicePrincipal.
 The Role and target must exist in the path Namespace. Exact targets and Role
 permission kinds are `namespace`, `agent`, `agent_revision`, `configuration`,
-`credential_source`, `preset`, `secret`, or `service_account`. For a `namespace`
-target, `resourceId` must equal the Namespace ID in the path. A ServiceAccount
+`credential_source`, `preset`, `secret`, or `service_account`. `namespace`
+permissions support only `read`, and for a `namespace` target, `resourceId` must
+equal the Namespace ID in the path. A ServiceAccount
 resource is not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
 and extra fields are rejected. Native IAM commits validated policy and its
 attributable audit event together; later requests on other replicas see it

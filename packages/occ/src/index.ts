@@ -6096,6 +6096,9 @@ export class OpenClawController {
           throw new ScopeViolationError("IAM Role Permissions are invalid.");
         }
         this.assertNamespacePolicyResourceKind(permission.resourceKind);
+        if (permission.resourceKind === "namespace" && permission.action !== "read") {
+          throw new ScopeViolationError("IAM Namespace Role Permissions support only read.");
+        }
         const key = `${permission.action}\u0000${permission.resourceKind}`;
         if (seen.has(key)) {
           throw new ScopeViolationError("IAM Role Permissions contain duplicates.");

@@ -1014,6 +1014,60 @@ test("Namespace IAM routes bind existing humans to the exact Namespace and Agent
   assert.equal(bindings.data.length, 2, "rejected grants must leave policy unchanged");
 });
 
+test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespace binding", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("namespace-escalation-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "namespace-read-only-grant");
+  const createRole = (permissions) =>
+    controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+      body: { permissions },
+    });
+  for (const action of ["create", "update", "delete", "deploy", "operate", "administer"]) {
+    const rejected = await createRole([
+      { action: "read", resourceKind: "namespace" },
+      { action, resourceKind: "namespace" },
+    ]);
+    // OCC reports the ScopeViolation as not found, like other out-of-scope policy input.
+    assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "NOT_FOUND");
+  }
+  const roles = await controller.request("GET", `/namespaces/${namespace.id}/iam/roles`);
+  assert.deepEqual(roles.data, [], "rejected Namespace Roles must not be persisted");
+
+  const reader = await createRole([{ action: "read", resourceKind: "namespace" }]);
+  assert.equal(reader.status, 201, JSON.stringify(reader.body));
+  const binding = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/iam/access-bindings`,
+    {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: reader.data.id,
+        resourceKind: "namespace",
+        resourceId: namespace.id,
+      },
+    },
+  );
+  assert.equal(binding.status, 201, JSON.stringify(binding.body));
+  // Mirror persisted policy into the native IAM state, as production loadNativeIAMState does.
+  fixture.state.roles.push(reader.data);
+  fixture.state.bindings.push(binding.data);
+
+  const memberApp = fixture.createApp(member.principal);
+  const read = await injectedRequest(memberApp, "GET", `/namespaces/${namespace.id}`);
+  assert.equal(read.status, 200, JSON.stringify(read.body));
+  const deletion = await injectedRequest(memberApp, "DELETE", `/namespaces/${namespace.id}`);
+  assert.equal(deletion.status, 403, JSON.stringify(deletion.body));
+  const after = await controller.request("GET", `/namespaces/${namespace.id}`);
+  assert.equal(after.data.status, read.data.status, "the Namespace must not enter deletion");
+});
+
 test("Namespace IAM read routes serialize broad native policy without widening mutations", async () => {
   const fixture = await createInjectedFixture();
   const controller = {
