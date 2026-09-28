@@ -102,7 +102,7 @@ Private registries need the same cluster/node pull credentials.
 For a local trial, [build and import the images](local-operations.md#build-images-for-local-kubernetes)
 and set `OCC_INPUT_DIRECTORY` to the generated YAML directory. For registry-backed
 installs, [check the selected image digests](../../testing/images.md#check-published-images)
-and retain their exports. Set shell
+on native hosts for their target architectures and retain their exports. Set shell
 inputs before Kubernetes commands:
 
 ```bash
@@ -443,8 +443,8 @@ For later releases, follow the
 
 The published controller lacks GitHub sign-in; [build a compatible image](#build-and-publish-production-images).
 Follow the [single-controller profile](../../reference/authentication.md#github-sign-in-for-existing-accounts)
-during stopped maintenance. Installation is two-phase: install without GitHub as
-above, then enable it with `helm upgrade`.
+during stopped maintenance. Install without GitHub as above, then enable it with
+`helm upgrade`.
 
 Activation is one-way: the database refuses older images' sessions and
 `auth.github` must stay set. Never `helm rollback` past activation
