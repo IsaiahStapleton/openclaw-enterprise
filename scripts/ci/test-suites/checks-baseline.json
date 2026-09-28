@@ -190,6 +190,14 @@
       "path": "tests/integration/ci-runner.test.mjs"
     },
     {
+      "path": "tests/integration/metrics-monitoring-readiness.test.mjs",
+      "expectedTests": [
+        "datasource readiness retries a transient HTTP 400",
+        "a timed-out Prometheus response body retries and accepts a later valid query",
+        "malformed Prometheus responses remain query errors"
+      ]
+    },
+    {
       "path": "tests/integration/full-integration-preflight.test.mjs"
     },
     {

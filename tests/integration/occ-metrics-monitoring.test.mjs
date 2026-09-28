@@ -5,10 +5,14 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import test from "node:test";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
+import {
+  checkGrafanaDatasource,
+  queryPrometheus,
+  waitForMonitoring,
+} from "../helpers/metrics-monitoring-readiness.mjs";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
 import { startMetricsListener } from "../../apps/controller/src/metrics/listener.ts";
 
@@ -30,65 +34,9 @@ async function port() {
   return value;
 }
 
-function monitoringFailure(stage, reason, details = {}) {
-  const error = new Error(`Monitoring ${stage} failed: ${reason}`);
-  error.openclawCiDiagnostic = { kind: "metrics-monitoring", stage, reason, ...details };
-  return error;
-}
-
 async function containerState(name) {
   const { stdout } = await run(engine, ["inspect", "--format", "{{json .State}}", name]);
   return JSON.parse(stdout);
-}
-
-async function waitFor(stage, read, containers) {
-  const end = Date.now() + 60_000;
-  let lastHttpStatus;
-  while (Date.now() < end) {
-    // A detached container can exit successfully from `run -d` before its
-    // listener binds; waiting for a scrape would hide that setup failure.
-    for (const [role, name] of containers) {
-      let state;
-      try {
-        state = await containerState(name);
-      } catch {
-        throw monitoringFailure(stage, "query-error", { container: role, lastHttpStatus });
-      }
-      if (!state.Running) {
-        throw monitoringFailure(stage, "container-exited", {
-          container: role,
-          exitCode: state.ExitCode,
-          lastHttpStatus,
-        });
-      }
-    }
-    try {
-      if (await read()) {
-        return;
-      }
-    } catch (error) {
-      if (error.openclawCiDiagnostic?.reason === "query-error") {
-        throw error;
-      }
-      const connectionError = ["ECONNREFUSED", "ECONNRESET", "UND_ERR_SOCKET"].includes(
-        error.cause?.code,
-      );
-      const serverError = error.httpStatus >= 500 && error.httpStatus <= 599;
-      const datasourceProvisioning = stage === "grafana-datasource" && error.httpStatus === 404;
-      if (
-        !connectionError &&
-        error.name !== "TimeoutError" &&
-        !serverError &&
-        !datasourceProvisioning
-      ) {
-        throw error;
-      }
-      // These outcomes can occur while the listeners and provisioning start.
-      lastHttpStatus = error.httpStatus ?? lastHttpStatus;
-    }
-    await delay(500);
-  }
-  throw monitoringFailure(stage, "timeout", { lastHttpStatus });
 }
 
 test(
@@ -207,31 +155,8 @@ test(
       ],
       ["--tmpfs", "/tmp:rw,mode=1777"],
     );
-    const query = async (stage, expression) => {
-      const response = await fetch(
-        `${promURL}/api/v1/query?query=${encodeURIComponent(expression)}`,
-        { signal: AbortSignal.timeout(3_000) },
-      );
-      if (!response.ok) {
-        if (response.status < 500) {
-          throw monitoringFailure(stage, "query-error", { lastHttpStatus: response.status });
-        }
-        const error = new Error(`Prometheus query returned HTTP ${response.status}`);
-        error.httpStatus = response.status;
-        throw error;
-      }
-      let body;
-      try {
-        body = await response.json();
-      } catch {
-        throw monitoringFailure(stage, "query-error", { lastHttpStatus: response.status });
-      }
-      if (body.status !== "success" || !Array.isArray(body.data?.result)) {
-        throw monitoringFailure(stage, "query-error", { lastHttpStatus: response.status });
-      }
-      return body.data.result;
-    };
-    await waitFor(
+    const query = (stage, expression) => queryPrometheus(promURL, stage, expression);
+    await waitForMonitoring(
       "prometheus-up",
       async () =>
         (await query("prometheus-up", 'up{job="occ-api"}')).some(
@@ -241,9 +166,10 @@ test(
         ["server", server],
         ["agent", agent],
       ],
+      containerState,
     );
     await fixture.request("GET", "/installation");
-    await waitFor(
+    await waitForMonitoring(
       "occ-request",
       async () =>
         (
@@ -256,6 +182,7 @@ test(
         ["server", server],
         ["agent", agent],
       ],
+      containerState,
     );
     const dashboard = JSON.parse(
       await readFile("deploy/helm/openclaw-observability-demo/files/dashboard.json", "utf8"),
@@ -296,7 +223,7 @@ test(
         "GF_PLUGINS_PREINSTALL_DISABLED=true",
       ],
     );
-    await waitFor(
+    await waitForMonitoring(
       "grafana-health",
       async () => {
         const response = await fetch(`http://127.0.0.1:${grafanaPort}/api/health`, {
@@ -310,6 +237,7 @@ test(
         return true;
       },
       [["grafana", grafana]],
+      containerState,
     );
     const provisioned = await fetch(
       `http://127.0.0.1:${grafanaPort}/api/dashboards/uid/occ-development`,
@@ -318,25 +246,14 @@ test(
     assert.deepEqual(provisioned.dashboard.panels, dashboard.panels);
     // Grafana's HTTP listener can be ready before its datasource backend. Wait
     // for the actual Grafana-to-Prometheus query to succeed within the same bound.
-    await waitFor(
+    await waitForMonitoring(
       "grafana-datasource",
-      async () => {
-        const response = await fetch(
-          `http://127.0.0.1:${grafanaPort}/api/datasources/uid/occ-prometheus/health`,
-          { signal: AbortSignal.timeout(3_000) },
-        );
-        if (!response.ok) {
-          const error = new Error(`Grafana datasource returned HTTP ${response.status}`);
-          error.httpStatus = response.status;
-          throw error;
-        }
-        const datasource = await response.json();
-        return datasource.status === "OK";
-      },
+      () => checkGrafanaDatasource(`http://127.0.0.1:${grafanaPort}`),
       [
         ["grafana", grafana],
         ["server", server],
       ],
+      containerState,
     );
   },
 );
