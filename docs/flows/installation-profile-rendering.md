@@ -121,13 +121,17 @@ and worker peer expected by the broker sidecar.
 
 `scripts/render-installation-profile.mjs:writeYaml`
 
-Successful runs render deterministic YAML, then write `values.yaml`,
-`installation.yaml`, and `preflight.json`. Failed validation writes only
-`preflight.json` with `ok:false` and exits nonzero. The preflight report
-includes warnings, external prerequisites, and the next operator steps. It does
-not claim live readiness; Helm rendering, Secret creation, runtime proof,
-hosted discovery, Slack consumer activation, and repository registry creation
-are separate evidence.
+Successful runs render deterministic `installation.yaml`, compute a SHA-256
+checksum from those exact bytes, inject that digest into
+`values.yaml` as `controlPlane.installationChecksum`, then write
+`values.yaml`, `installation.yaml`, and `preflight.json`. Failed validation
+writes only `preflight.json` with `ok:false` and exits nonzero. The preflight
+report includes warnings, external prerequisites, and the next operator steps.
+It tells the operator to update the Installation startup Secret before the Helm
+upgrade so API and worker pod-template annotations roll when startup-only
+configuration changes. It does not claim live readiness; Helm rendering, Secret
+creation, runtime proof, hosted discovery, Slack consumer activation, and
+repository registry creation are separate evidence.
 
 ## Debugging and Verification
 
@@ -138,6 +142,9 @@ are separate evidence.
   `installation.yaml` are intentionally absent.
 - Run `helm template oce deploy/helm/openclaw-enterprise --namespace <namespace> --values <out-dir>/values.yaml`
   to check chart-level validation before applying the chart.
+- Startup-only input changes should change `controlPlane.installationChecksum`
+  in `values.yaml` and the API/worker deployment pod-template annotations in
+  Helm output.
 - For runtime proof, continue through the production installation and Agent
   deployment guides. Rendered files alone do not prove native admin access,
   Codex sandboxing, hosted discovery, Slack connectivity, or repository
@@ -163,3 +170,5 @@ are separate evidence.
 - 2026-09-28 17:04: Clarified that Codex defaults to existing `codex_pat` token credentials and renders managed ServiceAccount wiring only when explicitly supplied. (authoring-run/6f2a325a-cf1c-4277-9ce3-7623626f68c6 - 6c56149f1f2b7290d8526d87c3624c9b7db09fbf)
 
 - 2026-09-28 17:31: Documented stricter profile preflight checks for IPv4 CIDRs, native-admin DNS domains, and paired metrics selectors. (authoring-run/6f2a325a-cf1c-4277-9ce3-7623626f68c6 - 6c56149f1f2b7290d8526d87c3624c9b7db09fbf)
+
+- 2026-09-28 18:02: Documented rendered Installation checksum injection into Helm values and the Secret-before-Helm apply order. (authoring-run/6f2a325a-cf1c-4277-9ce3-7623626f68c6 - 6c56149f1f2b7290d8526d87c3624c9b7db09fbf)

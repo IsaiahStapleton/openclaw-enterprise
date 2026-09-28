@@ -144,7 +144,9 @@ node scripts/render-installation-profile.mjs \
 
 On success, the output directory contains:
 
-- `values.yaml`: Helm values for `deploy/helm/openclaw-enterprise`.
+- `values.yaml`: Helm values for `deploy/helm/openclaw-enterprise`, including
+  `controlPlane.installationChecksum` computed from the exact rendered
+  `installation.yaml` bytes.
 - `installation.yaml`: Installation startup YAML for the
   `occ-installation-startup` Secret.
 - `preflight.json`: rendered output paths, warnings, prerequisites, and next
@@ -156,7 +158,11 @@ If required input is missing or unsupported input is present, the renderer write
 
 ## Apply rendered output
 
-Create the Installation startup Secret from the rendered file:
+Create or update the Installation startup Secret from the rendered file before
+running Helm. The rendered Helm values include a checksum of this exact
+`installation.yaml`; applying the Secret first ensures the control-plane rollout
+loads the same startup configuration that Helm uses for its pod-template
+checksum.
 
 ```sh
 kubectl --namespace openclaw-system create secret generic occ-installation-startup \

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const digestA = "a".repeat(64);
 const digestB = "b".repeat(64);
 const digestC = "c".repeat(64);
+const digestD = "d".repeat(64);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const helm = process.env.OCC_HELM_BIN ?? "helm";
 
@@ -146,6 +147,20 @@ function helmTemplate(output, extraValueFiles = []) {
   );
 }
 
+function deploymentChecksum(manifests, component) {
+  const document = manifests
+    .split(/\n---\n/)
+    .find(
+      (entry) =>
+        entry.includes("kind: Deployment") &&
+        entry.includes(`app.kubernetes.io/component: ${component}`),
+    );
+  assert.ok(document, `expected ${component} Deployment in Helm output`);
+  const match = document.match(/openclaw\.dev\/installation-checksum: "([a-f0-9]{64})"/);
+  assert.ok(match, `expected ${component} installation checksum annotation`);
+  return match[1];
+}
+
 function renderError(callback) {
   try {
     callback();
@@ -240,6 +255,36 @@ test("rendered profile values pass Helm chart validation", { skip: helmSkip }, (
   );
   assert.match(helmTemplate(repositoryOutput), /repository-credentials/);
 });
+
+test(
+  "startup-only installation changes roll API and worker pod templates",
+  { skip: helmSkip },
+  () => {
+    const original = render("codex", codexInput());
+    const changed = render(
+      "codex",
+      codexInput({
+        runtime: {
+          image: `registry.example.invalid/openclaw-enterprise/runtime@sha256:${digestD}`,
+        },
+      }),
+    );
+
+    assert.match(original.values, /installationChecksum: [a-f0-9]{64}/);
+    assert.match(changed.values, /installationChecksum: [a-f0-9]{64}/);
+    assert.notEqual(original.installation, changed.installation);
+
+    const originalManifests = helmTemplate(original);
+    const changedManifests = helmTemplate(changed);
+    for (const component of ["api", "worker"]) {
+      assert.notEqual(
+        deploymentChecksum(originalManifests, component),
+        deploymentChecksum(changedManifests, component),
+        `${component} checksum annotation changes when only installation.yaml changes`,
+      );
+    }
+  },
+);
 
 test("Helm catches generated profile Secret collisions", { skip: helmSkip }, () => {
   const repositoryOutput = render(

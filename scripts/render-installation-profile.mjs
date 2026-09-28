@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { dirname, resolve } from "node:path";
@@ -171,9 +172,16 @@ function toYaml(value, indent = 0) {
   return yamlScalar(value);
 }
 
+function renderYaml(value) {
+  return `${toYaml(value)}\n`;
+}
+
 async function writeYaml(path, value) {
-  const rendered = `${toYaml(value)}\n`;
-  await writeFile(path, rendered);
+  await writeFile(path, renderYaml(value));
+}
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function asString(source, path, diagnostics, { pattern, validate, description } = {}) {
@@ -1021,9 +1029,14 @@ const output = {
 };
 
 if (diagnostics.errors.length === 0) {
+  const installationYaml = renderYaml(installation);
+  values.controlPlane = {
+    ...(values.controlPlane ?? {}),
+    installationChecksum: sha256Hex(installationYaml),
+  };
   await Promise.all([
     writeYaml(output.values, values),
-    writeYaml(output.installation, installation),
+    writeFile(output.installation, installationYaml),
   ]);
 }
 const preflight = await writePreflight(outDir, profile.name, diagnostics, output);
