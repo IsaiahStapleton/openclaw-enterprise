@@ -161,7 +161,6 @@ test("repository capability admits only configured Compute-owned native topologi
   );
   for (const [id, mode] of [
     ["openclaw", "embedded"],
-    ["openclaw", "dedicated"],
     ["codex", "dedicated"],
   ]) {
     const harness = { id, mode, version: "1.0.0" };
@@ -191,6 +190,7 @@ test("repository capability admits only configured Compute-owned native topologi
   }
   for (const [id, mode] of [
     ["codex", "embedded"],
+    ["openclaw", "dedicated"],
     ["unknown", "dedicated"],
     ["codex", "unknown"],
   ]) {
