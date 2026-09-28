@@ -99,6 +99,24 @@ provider credential
 is needed for these cases. Hosted PostgreSQL CI prepares Chromium after the
 frozen workspace dependencies; local runs use the prepared browser above.
 
+## Password-default sign-in
+
+GitHub sign-in is optional; these suites prove the default. Each needs a fresh
+`OCC_TEST_DATABASE_URL` and composes the production API from the settings the
+example Helm values render, after the real production bootstrap:
+
+- `postgres-password-default.test.mjs`: GitHub unconfigured. Administrator
+  onboarding, account creation, Origin-checked sign-out, refused GitHub routes,
+  and a per-client password flood limit.
+- `postgres-password-default-activation.test.mjs`: the GitHub upgrade enrols
+  earlier password accounts, logs skipped ones, and keeps account creation.
+- `postgres-github-outage.test.mjs`: a fixture provider that errors, then stalls
+  past the ten-second deadline. GitHub sign-in fails closed, passwords keep
+  working, and the recovery administrator signs in while the shared lane is full.
+
+`tests/integration/password-default-chart.test.mjs` (Images and Packaging lane,
+Helm and yq) checks that the chart renders exactly those settings.
+
 ## Authentication maintenance
 
 `tests/integration/auth-maintain.test.mjs` runs the real `scripts/auth-maintain.mjs`

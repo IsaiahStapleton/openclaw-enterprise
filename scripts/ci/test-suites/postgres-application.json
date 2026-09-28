@@ -259,6 +259,24 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-password-default.test.mjs",
+      "expectedTests": [
+        "a password-only install without GitHub onboards, signs in and out, and refuses GitHub routes"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-password-default-activation.test.mjs",
+      "expectedTests": [
+        "password accounts from before GitHub activation keep signing in, and creation continues after it"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-github-outage.test.mjs",
+      "expectedTests": [
+        "a GitHub outage fails GitHub sign-in closed while password sign-in keeps working"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-trusted-proxy.test.mjs",
       "expectedTests": [
         "sign-in admission keys on the client behind a trusted ingress and ignores other peers' headers"
