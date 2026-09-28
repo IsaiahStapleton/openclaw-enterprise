@@ -1,5 +1,10 @@
 import { scenarios } from "./public/scenarios.mjs";
 
+// Injected by the Storybook build from the prepared static assets.
+/* global __CONSOLE_STORY_BUILD__ */
+const fixtureUrl = (id) =>
+  `/storybook-fixtures/frame.html?story=${encodeURIComponent(id)}&v=${__CONSOLE_STORY_BUILD__}`;
+
 export function story(id) {
   const scenario = scenarios[id];
   return {
@@ -31,9 +36,19 @@ export function story(id) {
         gap.style.cssText = "padding:12px;border:1px solid #bd7f23;background:#fff3d6";
         root.append(gap);
       }
+      if (scenario.nextStory) {
+        const next = scenarios[scenario.nextStory];
+        const nextLink = document.createElement("a");
+        nextLink.href = fixtureUrl(scenario.nextStory);
+        nextLink.target = "_blank";
+        nextLink.rel = "noopener noreferrer";
+        nextLink.textContent = `Next segment: ${next.name}`;
+        nextLink.style.cssText = "display:inline-block;margin:0 0 12px;font-weight:700";
+        root.append(nextLink);
+      }
       const frame = document.createElement("iframe");
       frame.title = `${scenario.name}: interactive console`;
-      frame.src = `/storybook-fixtures/frame.html?story=${encodeURIComponent(id)}`;
+      frame.src = fixtureUrl(id);
       frame.style.cssText = `display:block;width:100%;max-width:${scenario.mobile ? "390px" : "1600px"};height:min(900px, calc(100vh - 80px));min-height:480px;border:1px solid #d6d0c5;background:white`;
       frame.setAttribute(
         "sandbox",
@@ -43,7 +58,7 @@ export function story(id) {
       reset.textContent = "Reset story";
       reset.style.cssText = "padding:8px 16px;margin:0 0 12px;cursor:pointer";
       reset.addEventListener("click", () => {
-        frame.src = `/storybook-fixtures/frame.html?story=${encodeURIComponent(id)}`;
+        frame.src = fixtureUrl(id);
       });
       root.append(reset, frame);
       return root;
