@@ -1,8 +1,8 @@
 # RBAC security
 
 Read the [current-source and release-scope amendment](../31-basic-rbac.md#current-source-amendment--2026-09-24)
-before applying this original proposal. Its broader invocation scope remains
-disputed for 0.x; the requirements below are not implementation acceptance.
+before applying this original proposal. Its broader invocation scope is deferred
+past 0.x; the requirements below are not implementation acceptance.
 
 The [proposal](../31-basic-rbac.md) protects a person's content and the authority
 used by their Agent request. Its controls are selected requirements. Missing

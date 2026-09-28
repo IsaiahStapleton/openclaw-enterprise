@@ -74,7 +74,7 @@ create-only Console and API input, applied once before first runtime execution.
 [Agent presets](33-agent-presets.md) — Implementing; reusable, partial Agent launch
 templates with variables, CRUD APIs, and console selection.
 
-[Basic role-based access control](31-basic-rbac.md) — Proposed; release scope disputed.
+[Basic role-based access control](31-basic-rbac.md) — Direction; deferred past 0.x.
 Personal and team Agent access, exact grants, and withdrawal; see the current-source amendment.
 
 [Harness authentication bindings](30-harness-auth-binding.md) — Accepted for implementation;

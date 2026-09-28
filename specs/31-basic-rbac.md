@@ -17,9 +17,8 @@ Its references to “selected” scope describe that proposal, not an accepted r
 commitment. The [outstanding scope review](https://github.com/openclaw/openclaw-enterprise/pull/245#pullrequestreview-5262687790)
 objects to another authorization layer between Agents and channels for 0.x and
 calls for using OpenClaw Gateway's existing permission model. The invocation,
-audience mediation and protected-turn program here remains disputed and must not
-be treated as an approved 0.x requirement. Maintainers resolved that scope
-decision: this package lands as direction, deferred past 0.x.
+audience mediation and protected-turn program here was disputed and is not a 0.x
+requirement: this package lands as direction, deferred past 0.x.
 
 [Authorization at the refreshed base](https://github.com/openclaw/openclaw-enterprise/blob/5ebd7305b0876db33276a249934bc82073b63424/docs/reference/authorization.md#manage-namespace-policy)
 already supports immutable Namespace Roles with administrator-selected permissions
