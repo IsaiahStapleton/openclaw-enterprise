@@ -97,6 +97,17 @@ and logout requests without browser Origin headers. No live provider credential
 is needed for these cases. Hosted PostgreSQL CI prepares Chromium after the
 frozen workspace dependencies; local runs use the prepared browser above.
 
+## Authentication maintenance
+
+`tests/integration/auth-maintain.test.mjs` runs the real `scripts/auth-maintain.mjs`
+command against a fresh database: `OCC_TEST_DATABASE_URL` as `occ_app` and
+`OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL` as `occ_migrator` for the same database.
+It covers activation, the refusal while another client is connected, enrolment
+repair, recovery password reset, session purge, and deactivation back to the
+legacy profile, including the disabled-account refusal. The suite closes its own
+connections before each command; any other client on the database makes the
+commands exit 2. It does not exercise a Kubernetes Job or a scaled-down API.
+
 ## Canonical migration compatibility
 
 The mandatory native `postgres` lane runs
@@ -140,6 +151,7 @@ provider operation. Developer recovery is documented under
 | `OCC_PRODUCTION_WIREUP_DATABASE_URL`           | Production bootstrap integration.          | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent.                                                             |
 | `OCC_BOOTSTRAP_FAILURE_DATABASE_URL`           | Bootstrap race and uncertain-commit tests. | Application-role URL for a migrated, disposable loopback database named `openclaw_failures_*`. The suite resets its tables; skipped when absent.                                           |
 | `OCC_BOOTSTRAP_FAILURE_MIGRATION_DATABASE_URL` | Bootstrap failure fixture setup/reset.     | Optional for the local `occ_app` fixture, which uses `occ_migrator` and its local test password; otherwise required. Must target the same host, port, and database as the application URL. |
+| `OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL`     | Authentication maintenance integration.    | Migrator-role URL for the same fresh database as `OCC_TEST_DATABASE_URL`; the case is skipped when absent.                                                                                 |
 | `OCC_TEST_KUBERNETES_CONFIGURATION`            | Optional live Configuration coverage.      | Set to `1` only when the PostgreSQL integration also has an explicitly configured live Kubernetes Configuration Driver.                                                                    |
 
 The bootstrap integration creates its own exact Installation and administrators;
