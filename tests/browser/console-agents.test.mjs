@@ -8821,8 +8821,8 @@ test("a delayed restored Preset list cannot read a selection after starting with
     await heldList;
     await route.continue();
   });
-  const listResponse = page.waitForResponse(
-    (response) => response.url().endsWith(`/namespaces/${namespace.id}/presets`),
+  const listResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`/namespaces/${namespace.id}/presets`),
   );
   let exactReadsBeforeRelease;
   try {
@@ -8865,7 +8865,9 @@ test("denied Preset reads do not automatically start an Agent form", async (t) =
   const starter = presets.data.find((preset) => preset.name === "default-codex");
   const { page } = await newPage(t, fixture);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
-  await page.getByRole("button", { name: "Start with default Preset" }).waitFor({ state: "visible" });
+  await page
+    .getByRole("button", { name: "Start with default Preset" })
+    .waitFor({ state: "visible" });
   await page.waitForFunction(() => !globalThis.document.querySelector("#agent-preset").disabled);
   // Deny the exact read after the list is visible to exercise a changed grant.
   fixture.policy.restrictions.push({

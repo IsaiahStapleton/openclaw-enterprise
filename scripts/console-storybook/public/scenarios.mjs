@@ -1651,7 +1651,8 @@ export const scenarios = {
     name: "Default Preset access denied",
     path: create,
     rules: [{ path: presetSecretsPath.replace(/secrets$/, "presets"), status: 403 }],
-    description: "Denied Preset access leaves quick-start disabled and reports the error. Start without Preset remains available as a separate action.",
+    description:
+      "Denied Preset access leaves quick-start disabled and reports the error. Start without Preset remains available as a separate action.",
   },
   createNoPresets: {
     group: "Pages/Create Agent",

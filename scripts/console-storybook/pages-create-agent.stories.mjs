@@ -105,7 +105,10 @@ export const CreateBoundCredentialPreset = {
   name: "Preset with saved model credential",
 };
 export const CreateNoPresets = { ...story("createNoPresets"), name: "No Presets" };
-export const CreateWithoutPreset = { ...story("createWithoutPreset"), name: "Start without Preset" };
+export const CreateWithoutPreset = {
+  ...story("createWithoutPreset"),
+  name: "Start without Preset",
+};
 export const CreateAnthropic = {
   ...story("createAnthropic"),
   name: "Anthropic with OpenClaw harness",
