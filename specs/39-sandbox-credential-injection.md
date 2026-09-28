@@ -25,19 +25,21 @@ never receives a real value.
 Add a `credential_gateway` Driver capability to manage credential sources and
 their attachment to Agent revisions. How a credential reaches a request belongs
 to the implementation; OCE's contract never names the mechanism. OpenShell
-implements the common interface with its paired Sandbox. The first target pairs the GitHub broker with a static OpenShell model
-source in one dedicated revision.
+implements the common interface with its paired Sandbox. The first target pairs
+the GitHub broker with a static OpenShell model source in one dedicated
+revision.
 
-Blocked on main: Kubernetes Compute refuses repository credentials whenever a
-SandboxDriver is selected (`validateRepositoryCredentialSupport`), and
-credential-source model auth requires a SandboxDriver, so the combined revision
-is refused at repository listing, deploy admission (409) and dispatch. Reaching
-it requires lifting that guard, carrying repository material in
+Blocked on main: an Installation cannot select `drivers.repo` with
+`drivers.sandbox` (`installation-config.ts` startup check), and Compute's
+`validateRepositoryCredentialSupport` refuses repository credentials with any
+SandboxDriver at listing, deploy admission (409), dispatch and material build.
+Credential-source model auth requires a SandboxDriver. Reaching the combined
+revision requires lifting both guards, carrying repository material in
 `HarnessWorkloadRequirements`, and an OpenShell policy route to the repository
-gateway; until then the GitHub broker is supported only on Compute-owned
-runtimes and the OpenShell model source only without repository bindings. The
-adapter keeps the existing OCE HTTPS repository service as the only Git and `gh`
-destination, routed with `tls: skip` so OpenShell does not substitute
+gateway; until then the GitHub broker is supported only in installations without
+a Sandbox Driver and the OpenShell model source only without repository
+bindings. The adapter keeps the OCE HTTPS repository service as the only Git
+and `gh` destination, routed with `tls: skip` so OpenShell does not substitute
 credentials on that hop; clients still verify the service certificate. No
 direct GitHub route may bypass it.
 
@@ -205,14 +207,16 @@ gateway selected, secret-backed `harnessAuth` methods return 409; there is no
 fallback to environment delivery. Proposed: a list of non-model sources per Agent.
 
 IAM follows existing Secret patterns. Source read and delete are exact-resource
-actions; create is checked on the Namespace. Registration also requires `operate` on each referenced
-OCC Secret. Binding a source to an Agent requires `operate` on the source for the
-actor, and admission also requires it for `Agent.servicePrincipalId`.
+actions; create is checked on the Namespace. Registration also requires
+`operate` on each referenced OCC Secret. Binding a source to an Agent requires
+`operate` on the source for the actor, and admission also requires it for
+`Agent.servicePrincipalId`.
 
 ### Lifecycle and authority
 
 OpenShell checks caller role on every RPC and token scope when the gateway
-enforces OIDC scopes (`proto/openshell.proto` authorization options). Main uses one principal; the proposal splits it:
+enforces OIDC scopes (`proto/openshell.proto` authorization options). Main uses
+one principal; the proposal splits it:
 
 - **Worker principal:** global `platform_admin`, which the Sandbox driver needs
   for workspaces, with `workspace:*` and `sandbox:*` scopes and no `provider:*`
@@ -226,14 +230,14 @@ enforces OIDC scopes (`proto/openshell.proto` authorization options). Main uses 
 | Operation                 | Principal | OpenShell RPCs (scope; role)                                                                                                                                                                                |
 | ------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Prepare a Namespace       | Worker    | `GetWorkspace` (`workspace:read`; user), `CreateWorkspace` (`workspace:write`; `platform_admin`), `AddWorkspaceMember` for the API principal as admin and `ListWorkspaceMembers` (`workspace:write`/`read`) |
-| Create or update a source | API       | `GetProviderProfile` (`provider:read`), `ImportProviderProfiles`, `UpdateProviderProfiles`, `CreateProvider`, `UpdateProvider`, `ConfigureProviderRefresh` (`provider:write`; admin)                        |
+| Create or update a source | API       | `GetProviderProfile`, `GetProvider` (`provider:read`), `ImportProviderProfiles`, `UpdateProviderProfiles`, `CreateProvider`, `UpdateProvider`, `ConfigureProviderRefresh` (`provider:write`; admin)         |
 | Rotate a source           | API       | `RotateProviderCredential` (`provider:write`; admin)                                                                                                                                                        |
 | Read source status        | API       | `GetProvider`, `GetProviderRefreshStatus` (`provider:read`; user)                                                                                                                                           |
 | Provision a revision      | Worker    | `CreateSandbox` with `SandboxSpec.providers` (`sandbox:write`; user)                                                                                                                                        |
 | Read attachment status    | Worker    | `GetSandboxProviderStatus` (`sandbox:read`; user)                                                                                                                                                           |
 | Withdraw one Agent        | Worker    | `DetachSandboxProvider` (`sandbox:write`; user), then `GetSandboxProviderStatus`                                                                                                                            |
 | Retire a revision         | Worker    | `DeleteSandbox` (`sandbox:write`; user); attachments go with the Sandbox                                                                                                                                    |
-| Delete a source           | API       | `DeleteProvider`, `DeleteProviderProfile` with the last source per `ListProviders` (`provider:write`; admin), then `GetProvider` (`provider:read`)                                                          |
+| Delete a source           | API       | `GetProvider`, `ListProviders` (`provider:read`), `DeleteProvider`, and `DeleteProviderProfile` for the last source (`provider:write`; admin)                                                               |
 | Delete a Namespace        | Worker    | `DeleteWorkspace` (`workspace:write`; `platform_admin`)                                                                                                                                                     |
 
 The API uses `SecretDriver.withValue` for authorized registration, passing
@@ -338,7 +342,7 @@ Confirm before `Accepted`:
 ## Tests
 
 Extend `tests/integration/sandbox-driver-openshell-k3d-real.test.mjs` through the
-regular API and worker workflow:
+API and worker workflow:
 
 - Register a static OpenAI source, deploy a dedicated Codex Agent, and complete a
   real model turn. Verify the key is absent from the Harness Pod spec, Agent- and
@@ -387,7 +391,7 @@ The gateway copy does not follow Secret changes or grant removal; refresh and
 bounded withdrawal remain future work.
 
 Hosted evidence: none as of 2026-09-28; the `openshell` full-integration lane
-has not executed on main. Local runs only (#461 body).
+has not executed on main.
 
 The implementation differs from this proposal:
 
