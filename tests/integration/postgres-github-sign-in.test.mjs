@@ -204,7 +204,11 @@ test(
     }
     const beforeInvalidConfiguration = await activationState();
     assert.ok(beforeInvalidConfiguration.session.length > 0);
-    assert.deepEqual(beforeInvalidConfiguration.human_authentication_accounts, []);
+    // Only the account created through the provisioning route is enrolled before activation.
+    assert.deepEqual(
+      (await pool.query("SELECT user_id FROM occ.human_authentication_accounts")).rows,
+      [{ user_id: limited.id }],
+    );
     assert.deepEqual(beforeInvalidConfiguration.human_authentication_recovery, []);
     const productionRuntime = await loadInstallationConfiguration({
       mode: "production",
@@ -651,18 +655,70 @@ test(
       .map(({ name, value }) => `${name}=${value}`)
       .join("; ");
     const adminHeaders = { cookie: browserCookies, origin };
-    const refused = await app.inject({
+    // A failed provisioning (unknown Role) leaves no user, method or Principal behind.
+    const badRole = await app.inject({
       method: "POST",
       url: "/api/auth/accounts",
       headers: adminHeaders,
-      payload: { email: "after-activation@example.test", password, roleId: role.id },
+      payload: { email: "bad-role@example.test", password, roleId: "role-does-not-exist" },
     });
-    assert.equal(refused.statusCode, 409, refused.body);
+    assert.equal(badRole.statusCode, 400, badRole.body);
     assert.equal(
       (await pool.query('SELECT count(*)::int AS count FROM occ."user"')).rows[0].count,
       2,
     );
     assert.deepEqual(await state.loadNativeIAMState(installation.id), before);
+    // Account creation stays available with GitHub sign-in activated.
+    const opened = await app.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: adminHeaders,
+      payload: { email: "after-activation@example.test", password, roleId: role.id },
+    });
+    assert.equal(opened.statusCode, 201, opened.body);
+    const createdId = opened.json().data.id;
+    assert.equal(
+      (await pool.query('SELECT count(*)::int AS count FROM occ."user"')).rows[0].count,
+      3,
+    );
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: adminHeaders,
+      payload: { email: "after-activation@example.test", password, roleId: role.id },
+    });
+    assert.equal(duplicate.statusCode, 409, duplicate.body);
+    const createdLogin = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      headers: { origin },
+      payload: { email: "after-activation@example.test", password },
+    });
+    assert.equal(createdLogin.statusCode, 200, createdLogin.body);
+    const createdSession = await app.inject({
+      url: "/api/auth/session",
+      headers: { cookie: cookieHeaderFromSetCookie(createdLogin.headers["set-cookie"]) },
+    });
+    assert.equal(createdSession.json().data.user.id, createdId);
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/auth/accounts/${createdId}/providers/github`,
+          headers: adminHeaders,
+          payload: {
+            subject: "33333333",
+            expectedVersion: (await readAccount(createdId, adminHeaders)).version,
+          },
+        })
+      ).statusCode,
+      200,
+    );
+    assert.ok(
+      (await readAccount(createdId, adminHeaders)).methods.some(
+        (method) => method.subject === "33333333",
+      ),
+    );
     assert.equal(
       (
         await app.inject({
