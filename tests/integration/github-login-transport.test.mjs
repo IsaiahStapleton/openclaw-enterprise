@@ -89,6 +89,14 @@ function loginFixture(overrides = {}) {
           headers: { origin },
         }),
       ),
+    result: (attemptId, cookie) =>
+      auth.handler(
+        new Request(`${origin}/api/auth/oce/providers/github/result`, {
+          method: "POST",
+          headers: { origin, cookie, "content-type": "application/json" },
+          body: JSON.stringify({ attemptId }),
+        }),
+      ),
     password: (password = "too-short") =>
       auth.handler(
         new Request(`${origin}/api/auth/oce/password`, {
@@ -103,7 +111,14 @@ function loginFixture(overrides = {}) {
 async function expectDenied(response) {
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { message: "Authentication was not accepted." });
-  assert.doesNotMatch(response.headers.get("set-cookie") ?? "", /session_token/);
+  assert.doesNotMatch(response.headers.get("set-cookie") ?? "", /session_token|login_receipt/);
+}
+
+function cookiePairs(response) {
+  return response.headers
+    .getSetCookie()
+    .map((cookie) => cookie.split(";", 1)[0])
+    .join("; ");
 }
 
 function token(response) {
@@ -433,10 +448,81 @@ test(
             const maxAge = Number(/Max-Age=(\d+)/i.exec(cookie)?.[1]);
             assert.ok(maxAge > 0 && maxAge < 28_800, "Session cookie must subtract elapsed time");
             assert.deepEqual(await response.json(), { authenticated: true });
+            assert.match(response.headers.get("set-cookie"), /__Host-occ_login_receipt=/);
           }
         },
       );
     }
+
+    await t.test(
+      "callback receipt binds the starting attempt and exchanges once for its session key",
+      async () => {
+        const createdAt = new Date();
+        const user = {
+          id: "existing-user",
+          name: "Existing user",
+          email: "existing@example.test",
+          emailVerified: false,
+          createdAt,
+          updatedAt: createdAt,
+        };
+        let issued;
+        const login = loginFixture({
+          snapshotExternal: async () => ({ user, proof: { userId: user.id } }),
+          issueSession: async (_proof, session) => {
+            issued = {
+              ...session,
+              createdAt,
+              updatedAt: createdAt,
+              expiresAt: new Date(createdAt.getTime() + 28_800_000),
+            };
+            return issued;
+          },
+          currentSession: async (token) =>
+            issued?.token === token ? { ...issued, user } : undefined,
+        });
+        serve = (request, response) => {
+          if (request.url === "/login/oauth/access_token") {
+            return token(response);
+          }
+          response.end(JSON.stringify({ id: 12345678 }));
+        };
+        const started = await login.start();
+        const other = await (await login.start()).json();
+        const { url, attemptId } = await started.json();
+        assert.match(attemptId, /^[A-Za-z0-9_-]{43}$/);
+        assert.notEqual(attemptId, other.attemptId, "each attempt has its own public id");
+        const attemptState = new URL(url).searchParams.get("state");
+        assert.equal(url.includes(attemptId), false, "the provider never sees the attemptId");
+
+        const callback = await login.callback(`state=${attemptState}&code=fixture-code`);
+        assert.equal(callback.status, 200);
+        const receipt = callback.headers
+          .getSetCookie()
+          .find((value) => value.startsWith("__Host-occ_login_receipt="));
+        assert.ok(receipt, "successful callback sets the login receipt");
+        assert.match(receipt, /Max-Age=120/);
+        assert.match(receipt, /Path=\//);
+        assert.match(receipt, /HttpOnly/i);
+        assert.match(receipt, /Secure/i);
+        assert.match(receipt, /SameSite=Strict/i);
+        // The receipt names the session without carrying its bearer token.
+        assert.equal(receipt.includes(issued.token), false);
+        const cookies = cookiePairs(callback);
+
+        // Another tab's attempt cannot claim this session.
+        await expectDenied(await login.result(other.attemptId, cookies));
+        const exchanged = await login.result(attemptId, cookies);
+        assert.equal(exchanged.status, 200);
+        assert.doesNotMatch(exchanged.headers.get("set-cookie") ?? "", /session_token/);
+        assert.match(exchanged.headers.get("set-cookie") ?? "", /occ_login_receipt=;.*Max-Age=0/);
+        const { sessionKey } = await exchanged.json();
+        assert.match(sessionKey, /^[A-Za-z0-9_-]{43}$/);
+        assert.equal(sessionKey.includes(issued.id), false);
+        // A copied receipt is single-use even while it is still within its lifetime.
+        await expectDenied(await login.result(attemptId, cookies));
+      },
+    );
 
     await t.test(
       "attempt cookie lifetime uses State duration despite controller clock skew",
