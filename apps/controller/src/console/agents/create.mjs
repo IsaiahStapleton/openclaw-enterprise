@@ -767,6 +767,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     context,
     input: plugins,
     canDiscover: () => Boolean(discoveryCredential()),
+    canPrefetch: () =>
+      pluginDiscoveryCredential !== null &&
+      (binding?.method ?? authMethod.value) === "codex_pat" &&
+      Boolean(binding?.source ?? modelCredentialSource ?? apiKey.value.trim()),
     isPending: () => pending,
     requestBody: (body) => ({ ...discoveryCredential(), ...body }),
     unavailableMessage: () =>
