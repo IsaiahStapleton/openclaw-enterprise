@@ -1,7 +1,7 @@
 ---
 created: 2026-09-23
-updated: "2026-09-26"
-last_updated_session: "authoring-run/1495f489-e298-44e9-b75d-6a49445d35e3"
+updated: "2026-09-28"
+last_updated_session: "authoring-run/ef0e4dd2-3f52-48b4-a742-60dfbb85864a"
 ---
 
 # Production image upgrade flow
@@ -30,160 +30,127 @@ Doctor lint. Model and external integration checks remain operator tasks.
 
 ```mermaid
 graph TD
-    A["Validate protected inputs and target Installation"] --> B{"Runtime image selected?"}
-    B -->|No| C["Render controller candidate"]
-    C --> D["Run Helm with new controller image"]
-    D --> E{"API and worker ready?"}
-    E -->|No| F["Stop after OCC rollout failure"]
-    E -->|Yes| G["Return controller rollout result"]
-    B -->|Yes| H{"Complete fleet inventory available?"}
-    H -->|No| I["Stop before mutation"]
-    H -->|Yes| J["Freeze running Agent baseline"]
-    J --> K["Update runtime configuration and run Helm"]
-    K --> L{"API and worker ready?"}
-    L -->|No| M["Stop before Agent deployment"]
-    L -->|Yes| N["Deploy every baseline Agent concurrently"]
-    N --> O{"All revisions and Pods ready?"}
-    O -->|No| P["Preserve partial results for recovery"]
-    O -->|Yes| Q{"Doctor lint passes in each gateway?"}
-    Q -->|No| R["Stop with diagnostic evidence"]
-    Q -->|Yes| S["Hand off application checks"]
+    A["Validate inputs and freeze fleet"] --> B["Render candidate and save recovery record"]
+    B --> C["Read live Secret and Helm state"]
+    C --> D{"Candidate Helm release deployed?"}
+    D -->|No| E["Stop API and worker Pods"]
+    E --> F["Update Secret and run Helm migration"]
+    F --> G{"Helm completes?"}
+    G -->|No| H["Inspect migration and release before retry"]
+    H --> C
+    G -->|Yes| I["Verify OCC rollout"]
+    D -->|Yes| I
+    I --> J{"Runtime release?"}
+    J -->|No| K["Hand off application checks"]
+    J -->|Yes| L["Deploy recorded Agents"]
+    L --> M{"Dispatch response known?"}
+    M -->|No| N["Read Agent and stop for reconciliation"]
+    N --> L
+    M -->|Yes| O["Check revisions, Pods, and Doctor"]
+    O --> K
 ```
 
 ## Execution Trace
 
-For repository-enabled releases, `scripts/upgrade-production-images` reads the
-worker's broker origin after checking protected/live values and Installation
-identity. It validates the origin against the release namespace, Service name,
-and cluster domain, then writes the exact hostname and Service name into the
-candidate values. Explicit conflicting settings stop the upgrade.
-`deploy/helm/openclaw-enterprise/templates/_helpers.tpl` restricts that hostname
-to the selected Service's namespace-qualified or cluster-qualified DNS name.
-The sidecar uses it for certificate validation and new repository sessions.
-See the [repository installation guide](../guides/repository-credentials/installation.md).
+### 1. Prepare and freeze the target
 
-### 1. Validate the target and selected ownership
+`scripts/upgrade-production-images:213`
 
-`scripts/upgrade-production-images:110`
+The script verifies the protected files, cluster, deployed Helm release, and
+matching OCC and Secret Installation IDs. It compares protected and live
+configuration outside the selected image fields. A runtime release also reads
+complete authorized inventory and records every running Agent's baseline
+revision. Nonterminal deployment work, a missing active revision, or an unready
+Namespace stops preparation. Stopped and deleting Agents are excluded.
 
-The script requires private protected files, at least one immutable image, a full
-source SHA, and a new evidence directory. It compares the authenticated OCC
-Installation ID with the marker on the live Installation Secret.
+For repository-enabled releases, the script validates the running worker's
+broker origin against its Service settings and preserves the hostname in the
+candidate values. Restarting that broker loses delivered sessions; follow the
+[broker recovery procedure](../guides/repository-credentials/installation.md#install-and-verify).
 
-Protected configuration must match live state outside fields owned by the
-selected operation. A controller release may differ only at
-`images.controller`. A runtime release may differ only at the gateway and Agent
-image fields. This prevents one release path from silently adopting unrelated
-configuration drift.
+The script renders the chart and performs a server-side Helm dry run. It saves
+candidate inputs, inventory, target identity, and parameter hashes in the
+private evidence directory before marking preparation complete. A per-directory
+lock prevents two helpers from using that record at once. The operator must
+freeze other writers, autoscalers, Helm changes, and runtime draft edits as
+specified in the [production guide](../guides/deploy/production-upgrade.md).
 
-### 2. Build and validate the candidate
+### 2. Reconcile a prior attempt
 
-`scripts/upgrade-production-images:241`
+`scripts/upgrade-production-images:421`
 
-The script copies the protected inputs and changes only selected image fields.
-A runtime release hashes the candidate Installation document and puts that
-checksum on both OCC Pod templates so the API and worker reload configuration
-without changing their selected controller image.
+On every attempt the script rereads Helm status and values and the Installation
+Secret. Only the recorded baseline or candidate values are accepted; the
+Secret's UID, Installation annotation, and other data must match the baseline.
+Resume also binds the original kubeconfig contents, inputs, OCC URL, script,
+and chart. Unexpected drift or an in-progress Helm release stops the command.
 
-`helm template` and Helm server-side dry run validate the chart against the
-selected cluster. They do not prove image contents, startup, compatibility, or
-application behavior.
+If a previously started Helm release is deployed at a newer revision with the
+candidate values, the script continues without repeating Helm. Otherwise it
+requires the operator's migration-history check and refuses a retry while an
+initialization Pod remains active. A failed or disconnected migration may have
+committed; the check and Job inspection are operator-owned and are not a
+rollback. The guide describes the required attestation and recovery.
 
-### 3. Release the control plane independently
+### 3. Quiesce writers and run the candidate release
 
-`deploy/helm/openclaw-enterprise/templates/deployments.yaml:159`
+`scripts/upgrade-production-images:483`
 
-When only `--controller-image` is present, the script updates the protected Helm
-values and runs Helm without replacing the Installation Secret. Helm runs the
-candidate controller's database migrator as a pre-upgrade init container using
-the migration role. Bootstrap runs only after migration succeeds, and the API
-and worker roll out only after both hooks succeed.
+Before changing the Secret or invoking Helm, the script scales the selected API
+and worker Deployments to zero, waits until their Pods disappear, and confirms
+both desired replica counts remain zero. This covers the selected Helm release;
+it does not detect independent database writers, autoscalers, or partitioned
+nodes. The operator must stop those writers and keep nodes reachable.
 
-The script verifies both OCC Deployments and authenticated OCC recovery. It does
-not request deployment inventory or invoke `occ agent deploy`, and it does not
-change the selected runtime image. If a worker restart loses delivered broker
-sessions, affected revisions can fail and queue runtime retirement. The operator
-must inspect retained cleanup and deploy authorized replacements as described in
-the [production upgrade guide](../guides/deploy/production-upgrade.md).
+The protected files are atomically replaced with the saved candidate. For a
+runtime release, the script reads the Secret before updating its Installation
+key, preserving other data and metadata with a resource-version precondition.
+If the candidate is already present after a lost response, it does not write it
+again. The candidate Installation checksum is included in both OCC Pod
+templates.
 
-### 4. Freeze the fleet for a runtime release
+A durable marker precedes `helm upgrade`. The candidate migrator and bootstrap
+run in the Helm initialization hook before API and worker rollout. If Helm
+fails, resumption reads its current status and migration state before a retry;
+it does not start the old image to undo a committed schema change.
 
-`packages/occ/src/index.ts:OpenClawController.getInstallationDeploymentInventory`
+### 4. Verify control-plane recovery
 
-Runtime releases require Installation `administer`, exact `read` access to every
-Namespace, Agent, and selected active revision, and exact `deploy` access to each
-eligible running Agent. Any denial or incomplete durable work data fails the
-complete inventory.
+`scripts/upgrade-production-images:539`
 
-The baseline includes active Agents that request `running`, have an active
-revision, and belong to a ready Namespace. Nonterminal deployment work, a
-running Agent without a revision, or a running Agent in an unready Namespace
-stops the command. Stopped and deleting Agents are excluded. An empty baseline
-is valid.
+The script waits for both OCC Deployments, checks their controller image and
+replica count, and checks the Installation checksum for a runtime release. It
+retries authenticated OCC access and verifies the same Installation ID. A
+controller-only release then ends without requesting Agent deployments.
 
-### 5. Load runtime configuration without changing controller version
+### 5. Deploy and verify the recorded fleet
 
-`scripts/upgrade-production-images:271`
+`scripts/upgrade-production-images:568`
 
-The script writes the runtime digest to both Kubernetes Compute image fields,
-updates the protected Installation and its Secret, and runs Helm. The current
-controller image remains selected unless the operator also supplied
-`--controller-image`. The checksum causes new API and worker Pods to load the
-runtime configuration.
+Before sending each ordinary exact-Agent deployment request, the script records
+an intent. Successful responses are saved atomically. On resume, existing
+responses are reused; an intent without a response triggers an Agent readback
+and stops for operator reconciliation. The helper does not infer rejection from
+an unchanged active revision or replay an unknown request. An operator can
+record a verified accepted response and resume.
 
-The script waits for both OCC Deployments, verifies the selected controller
-image, and retries authenticated OCC access. A failure stops before Agent
-fan-out.
+The script polls each returned deployment through its authorized status
+operation, confirms active revision selection, and waits for all revision Pods
+to be `Running` and `Ready` on the candidate runtime digest. Embedded execution
+requires one runtime container; dedicated execution requires both gateway and
+Agent containers. Each replacement gateway then runs read-only
+`openclaw doctor --lint --json --severity-min error`. Failures retain dispatch,
+status, Pod, and Doctor evidence for inspection.
 
-### 6. Deploy the recorded fleet
-
-`internal/occcli/cli.go:application.agentCommand`
-
-The script starts one ordinary `occ agent deploy` process for each baseline
-Agent before waiting for any process. Each request repeats exact-resource IAM,
-creates an immutable revision from the current draft, records durable work, and
-emits the normal deployment audit event.
-
-A failed or unknown response is never converted into bulk success or
-automatically replayed.
-
-### 7. Wait for durable and runtime readiness
-
-`internal/occclient/client.go:Client.GetAgentDeployment`
-
-The script polls every returned revision until all succeed, one fails, or the
-shared deadline expires. It confirms that each Agent selected its returned
-revision and that revision-labeled Pods are `Running` and `Ready`. Gateway and
-Agent containers must use the candidate runtime digest. Embedded execution
-requires one gateway workload; dedicated execution requires both gateway and
-Agent workloads.
-
-The evidence directory retains dispatch responses, durable status, Pod state,
-Helm status, and before/after workload inventories.
-
-### 8. Run OpenClaw Doctor lint
-
-`scripts/upgrade-production-images:422`
-
-OpenClaw gateway startup performs startup-safe migrations and plugin convergence
-before Kubernetes readiness. Because this workflow replaces immutable images
-instead of invoking `openclaw update`, the script separately runs
-`openclaw doctor --lint --json --severity-min error` inside the gateway container
-for each replacement revision.
-
-The command uses the gateway's mounted state and configuration but does not pass
-`--fix`. Any error-level finding or command failure stops the release and leaves
-the JSON and stderr output in the private `status/` evidence directory.
-
-### 9. Hand off application verification
+### 6. Hand off application verification
 
 `docs/guides/deploy/production-upgrade.md:Verify the release`
 
-Controller success proves Helm convergence, image selection, and authenticated
-OCC recovery. Runtime success additionally proves durable deployment completion,
-active revision selection, Pod readiness, and error-free read-only Doctor lint.
-The operator next checks model responses, providers, channels, credential
-delivery, workspace continuity, native access, and required restore behavior.
+Successful script completion proves the selected Helm rollout and OCC access.
+For a runtime release it also proves the recorded deployments and Pods reached
+the checked states and Doctor reported no error. The operator next verifies
+model responses, providers, channels, credentials, workspace continuity, native
+access, and required restore behavior.
 
 ## Debugging and Verification
 
@@ -216,6 +183,8 @@ delivery, workspace continuity, native access, and required restore behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 07:02: Record quiesced migrations and resumable release and dispatch recovery. (authoring-run/ef0e4dd2-3f52-48b4-a742-60dfbb85864a - e06ff9625e72ff5ab3483a504a2f02a69a370cbb)
 
 - 2026-09-26 22:28: Preserve the selected repository broker hostname before image upgrades. (authoring-run/1495f489-e298-44e9-b75d-6a49445d35e3 - 7caf53332219db12fed62180c3c6d270baa8ea63)
 

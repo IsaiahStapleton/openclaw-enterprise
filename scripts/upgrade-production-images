@@ -8,13 +8,14 @@ Usage: scripts/upgrade-production-images \
   --values FILE --installation FILE \
   [--controller-image IMAGE@sha256:DIGEST] \
   [--runtime-image IMAGE@sha256:DIGEST] \
-  --source-revision FULL_GIT_SHA --evidence-dir NEW_DIRECTORY \
-  [--occ PATH] [--timeout-seconds SECONDS]
+  --source-revision FULL_GIT_SHA --evidence-dir DIRECTORY \
+  [--occ PATH] [--timeout-seconds SECONDS] [--resume] [--migration-history-checked]
 
 Select at least one image. A controller-only upgrade leaves the Installation and
 Agent revisions unchanged. A runtime upgrade restarts OCC on its current image,
-then redeploys every Agent that was running when the command began. OCC_URL,
-OCC_SERVICE_KEY_FILE, and OCC_CA_BUNDLE configure the OCC CLI connection.
+then redeploys every Agent that was running when the command began. Resume with
+the same arguments and evidence directory after inspecting any unknown outcomes.
+OCC_URL, OCC_SERVICE_KEY_FILE, and OCC_CA_BUNDLE configure the OCC CLI connection.
 EOF
 }
 
@@ -65,6 +66,24 @@ normalize_yaml_without() {
   yq -o=json '.' "$path" | jq -S "$filter" >"$output"
 }
 
+matches_yaml() {
+  local actual=$1
+  local expected=$2
+  yq -o=json '.' "$actual" | jq -eS 'select(type == "object")' >"$evidence_dir/compare-actual.json" || return 1
+  yq -o=json '.' "$expected" | jq -eS 'select(type == "object")' >"$evidence_dir/compare-expected.json" || return 1
+  [[ -s "$evidence_dir/compare-actual.json" && -s "$evidence_dir/compare-expected.json" ]] || return 1
+  cmp -s "$evidence_dir/compare-actual.json" "$evidence_dir/compare-expected.json"
+}
+
+install_atomically() {
+  local source=$1
+  local destination=$2
+  local temporary
+  temporary=$(mktemp "${destination}.upgrade.XXXXXXXX")
+  install -m 600 "$source" "$temporary"
+  mv -f "$temporary" "$destination"
+}
+
 kubeconfig=
 context=
 namespace=
@@ -77,6 +96,8 @@ source_revision=
 evidence_dir=
 occ=occ
 timeout_seconds=900
+resume=0
+migration_history_checked=0
 
 while (($#)); do
   case "$1" in
@@ -97,6 +118,14 @@ while (($#)); do
         --timeout-seconds) timeout_seconds=$2 ;;
       esac
       shift 2
+      ;;
+    --resume)
+      resume=1
+      shift
+      ;;
+    --migration-history-checked)
+      migration_history_checked=1
+      shift
       ;;
     -h | --help)
       usage
@@ -121,7 +150,14 @@ done
   die "--runtime-image must be an approved immutable SHA-256 image reference."
 [[ "$source_revision" =~ ^[a-f0-9]{40}$ ]] ||
   die "--source-revision must be a full lowercase Git commit SHA."
-[[ ! -e "$evidence_dir" ]] || die "--evidence-dir must not already exist."
+if ((resume)); then
+  [[ -d "$evidence_dir" && ! -L "$evidence_dir" ]] || die "--resume requires the original evidence directory."
+  mode=$(private_file_mode "$evidence_dir")
+  (((8#$mode & 077) == 0)) || die "the evidence directory must not grant group or other permissions."
+else
+  [[ ! -e "$evidence_dir" ]] || die "--evidence-dir must not already exist."
+  ((migration_history_checked == 0)) || die "--migration-history-checked is only valid with --resume."
+fi
 
 require_private_file "$kubeconfig"
 require_private_file "$values"
@@ -133,13 +169,48 @@ require_private_file "$OCC_SERVICE_KEY_FILE"
 if [[ -n "${OCC_CA_BUNDLE:-}" ]]; then
   require_regular_file "$OCC_CA_BUNDLE"
 fi
-for command in cmp helm jq kubectl python3 yq; do
+for command in cmp helm jq kubectl mktemp python3 yq; do
   require_command "$command"
 done
 [[ -x "$occ" ]] || command -v "$occ" >/dev/null 2>&1 || die "the OCC CLI is unavailable."
 
 umask 077
-mkdir -m 700 "$evidence_dir"
+if ((resume == 0)); then
+  mkdir -m 700 "$evidence_dir"
+fi
+mkdir "$evidence_dir/.upgrade-lock" 2>/dev/null || die "the evidence directory is locked; check for a running upgrade before removing its stale .upgrade-lock directory."
+trap 'rmdir "$evidence_dir/.upgrade-lock" 2>/dev/null || true' EXIT
+
+# Bind resume to the same inputs and chart. Kubeconfig bytes bind the selected
+# context to the same cluster even if the file is later replaced.
+parameters=$(python3 - "$kubeconfig" "$context" "$namespace" "$release" "$values" "$installation" "$controller_image" "$runtime_image" "$source_revision" "$OCC_URL" "$occ" "${OCC_CA_BUNDLE:-}" <<'PYTHON'
+import hashlib, json, os, sys
+chart = "deploy/helm/openclaw-enterprise"
+h = hashlib.sha256()
+for root, dirs, files in os.walk(chart):
+    dirs.sort()
+    for name in sorted(files):
+        path = os.path.join(root, name)
+        h.update(path.encode() + b"\0" + open(path, "rb").read() + b"\0")
+def digest(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+print(json.dumps({"arguments": sys.argv[1:], "kubeconfigSha256": digest(sys.argv[1]), "caSha256": digest(sys.argv[12]) if sys.argv[12] else None, "chartSha256": h.hexdigest(), "scriptSha256": digest("scripts/upgrade-production-images")}, sort_keys=True))
+PYTHON
+)
+if ((resume)); then
+  require_private_file "$evidence_dir/parameters.json"
+  [[ "$parameters" == "$(cat "$evidence_dir/parameters.json")" ]] || die "resume inputs, kubeconfig, CA, script, or chart changed; investigate before continuing."
+  [[ -f "$evidence_dir/prepared" ]] || die "preparation did not finish; no mutation was started. Start again with a new evidence directory."
+else
+  printf '%s\n' "$parameters" >"$evidence_dir/parameters.json"
+fi
+
+kube=(kubectl --kubeconfig "$kubeconfig" --context "$context")
+helm_args=(--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace")
+occ_json=("$occ" --output json)
+
+prepare_upgrade() {
 if [[ -n "$runtime_image" ]]; then
   mkdir -m 700 "$evidence_dir/inventory" "$evidence_dir/dispatch" "$evidence_dir/status"
 fi
@@ -149,12 +220,11 @@ printf '%s\n' "$source_revision" >"$evidence_dir/source-revision"
 cp "$values" "$evidence_dir/before-values.yaml"
 cp "$installation" "$evidence_dir/before-installation.yaml"
 
-kube=(kubectl --kubeconfig "$kubeconfig" --context "$context")
-helm_args=(--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace")
-occ_json=("$occ" --output json)
-
 "${kube[@]}" --request-timeout=15s get --raw=/readyz >"$evidence_dir/kubernetes-readyz"
 helm status "$release" "${helm_args[@]}" >"$evidence_dir/before-helm-status.txt"
+helm status "$release" "${helm_args[@]}" --output json >"$evidence_dir/before-helm-status.json"
+jq -e '.info.status == "deployed" and (.version | type == "number")' \
+  "$evidence_dir/before-helm-status.json" >/dev/null || die "the Helm release must be deployed before starting an upgrade."
 helm get values "$release" "${helm_args[@]}" --output yaml >"$evidence_dir/before-live-values.yaml"
 installation_secret=$(
   yq -er '.installation.secretName // "occ-installation-startup"' \
@@ -167,6 +237,9 @@ installation_key=$(
 live_installation_secret="$evidence_dir/before-live-installation-secret.json"
 "${kube[@]}" --namespace "$namespace" get secret "$installation_secret" --output json \
   >"$live_installation_secret"
+jq -e '(.metadata.uid | type == "string" and length > 0) and
+  (.metadata.resourceVersion | type == "string" and length > 0)' \
+  "$live_installation_secret" >/dev/null || die "the live Installation Secret lacks a UID or resource version."
 if ! cluster_installation_id=$(
   jq -er '.metadata.annotations["openclaw.dev/installation-id"]' "$live_installation_secret"
 ); then
@@ -323,22 +396,145 @@ helm template "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
 helm upgrade --install "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
   --values "$candidate_values" --dry-run=server --hide-secret \
   >"$evidence_dir/server-dry-run.txt"
+printf '%s\n' "$installation_id" >"$evidence_dir/installation-id"
+printf '%s\n' "$installation_secret" >"$evidence_dir/installation-secret-name"
+printf '%s\n' "$installation_key" >"$evidence_dir/installation-secret-key"
+printf '%s\n' "$selected_controller" >"$evidence_dir/selected-controller"
+touch "$evidence_dir/prepared"
+}
 
-# The protected local inputs become the recovery source before either cluster
-# mutation. Their original bytes remain in the private evidence directory.
-install -m 600 "$candidate_values" "$values"
-if [[ -n "$runtime_image" ]]; then
-  install -m 600 "$candidate_installation" "$installation"
-  "${kube[@]}" --namespace "$namespace" create secret generic "$installation_secret" \
-    --from-file="$installation_key=$installation" --dry-run=client --output yaml |
-    INSTALLATION_ID="$installation_id" yq \
-      '.metadata.annotations."openclaw.dev/installation-id" = strenv(INSTALLATION_ID)' |
-    "${kube[@]}" --namespace "$namespace" apply --filename - \
-    >"$evidence_dir/installation-secret-apply.txt"
+if ((resume == 0)); then
+  prepare_upgrade
 fi
 
-helm upgrade --install "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
-  --values "$values" --wait --timeout 5m >"$evidence_dir/helm-upgrade.txt"
+candidate_values="$evidence_dir/candidate-values.yaml"
+candidate_installation="$evidence_dir/candidate-installation.yaml"
+targets="$evidence_dir/targets.jsonl"
+target_count=$(wc -l <"$targets" | tr -d ' ')
+installation_id=$(cat "$evidence_dir/installation-id")
+installation_secret=$(cat "$evidence_dir/installation-secret-name")
+installation_key=$(cat "$evidence_dir/installation-secret-key")
+selected_controller=$(cat "$evidence_dir/selected-controller")
+
+# Read the live state on every attempt before deciding whether a mutation is
+# needed. An accepted write whose response was lost must not be repeated.
+helm status "$release" "${helm_args[@]}" --output json >"$evidence_dir/current-helm-status.json"
+helm_state=$(jq -er '.info.status' "$evidence_dir/current-helm-status.json")
+helm get values "$release" "${helm_args[@]}" --output yaml >"$evidence_dir/current-live-values.yaml"
+matches_yaml "$values" "$evidence_dir/before-values.yaml" ||
+  matches_yaml "$values" "$candidate_values" || die "protected Helm values changed outside this upgrade."
+matches_yaml "$installation" "$evidence_dir/before-installation.yaml" ||
+  matches_yaml "$installation" "$candidate_installation" || die "protected Installation changed outside this upgrade."
+matches_yaml "$evidence_dir/current-live-values.yaml" "$evidence_dir/before-live-values.yaml" ||
+  matches_yaml "$evidence_dir/current-live-values.yaml" "$candidate_values" || die "live Helm values changed outside this upgrade."
+
+live_secret="$evidence_dir/current-live-installation-secret.json"
+"${kube[@]}" --namespace "$namespace" get secret "$installation_secret" --output json >"$live_secret"
+jq -e --arg id "$installation_id" --slurpfile before "$evidence_dir/before-live-installation-secret.json" '
+  .metadata.uid == $before[0].metadata.uid and
+  .metadata.annotations["openclaw.dev/installation-id"] == $id and
+  (.data | del(.[$key])) == ($before[0].data | del(.[$key]))
+' --arg key "$installation_key" "$live_secret" >/dev/null || die "the Installation Secret identity or unrelated data changed."
+jq -er --arg key "$installation_key" '.data[$key]' "$live_secret" |
+  python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read().strip(), validate=True))' \
+    >"$evidence_dir/current-live-installation.yaml"
+matches_yaml "$evidence_dir/current-live-installation.yaml" "$evidence_dir/before-live-installation.yaml" ||
+  matches_yaml "$evidence_dir/current-live-installation.yaml" "$candidate_installation" ||
+  die "the live Installation Secret changed outside this upgrade."
+
+case "$helm_state" in
+  deployed | failed) ;;
+  *) die "Helm reports $helm_state; resolve the in-progress or unknown release before resuming." ;;
+esac
+if [[ ! -f "$evidence_dir/helm-started" && "$helm_state" != deployed ]]; then
+  die "the Helm release changed before this upgrade started; investigate before continuing."
+fi
+if [[ ! -f "$evidence_dir/helm-started" ]]; then
+  jq -e --slurpfile before "$evidence_dir/before-helm-status.json" \
+    '.version == $before[0].version' "$evidence_dir/current-helm-status.json" >/dev/null ||
+    die "the Helm release revision changed before this upgrade started."
+fi
+
+helm_complete=0
+if [[ -f "$evidence_dir/helm-started" && "$helm_state" == deployed ]] &&
+  matches_yaml "$evidence_dir/current-live-values.yaml" "$candidate_values"; then
+  # A deployed Helm revision includes successful hooks, but ensure it is newer
+  # than the baseline before interpreting a lost response as success.
+  if jq -e --slurpfile before "$evidence_dir/before-helm-status.json" \
+    '.version > $before[0].version' "$evidence_dir/current-helm-status.json" >/dev/null; then
+    helm_complete=1
+  fi
+fi
+if ((helm_complete)) && ! matches_yaml "$evidence_dir/current-live-installation.yaml" "$candidate_installation"; then
+  die "Helm selected the candidate but the live Installation Secret does not; investigate before continuing."
+fi
+if [[ -f "$evidence_dir/helm-started" ]] && ((helm_complete == 0)); then
+  ((migration_history_checked)) || die "Helm's outcome is unresolved. Inspect the release and initialization Job, run the candidate migration --check against the retained database, then resume with --migration-history-checked."
+  # A terminated Helm client can leave the initialization Job running. Do not
+  # replace its hook or race another migrator until all of its Pods are terminal.
+  "${kube[@]}" --namespace "$namespace" get pods \
+    --selector "app.kubernetes.io/instance=$release,app.kubernetes.io/component=initialization" \
+    --output json >"$evidence_dir/current-initialization-pods.json"
+  jq -e 'all(.items[]; .status.phase == "Succeeded" or .status.phase == "Failed")' \
+    "$evidence_dir/current-initialization-pods.json" >/dev/null || die "an initialization Pod is still active; wait for it to terminate before retrying Helm."
+fi
+
+if ((helm_complete == 0)); then
+  # Stop the old database writers before the migration hook. Other writers and
+  # autoscalers must already be stopped by the operator's maintenance window.
+  for component in api worker; do
+    deployment="openclaw-enterprise-$component"
+    "${kube[@]}" --namespace "$namespace" get "deployment/$deployment" --output json \
+      >"$evidence_dir/current-$component-deployment.json"
+    jq -e --arg release "$release" --arg component "$component" '
+      .metadata.labels["app.kubernetes.io/instance"] == $release and
+      .metadata.labels["app.kubernetes.io/component"] == $component and
+      (.spec.replicas == 0 or .spec.replicas == 1)
+    ' "$evidence_dir/current-$component-deployment.json" >/dev/null || die "$deployment has unexpected ownership or replicas."
+    "${kube[@]}" --namespace "$namespace" scale "deployment/$deployment" --replicas=0
+  done
+  deadline=$((SECONDS + timeout_seconds))
+  while true; do
+    "${kube[@]}" --namespace "$namespace" get pods \
+      --selector "app.kubernetes.io/name=openclaw-enterprise,app.kubernetes.io/instance=$release" \
+      --output json >"$evidence_dir/quiescence-pods.json"
+    if jq -e '[.items[] | select(.metadata.labels["app.kubernetes.io/component"] == "api" or .metadata.labels["app.kubernetes.io/component"] == "worker")] | length == 0' \
+      "$evidence_dir/quiescence-pods.json" >/dev/null; then
+      break
+    fi
+    ((SECONDS < deadline)) || die "OCC Pods did not terminate before the timeout; migration was not started."
+    sleep 2
+  done
+  for component in api worker; do
+    "${kube[@]}" --namespace "$namespace" get "deployment/openclaw-enterprise-$component" --output json \
+      >"$evidence_dir/quiescence-$component-deployment.json"
+    jq -e '.spec.replicas == 0' "$evidence_dir/quiescence-$component-deployment.json" >/dev/null ||
+      die "OCC replicas changed during quiescence; migration was not started."
+  done
+
+  install_atomically "$candidate_values" "$values"
+  if [[ -n "$runtime_image" ]]; then
+    install_atomically "$candidate_installation" "$installation"
+    if ! matches_yaml "$evidence_dir/current-live-installation.yaml" "$candidate_installation"; then
+      python3 - "$live_secret" "$candidate_installation" "$installation_key" <<'PYTHON' |
+import base64, json, sys
+with open(sys.argv[1]) as f:
+    secret = json.load(f)
+with open(sys.argv[2], "rb") as f:
+    secret["data"][sys.argv[3]] = base64.b64encode(f.read()).decode()
+secret["metadata"].pop("managedFields", None)
+json.dump(secret, sys.stdout)
+PYTHON
+        "${kube[@]}" --namespace "$namespace" replace --filename - \
+          >"$evidence_dir/installation-secret-apply.txt"
+    fi
+  fi
+  # The marker precedes the request, so a crash cannot turn an unknown Helm
+  # outcome into an automatic retry or an unsafe return to the old image.
+  touch "$evidence_dir/helm-started"
+  helm upgrade --install "$release" deploy/helm/openclaw-enterprise "${helm_args[@]}" \
+    --values "$values" --wait --timeout 5m >"$evidence_dir/helm-upgrade.txt"
+fi
 
 for component in api worker; do
   deployment="openclaw-enterprise-$component"
@@ -347,6 +543,17 @@ for component in api worker; do
     --output "jsonpath={.spec.template.spec.containers[?(@.name=='$component')].image}")
   [[ "$observed" == "$selected_controller" ]] ||
     die "$deployment uses $observed instead of the selected controller image."
+  "${kube[@]}" --namespace "$namespace" get "deployment/$deployment" --output json \
+    >"$evidence_dir/after-$component-deployment.json"
+  jq -e '.spec.replicas == 1' "$evidence_dir/after-$component-deployment.json" >/dev/null ||
+    die "$deployment does not have its expected replica."
+  if [[ -n "$runtime_image" ]]; then
+    installation_checksum=$(cat "$evidence_dir/installation-checksum")
+    jq -e --arg checksum "$installation_checksum" \
+      '.spec.template.metadata.annotations["openclaw.dev/installation-checksum"] == $checksum' \
+      "$evidence_dir/after-$component-deployment.json" >/dev/null ||
+      die "$deployment does not select the candidate Installation checksum."
+  fi
 done
 
 deadline=$((SECONDS + timeout_seconds))
@@ -354,17 +561,45 @@ until "${occ_json[@]}" installation get >"$evidence_dir/installation-after.json"
   ((SECONDS < deadline)) || die "OCC authentication did not recover before the timeout."
   sleep 2
 done
+jq -e --arg id "$installation_id" '.id == $id' "$evidence_dir/installation-after.json" >/dev/null ||
+  die "the recovered OCC endpoint identifies a different Installation."
 rm -f "$evidence_dir/occ-recovery-error.txt"
 
 dispatch_failed=0
 if [[ -n "$runtime_image" ]] && ((target_count > 0)); then
+  # Check every prior intent before launching any additional requests.
+  while IFS= read -r target; do
+    namespace_id=$(jq -r '.namespaceId' <<<"$target")
+    agent_id=$(jq -r '.agentId' <<<"$target")
+    prefix="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id")"
+    if [[ -f "$prefix.json" ]]; then
+      jq -e '.id | type == "string" and length > 0' "$prefix.json" >/dev/null ||
+        die "invalid recorded deployment response for Agent $agent_id; inspect it before resuming."
+    elif [[ -f "$prefix.intent" ]]; then
+      # Active revision alone cannot prove that a timed-out request was rejected.
+      "${occ_json[@]}" --namespace "$namespace_id" agent get "$agent_id" \
+        >"$prefix.readback.json" || true
+      die "Agent $agent_id has an unknown deployment outcome; inspect revision history and audit evidence before recording a resolved response."
+    fi
+  done <"$targets"
+
   pids=()
   while IFS= read -r target; do
     namespace_id=$(jq -r '.namespaceId' <<<"$target")
     agent_id=$(jq -r '.agentId' <<<"$target")
     output="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").json"
     error="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").error"
-    ("${occ_json[@]}" --namespace "$namespace_id" agent deploy "$agent_id" >"$output" 2>"$error") &
+    intent="$evidence_dir/dispatch/$(json_file_name "$namespace_id--$agent_id").intent"
+    if [[ -f "$output" ]]; then
+      continue
+    fi
+    touch "$intent"
+    (
+      temporary="$output.tmp"
+      "${occ_json[@]}" --namespace "$namespace_id" agent deploy "$agent_id" >"$temporary" 2>"$error" &&
+        jq -e '.id | type == "string" and length > 0' "$temporary" >/dev/null &&
+        mv "$temporary" "$output"
+    ) &
     pids+=("$!")
   done <"$targets"
 
@@ -372,7 +607,7 @@ if [[ -n "$runtime_image" ]] && ((target_count > 0)); then
     wait "$pid" || dispatch_failed=1
   done
 fi
-((dispatch_failed == 0)) || die "at least one Agent deployment request failed; inspect $evidence_dir/dispatch before retrying."
+((dispatch_failed == 0)) || die "at least one Agent deployment outcome is unknown; inspect $evidence_dir/dispatch and reconcile it before resuming."
 
 deployments="$evidence_dir/deployments.jsonl"
 : >"$deployments"

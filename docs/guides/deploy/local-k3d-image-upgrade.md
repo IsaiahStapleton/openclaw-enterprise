@@ -157,7 +157,8 @@ script, and a compatible installed `occ` CLI. From that checkout confirm
 contain the upgrade script, stop; this procedure cannot be run from it. Do not
 overwrite a working checkout. Install `helm`, `kubectl`, `jq`, `yq` v4, and
 Python 3. Use a fresh
-`UPGRADE_EVIDENCE` directory for each attempt. The script changes the protected
+`UPGRADE_EVIDENCE` directory for each new release; retain it when resuming an
+interrupted release. The script changes the protected
 input files as well as the cluster; it saves their previous contents in that
 private evidence directory before cluster mutation.
 
@@ -173,7 +174,7 @@ scripts/upgrade-production-images \
   --source-revision "$RELEASE_SOURCE_SHA" --evidence-dir "$UPGRADE_EVIDENCE" \
   --controller-image "$CONTROLLER_IMAGE"
 
-# Runtime only: use a fresh UPGRADE_EVIDENCE if another attempt was made.
+# Runtime only: use a fresh UPGRADE_EVIDENCE for a new release.
 scripts/upgrade-production-images \
   --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   --namespace "$NAMESPACE" --release "$RELEASE" \
@@ -181,7 +182,7 @@ scripts/upgrade-production-images \
   --source-revision "$RELEASE_SOURCE_SHA" --evidence-dir "$UPGRADE_EVIDENCE" \
   --runtime-image "$RUNTIME_IMAGE"
 
-# Combined: use a fresh UPGRADE_EVIDENCE if another attempt was made.
+# Combined: use a fresh UPGRADE_EVIDENCE for a new release.
 scripts/upgrade-production-images \
   --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   --namespace "$NAMESPACE" --release "$RELEASE" \
@@ -190,7 +191,8 @@ scripts/upgrade-production-images \
   --controller-image "$CONTROLLER_IMAGE" --runtime-image "$RUNTIME_IMAGE"
 ```
 
-Helm runs initialization, including database migration with the migrator role,
+The helper stops the API and worker and waits for their Pods to terminate. Helm
+then runs initialization, including database migration with the migrator role,
 before rolling out OCC. Runtime-only also restarts OCC on its existing controller
 image to load the updated Installation. The script deploys all recorded running
 Agents concurrently; stopped and deleting Agents are left alone. See the

@@ -3,7 +3,7 @@ import { defaultAgentModel } from "../../apps/controller/src/console/agents/star
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdtemp, readFile, readdir, writeFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile, rm } from "node:fs/promises";
 import https from "node:https";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -1265,40 +1265,75 @@ test(
       });
 
       const upgradeEvidence = join(directory, "runtime-upgrade");
-      const output = await run(
-        "scripts/upgrade-production-images",
-        [
-          "--kubeconfig",
-          selection.kubeconfigPath,
-          "--context",
-          selection.kubernetesContext,
-          "--namespace",
-          system,
-          "--release",
-          release,
-          "--values",
-          valuesPath,
-          "--installation",
-          installationPath,
-          "--runtime-image",
-          upgradeImages.runtime,
-          "--source-revision",
-          sourceRevision,
-          "--evidence-dir",
-          upgradeEvidence,
-          "--occ",
-          occCli,
-          "--timeout-seconds",
-          "600",
-        ],
-        {
+      const runtimeArguments = [
+        "--kubeconfig",
+        selection.kubeconfigPath,
+        "--context",
+        selection.kubernetesContext,
+        "--namespace",
+        system,
+        "--release",
+        release,
+        "--values",
+        valuesPath,
+        "--installation",
+        installationPath,
+        "--runtime-image",
+        upgradeImages.runtime,
+        "--source-revision",
+        sourceRevision,
+        "--evidence-dir",
+        upgradeEvidence,
+        "--occ",
+        occCli,
+        "--timeout-seconds",
+        "600",
+      ];
+      const upgradeEnvironment = {
+        OCC_URL: baseURL,
+        OCC_SERVICE_KEY_FILE: localServiceKeyFile,
+        OCC_CA_BUNDLE: join(directory, "tls.crt"),
+        OPENAI_API_KEY: undefined,
+      };
+
+      // Commit the real Secret write, then simulate a lost client response.
+      // Resumption must use the recorded fleet and continue the same release.
+      const wrapperDirectory = join(directory, "interrupted-upgrade-bin");
+      await mkdir(wrapperDirectory);
+      const realKubectl = (await run("sh", ["-c", "command -v kubectl"])).trim();
+      const wrapper = join(wrapperDirectory, "kubectl");
+      await writeFile(
+        wrapper,
+        `#!/bin/sh\ncase " $* " in\n  *" replace --filename - "*) ${shellQuote(realKubectl)} "$@" || exit $?; exit 75 ;;\n  *) exec ${shellQuote(realKubectl)} "$@" ;;\nesac\n`,
+        { mode: 0o700 },
+      );
+      await assert.rejects(
+        run("scripts/upgrade-production-images", runtimeArguments, {
           timeout: 900_000,
           env: {
-            OCC_URL: baseURL,
-            OCC_SERVICE_KEY_FILE: localServiceKeyFile,
-            OCC_CA_BUNDLE: join(directory, "tls.crt"),
-            OPENAI_API_KEY: undefined,
+            ...upgradeEnvironment,
+            PATH: `${wrapperDirectory}:${process.env.PATH}`,
           },
+        }),
+        /failed \(75\)/u,
+      );
+      const installationSecret = await get("secret", "occ-installation-startup");
+      assert.equal(
+        Buffer.from(installationSecret.data["installation.yaml"], "base64").toString(),
+        await readFile(join(upgradeEvidence, "candidate-installation.yaml"), "utf8"),
+      );
+      for (const component of ["api", "worker"]) {
+        assert.equal(
+          (await get("deployment", `openclaw-enterprise-${component}`)).spec.replicas,
+          0,
+        );
+      }
+      const output = await run(
+        "scripts/upgrade-production-images",
+        [...runtimeArguments, "--resume"],
+        {
+          timeout: 900_000,
+          env: upgradeEnvironment,
         },
       );
       assert.match(

@@ -9,8 +9,9 @@ Use `scripts/upgrade-production-images` to release the OpenClaw Control Plane
   Agent runtime image, and deploys a new revision for every running Agent.
 - Supplying both performs the two changes together.
 
-Runtime upgrades restart the fleet concurrently. Schedule an interruption
-window and provide enough capacity for old and replacement revisions to overlap.
+Every release stops the OCC API and worker during migration and rollout. Runtime
+upgrades also restart the fleet concurrently. Schedule an interruption window
+and provide enough capacity for old and replacement revisions to overlap.
 Before either kind of release, complete the
 [upgrade migration checklist](upgrade-checklist.md) so persisted control-plane,
 Driver, runtime, and cluster-owned state has an explicit disposition.
@@ -47,9 +48,15 @@ review their current drafts and exact-resource deploy grants. Prepare authorized
 replacement revisions for affected Agents; stop if recovery cannot be performed
 safely. A controller-only release does not request those deployments for you.
 
-Stop other Helm changes until the command completes. For a runtime upgrade, also
-stop Agent deployments and draft edits, and resolve any queued or running Agent
-deployment first.
+Stop other Helm changes until the command completes. Disable autoscalers and
+other automation that can restart or scale the OCC Deployments. Stop any other
+process that writes to the OCC database, including independent API, worker, or
+maintenance processes. Confirm nodes are reachable and do not force-delete OCC
+Pods: a missing Pod alone cannot prove a partitioned process stopped. The helper
+stops the selected Helm release's API and worker and waits for their Pods to
+terminate; it cannot stop or detect other database writers. For a runtime upgrade,
+also stop Agent deployments and draft edits, and resolve queued or running Agent
+deployments first. Keep these restrictions in place through recovery.
 
 Set the shared inputs:
 
@@ -113,8 +120,10 @@ manually before running the helper. It then renders the chart and performs a
 server-side dry run.
 
 The command changes `images.controller`, persists the preserved broker endpoint
-when enabled, runs Helm, waits for the API and worker, verifies their image, and
-confirms OCC authentication recovers.
+when enabled, scales the API and worker to zero, and waits for their Pods to
+terminate. It then runs Helm, waits for the API and worker, verifies their image,
+and confirms OCC authentication recovers. Helm restores the candidate
+Deployments after its initialization hooks succeed.
 
 Helm runs the candidate controller's database migration init container with the
 migration role, then runs bootstrap. The API and worker do not roll out unless
@@ -164,7 +173,8 @@ deployment in progress. Every running Agent must have a readable active revision
 in a ready Namespace.
 
 The command writes the runtime digest to both Kubernetes Compute image fields,
-updates the Installation Secret, and runs Helm with the current controller image.
+updates the Installation Secret after quiescing OCC, and runs Helm with the
+current controller image.
 The Installation checksum restarts the API and worker so they load the new
 configuration; their software version does not change.
 
@@ -210,25 +220,85 @@ not prove those application paths.
 
 ## Recover from a partial failure
 
-For a controller-only failure, inspect the Helm initialization Job and OCC
-rollouts. Prefer a reviewed forward fix. Before selecting the previous controller
-image, verify that it can read state written by the candidate; Helm rollback does
-not reverse database migrations.
+Keep the original private evidence directory and the maintenance restrictions.
+Do not start a fresh upgrade to recover an interrupted one: its frozen Agent
+inventory and dispatch records are needed to avoid duplicate deployments. If
+preparation did not finish, the helper stopped before mutation; use a new
+evidence directory after resolving the failure. Otherwise, repeat the original
+command with the same arguments, protected file paths, kubeconfig contents,
+OCC URL, script, and chart, adding `--resume`. The helper reads the live Secret
+and Helm release first, accepts only the recorded baseline or candidate, and
+continues the recorded fleet. It rejects unrelated drift. The evidence includes
+Secret contents and must remain private.
 
-A runtime upgrade is not transactional. If OCC succeeds but an Agent deployment
-fails, keep the healthy control plane and inspect the exact failed deployment.
-Do not retry an unknown response until revision history shows whether OCC
-accepted it; a retry can create another revision.
+If a killed process leaves `.upgrade-lock`, first establish that no helper or
+its child commands are still running, then remove that empty directory and
+resume. This lock covers only processes sharing this evidence directory; it
+cannot stop other operators or automation.
 
-Before rolling back a runtime image, verify that the previous release can read
-candidate runtime data. Restore the previous runtime selection, recompute the
-Installation checksum, run Helm, and deploy the affected running Agents again.
-Never delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
+A Helm failure or disconnected response does not prove that the migration
+rolled back. Read the current Helm status and history, inspect the initialization
+Job and its Pods and logs, and inspect the retained database. The saved
+`current-helm-status.json` is the last read and can predate the failed request.
+A `pending-*` Helm release must be resolved separately before the helper can
+continue. Do not start the old API or worker against a migrated database. If the
+candidate Helm revision is deployed, the helper reads it back and continues
+without rerunning Helm. Otherwise, wait
+until the initialization Pods are terminal, then run the **candidate controller
+image** with `node scripts/migrate-production.mjs --check` against the same
+retained database, using its dedicated migrator credential and required database
+CA in an authorized environment. Keep its exit-zero `migration.checked` output in
+private evidence. Follow [migration history](../../reference/settings/operations.md#migration-history)
+to interpret unsupported or uncertain state. Only after this check and review of
+the Job outcome, repeat the command with `--resume --migration-history-checked`.
+That flag records your attestation; it does not run the database check. The
+helper keeps or returns OCC to zero replicas before retrying the candidate Helm
+release. Prefer a reviewed forward fix; neither Helm rollback nor the helper
+reverses committed migrations.
+
+For an unknown Agent dispatch, the helper saves an Agent readback and stops
+without replaying it. Inspect the exact Agent's authorized revision history,
+deployment status, and audit records, and allow any in-flight request to finish.
+An unchanged active revision alone does not prove rejection, and a filtered
+revision list does not prove absence. If you can identify the accepted revision,
+record a private `dispatch/<same-prefix-as-intent>.json` containing its `id`;
+the helper checks that exact deployment's status on resume. If evidence proves
+the request was not accepted, deploy that Agent once with the ordinary OCC CLI
+and save its successful JSON response under that name. Preserve the `.intent`,
+error, and readback evidence. If the result is still uncertain, stop and
+investigate rather than submitting another request. For a known failed revision,
+inspect its failure and explicitly deploy an authorized replacement before
+recording that replacement's response; preserve the original response separately.
+Each deployment snapshots current drafts.
+
+For an accepted revision, set `OCC_NAMESPACE` and `OCC_AGENT` to the exact
+Agent IDs, `DISPATCH_PREFIX` to the matching evidence path without `.intent` or
+`.json`, and `REVISION_ID` to the independently confirmed revision. Verify the exact Agent and deployment before recording it:
+
+```bash
+if occ --output json --namespace "$OCC_NAMESPACE" agent deployment-status "$OCC_AGENT" "$REVISION_ID" > "$DISPATCH_PREFIX.confirmed-status.json" &&
+  jq -e --arg namespace "$OCC_NAMESPACE" --arg agent "$OCC_AGENT" --arg revision "$REVISION_ID" \
+    '.namespaceId == $namespace and .agentId == $agent and .deploymentId == $revision' "$DISPATCH_PREFIX.confirmed-status.json" &&
+  test ! -e "$DISPATCH_PREFIX.json" &&
+  jq -n --arg id "$REVISION_ID" '{id: $id}' > "$DISPATCH_PREFIX.json.tmp"; then
+  mv "$DISPATCH_PREFIX.json.tmp" "$DISPATCH_PREFIX.json"
+else
+  printf '%s\n' 'Deployment could not be confirmed; do not resume.' >&2
+fi
+```
+
+Keep the shell's `umask 077`. If the status read is denied or does not identify
+the confirmed deployment, do not create the response file. The helper rechecks
+its status on resume; it does not verify how you identified an accepted request.
+
+Before selecting an older controller or runtime image, verify it can read all
+state written by the candidate and restore compatible data if required. Never
+delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
 
 ## Current limits
 
 - No canary, batching, automatic compatibility check, automatic rollback, or
-  upgrade lock.
+  cluster-wide upgrade lock.
 - Runtime upgrades start all recorded Agent deployments concurrently.
 - Agent deployments use current drafts rather than recreating active revisions.
 - One runtime image is used for both gateway and Agent containers.

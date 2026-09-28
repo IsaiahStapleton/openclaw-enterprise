@@ -53,9 +53,10 @@ fi
     jq,
     `#!/usr/bin/env bash
 case "$*" in
+  *'.info.status'*) printf 'deployed\\n' ;;
   *'.data['*) printf 'cHJvdGVjdGVkCg==\\n' ;;
   *'openclaw.dev/installation-id'*) printf '%s\\n' "$CLUSTER_INSTALLATION_ID" ;;
-  '-S '*) cat ;;
+  '-S '*|'-eS '*) cat ;;
   *'.installationId == '*) exit 0 ;;
   *'.deploymentInProgress'*|*'.activeRevisionId == null'*|*'.status != "ready"'*) exit 1 ;;
   *'namespaceId: $namespace.id'*) exit 0 ;;
@@ -240,11 +241,12 @@ fi
   await writeFile(
     jq,
     `#!/usr/bin/env bash
-if [[ "$*" == '-S '* ]]; then
+if [[ "$*" == '-S '* || "$*" == '-eS '* ]]; then
   cat
   exit 0
 fi
 case "$*" in
+  *'.info.status'*) printf 'deployed\\n' ;;
   *'.data['*) printf 'cHJvdGVjdGVkCg==\\n' ;;
   *'openclaw.dev/installation-id'*) printf '%s\\n' "$CLUSTER_INSTALLATION_ID" ;;
   *'.installationId == '*) exit 0 ;;
