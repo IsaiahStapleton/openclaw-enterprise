@@ -126,12 +126,17 @@ test("reconcile checks ownership before patching and preserves revision routing 
 
 test("gateway readiness rejects a foreign Service before accepting endpoint readiness", async () => {
   const driver = createTestKubernetesComputeDriver();
-  const deployment = driver.manifest("apps/v1", "Deployment", "gateway", ownership, {
-    name: namespace,
-    plane: "execution",
-  });
+  const deployment = driver.deployment(
+    "gateway",
+    ownership,
+    { name: namespace, plane: "execution" },
+    "gateway:local",
+    "gateway",
+    "gateway",
+    {},
+    "info",
+  );
   deployment.metadata.generation = 1;
-  deployment.spec = { replicas: 1 };
   deployment.status = { observedGeneration: 1, readyReplicas: 1 };
   const service = driver.service(
     "gateway",

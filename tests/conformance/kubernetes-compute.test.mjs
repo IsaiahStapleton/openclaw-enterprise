@@ -1494,7 +1494,12 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   );
   assert.equal(nodeEgress.metadata.annotations["openclaw.dev/namespace-id"], tenant.id);
   assert.deepEqual(nodeEgress.spec, {
-    podSelector: { matchLabels: { "openclaw.dev/workload-role": "agent" } },
+    podSelector: {
+      matchLabels: {
+        "openclaw.dev/workload-role": "agent",
+        "openclaw.dev/network-profile": "broad-egress-v1",
+      },
+    },
     policyTypes: ["Egress"],
     egress: [
       {
@@ -2857,6 +2862,7 @@ test("account-token authentication grants only the exact Codex revision outbound
     "openclaw.dev/workload-role": "agent",
     "openclaw.dev/agent": revision.agentId,
     "openclaw.dev/revision": revision.id,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(policy.spec.policyTypes, ["Egress"]);
   assert.equal(policy.spec.ingress, undefined);
@@ -5672,6 +5678,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
     "openclaw.dev/namespace": tenant.id,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": revision.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(policies[0].spec.policyTypes, ["Egress"]);
   assert.deepEqual(policies[0].spec.egress[0].ports, [{ protocol: "TCP", port: 443 }]);
@@ -7965,7 +7972,12 @@ test("dedicated Harness Service selector satisfies the gateway policy during cut
     assert.deepEqual(gatewayTargetNamespace(selectedRevision), {
       "kubernetes.io/metadata.name": namespace,
     });
+    // Service selectors intentionally stay profile-free; the policy peer carries it.
+    assert.equal(target["openclaw.dev/network-profile"], "broad-egress-v1");
     for (const [name, value] of Object.entries(target)) {
+      if (name === "openclaw.dev/network-profile") {
+        continue;
+      }
       assert.equal(selector[name], value, `${name} must match the gateway egress selector`);
     }
     assert.equal(
@@ -7986,7 +7998,12 @@ test("dedicated Harness Service selector satisfies the gateway policy during cut
       )
       .find(({ metadata }) => metadata.name === "allow-gateway-ingress");
     const target = ingressPolicy.spec.podSelector.matchLabels;
+    // Service selectors intentionally stay profile-free; the policy selector carries it.
+    assert.equal(target["openclaw.dev/network-profile"], "broad-egress-v1");
     for (const [name, value] of Object.entries(target)) {
+      if (name === "openclaw.dev/network-profile") {
+        continue;
+      }
       assert.equal(selector[name], value, `${name} must match the gateway ingress selector`);
     }
     assert.equal(selector["app.kubernetes.io/name"], gatewayName);
