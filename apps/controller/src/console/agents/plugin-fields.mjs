@@ -333,6 +333,7 @@ export function createPluginFields({
     const focusedTool = document.activeElement?.closest("[data-tool]")?.dataset.tool;
     const focusedHeading = document.activeElement?.matches(".plugin-detail h3");
     const values = selections();
+    const catalogLoading = !configuredOnly && catalog?.status === "loading";
     policyStatus.textContent = capabilities
       ? ""
       : "This installation does not support plugin policy editing. You can browse plugins; existing settings are preserved.";
@@ -363,8 +364,11 @@ export function createPluginFields({
     status.textContent =
       catalog?.message ??
       "Enter a service account token with the Codex harness to discover plugins. Existing selections remain in JSON.";
-    if (catalog?.status === "loading") {
-      status.textContent = "Loading available plugins…";
+    status.classList.toggle("plugin-loading", catalogLoading);
+    if (catalogLoading) {
+      status.textContent = availableQuery.trim()
+        ? "Searching plugins…"
+        : "Loading available plugins…";
     } else if (catalog?.status === "error") {
       status.textContent = catalog.message;
     } else if (catalog?.status === "ready") {
@@ -394,7 +398,7 @@ export function createPluginFields({
     if (configuredOnly) {
       status.textContent = `${count} configured plugin${count === 1 ? "" : "s"}`;
     }
-    browser.setAttribute("aria-busy", String(catalog?.status === "loading"));
+    list.setAttribute("aria-busy", String(catalogLoading));
     workspace.dataset.showDetails = String(activeId !== null);
     const query = configuredOnly || !onLoadPlugins ? search.value.trim().toLowerCase() : "";
     const candidates = configuredOnly
@@ -675,7 +679,11 @@ export function createPluginFields({
             tools.set(id, { id, name: id });
           }
         }
-        if (entry.tools === null) {
+        if (entry.toolStatus === "loading") {
+          details.append(
+            element("p", { className: "hint plugin-loading", role: "status" }, "Loading tools…"),
+          );
+        } else if (entry.tools === null) {
           details.append(
             element(
               "p",
@@ -700,16 +708,12 @@ export function createPluginFields({
               ),
             );
             const load = button(
-              entry.toolStatus === "loading"
-                ? "Loading tools…"
-                : entry.toolError
-                  ? `Retry tools for ${entry.name}`
-                  : `Load tools for ${entry.name}`,
+              entry.toolError ? `Retry tools for ${entry.name}` : `Load tools for ${entry.name}`,
               () => onLoadTools(entry.id),
             );
             load.dataset.discovery = "true";
             load.dataset.policyUnsupported = String(
-              !catalog?.canLoad || catalog?.status === "loading" || entry.toolStatus === "loading",
+              !catalog?.canLoad || catalog?.status === "loading",
             );
             details.append(load);
           }
@@ -908,7 +912,7 @@ export function createPluginFields({
         return details;
       }),
     );
-    if (!visible.length) {
+    if (!visible.length && !catalogLoading) {
       list.append(
         element(
           "p",
@@ -982,6 +986,13 @@ export function createPluginFields({
           (invalid && node.dataset.discovery !== "true") ||
           node.dataset.policyUnsupported === "true";
       }
+    },
+    resetSearch() {
+      availableQuery = "";
+      if (!configuredOnly) {
+        search.value = "";
+      }
+      render();
     },
     setCapabilities(value) {
       capabilities = value;

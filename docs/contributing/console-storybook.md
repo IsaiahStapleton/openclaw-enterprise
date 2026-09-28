@@ -208,25 +208,28 @@ switch to **Configuration** for Harness authentication. Values never appear.
 
 ### Discover and configure plugins
 
-**Create Agent / Discover plugins with a service account token** uses a dummy
-token and simulated OCC discovery. Open **Configure plugins**, then Calendar.
-**Add Calendar** exposes policies; expand a tool to edit an
-override. **Done** returns to the form; **Plugin selections JSON** shows the draft.
-**Filter this page** searches plugins; **Filter tools** narrows tool rows without
-moving the caret. Credential, provider, or Harness changes clear the catalog but
-preserve selections. Companion stories cover empty,
-loading, rejection, failure, and pagination states.
+**Create Agent / Discover plugins with a service account token** uses simulated
+discovery. Open **Configure plugins**, select Calendar, then **Add Calendar**;
+expand a tool to edit its policy. **Done** returns to the form;
+**Plugin selections JSON** shows the draft. **Search plugins** queries the
+catalog; **Filter tools** filters locally. Credential, provider, or Harness
+changes clear the catalog and preserve selections.
 
-In **Components/Plugins → Unavailable reason popover**, open reasons with the
-information button, then dismiss with Escape or an outside click. Rows stay
-compact; details retain guidance and disabled **Add**. Follow its keyboard and
-help-link walkthrough.
+**Preload plugins after entering a service account token** starts with the picker
+closed. Open it to reuse the background request. **Plugin search loading** holds
+the search response: loading should start while typing, preserve input focus,
+and replace empty-result feedback. **Plugin tools loading** holds Calendar's
+details: check its loading status and disabled **Add Calendar**. Reset to replay
+pending states before timeout.
 
-**Create Agent / Discover plugins with a selected PAT Secret** uses simulated
-Secret metadata and discovery responses. Choose Calendar to inspect details, then
-change the selected Secret to clear the catalog. **Selected PAT Secret discovery
-denied** shows a simulated permission failure. Preset PAT Secrets enable discovery;
-API keys do not. Catalog visibility does not prove a plugin can be invoked.
+**Discover plugins with a selected PAT Secret** uses simulated Secret metadata.
+Choose Calendar, then change the Secret to clear discovery.
+**Selected PAT Secret discovery denied** previews permission failure.
+Preset PAT Secrets enable discovery; API keys do not. Catalog visibility does
+not prove invocation access.
+
+**Components/Plugins → Unavailable reason popover** covers keyboard access,
+dismissal, compact rows, help links, detail guidance, and disabled **Add**.
 
 **Components/Plugins** uses simulated catalogs and capabilities.
 Expand a tool to inspect inherited enablement
@@ -239,12 +242,11 @@ inherit. Tool IDs under names match the JSON keys.
 **Create Agent / Edit existing plugin policies** exercises the form with simulated
 policy capabilities; it does not verify installation or runtime enforcement.
 
-**Pages/Agent detail → Edit plugins in new revision** starts with Calendar saved
-on a deployed Agent. Open **Plugins** and load the catalog using its saved
-Service Accounts Secret. Add Documents and change Calendar's policy in
-**Configure plugins**, then save and deploy. **Plugins in admitted revision**
-shows the frozen snapshot. The fixture does not prove installation or a live
-Agent turn.
+**Pages/Agent detail → Edit plugins in new version** starts with Calendar saved.
+Opening **Plugins** preloads the catalog using its Service Accounts Secret.
+In **Configure plugins**, add Documents and change Calendar's policy, then save
+and deploy. **Plugins in admitted revision** shows the frozen snapshot.
+Fixtures do not prove installation or live Agent turns.
 
 ### Update
 
