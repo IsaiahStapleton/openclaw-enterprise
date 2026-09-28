@@ -54,6 +54,7 @@ const ALLOWED_FIELDS = new Set([
   "revisionId",
   "route",
   "sandboxDriverId",
+  "skippedUserIds",
   "status",
   "workId",
 ]);
@@ -143,6 +144,17 @@ function safeScalar(key: string, value: unknown): string | number | boolean | un
   return undefined;
 }
 
+// Account identifiers an operator must repair, such as users skipped at GitHub activation.
+function safeIdentifiers(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const identifiers = value
+    .slice(0, 100)
+    .filter((entry): entry is string => typeof entry === "string" && safeString(entry) === entry);
+  return identifiers.length === 0 ? undefined : Object.freeze(identifiers);
+}
+
 function safeAttempt(
   value: unknown,
 ): number | Readonly<Record<string, string | number | boolean>> | undefined {
@@ -185,7 +197,12 @@ function sanitizedEvent(
     if (key === "message" && eventName !== "compute.preflight-warning") {
       continue;
     }
-    const safe = key === "attempt" ? safeAttempt(value) : safeScalar(key, value);
+    const safe =
+      key === "attempt"
+        ? safeAttempt(value)
+        : key === "skippedUserIds"
+          ? safeIdentifiers(value)
+          : safeScalar(key, value);
     if (safe !== undefined) {
       result[key] = safe;
     }
