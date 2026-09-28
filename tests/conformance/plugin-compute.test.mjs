@@ -1871,7 +1871,7 @@ test("compute rejects plugin selections that target the wrong native runtime", a
   await assert.rejects(async () => {
     const state = openClawPluginState();
     pluginRuntimeSpecForRevision(revision({ plugins: state }));
-  }, /embedded OpenClaw Harness/);
+  }, /require an OpenClaw Harness/);
 });
 
 test("compute fails closed when Codex plugin selections are malformed", () => {
