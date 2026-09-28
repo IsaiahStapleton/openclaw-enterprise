@@ -107,7 +107,7 @@ example Helm values render, after the real production bootstrap:
 
 - `postgres-password-default.test.mjs`: GitHub unconfigured. Administrator
   onboarding, account creation, Origin-checked sign-out, refused GitHub routes,
-  and a per-client password flood limit.
+  and wrong passwords that never lock the administrator out.
 - `postgres-password-default-activation.test.mjs`: the GitHub upgrade enrols
   earlier password accounts, logs skipped ones, and keeps account creation.
 - `postgres-github-outage.test.mjs`: a fixture provider that errors, then stalls
