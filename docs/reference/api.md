@@ -163,6 +163,7 @@ Inspect current human account state
 | `200` | OK |
 | `401` | Unauthorized |
 | `403` | Forbidden |
+| `404` | Not Found |
 | `503` | Service Unavailable |
 
 **`200` response body:** `application/json`
@@ -218,6 +219,7 @@ Disable a human account
 | `200` | OK |
 | `401` | Unauthorized |
 | `403` | Forbidden |
+| `404` | Not Found |
 | `409` | Conflict |
 | `503` | Service Unavailable |
 
@@ -267,6 +269,7 @@ Re-enable a disabled human account
 | `200` | OK |
 | `401` | Unauthorized |
 | `403` | Forbidden |
+| `404` | Not Found |
 | `409` | Conflict |
 | `503` | Service Unavailable |
 
@@ -360,6 +363,7 @@ Detach an external sign-in identity from an account
 | `200` | OK |
 | `401` | Unauthorized |
 | `403` | Forbidden |
+| `404` | Not Found |
 | `409` | Conflict |
 | `503` | Service Unavailable |
 
@@ -410,6 +414,7 @@ Attach an exact GitHub identity to an existing account
 | `200` | OK |
 | `401` | Unauthorized |
 | `403` | Forbidden |
+| `404` | Not Found |
 | `409` | Conflict |
 | `503` | Service Unavailable |
 
@@ -459,6 +464,7 @@ Revoke all sessions for a human account
 | `200` | OK |
 | `401` | Unauthorized |
 | `403` | Forbidden |
+| `404` | Not Found |
 | `409` | Conflict |
 | `503` | Service Unavailable |
 
