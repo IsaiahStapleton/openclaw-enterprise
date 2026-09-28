@@ -10,7 +10,7 @@ requires approval for Create issue. This remains simulated UI evidence, not live
 plugin access, credential readiness, or runtime policy enforcement.
 
 The current DevDay Storybook fixture keeps that catalog available regardless of
-the create path: Start without Preset, every DevDay Preset, both standard
+the create path: Start with default Preset, every DevDay Preset, both standard
 Presets, new model Secret entry, and existing model Secret selection. The
 checkpoint exercises the same Linear policy steps and reaches the Workspace tab.
 
@@ -52,10 +52,10 @@ Agent name in `AGENTS.md`. No browser errors or unhandled fixture requests occur
 The Installation example still comments out custom presets; Storybook includes
 all three for rehearsal.
 Current source also includes Community Agent. SWE Agent, Q&A Agent, and Oncall
-Agent prefill `oce-feedback`, `oce-team`, `oce-feedback-test`, and
-`oce-team-test`; Community Agent preconfigures `oce-team`, `oce-team-test`,
-`oce-community`, and `oce-community-test`. The older captures below predate those
-channel defaults.
+Agent prefill `oce-feedback`, `oce-team`, `oce-feedback-test`, `oce-team-test`,
+`oce-community`, and `oce-community-test`; Community Agent preconfigures
+`oce-team`, `oce-team-test`, `oce-community`, and `oce-community-test`.
+The older captures below predate those channel defaults.
 
 - [SWE Agent](presets/11-swe-choice.png)
 - [Q&A Agent](presets/12-qa-choice.png)

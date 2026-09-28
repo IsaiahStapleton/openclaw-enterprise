@@ -33,7 +33,9 @@ function codexPluginState() {
 function openClawPluginState() {
   return {
     driver: { id: "openclaw-plugin", implementation: "occ/openclaw-plugin" },
-    plugins: { "openclaw-plugin:example": { enabled: true, toolDefaults: { approval: "native" } } },
+    plugins: {
+      "openclaw-plugin:example": { enabled: true, toolDefaults: { approval: "provider_default" } },
+    },
   };
 }
 
@@ -486,13 +488,10 @@ async function fixture(mode = "embedded", nodeEnrollment, options = {}) {
     );
   const enroll = (selected) => {
     const name = driver.workspaceNodeName(selected);
-    const secret = driver.manifest(
-      "v1",
-      "Secret",
-      name,
-      driver.pluginRuntimeOwnership(selected),
-      namespace,
-    );
+    const secret = driver.manifest("v1", "Secret", name, driver.pluginRuntimeOwnership(selected), {
+      name: namespace,
+      plane: "execution",
+    });
     save({
       ...secret,
       metadata: {
@@ -781,7 +780,7 @@ for (const mode of ["embedded", "dedicated"]) {
     const driverId = mode === "embedded" ? "openclaw-plugin" : "codex-plugin";
     f.revision.plugins = {
       driver: { id: driverId, implementation: `occ/${driverId}` },
-      plugins: { [pluginId]: { enabled: true, toolDefaults: { approval: "native" } } },
+      plugins: { [pluginId]: { enabled: true, toolDefaults: { approval: "provider_default" } } },
     };
     let loseMaterialReadiness = false;
     let statusObserved = false;
