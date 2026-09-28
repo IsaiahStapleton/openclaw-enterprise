@@ -9,7 +9,11 @@ import {
   OpenClawController,
   PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { createPostgresControllerAuth, type GitHubLoginConfiguration } from "../auth/index.ts";
+import {
+  createPostgresControllerAuth,
+  type ClientAddressConfiguration,
+  type GitHubLoginConfiguration,
+} from "../auth/index.ts";
 import { createFastifyApp } from "../index.ts";
 import { SlackChannelDriver } from "../drivers/channel/slack.ts";
 import type {
@@ -38,6 +42,7 @@ export interface ProductionConfig {
   readonly authSecret: string;
   readonly authBaseURL: string;
   readonly github?: GitHubLoginConfiguration;
+  readonly clientAddress?: ClientAddressConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly logger?: OccLogger;
@@ -103,6 +108,7 @@ export async function composeProduction(config: ProductionConfig) {
       state,
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
     });
     const provisionAuthAccount = async (seed: AuthPrincipalSeed, auditEvent: AuditEvent) => {
       const current = await state.loadNativeIAMState(persistedInstallation.id);
@@ -233,6 +239,7 @@ export async function composeProduction(config: ProductionConfig) {
         installationId: persistedInstallation.id,
       },
       maxBodyBytes: 64 * 1024,
+      ...(config.clientAddress === undefined ? {} : { trustedProxies: config.clientAddress }),
       ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));

@@ -79,6 +79,7 @@ import {
   hostnameMatchesSharedCookieDomain,
   normalizeSharedCookieDomain,
   OCC_SERVICE_KEY_HEADER,
+  type ClientAddressConfiguration,
   type ControllerAuth,
 } from "./auth/index.ts";
 import { CONSOLE_CONTENT_SECURITY_POLICY, readConsoleAsset } from "./console-assets.ts";
@@ -157,6 +158,8 @@ export interface ControllerAppOptions {
   ) => Promise<void>;
   readonly auditEventFactory?: AuditEventFactory;
   readonly logger?: FastifyBaseLogger;
+  /** Production proxies allowed to send forwarded headers; admission ignores those headers. */
+  readonly trustedProxies?: Pick<ClientAddressConfiguration, "trusts">;
 }
 
 export interface ControllerApp {
@@ -962,6 +965,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
   }
   validateTrustedDevelopmentCidrs(development);
+  if (development.enabled && options.trustedProxies !== undefined) {
+    throw new Error("Trusted proxies are a production setting.");
+  }
 
   const app = Fastify({
     bodyLimit,
@@ -1774,9 +1780,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     } else if (Array.isArray(origin)) {
       originAllowed = false;
     }
-    const forwarded = Object.keys(request.headers).some(
-      (name) => name === "forwarded" || name === "x-real-ip" || name.startsWith("x-forwarded-"),
-    );
+    // Forwarded headers are never used for admission. They are tolerated only from a
+    // configured trusted proxy, which adds them to every request it relays.
+    const forwarded =
+      options.trustedProxies?.trusts(remoteAddress) !== true &&
+      Object.keys(request.headers).some(
+        (name) => name === "forwarded" || name === "x-real-ip" || name.startsWith("x-forwarded-"),
+      );
     if (
       forwarded ||
       (development.enabled &&

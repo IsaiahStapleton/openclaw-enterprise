@@ -397,6 +397,9 @@
     },
     {
       "path": "tests/integration/github-login-transport.test.mjs"
+    },
+    {
+      "path": "tests/integration/client-address.test.mjs"
     }
   ]
 }
