@@ -126,12 +126,20 @@ retains its non-secret IDs. Lost output does not trigger regeneration; normal
 
 `apps/controller/src/auth/index.ts:createControllerAuth` configures Better Auth
 email/password authentication, protected session cookies, and durable PostgreSQL
-storage. Sign-in returns only `{ authenticated: true }`; the session token stays
+storage. Sign-in returns `{ authenticated: true }`; the session token stays
 in its HttpOnly cookie and is omitted from session-inspection responses.
-`safeSessionResponse` projects the noncredential session record ID as `sessionKey`
-alongside public user identity. Console compares it to invalidate retained views
-and drafts after a new session, including for the same user. Sign-out
-revokes the session, and public signup is disabled.
+`safeSessionResponse` projects `sessionKey`, an HMAC of the session record ID
+under the auth secret (`apps/controller/src/auth/session-binding.ts`), alongside
+public user identity. Console compares it to invalidate retained views and drafts
+after a new session, including for the same user. Sign-out revokes the session,
+and public signup is disabled.
+
+`requireSessionKey` applies the optional `x-occ-session-key` header after the
+cookie session resolves, in `ControllerAdmissionVerifier.verify` (protected API
+and native admin proxy), `session`, `resolveSession`, and `signOut`. An absent
+header changes nothing; a malformed, duplicated, or foreign key returns `401`, so
+the header narrows but never selects a session. Sign-out with a foreign key
+revokes and clears nothing. The native admin proxy strips the header upstream.
 
 When GitHub is configured, `apps/controller/src/auth/github.ts:createHumanLogin`
 wraps the Better Auth adapter and provides curated password, GitHub, and logout
@@ -158,8 +166,17 @@ only for `/user`, and returns the numeric subject. Access and refresh tokens,
 expiry, and scope data are discarded; the App private key remains with the
 repository credential consumer. The subject selects an exact existing enrollment;
 email, login name, and tokens do not become identity or policy. Success redirects
-to `/console/`; failure redirects to the fixed
-Console URL with a sanitized error marker. Expected protocol or identity rejection is
+to exactly `/console/`; failure redirects to the fixed
+Console URL with a sanitized error marker.
+
+Start also returns `attemptId`, an HMAC of the attempt's state digest. Success sets
+a signed two-minute `SameSite=Strict` receipt naming the new session and that
+`attemptId`. The Console's same-origin `POST /api/auth/providers/github/result`
+reaches `oceGithubResult`, which checks the receipt signature and expiry, the
+posted `attemptId`, and that the session cookie still resolves to the named
+session. It then records the receipt in a process-local ledger until expiry,
+clears the cookie, and returns the session key, without issuing or extending a
+session. Password sign-in in this profile returns the same key. Expected protocol or identity rejection is
 audited separately from State dependency failure or uncertain session completion.
 Neither path automatically retries.
 
@@ -261,6 +278,8 @@ infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 04:00: Trace the GitHub attempt receipt, result exchange, and `x-occ-session-key` narrowing in the accompanying source change. (feat/github-session-binding-20260928)
 
 - 2026-09-25 17:27: Trace noncredential session identity for Console lifetime invalidation in accompanying changes. (01a0d992-db83-7843-b40c-355c0f2c2b9a - 64ab72aed5c4926e4a2080ade91d785e531801a2)
 

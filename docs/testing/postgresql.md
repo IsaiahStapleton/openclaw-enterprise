@@ -73,7 +73,7 @@ node --test tests/integration/postgres-github-sign-in.test.mjs
 ```
 
 The suite checks existing-account enrollment, unchanged Principals and grants,
-password parity, rejection of older unbound sessions, one-use callback handling,
+the one-use attempt receipt exchange and `x-occ-session-key` narrowing, password parity, rejection of older unbound sessions, one-use callback handling,
 account-wide revocation, protected recovery, and browser access to an already
 permitted Namespace and existing Agent detail. It checks actual listener stop, admitted-request drain, activation and restart in the loopback composition; installed ingress and deployment controls remain a separate qualification. Provider exchange/profile HTTP responses are controlled
 fixtures. They allow deterministic optional-email and rejected-identity cases;
