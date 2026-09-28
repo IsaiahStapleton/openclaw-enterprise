@@ -5,7 +5,7 @@
 [#461](https://github.com/openclaw/openclaw-enterprise/pull/461). See the
 [delivery record](#delivery-record).
 **Owner:** Driver contracts, Agent deployment, and the OpenShell integration.
-**Source baseline:** OCE `main` at `e4a807e7`, which pins OpenShell
+**Source baseline:** OCE `main` at `ec103d94`, which pins OpenShell
 [`v0.1.0`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0) (`496ebba2`). Upstream
 paths below are relative to that tag.
 
@@ -73,8 +73,8 @@ Sources: `docs/how-it-works/providers/overview.mdx:204-302` and
 | `aws_sts_assume_role`                                                | Gateway mints three credentials; the proxy re-signs requests with SigV4              | Role ARN, optional session settings and long-lived source keys     | Deferred: needs an authorized AWS role                             |
 | Token grant: `client_credentials`, `token_exchange`                  | Supervisor obtains a token with its SPIFFE JWT-SVID; the proxy inserts the header    | Profile configuration; a stored subject token for `token_exchange` | Deferred: needs SPIRE and an issuer that accepts SPIFFE assertions |
 
-The proposed catalog covers every row. OpenShell currently lists only `openai`;
-other types require real-path integration tests.
+OCE's catalog lists only `openai` (static); other types require real-path
+integration tests.
 
 Every type binds credentials to profile endpoints and returns 403
 (`credential_endpoint_mismatch`) elsewhere
@@ -92,16 +92,15 @@ Backend owns the gateway client and declares both required members, following
 the existing [Backend membership](../docs/reference/backends.md) pattern:
 
 ```yaml
-backends:
+backend:
   - id: openshell
     type: openshell
     configuration: { endpoint: https://…, auth: { mode: bearerTokenFile, path: … } }
     drivers: { sandbox: openshell-sandbox, credential_gateway: openshell-credentials }
 ```
 
-Startup rejects a selected `credential_gateway` unless both Backend members are selected.
-The shared Backend replaces #386's `sandboxDriverId`; each role keeps its own
-selection.
+Startup rejects a selected `credential_gateway` unless both Backend members and
+Kubernetes Compute are selected. This replaces #386's `sandboxDriverId`.
 
 ### Driver interface
 
@@ -167,11 +166,15 @@ Contract rules:
   paired SandboxDriver's `provisionHarness` must consume every attachment and
   reject any it did not issue.
 - `withdraw` returns `revoked` only after the implementation observes
-  revocation: for OpenShell, a detach receipt in state `revoked`. Withdrawn
-  placeholders stop resolving, even in running processes; forwarded requests are
-  not undone (`docs/how-it-works/providers/profiles.mdx:1018-1080`). Otherwise it
-  returns `pending`. Main's OpenShell `withdraw`, `updateSource` and
-  `rotateSource` throw "not supported yet"; OCC has no caller.
+  revocation, otherwise `pending`. On OpenShell v0.1.0 a `revoked` detach
+  receipt means the supervisor reloaded policy without the provider; the
+  placeholder no longer resolves and every open proxied connection in that
+  Sandbox was closed. Already-forwarded requests are not undone. Delay follows
+  the supervisor poll interval (default 10s) and is not an upstream contract;
+  while the supervisor cannot reach the gateway or after a failed refresh,
+  credentials and open connections may persist and the receipt stays `pending`.
+  Main's OpenShell `withdraw`, `updateSource` and `rotateSource` throw "not
+  supported yet".
 - `removeSource` is idempotent. OCC, not the Driver, refuses deletion with 409
   while an Agent draft, active revision, or pending deployment references the
   source. A retiring revision's Sandbox is caught only by OpenShell's
@@ -202,28 +205,29 @@ actor, and admission also requires it for `Agent.servicePrincipalId`.
 
 ### Lifecycle and authority
 
-OpenShell checks token scope and caller role on every RPC
-(`proto/openshell.proto` authorization options). OCC uses two gateway principals:
+OpenShell checks caller role on every RPC and token scope when the gateway
+enforces OIDC scopes (`proto/openshell.proto` authorization options). Main uses one principal; the proposal splits it:
 
-- **Worker principal:** global `platform_admin`, which the existing Sandbox
-  driver already needs to create and delete workspaces. Its token carries
-  `workspace:read`, `workspace:write`, `sandbox:read`, and `sandbox:write`, and
-  no `provider:*` scope, so it cannot read or change provider material.
-- **API principal:** workspace `admin` membership in each OCC workspace, with
-  `provider:read` and `provider:write`. It has no role outside OCC workspaces
-  and no `sandbox:*` scope.
+- **Worker principal:** global `platform_admin`, which the Sandbox driver needs
+  for workspaces, with `workspace:*` and `sandbox:*` scopes and no `provider:*`
+  scope. It cannot create, update or delete provider records or profiles when
+  the gateway enforces OIDC scopes (`scopes_claim` set). Residual risks: with
+  `sandbox:write` it can attach any provider to any Sandbox and exec inside it,
+  and the worker's Kubernetes RBAC reads the source Secret plaintext.
+- **API principal:** workspace `admin` in each OCC workspace, with
+  `provider:read` and `provider:write`, and no other role or `sandbox:*` scope.
 
 | Operation                 | Principal | OpenShell RPCs (scope; role)                                                                                                                                                                                |
 | ------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Prepare a Namespace       | Worker    | `GetWorkspace` (`workspace:read`; user), `CreateWorkspace` (`workspace:write`; `platform_admin`), `AddWorkspaceMember` for the API principal as admin and `ListWorkspaceMembers` (`workspace:write`/`read`) |
-| Create or update a source | API       | `ImportProviderProfiles`, `CreateProvider`, `UpdateProvider`, `ConfigureProviderRefresh` (`provider:write`; admin)                                                                                          |
+| Create or update a source | API       | `GetProviderProfile` (`provider:read`), `ImportProviderProfiles`, `UpdateProviderProfiles`, `CreateProvider`, `UpdateProvider`, `ConfigureProviderRefresh` (`provider:write`; admin)                        |
 | Rotate a source           | API       | `RotateProviderCredential` (`provider:write`; admin)                                                                                                                                                        |
 | Read source status        | API       | `GetProvider`, `GetProviderRefreshStatus` (`provider:read`; user)                                                                                                                                           |
 | Provision a revision      | Worker    | `CreateSandbox` with `SandboxSpec.providers` (`sandbox:write`; user)                                                                                                                                        |
 | Read attachment status    | Worker    | `GetSandboxProviderStatus` (`sandbox:read`; user)                                                                                                                                                           |
 | Withdraw one Agent        | Worker    | `DetachSandboxProvider` (`sandbox:write`; user), then `GetSandboxProviderStatus`                                                                                                                            |
 | Retire a revision         | Worker    | `DeleteSandbox` (`sandbox:write`; user); attachments go with the Sandbox                                                                                                                                    |
-| Delete a source           | API       | `DeleteProvider`, `DeleteProviderProfile` with the last source (`provider:write`; admin), then `GetProvider` (`provider:read`)                                                                              |
+| Delete a source           | API       | `DeleteProvider`, `DeleteProviderProfile` with the last source per `ListProviders` (`provider:write`; admin), then `GetProvider` (`provider:read`)                                                          |
 | Delete a Namespace        | Worker    | `DeleteWorkspace` (`workspace:write`; `platform_admin`)                                                                                                                                                     |
 
 The API uses `SecretDriver.withValue` for authorized registration, passing
@@ -257,23 +261,25 @@ operation-mediated broker are later targets.
 The entrypoint receives only the literal login mode from the source type's
 `harnessAuth.loginMode`. For an `openai` static source, the supervisor sets the
 `OPENAI_API_KEY` placeholder, and `codex login --with-api-key` stores it. The
-upstream `codex` profile supplies `CODEX_AUTH_*` placeholders for a ChatGPT
-account. It has no gateway refresh and allows only `auth.openai.com`, so Codex
-CLI refresh would send placeholders in the request body. The
-proposed Codex startup model probe checks either path before readiness. Current
-support is the `openai` API-key source only.
+upstream `codex` profile's ChatGPT-account placeholders have no gateway refresh,
+so Codex CLI refresh would send placeholders in the request body. The Codex
+startup model probe checks the path before readiness
+([Harness execution](../docs/reference/harness-execution.md)). Only the `openai`
+API-key source is supported.
 
 ## Trust requirements
 
-- OCC's two principals must be the only members of its OpenShell workspaces,
-  because workspace users can attach any provider. The worker checks this with
-  `ListWorkspaceMembers` when preparing the Namespace and fails on any other
-  member in the proposed split. Platform Admins bypass membership, so the worker
-  must be the only Platform Admin; OCC cannot verify that through the API.
-  Current OCC uses one principal and checks neither.
+- OCC's principals must be the only members of its OpenShell workspaces,
+  because workspace users can attach any provider. In the proposed split the
+  worker fails Namespace preparation on any other member in
+  `ListWorkspaceMembers`; the check is point-in-time because the worker can
+  `AddWorkspaceMember`. Platform Admins bypass membership, so the worker must be
+  the only Platform Admin, which OCC cannot verify. Main checks neither.
 - Sources do not cross OCC Namespaces; each OCC Namespace maps to one workspace.
 - Credentialed endpoints require L7 inspection. Codex and other clients must
-  trust the per-generation Sandbox CA.
+  trust the per-generation Sandbox CA. OpenShell rejects a `tls: skip` rule that
+  overlaps the model endpoint; skip rules for other hosts relay bytes
+  unmodified, so the placeholder may be forwarded literally but the key never is.
 - The guarantee depends on OpenShell's NetworkPolicy, which admits only
   supervisor ingress to the workload and denies workload-initiated connections.
   The cluster's network plugin must enforce it
@@ -282,18 +288,17 @@ support is the `openai` API-key source only.
 - `token_exchange` stores a subject token. The design's non-goals exclude
   "Delegating human identity or authentication to an Agent", so the subject must
   be a non-human principal until that is revisited.
-- Outside development, registration requires an `https` gateway endpoint with
-  bearer authentication.
+- Registration requires TLS plus `bearerTokenFile`, or an explicit
+  `insecureTransport: network-policy`, accepted in any profile and unverifiable
+  by OCC (`packages/occ/src/backends.ts:248-270`).
 
 ## Failure behavior
 
 - Unknown source types, missing inputs, and unauthorized Secrets fail before any
   gateway call.
-- Before future registration enablement, resolve uncertain creation, cleanup and
-  COMMIT, or obtain a supported explicit human decision on availability; none is
-  recorded. Preserve original custody and attempts until settlement or fencing.
-  Never replay or compensate uncertain effects. Unknown COMMIT is not rollback:
-  discard the client without further query; observation is not a COMMIT receipt.
+- Known gap, tracked in #118: registration shipped with only the 70-second
+  fence, without resolving uncertain creation, cleanup and COMMIT. Never replay
+  or compensate uncertain effects; unknown COMMIT is not rollback.
 - Missing attachment readiness keeps the candidate inactive.
 - A proxy endpoint mismatch fails the request; the Harness startup probe keeps
   the Pod unready.
@@ -307,9 +312,9 @@ support is the `openai` API-key source only.
   refreshed, and dynamic credentials.
 - **Omitted:** `mediate`, `BoundExchange`, `Assurance` profiles, and branded
   evidence types. OpenShell does not call OCE per request.
-- **Not yet a contract:** #386's 30-second active-traffic closure. OpenShell
-  `v0.1.0` defines revocation for new resolution, but it does not undo requests
-  already forwarded, and it sets no bound for open streams.
+- **Not yet a contract:** a 30-second closure bound, including loss of renewal
+  (see `withdraw`). The protected bound is tracked in
+  [#118](https://github.com/openclaw/openclaw-enterprise/issues/118).
 
 ## Verification gates
 
@@ -321,8 +326,8 @@ Confirm before `Accepted`:
    `CODEX_AUTH_*` variables without parsing them locally. ChatGPT-account
    refresh works through the proxy, or the source type uses gateway refresh
    instead.
-3. A `revoked` detach receipt stops new requests from a running Codex process,
-   and the observed effect on open streams is recorded.
+3. A `revoked` detach receipt stops a running Codex process's requests and
+   closes its open streams.
 4. The principal split works as specified: the worker principal is denied
    provider RPCs, and the API principal is denied workspace and Sandbox RPCs.
 
@@ -354,7 +359,7 @@ Deferred types stay out of the catalog until their real-path tests exist.
 
 ## Documentation
 
-The implementation PR updates:
+#461 updated:
 
 - the platform design ([Drivers](../docs/design/drivers.md),
   [resources](../docs/design/resources.md), and
@@ -388,11 +393,8 @@ The implementation differs from this proposal:
   call throws, OCC attempts removal, then marks uncertain attempts `deleting`.
   If the state update does not settle, the last committed state can be
   `registering` or `deleting`. DELETE finalizes only 70 seconds after `createdAt`.
-- Secret values come from the existing `SecretDriver.withValue`.
 - Compute's `resolveSandboxNamespace` supplies the gateway Workspace, and
   providers set `profile_workspace`.
-- Plain in-cluster gateway transport requires `insecureTransport: network-policy`.
-- One gateway principal serves the API and worker.
 
 Remaining work is tracked in
 [#118](https://github.com/openclaw/openclaw-enterprise/issues/118).
