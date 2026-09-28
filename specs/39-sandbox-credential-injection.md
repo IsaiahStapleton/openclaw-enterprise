@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-26
 **Status:** Implementing; the first slice shipped in
-[#461](https://github.com/openclaw/openclaw-enterprise/pull/461). See the
-[delivery record](#delivery-record).
+[#461](https://github.com/openclaw/openclaw-enterprise/pull/461); remaining
+proposal not Accepted. See the [delivery record](#delivery-record).
 **Owner:** Driver contracts, Agent deployment, and the OpenShell integration.
 **Source baseline:** OCE `main` at `ec103d94`, which pins OpenShell
 [`v0.1.0`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0) (`496ebba2`). Upstream
@@ -11,9 +11,9 @@ paths below are relative to that tag.
 
 ## Problem and decision
 
-Agents need credentials for model providers, source control, cloud APIs, and
-package registries. OCE has delivered model credentials as Kubernetes `secretKeyRef`
-environment entries, putting the real value in the Harness process. The
+Agents need credentials for models, source control, cloud APIs and registries.
+OCE has delivered model credentials as Kubernetes `secretKeyRef` environment
+entries, putting the real value in the Harness process. The
 [target design](../docs/design/safeguards.md#secret-access) calls this a temporary
 exception: the Harness should receive only scoped substitutes.
 
@@ -23,20 +23,26 @@ applies it to outbound requests. The workload Pod has no direct egress and
 never receives a real value.
 
 Add a `credential_gateway` Driver capability to manage credential sources and
-their attachment to Agent revisions. How a credential reaches a request
-(placeholder substitution, proxy-inserted headers, request signing, or
-gateway-minted tokens) belongs to the implementation. OCE's contract never names
-those mechanisms. OpenShell implements the common interface with its paired
-Sandbox. The GitHub broker needs an adapter or attachment/consumer extension;
-neither is implemented. The first target pairs the broker with a static OpenShell
-model source in one dedicated revision. Its private Sandbox handoff remains unimplemented;
-retain current guards until the joined path is proven.
+their attachment to Agent revisions. How a credential reaches a request belongs
+to the implementation; OCE's contract never names the mechanism. OpenShell
+implements the common interface with its paired Sandbox. The first target pairs the GitHub broker with a static OpenShell model
+source in one dedicated revision.
 
-This follows [PR #386](https://github.com/openclaw/openclaw-enterprise/pull/386)'s
-separate capability and the deferred `CredentialGatewayDriver` in the
+Blocked on main: Kubernetes Compute refuses repository credentials whenever a
+SandboxDriver is selected (`validateRepositoryCredentialSupport`), and
+credential-source model auth requires a SandboxDriver, so the combined revision
+is refused at repository listing, deploy admission (409) and dispatch. Reaching
+it requires lifting that guard, carrying repository material in
+`HarnessWorkloadRequirements`, and an OpenShell policy route to the repository
+gateway; until then the GitHub broker is supported only on Compute-owned
+runtimes and the OpenShell model source only without repository bindings. The
+adapter keeps the existing OCE HTTPS repository service as the only Git and `gh`
+destination, routed with `tls: skip` so OpenShell does not substitute
+credentials on that hop; clients still verify the service certificate. No
+direct GitHub route may bypass it.
+
+This builds on the deferred `CredentialGatewayDriver` in the
 [archived Sandbox provisioning spec](.archive/13-sandbox-driver-provisioning.md).
-It omits #386's per-request `mediate`: OCE is not on the request path when the
-Sandbox injects credentials.
 
 ## Scope
 
@@ -57,7 +63,7 @@ Out of scope:
   These remain separate OpenShell blockers.
 - Embedded OpenClaw, which OpenShell already rejects.
 - Credential Gateway implementations without a Sandbox, such as a proxy for plain
-  Kubernetes Compute. The contract permits them; none is delivered here.
+  Kubernetes Compute: permitted, not delivered here.
 
 ## OpenShell source types
 
@@ -88,8 +94,8 @@ OpenShell workspace, and any workspace `user` can attach any provider in it
 
 Add `credential_gateway` to `DRIVER_CAPABILITIES`
 (`packages/contracts/src/index.ts:42`) and an `openshell` Backend type. The
-Backend owns the gateway client and declares both required members, following
-the existing [Backend membership](../docs/reference/backends.md) pattern:
+Backend owns the gateway client and declares both members
+([Backend membership](../docs/reference/backends.md)):
 
 ```yaml
 backend:
@@ -100,7 +106,7 @@ backend:
 ```
 
 Startup rejects a selected `credential_gateway` unless both Backend members and
-Kubernetes Compute are selected. This replaces #386's `sandboxDriverId`.
+Kubernetes Compute are selected.
 
 ### Driver interface
 
@@ -264,8 +270,7 @@ The entrypoint receives only the literal login mode from the source type's
 upstream `codex` profile's ChatGPT-account placeholders have no gateway refresh,
 so Codex CLI refresh would send placeholders in the request body. The Codex
 startup model probe checks the path before readiness
-([Harness execution](../docs/reference/harness-execution.md)). Only the `openai`
-API-key source is supported.
+([Harness execution](../docs/reference/harness-execution.md)).
 
 ## Trust requirements
 
@@ -284,7 +289,6 @@ API-key source is supported.
   supervisor ingress to the workload and denies workload-initiated connections.
   The cluster's network plugin must enforce it
   (`docs/kubernetes/setup.mdx:11-34`).
-- Token grants require a SPIFFE Workload API for supervisors.
 - `token_exchange` stores a subject token. The design's non-goals exclude
   "Delegating human identity or authentication to an Agent", so the subject must
   be a non-human principal until that is revisited.
@@ -355,44 +359,42 @@ regular API and worker workflow:
 - Test startup membership, catalog validation, deferred-type rejection, and
   admission refusal of secret-backed `harnessAuth` with a gateway selected.
 
-Deferred types stay out of the catalog until their real-path tests exist.
-
 ## Documentation
 
-#461 updated:
-
-- the platform design ([Drivers](../docs/design/drivers.md),
-  [resources](../docs/design/resources.md), and
-  [Secret access](../docs/design/safeguards.md#secret-access));
-- a new Credential Gateway Driver reference, plus the
-  [OpenShell SandboxDriver](../docs/reference/drivers/openshell-sandbox.md),
-  [Backends](../docs/reference/backends.md),
-  [Namespaces](../docs/reference/namespaces.md),
-  [Harness execution](../docs/reference/harness-execution.md), and
-  [Secret Driver](../docs/reference/drivers/secret.md) references;
-- the API, permissions, and database-entity cheat sheets;
-- the [OpenShell provisioning flow](../docs/flows/openshell-sandbox-provisioning.md)
-  and [OpenShell testing](../docs/testing/openshell.md).
+#461 updated the [Drivers](../docs/design/drivers.md),
+[resources](../docs/design/resources.md) and
+[Secret access](../docs/design/safeguards.md#secret-access) design; a new
+Credential Gateway reference and the
+[OpenShell SandboxDriver](../docs/reference/drivers/openshell-sandbox.md),
+[Backends](../docs/reference/backends.md),
+[Namespaces](../docs/reference/namespaces.md),
+[Harness execution](../docs/reference/harness-execution.md) and
+[Secret Driver](../docs/reference/drivers/secret.md) references; API,
+permissions and database-entity cheat sheets; the
+[provisioning flow](../docs/flows/openshell-sandbox-provisioning.md); and
+[OpenShell testing](../docs/testing/openshell.md).
 
 ## Delivery record
 
 [#461](https://github.com/openclaw/openclaw-enterprise/pull/461) delivered
 registration, removal, attachment, and status for the `openai` source type. A
-real OpenShell model turn used the injected key while the Harness held only the
+local real OpenShell model turn used the injected key while the Harness held only the
 placeholder. The current contract is owned by
 [Credential Gateway](https://github.com/openclaw/openclaw-enterprise/blob/ec103d947abb40b21411e5b8bdede7774ae35df1/docs/reference/drivers/credential-gateway.md) and
 [credential sources](https://github.com/openclaw/openclaw-enterprise/blob/ec103d947abb40b21411e5b8bdede7774ae35df1/docs/reference/credential-sources.md).
 
 The gateway copy does not follow Secret changes or grant removal; refresh and
-bounded withdrawal remain future work. The 70-second delay below does not prove
-settlement of uncertain creation, late effects or credential handles.
+bounded withdrawal remain future work.
+
+Hosted evidence: none as of 2026-09-28; the `openshell` full-integration lane
+has not executed on main. Local runs only (#461 body).
 
 The implementation differs from this proposal:
 
-- Registration commits a `registering` record before the gateway call. If the
-  call throws, OCC attempts removal, then marks uncertain attempts `deleting`.
-  If the state update does not settle, the last committed state can be
-  `registering` or `deleting`. DELETE finalizes only 70 seconds after `createdAt`.
+- Registration commits a `registering` record before the gateway call; if the
+  call throws, OCC attempts removal and marks uncertain attempts `deleting`. An
+  unsettled update can leave either state. DELETE finalizes only 70 seconds
+  after `createdAt`.
 - Compute's `resolveSandboxNamespace` supplies the gateway Workspace, and
   providers set `profile_workspace`.
 
@@ -401,7 +403,6 @@ Remaining work is tracked in
 
 ## Open questions
 
-- Should `CredentialSource` keep the design's reserved `SecretBroker` name?
 - Should ChatGPT account tokens issued by the ServiceAccount Driver become an
   `external` source that the Driver updates?
 - Which principal may supply a `token_exchange` subject token?
