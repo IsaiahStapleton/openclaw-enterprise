@@ -1798,12 +1798,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
   ): void {
     this.validateRepositoryCredentialSupport(sandboxDriverId);
     if (!(
-      (harness.id === "openclaw" &&
-        (harness.mode === "embedded" || harness.mode === "dedicated")) ||
+      (harness.id === "openclaw" && harness.mode === "embedded") ||
       (harness.id === "codex" && harness.mode === "dedicated")
     )) {
       throw new ConfigurationFailure(
-        "Repository credentials require OpenClaw or a dedicated Codex Kubernetes runtime.",
+        "Repository credentials require an embedded OpenClaw or dedicated Codex Kubernetes runtime.",
       );
     }
   }

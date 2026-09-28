@@ -46,7 +46,7 @@ Presets and edited Configuration JSON retain their settings.
    **Reset template** replaces them.
 5. Optional: under **Repository access**, select up to 16 repositories approved
    for this Namespace. Select one authorization level shared by every chosen
-   repository. Kubernetes supports Codex (Dedicated) or OpenClaw (either mode),
+   repository. Kubernetes supports Codex (Dedicated) or OpenClaw (Embedded),
    without a Sandbox Driver. Use Codex for Slack. Leave repositories unselected
    for an Agent without repository access.
 
