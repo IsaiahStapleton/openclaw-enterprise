@@ -36,20 +36,6 @@ verify Teams. The test temporarily adds `allowBots: "mentions"`,
 `users: ["<sender-bot-user-id>"]`, and `replyToMode: "off"` only to the exact test
 channel. `requireMention` stays enabled. Do not enable bot access account-wide.
 
-## Diagnostics without sending messages
-
-Run `tests/integration/harness-topology-k3d-slack-nosend-real.test.mjs` with the
-same Kubernetes runtime prerequisites to check an unreachable Slack connection.
-Set `OCC_TEST_SLACK_NOSEND_INVALID=1` to include rejected credentials and
-`OCC_TEST_SLACK_NOSEND_LIVE=1` to include an authenticated connection. Both
-additional cases require the approved `OCC_TEST_SLACK_PROXY_URL` above; the
-suite does not provision a proxy. The live case also needs `SLACK_APP_TOKEN`
-and `SLACK_BOT_TOKEN` (or `APP_TOKEN` and `BOT_TOKEN`).
-
-These cases run the diagnostics API without posting messages; they do not need
-the sender bot token or test-channel membership. Keep the message suite above
-for delivery proof.
-
 ## Slack test environment
 
 `OCC_TEST_SLACK_LIVE=1` enables

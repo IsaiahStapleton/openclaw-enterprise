@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-23
-last_updated_session: codex/01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-09-25
+last_updated_session: authoring-run/6556d897-be75-463f-b50c-73f3b1fb6d72
 ---
 
 # Secret Storage and Gateway Delivery Flow
@@ -32,10 +32,8 @@ Credential issuance and provider internals are outside this flow.
   [OpenClawController](../../packages/occ/src/index.ts), and
   [KubernetesSecretDriver](../../apps/controller/src/drivers/secret/kubernetes/index.ts).
 - The console and [OCC CLI](../guides/cli.md#provision-integration-secrets)
-  call the same HTTP operations. `internal/occcli/cli.go` reads protected JSON
-  input files; `internal/occclient/client.go` constructs resource paths and
-  authenticated requests. Both initiate OCC-authorized mutations; neither writes
-  directly to SQL, Kubernetes, or credential backends.
+  call these HTTP operations. They initiate OCC-authorized mutations; neither
+  writes directly to SQL, Kubernetes, or credential backends.
 
 ## Flow
 
@@ -48,11 +46,13 @@ graph TD
   end
   subgraph Admission["Configuration and deployment"]
     D --> E["Bind source ref to gateway env destination"]
-    E --> P["Administrator binds Agent identity to exact Secret"]
+    E --> P["Bind Agent identity to exact Secret"]
     P --> F["Authorize caller and Agent SP; verify backend"]
     F -->|allowed| G["Freeze references in AgentRevision"]
     F -->|denied or unavailable| X["No admitted deployment"]
-    D --> L["Local installer: grant Agent use of this exact Secret"]
+    D --> K{"Local v3 state uses<br/>Kubernetes and Sandbox none?"}
+    K -->|yes| L["Local installer: grant Agent use of this exact Secret"]
+    K -->|no or OpenShell| X
     L --> F
     L -->|ownership or IAM denied| X
   end
@@ -100,13 +100,10 @@ recovery.
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
-The Agent response exposes its immutable `servicePrincipalId`. An
-administrator uses `createIAMRole` and `createIAMAccessBinding` to grant that
-identity `operate` on the exact Secret. OCC checks Installation `administer`,
-Namespace `read`, and target `read`; native IAM validates the same-Namespace
-identity, Role, and target inside the policy transaction. Policy and audit
-commit together. The [authorization reference](../reference/authorization.md#manage-namespace-policy)
-owns the request shapes and deletion semantics.
+The Agent response exposes its immutable `servicePrincipalId`. An administrator
+grants that identity `operate` on the exact Secret before deployment. OCC checks
+Installation administration, Namespace scope, and target access through the
+selected IAM Driver; policy and audit commit together.
 
 [createConfiguration and updateConfiguration](../../packages/occ/src/index.ts)
 keep `secretBindings` in OCC metadata, separate from native `values`. Each binding
@@ -140,7 +137,11 @@ execution topology.
 `scripts/first-agent-database.mjs:grantFirstAgentSecret`
 
 The [tool](../../scripts/first-agent.mjs) targets the persistent installation
-started with `OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev up`.
+started with `./bin/occ dev up`. Before invoking Kubernetes or the OCC API, it
+requires the current v3 development marker and state from the same checkout.
+The state must select Kubernetes Compute and
+`sandboxDriver: "none"`. OpenShell state fails with an explicit unsupported-profile
+error because that development profile does not support this model-turn path.
 With the [bootstrap service key](../../packages/iam/src/index.ts), it creates a
 Secret, Configuration, and named Agent through the OCC HTTP API. A new Agent uses
 `openai/gpt-6-astra` unless `OPENCLAW_FIRST_AGENT_MODEL` selects another authorized
@@ -213,10 +214,9 @@ response retains the same ref. No revision, binding, or running environment is
 updated, and no controller automatically restarts the gateway. A successful update
 means stored, not delivered.
 
-For coordinated channel replacement, stop the Agent and wait for shutdown
-before updating each Secret. A partial update leaves it stopped until repaired;
-there is no multi-Secret transaction or rollback of stored bytes. A shared
-Secret still requires explicit deployment of each consuming Agent.
+For coordinated channel replacement, stop the Agent and wait for shutdown before
+updating each Secret. A partial update leaves it stopped until repaired; there is
+no multi-Secret transaction or rollback of stored bytes.
 
 For model-key replacement, update the OCC Secret and explicitly deploy each
 consuming Agent through OCE. The new revision's preparation calls
@@ -238,20 +238,6 @@ A partial delete can be retried; missing or foreign objects never become an
 adoption or recreation path. Gateway replacement does not garbage-collect
 Secrets, so immediate revocation requires stopping workloads or revoking the
 credential at its issuer.
-
-### 6. Provision generated connection credentials
-
-`packages/occ/src/index.ts:OpenClawController.provisionAgentRuntimeCredentials`
-
-Generated communication credentials remain Compute-owned and separate from
-integration Secrets. Initial provisioning accepts an empty request for a stopped
-Agent with no historical revisions. GET returns `{transportConfigured}` metadata
-without credential values. Later deployments reuse the same Agent-owned bundle.
-Rotation and repair of this bundle are not exposed by the API.
-
-The next handoff is ordinary [worker reconciliation](controller-worker.md).
-Model and channel credential replacement uses the existing Secret update and
-explicit deployment workflow above.
 
 ## Debugging and Verification
 
@@ -290,6 +276,8 @@ explicit deployment workflow above.
 
 ## Changelog
 
+- 2026-09-25 14:57: Align first-Agent admission and its real fixture with v3 development state, and reject the unsupported OpenShell profile before external calls. (authoring-run/6556d897-be75-463f-b50c-73f3b1fb6d72 - 189c62c993066d52703d2cd7eb896e2c2c01bdc4)
+
 - 2026-09-23 14:12: Clarify model-key replacement through OCE deployment and distinguish Harness Pod recreation from credential delivery. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 240c72f2ef96c034c4e05c4775a79a94ebbe64ab)
 
 - 2026-09-23 12:22: Move canonical credential sources to CP and describe revision-scoped Harness delivery in the accompanying change. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 623d56dec26a8ef0f72b562254687cabecdbbf82)
@@ -298,7 +286,6 @@ explicit deployment workflow above.
 
 - 2026-09-20 18:25: Document the local first-Agent Secret grant and model-response check added with the installer tool. (01a0c00c-8a45-7233-82c4-e12fb2c3b0d7 - 3bbdc447dbe2dee8c5f757b822e9ebe034047193)
 - 2026-09-20 00:00: Recorded channel credentials as Configuration Secret bindings with Agent service-principal grants and gateway-only delivery. (01a0bce5-9f29-7110-85fd-6b140674d362 - 93fe0a83)
-- 2026-09-19 20:53: Document the runtime API completion paths and source-owned credential/failure boundaries; live proof is tracked separately.
 
 - 2026-09-17 00:48: Correct current harness admission and metadata-only dispatch boundaries after implementation review. (01a0acbf-4d5a-7413-9411-dce911f3ad23 - 107900e9551b90c3e9ac24d30f8ea866f17e5dbb)
 

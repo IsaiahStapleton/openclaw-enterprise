@@ -1,3 +1,5 @@
+/// <reference lib="es2024.string" />
+
 import type { V1Volume, V1VolumeMount } from "@kubernetes/client-node";
 import type {
   AgentRevision,
@@ -187,11 +189,13 @@ export function repositorySessionFiles(
   }
   for (const key of keys) {
     const content = files[key];
-    if (typeof content !== "string" || content.length === 0 || content.includes("\0")) {
-      return invalid();
-    }
-    const bytes = Buffer.from(content, "utf8");
-    if (bytes.length > limits[key as keyof typeof limits] || bytes.toString("utf8") !== content) {
+    if (
+      typeof content !== "string" ||
+      content.length === 0 ||
+      content.includes("\0") ||
+      Buffer.byteLength(content, "utf8") > limits[key as keyof typeof limits] ||
+      !content.isWellFormed()
+    ) {
       return invalid();
     }
   }
@@ -254,13 +258,19 @@ export function repositoryMaterialSpec(
   const materialBindings = bindings
     .map((binding): RepositoryMaterialBinding => {
       const input = record(binding);
+      const hasAdmissionId = Object.hasOwn(input, "admissionId");
       const expectedKeys =
         binding.kind === "new"
           ? ["kind", "repositoryRef", "sessionId", "deadlineWallMs", "files"]
           : ["kind", "repositoryRef", "sessionId", "deadlineWallMs"];
+      if (hasAdmissionId) {
+        expectedKeys.push("admissionId");
+      }
       if (
         Object.keys(input).length !== expectedKeys.length ||
         expectedKeys.some((key) => !Object.hasOwn(input, key)) ||
+        (hasAdmissionId &&
+          (typeof binding.admissionId !== "string" || !refPattern.test(binding.admissionId))) ||
         typeof binding.repositoryRef !== "string" ||
         !refPattern.test(binding.repositoryRef) ||
         !references.delete(binding.repositoryRef) ||

@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  assertActualModelTurn,
-  assertCurrentRuntimeDiagnosticsNoSend,
-} from "../helpers/harness-topology-k3d-real.mjs";
+import { assertActualModelTurn } from "../helpers/harness-topology-k3d-real.mjs";
 
 import {
   arrangeNoSendSlackTopology,
   assertConnectedSlackChecks,
+  assertCurrentRuntimeDiagnosticsNoSend,
   assertInvalidAuthRejected,
   assertMissingCredentialAdmissionDenied,
   assertNoSendSlackPrerequisites,

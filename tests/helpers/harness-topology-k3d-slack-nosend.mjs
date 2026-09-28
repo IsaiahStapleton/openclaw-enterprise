@@ -359,9 +359,72 @@ async function arrangeNoSendSlackTopology(context, slack) {
   };
 }
 
+function assertIsoTimestampAtOrAfter(value, startedAt, description) {
+  assert.equal(typeof value, "string", `${description} must be an ISO timestamp`);
+  const parsed = Date.parse(value);
+  assert.equal(Number.isNaN(parsed), false, `${description} must parse as an ISO timestamp`);
+  assert.ok(parsed >= startedAt, `${description} must be fresh for the explicit diagnostic run`);
+}
+
+async function assertCurrentRuntimeDiagnosticsNoSend(context, topology, revision) {
+  const startedAt = Date.now() - 1_000;
+  const response = await topology.request(
+    "POST",
+    `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deployments/${revision.id}/diagnostics`,
+  );
+  assert.equal(response.status, 200, JSON.stringify(response.error));
+  assertNoSecretMaterial(
+    response,
+    [process.env.OPENAI_API_KEY],
+    "current runtime diagnostics response",
+  );
+  assert.deepEqual(
+    Object.keys(response.data).sort(),
+    ["checks", "observedAt", "revisionId"],
+    "diagnostics response must use the approved opaque shape",
+  );
+  assert.equal(response.data.revisionId, revision.id);
+  assertIsoTimestampAtOrAfter(response.data.observedAt, startedAt, "diagnostics observedAt");
+  assert.ok(
+    response.data.checks.length > 0,
+    "current diagnostics must report at least one native runtime health check",
+  );
+  for (const check of response.data.checks) {
+    assert.deepEqual(
+      Object.keys(check).sort(),
+      check.code === undefined
+        ? ["check", "checkedAt", "component", "state"]
+        : ["check", "checkedAt", "code", "component", "state"],
+    );
+    assert.equal(typeof check.component, "string");
+    assert.equal(typeof check.check, "string");
+    assert.match(check.component, /^[A-Za-z0-9._~:@-]{1,64}$/);
+    assert.match(check.check, /^[A-Za-z0-9._~:@-]{1,64}$/);
+    assert.ok(
+      ["succeeded", "failed", "unknown"].includes(check.state),
+      `unsupported diagnostic state ${check.state}`,
+    );
+    if (check.checkedAt !== null) {
+      assertIsoTimestampAtOrAfter(
+        check.checkedAt,
+        startedAt,
+        `${check.component}/${check.check} checkedAt`,
+      );
+    }
+    if (check.code !== undefined) {
+      assert.match(check.code, /^[A-Za-z0-9._~:@-]{1,64}$/);
+    }
+  }
+  context.diagnostic(
+    `runtime diagnostics: ${revision.id} reported ${response.data.checks.length} no-send checks`,
+  );
+  return response.data;
+}
+
 export {
   arrangeNoSendSlackTopology,
   assertConnectedSlackChecks,
+  assertCurrentRuntimeDiagnosticsNoSend,
   assertInvalidAuthRejected,
   assertMissingCredentialAdmissionDenied,
   assertNoSendSlackPrerequisites,

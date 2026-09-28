@@ -65,9 +65,15 @@ spec:
   provider:
     type: Kubernetes
     kubernetes:
+      {{- with .Values.controlPlane.nodeSelector }}
+      envoyDeployment:
+        pod:
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+      {{- end }}
       envoyService:
         name: {{ $serviceName }}
-        type: ClusterIP
+        type: {{ $routing.serviceType }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -214,6 +220,17 @@ spec:
           podSelector:
             matchLabels:
               openclaw.dev/workload-role: agent
+        {{- range $routing.remoteNodeCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+
+        - namespaceSelector:
+            matchLabels:
+              openclaw-enterprise.io/gateway: {{ $routeNamespaceLabel }}
+          podSelector:
+            matchLabels:
+              openshell.ai/boundary-role: supervisor
       ports:
         - protocol: TCP
           port: {{ $routing.envoyHttpsTargetPort }}

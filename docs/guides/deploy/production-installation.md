@@ -13,15 +13,23 @@ Run from the repository root; retain this shell and protected files for
 
 ## Use published images
 
-For an authorized trial on `linux/amd64` or `linux/arm64`, use the private images
-below instead of building them. Both were built from source
-`e3b28515f30523eede3cd905e589c1ab9063dbda`, passed image startup checks, and had
-their remote digests verified in [publication run 35680912119](https://github.com/openclaw/openclaw-enterprise/actions/runs/35680912119).
-Both digest references select multi-platform indexes; Docker and Kubernetes
-pull the variant matching the host or node. Startup checks passed for both
-architectures, with ARM64 checked under QEMU. Publication does not establish
-production deployment readiness. To change the image contents,
-[build your own images](#build-and-publish-production-images).
+To install the current example, select a verified release or custom controller
+image supporting `catalogSource: openai-curated` and the
+[origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
+plus a compatible runtime. Export their immutable digests as `CONTROLLER_IMAGE`
+and `RUNTIME_IMAGE` for installation, or [build and publish images](#build-and-publish-production-images)
+from this checkout.
+
+The published controller supports the curated catalog but predates the current
+origin check. No release meeting current production requirements has been verified
+for this guide. Use these images only for image tests or workflows targeting their
+recorded source revision.
+
+Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
+matching-architecture startup checks and remote digest verification in
+[publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
+Their multi-platform indexes select the host or node variant. Publication does not
+establish production deployment readiness.
 
 You need read access to both GHCR packages. At publication, they inherited access
 from `openclaw/openclaw-enterprise`. Authenticate locally with a GitHub personal
@@ -32,20 +40,18 @@ password prompt. Do not paste the token into the command itself. See
 
 ```bash
 docker login ghcr.io --username '<your-github-username>'
-
-export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:9aa430eb19553a35ccafd5dafff58984ec1264e7c77b1440f56a893cf8e993e1'
-export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:792f0ffe88ec9f935b55c36f41ee646a828e3d83df21427cf7955a5beef52460'
 ```
 
-Use the controller image for API, worker, migration, and bootstrap, and one
-runtime image for gateways and Agents. Keep the tested digest references.
+For historical [image tests](../../testing/images.md#check-published-images), export:
 
-For Kubernetes, configure approved cluster/node pull credentials for **both
-control-plane and tenant Pods**. Local `docker login` does not authenticate
-cluster nodes. Both images support amd64 and arm64 nodes. Continue at [Configure the Installation](#configure-the-installation)
-with these exports; skip the build-and-publish block below. Local quickstart and
-image-test readers should return to their calling guide after authentication
-and exporting the image references.
+```bash
+export HISTORICAL_CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
+export HISTORICAL_RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
+```
+
+Configure approved pull credentials for **control-plane and tenant Pods**;
+`docker login` does not authenticate cluster nodes. To install, continue with the
+verified current pair.
 
 ## Build and publish production images
 
@@ -114,9 +120,8 @@ Set the production shell inputs before the first Kubernetes command. For a local
 Kubernetes trial, [build and import the test images](local-operations.md#build-images-for-local-kubernetes)
 to produce YAML copies with real image digests, then set
 `OCC_INPUT_DIRECTORY` to that generated directory and keep those files.
-For a registry-backed installation, keep the digest exports from either
-[Use published images](#use-published-images) or
-[Build and publish production images](#build-and-publish-production-images).
+For registry-backed installations, [check the selected image digests](../../testing/images.md#check-published-images)
+on native hosts for their target architectures and retain their exports.
 
 ```bash
 umask 077
@@ -150,7 +155,7 @@ configures Drivers, runtime images, identity, networking, storage, and logging.
 For `logging.level`, follow [Choose the log level](../observability.md#1-choose-the-log-level),
 including when to restart OCC and deploy a new AgentRevision.
 
-If you built the production images above, write their digest references into
+For a registry-backed installation, write the image digest references into
 the protected copies (skip this block for the local Kubernetes import path):
 
 ```bash
@@ -162,7 +167,7 @@ yq -i '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
   "$OCC_INPUT_DIRECTORY/installation.yaml"
 ```
 
-Edit the protected YAML copies before provisioning anything:
+Edit the protected YAML copies:
 
 - `$OCC_INPUT_DIRECTORY/values.yaml`: set `images.controller`,
   `auth.baseUrl`, `bootstrap.adminEmail`, `database.cidrs`, `cluster.cidrs`,
@@ -174,25 +179,32 @@ Edit the protected YAML copies before provisioning anything:
   Secret names and keys; otherwise update the Secret creation commands below.
 - `$OCC_INPUT_DIRECTORY/installation.yaml`: set `occ.cluster`, `logging.level`,
   `drivers.compute.configuration.images` digests, DNS selectors, matching
-  `gatewayRouting` settings, service-principal token settings, runtime selector, Secret
+  `gatewayRouting` settings, service-principal token settings, Secret
   prefixes, and `runtime.gatewayStorageClassName`. Keep
   `drivers.compute.configuration.images.requireImmutableDigest: true`.
+  Set `runtime.gatewayNodeSelector` (trusted) and `runtime.nodeSelector` (Harness)
+  to disjoint Ready pools; Helm does not place runtimes.
   Do not set `network.gatewayClients` with routing enabled; Compute derives the
   Envoy peer from `gatewayRouting`.
-  If enabling Agent plugins, set one compatible bundled `drivers.plugin` selector
-  and any required Codex catalog-reader configuration. See the
+  The example selects the curated Codex PluginDriver catalog. To use a different
+  catalog or Driver, follow the
   [PluginDriver reference](../../reference/drivers/plugin.md#selection-and-catalogs).
-  For dedicated Codex command execution on nodes whose default syscall policy
-  blocks user namespaces, install a reviewed compatibility profile on every
-  eligible node and set `runtime.codexSeccompProfile` to its relative kubelet
-  profile path. See the [Kubernetes runtime requirements](../../reference/drivers/kubernetes-compute.md#requirements).
+  For Slack Agents, configure the separate gateway and API proxy inputs in the
+  [Slack guide](../integrations/slack.md#configure-both-slack-proxies).
+  If the default syscall policy blocks Codex user namespaces, follow
+  [Codex sandbox setup](codex-sandbox.md): install a reviewed profile on every
+  eligible node, set `runtime.codexSeccompProfile` to its relative kubelet path,
+  and verify sandbox enforcement.
   Set `presets.includeDefaults: false` to disable the example's
   [bundled Presets](../../reference/presets.md#installation-defaults).
 - `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
   namespace, size, and protected `storageClassName` for the cluster.
 
-Require all checks below, including Helm rendering, to pass before provisioning.
-API startup also validates shared-cookie domain compatibility:
+For registry-backed installations, [compare the edited images](../../testing/images.md#verify-installation-image-selections)
+with the checked digests; skip this for local imports.
+
+Run every check below, including Helm rendering, before provisioning.
+API startup checks shared-cookie domain compatibility:
 
 ```bash
 yq e -e '.images.controller | test("@sha256:[a-f0-9]{64}$")' \
@@ -208,6 +220,7 @@ yq e -e '.drivers.compute.configuration.images.requireImmutableDigest == true an
   (.drivers.compute.configuration.images.gateway | test("@sha256:[a-f0-9]{64}$")) and
   (.drivers.compute.configuration.images.agent | test("@sha256:[a-f0-9]{64}$")) and
   .drivers.compute.configuration.runtime.gatewayStorageClassName != "" and
+  (.drivers.compute.configuration.runtime.gatewayNodeSelector | length > 0) and
   (.drivers.compute.configuration.runtime.nodeSelector | length > 0)' \
   "$OCC_INPUT_DIRECTORY/installation.yaml" >/dev/null
 yq e -e '.metadata.namespace == "openclaw-system" and .spec.storageClassName != ""' \
@@ -305,7 +318,7 @@ read-only into migration, bootstrap, API, and worker containers at
 
 Enable repository credentials only after preparing the
 [repository service inputs](../repository-credentials/installation.md) and the matching
-[GitHub Provider selection](../../reference/providers.md#github-repository-credentials).
+[GitHub Backend selection](../../reference/backends.md#github-repository-credentials).
 The feature defaults disabled. It requires a separately built, immutable service
 image, an immutable registry ConfigMap, private service configuration, App key,
 TLS certificate/key for the exact internal Service hostname, and a separate
@@ -401,11 +414,8 @@ access, Agent deployment, or a model turn.
 ## Authenticate to the production API
 
 Retrieve `initial-admin-service-key.json` from the protected bootstrap PVC
-through approved storage access and retain it in protected storage. The example
-uses `/secure/occ/initial-admin-service-key.json` as the retained copy and
-creates a separate, private copy for this operator session. It preserves values
-already set in your shell. Otherwise, replace the sample hostname with your
-production HTTPS origin before running and set a different retained path if needed:
+through approved storage access and retain it privately. This example preserves
+existing shell values and creates a separate session copy:
 
 ```bash
 export OCC_URL="${OCC_URL:-https://<internal-occ-host>}"
@@ -441,18 +451,25 @@ prepare_occ_service_key
 ```
 
 Expect the displayed `ID` to match the key file's
-`meta.installationId`. A completed initialization Job is not an exec endpoint,
-and neither the API nor worker mounts the bootstrap PVC. Keep the protected
-source after ending the session; initialization does not reissue a lost key.
-The [operator cleanup](production-agents.md#end-the-operator-session) removes
-only the disposable copy created above.
+`meta.installationId`. Before the first image update, use that ID to
+[bind upgrades to this Kubernetes Installation](production-upgrade.md#bind-the-installation-once).
+API and worker cannot read the bootstrap PVC. Keep the protected source because
+initialization does not reissue a lost key. The
+[operator cleanup](production-agents.md#end-the-operator-session) removes the
+session copy.
 
-After the production API authenticates, continue with Namespace preparation,
-Agent deployment, and a [real model-response check](production-agents.md#verify-production-workloads)
-that matches the Agent's native gateway authentication mode.
+After authentication, follow [Namespace and Agent deployment](production-agents.md),
+including its [model-response check](production-agents.md#verify-production-workloads).
+
+For later releases, follow the
+[production image upgrade](production-upgrade.md).
 
 ## Related
 
-Continue with [production Agent deployment](production-agents.md). For failed
+Continue with [production Agent deployment](production-agents.md), or use the
+[production image upgrade](production-upgrade.md) for an existing release. For failed
 initialization, preserve state and follow [bootstrap recovery](../../reference/authentication/service-api-keys.md#recover-an-incomplete-bootstrap)
 and the [production startup flow](../../flows/production-startup.md).
+
+[Connect default metrics and logs](../observability.md) to your collectors. The
+[optional demo stack](../observability/demo.md) is not recommended for production.

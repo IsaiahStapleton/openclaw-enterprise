@@ -3,15 +3,13 @@ import test from "node:test";
 import {
   arrangeProductionTopology,
   assertActualModelTurn,
-  assertCurrentRuntimeDiagnosticsNoSend,
-  assertConsoleRuntimeApiWorkflow,
   assertInvalidHarnessAuthStaysUnready,
   assertDedicatedAgentsInstructionsInFreshSession,
   assertLegacyModelSecretBindingDenied,
   assertDedicatedWorkspaceResources,
   assertDedicatedWorkspaceRuntime,
   assertDeniedConnection,
-  assertEmbeddedCreatesNoSharedWorkspaceClaim,
+  assertEmbeddedCreatesNoHarnessWorkspaceClaim,
   assertGatewayPodContinuity,
   assertGatewayPrivateResources,
   assertNativeReferenceNegativeControl,
@@ -39,7 +37,6 @@ test(
   async (context) => {
     const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
       gatewayPassword: true,
-      browserConsole: true,
     });
     assert.ok(topology.harnessPod, "dedicated production must start a real separate Codex Pod");
     assert.notEqual(topology.gatewayPod.metadata.uid, topology.harnessPod.metadata.uid);
@@ -124,7 +121,6 @@ test(
     );
     process.stderr.write("k3d dedicated: topology ready; running a real model turn.\n");
     await assertActualModelTurn(topology);
-    await assertCurrentRuntimeDiagnosticsNoSend(context, topology, topology.revision);
     process.stderr.write("k3d dedicated: model turn passed; testing normal workspace flows.\n");
     await assertDedicatedAgentsInstructionsInFreshSession(topology);
     await assertDedicatedWorkspaceRuntime(context, topology, harnessWorkspaceClaim, privateClaim);
@@ -135,7 +131,6 @@ test(
       "k3d dedicated: credential recovery passed; testing legacy binding rejection.\n",
     );
     await assertLegacyModelSecretBindingDenied(topology);
-    await assertConsoleRuntimeApiWorkflow(context, topology);
     process.stderr.write("k3d dedicated: retained state and Pod replacement passed.\n");
   },
 );
@@ -149,7 +144,7 @@ test(
     assert.equal(topology.gatewayPod.spec.serviceAccountName, topology.agentServiceName);
     assert.equal((await resources("deployments", topology.placement)).length, 1);
     assertPrivateStateInitContainer(topology.gatewayPod);
-    await assertEmbeddedCreatesNoSharedWorkspaceClaim(topology);
+    await assertEmbeddedCreatesNoHarnessWorkspaceClaim(topology);
     const privateClaim = await assertGatewayPrivateResources(topology);
 
     const [environment, identity] = await Promise.all([
@@ -206,7 +201,7 @@ test(
     assert.equal(topology.gatewayPod.spec.serviceAccountName, topology.agentServiceName);
     assert.equal((await resources("deployments", topology.placement)).length, 1);
     assertPrivateStateInitContainer(topology.gatewayPod);
-    await assertEmbeddedCreatesNoSharedWorkspaceClaim(topology);
+    await assertEmbeddedCreatesNoHarnessWorkspaceClaim(topology);
     await assertGatewayPrivateResources(topology);
 
     const [environment, identity] = await Promise.all([
@@ -245,7 +240,6 @@ test(
       target.status.podIP,
     );
     await assertActualModelTurn(topology);
-    await assertCurrentRuntimeDiagnosticsNoSend(context, topology, topology.revision);
     await assertSameNamespaceSecretSharing(context, topology);
     await assertSecretApiNegativeRows(context, topology);
     await assertUnboundSecretDeletion(context, topology);

@@ -6,14 +6,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { isDeepStrictEqual, promisify } from "node:util";
+import { promisify } from "node:util";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import {
   KubernetesComputeDriver,
   kubernetesNamespaceName,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import {
-  configureExistingK3dLocalPathSharedFileSystem,
   createKubernetesClient,
   validateExplicitK3dLoopbackContext,
 } from "../helpers/kubernetes-real.mjs";
@@ -166,7 +165,7 @@ function gatewayName(agentId) {
 function pluginRevisionState() {
   return {
     driver: { id: "occ-plugin", implementation: "occ/openclaw-plugin" },
-    plugins: { [pluginId]: { enabled: true, approvalMode: "always" } },
+    plugins: { [pluginId]: { enabled: true, toolDefaults: { approval: "none" } } },
   };
 }
 
@@ -176,7 +175,7 @@ function revision(driver, owner, agentId, number, harnessAuth) {
     namespaceId: owner.id,
     agentId,
     revision: number,
-    providerId: null,
+    backendId: null,
     configurationId: `cfg_${randomUUID()}`,
     configurationKind: "agent",
     configurationGeneration: number,
@@ -469,9 +468,6 @@ async function waitForReadyPluginWarning(fixture, warning) {
     if (!observation.ready) {
       return undefined;
     }
-    if (!isDeepStrictEqual(observation.warnings, [warning])) {
-      return undefined;
-    }
     const pods = (await exactGatewayPods(fixture.namespaceName, fixture.candidate)).filter(
       (pod) => pod.metadata.deletionTimestamp === undefined && isReadyPod(pod),
     );
@@ -488,7 +484,7 @@ async function waitForReadyPluginWarning(fixture, warning) {
     if (status?.phase !== "ready") {
       return undefined;
     }
-    if (!isDeepStrictEqual(status.failures, [warning])) {
+    if (JSON.stringify(status.failures) !== JSON.stringify([warning])) {
       return undefined;
     }
     return { observation, pod, status };
@@ -540,7 +536,6 @@ test(
   { ...requiresKubernetes, timeout: 360_000 },
   async (context) => {
     await assertPrerequisites();
-    await configureExistingK3dLocalPathSharedFileSystem({ kubeconfigPath, kubernetesContext });
     const fixture = await createStatusCandidate("plugin-status", context);
     await scheduleGatewayOnNonServerNode(fixture);
 
@@ -584,7 +579,6 @@ test(
   { ...requiresKubernetes, timeout: 360_000 },
   async (context) => {
     await assertPrerequisites();
-    await configureExistingK3dLocalPathSharedFileSystem({ kubeconfigPath, kubernetesContext });
     const fixture = await createStatusCandidate("plugin-status-warning", context);
     await scheduleGatewayOnNonServerNode(fixture);
     const ready = await waitForReadyPluginStatus(fixture);

@@ -3,18 +3,14 @@ package occcli
 import (
 	"cmp"
 	"encoding/json/jsontext"
-	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
-	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/openclaw/openclaw-enterprise/internal/occclient"
 	"github.com/spf13/cobra"
-	"go.yaml.in/yaml/v3"
 )
 
 const defaultTimeoutSeconds = "30"
@@ -31,11 +27,6 @@ type application struct {
 	namespace      string
 	output         string
 	parsedTimeout  time.Duration
-}
-
-type column struct {
-	title string
-	key   string
 }
 
 // New builds the OCC domain command tree.
@@ -80,7 +71,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 		&app.namespace,
 		"namespace",
 		os.Getenv("OCC_NAMESPACE"),
-		"Namespace scope for Configuration, Secret, IAM, and Agent operations",
+		"Namespace scope for Configuration, Secret, credential source, IAM, and Agent operations",
 	)
 	flags.StringVarP(&app.output, "output", "o", "table", "Output format: table, json, or yaml")
 
@@ -90,6 +81,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 		app.iamCommand(),
 		app.configurationCommand(),
 		app.secretCommand(),
+		app.credentialSourceCommand(),
 		app.agentCommand(),
 		developmentCommand(),
 	)
@@ -98,7 +90,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 
 func (app *application) installationCommand() *cobra.Command {
 	command := commandGroup("installation", "Inspect the singleton Installation")
-	command.AddCommand(&cobra.Command{
+	get := &cobra.Command{
 		Use:   "get",
 		Short: "Show the Installation",
 		Args:  cobra.NoArgs,
@@ -117,7 +109,27 @@ func (app *application) installationCommand() *cobra.Command {
 				{title: "CREATED", key: "createdAt"},
 			})
 		},
-	})
+	}
+	deploymentInventory := &cobra.Command{
+		Use:   "deployment-inventory",
+		Short: "Show the complete authorized Agent deployment inventory",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			result, err := client.GetInstallationDeploymentInventory()
+			if err != nil {
+				return err
+			}
+			return app.printItems(result, false, []column{
+				{title: "INSTALLATION", key: "installationId"},
+				{title: "NAMESPACES", key: "namespaces"},
+			})
+		},
+	}
+	command.AddCommand(get, deploymentInventory)
 	return command
 }
 
@@ -611,6 +623,106 @@ func (app *application) secretCommand() *cobra.Command {
 	return command
 }
 
+func (app *application) credentialSourceCommand() *cobra.Command {
+	command := commandGroup(
+		"credential-source",
+		"Manage credential sources held by the selected Credential Gateway",
+	)
+
+	var createFile string
+	create := &cobra.Command{
+		Use:   "create",
+		Short: "Register a credential source from a JSON document",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			body, err := readJSON(createFile)
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			source, err := client.CreateCredentialSource(namespace, body)
+			if err != nil {
+				return err
+			}
+			return app.printCredentialSource(source, false)
+		},
+	}
+	create.Flags().StringVar(&createFile, "file", "", "JSON document path")
+	_ = create.MarkFlagRequired("file")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List credential sources",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			sources, err := client.ListCredentialSources(namespace)
+			if err != nil {
+				return err
+			}
+			return app.printCredentialSource(sources, true)
+		},
+	}
+
+	get := &cobra.Command{
+		Use:   "get ID",
+		Short: "Show a credential source and its live gateway status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			source, err := client.GetCredentialSource(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printCredentialSource(source, false)
+		},
+	}
+
+	deleteCommand := &cobra.Command{
+		Use:   "delete ID",
+		Short: "Delete an unreferenced credential source and its gateway copy",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			if err := client.DeleteCredentialSource(namespace, args[0]); err != nil {
+				return err
+			}
+			return app.printDeletion("credential-source", args[0])
+		},
+	}
+
+	command.AddCommand(create, list, get, deleteCommand)
+	return command
+}
+
 func (app *application) agentCommand() *cobra.Command {
 	command := commandGroup("agent", "Manage Agents in the selected Namespace")
 
@@ -737,6 +849,31 @@ func (app *application) agentCommand() *cobra.Command {
 			})
 		},
 	}
+	deploymentStatus := &cobra.Command{
+		Use:   "deployment-status AGENT_ID DEPLOYMENT_ID",
+		Short: "Show durable status for one Agent deployment",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			deployment, err := client.GetAgentDeployment(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printItems(deployment, false, []column{
+				{title: "ID", key: "deploymentId"},
+				{title: "AGENT", key: "agentId"},
+				{title: "STATUS", key: "status"},
+				{title: "ERROR", key: "error"},
+			})
+		},
+	}
 	stop := &cobra.Command{
 		Use:   "stop ID",
 		Short: "Stop an Agent while retaining its revision history and persistent state",
@@ -778,64 +915,8 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, stop, deleteAgent, app.agentDeploymentCommand(), app.agentRuntimeCredentialsCommand())
+	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent, app.agentRuntimeCredentialsCommand())
 	return command
-}
-
-func commandGroup(use, short string) *cobra.Command {
-	return &cobra.Command{
-		Use:   use,
-		Short: short,
-		Args:  cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			return command.Help()
-		},
-	}
-}
-
-func (app *application) validateOptions() error {
-	switch app.output {
-	case "table", "json", "yaml":
-	default:
-		return fmt.Errorf("invalid output format %q: expected table, json, or yaml", app.output)
-	}
-	seconds, err := strconv.ParseUint(app.timeoutSeconds, 10, 64)
-	if err != nil || seconds == 0 || seconds > uint64((1<<63-1)/int64(time.Second)) {
-		return fmt.Errorf("OCC timeout must be a positive integer number of seconds")
-	}
-	app.parsedTimeout = time.Duration(seconds) * time.Second
-	return nil
-}
-
-func (app *application) client() (*occclient.Client, error) {
-	if app.url == "" {
-		return nil, fmt.Errorf("set OCC_URL or pass --url")
-	}
-	if app.serviceKeyFile == "" {
-		return nil, fmt.Errorf("set OCC_SERVICE_KEY_FILE or pass --service-key-file")
-	}
-	return occclient.New(occclient.Config{
-		URL:            app.url,
-		ServiceKeyFile: app.serviceKeyFile,
-		CABundle:       app.caBundle,
-		Timeout:        app.parsedTimeout,
-	})
-}
-
-func (app *application) requiredNamespace() (string, error) {
-	if app.namespace == "" {
-		return "", fmt.Errorf("set OCC_NAMESPACE or pass --namespace")
-	}
-	return app.namespace, nil
-}
-
-func (app *application) printNamespace(value any, collection bool) error {
-	return app.printItems(value, collection, []column{
-		{title: "ID", key: "id"},
-		{title: "NAME", key: "name"},
-		{title: "STATUS", key: "status"},
-		{title: "KUBERNETES NAMESPACE", key: "existingNamespace"},
-	})
 }
 
 func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
@@ -887,212 +968,51 @@ func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
 	return command
 }
 
-func (app *application) agentDeploymentCommand() *cobra.Command {
-	command := commandGroup("deployment", "Inspect Agent deployment status and diagnostics")
-
-	get := &cobra.Command{
-		Use:   "get AGENT_ID DEPLOYMENT_ID",
-		Short: "Show deployment status",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
-			if err != nil {
-				return err
-			}
-			status, err := client.GetAgentDeployment(namespace, args[0], args[1])
-			if err != nil {
-				return err
-			}
-			return app.printDeploymentStatus(status)
+func commandGroup(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
 		},
 	}
-
-	diagnostics := &cobra.Command{
-		Use:   "diagnostics AGENT_ID DEPLOYMENT_ID",
-		Short: "Run bodyless current-runtime deployment diagnostics",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
-			if err != nil {
-				return err
-			}
-			result, err := client.DiagnoseAgentDeployment(namespace, args[0], args[1])
-			if err != nil {
-				return err
-			}
-			return app.printDeploymentDiagnostics(result)
-		},
-	}
-
-	command.AddCommand(get, diagnostics)
-	return command
 }
 
-func (app *application) printConfiguration(value any) error {
-	return app.printItems(value, false, []column{
-		{title: "ID", key: "id"},
-		{title: "KIND", key: "kind"},
-		{title: "GENERATION", key: "generation"},
-		{title: "CREATED", key: "createdAt"},
-	})
-}
-
-func (app *application) printSecret(value any) error {
-	return app.printItems(value, false, []column{
-		{title: "ID", key: "id"},
-		{title: "NAME", key: "name"},
-	})
-}
-
-func (app *application) printIAMRole(value any, collection bool) error {
-	return app.printItems(value, collection, []column{
-		{title: "ID", key: "id"},
-		{title: "NAME", key: "name"},
-		{title: "PERMISSIONS", key: "permissions"},
-	})
-}
-
-func (app *application) printIAMAccessBinding(value any, collection bool) error {
-	return app.printItems(value, collection, []column{
-		{title: "ID", key: "id"},
-		{title: "SUBJECT", key: "subjectId"},
-		{title: "ROLE", key: "roleId"},
-		{title: "RESOURCE KIND", key: "resourceKind"},
-		{title: "RESOURCE", key: "resourceId"},
-	})
-}
-
-func (app *application) printAgent(value any, collection bool) error {
-	return app.printItems(value, collection, []column{
-		{title: "ID", key: "id"},
-		{title: "NAME", key: "name"},
-		{title: "SERVICE PRINCIPAL", key: "servicePrincipalId"},
-		{title: "CONFIGURATION", key: "configurationId"},
-		{title: "MODE", key: "executionMode"},
-		{title: "DESIRED STATE", key: "desiredRuntimeState"},
-		{title: "STATUS", key: "status"},
-		{title: "ACTIVE REVISION", key: "activeRevisionId"},
-	})
-}
-
-func (app *application) printRuntimeCredentials(value any) error {
-	return app.printItems(value, false, []column{
-		{title: "CONFIGURED", key: "transportConfigured"},
-	})
-}
-
-func (app *application) printDeploymentStatus(value any) error {
-	return app.printItems(value, false, []column{
-		{title: "DEPLOYMENT", key: "deploymentId"},
-		{title: "AGENT", key: "agentId"},
-		{title: "STATUS", key: "status"},
-		{title: "ERROR", key: "error"},
-		{title: "WARNINGS", key: "warnings"},
-	})
-}
-
-func (app *application) printDeploymentDiagnostics(value any) error {
-	return app.printItems(value, false, []column{
-		{title: "REVISION", key: "revisionId"},
-		{title: "OBSERVED", key: "observedAt"},
-		{title: "CHECKS", key: "checks"},
-	})
-}
-
-func (app *application) printDeletion(kind, id string) error {
-	value := map[string]any{"deleted": true, "kind": kind, "id": id}
-	if app.output == "table" {
-		_, err := fmt.Fprintf(app.out, "Deleted %s %s.\n", kind, id)
-		return err
-	}
-	return app.printStructured(value)
-}
-
-func (app *application) printItems(value any, collection bool, columns []column) error {
-	if app.output != "table" {
-		return app.printStructured(value)
-	}
-	items := []any{value}
-	if collection {
-		var ok bool
-		items, ok = value.([]any)
-		if !ok {
-			return fmt.Errorf("OCC returned an invalid resource collection")
-		}
-	}
-	return printTable(app.out, items, columns)
-}
-
-func (app *application) printStructured(value any) error {
+func (app *application) validateOptions() error {
 	switch app.output {
-	case "json":
-		if err := json.MarshalWrite(app.out, value, jsontext.WithIndent("  ")); err != nil {
-			return err
-		}
-		_, err := fmt.Fprintln(app.out)
-		return err
-	case "yaml":
-		encoded, err := yaml.Marshal(value)
-		if err != nil {
-			return err
-		}
-		_, err = app.out.Write(encoded)
-		return err
+	case "table", "json", "yaml":
 	default:
-		return fmt.Errorf("unsupported structured output format %q", app.output)
+		return fmt.Errorf("invalid output format %q: expected table, json, or yaml", app.output)
 	}
+	seconds, err := strconv.ParseUint(app.timeoutSeconds, 10, 64)
+	if err != nil || seconds == 0 || seconds > uint64((1<<63-1)/int64(time.Second)) {
+		return fmt.Errorf("OCC timeout must be a positive integer number of seconds")
+	}
+	app.parsedTimeout = time.Duration(seconds) * time.Second
+	return nil
 }
 
-func printTable(out io.Writer, items []any, columns []column) error {
-	if len(items) == 0 {
-		_, err := fmt.Fprintln(out, "No resources found.")
-		return err
+func (app *application) client() (*occclient.Client, error) {
+	if app.url == "" {
+		return nil, fmt.Errorf("set OCC_URL or pass --url")
 	}
-
-	writer := tabwriter.NewWriter(out, 0, 8, 2, ' ', 0)
-	headings := make([]string, len(columns))
-	for index, column := range columns {
-		headings[index] = column.title
+	if app.serviceKeyFile == "" {
+		return nil, fmt.Errorf("set OCC_SERVICE_KEY_FILE or pass --service-key-file")
 	}
-	if _, err := fmt.Fprintln(writer, strings.Join(headings, "\t")); err != nil {
-		return err
-	}
-	for _, item := range items {
-		resource, ok := item.(map[string]any)
-		if !ok {
-			return fmt.Errorf("OCC returned an invalid resource")
-		}
-		row := make([]string, len(columns))
-		for index, column := range columns {
-			row[index] = displayValue(resource[column.key])
-		}
-		if _, err := fmt.Fprintln(writer, strings.Join(row, "\t")); err != nil {
-			return err
-		}
-	}
-	return writer.Flush()
+	return occclient.New(occclient.Config{
+		URL:            app.url,
+		ServiceKeyFile: app.serviceKeyFile,
+		CABundle:       app.caBundle,
+		Timeout:        app.parsedTimeout,
+	})
 }
 
-func displayValue(value any) string {
-	if value == nil {
-		return "-"
+func (app *application) requiredNamespace() (string, error) {
+	if app.namespace == "" {
+		return "", fmt.Errorf("set OCC_NAMESPACE or pass --namespace")
 	}
-	if text, ok := value.(string); ok {
-		return text
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return "-"
-	}
-	return string(encoded)
+	return app.namespace, nil
 }
 
 func readJSON(path string) (jsontext.Value, error) {

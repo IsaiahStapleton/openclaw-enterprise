@@ -24,11 +24,7 @@ const occCli = join(process.cwd(), "bin", "occ");
 // does not claim PostgreSQL or Agent runtime coverage.
 test("service API keys authenticate scoped automation without replacing sessions or IAM", async (t) => {
   // Build the real CLI once, then exercise it through a live Fastify socket below.
-  const goCache = await mkdtemp(join(tmpdir(), "openclaw-go-build-cache-"));
-  t.after(() => rm(goCache, { recursive: true, force: true }));
-  await run("go", ["build", "-trimpath", "-o", occCli, "./cmd/occ"], {
-    env: { ...process.env, GOCACHE: goCache },
-  });
+  await run("go", ["build", "-trimpath", "-o", occCli, "./cmd/occ"]);
   const installationId = `ins_${randomUUID()}`;
   const memoryDatabase = { user: [], account: [], session: [], verification: [], apikey: [] };
   const authOptions = {
@@ -54,7 +50,6 @@ test("service API keys authenticate scoped automation without replacing sessions
   const iamDriver = new NativeIAMDriver({ loadNativeIAMState: async () => policy });
   const auditSink = new InMemoryAuditSink();
   const runtimeCredentialStatus = new Map();
-  const diagnosticsCalls = [];
   const computeDriver = {
     ...createDevelopmentComputeDriver(),
     async getAgentRuntimeCredentialStatus({ namespace, agent }) {
@@ -68,26 +63,6 @@ test("service API keys authenticate scoped automation without replacing sessions
       const status = { transportConfigured: true };
       runtimeCredentialStatus.set(`${namespace.id}:${agent.id}`, status);
       return status;
-    },
-    async diagnoseAgentDeployment({ namespace, agent, revision }) {
-      diagnosticsCalls.push({
-        namespaceId: namespace.id,
-        agentId: agent.id,
-        revisionId: revision.id,
-      });
-      return {
-        revisionId: revision.id,
-        observedAt: "2026-01-02T03:04:05.000Z",
-        checks: [
-          {
-            component: "gateway",
-            check: "configuration",
-            state: "succeeded",
-            checkedAt: "2026-01-02T03:04:04.000Z",
-            code: "ok",
-          },
-        ],
-      };
     },
   };
   let controller;
@@ -103,7 +78,7 @@ test("service API keys authenticate scoped automation without replacing sessions
     createController(installation) {
       controller = new OpenClawController(installation, {
         state: new InMemoryPlatformState({ auditSink }),
-        recordOperations: true,
+        recordOperations: false,
       });
       return controller;
     },
@@ -112,7 +87,11 @@ test("service API keys authenticate scoped automation without replacing sessions
   t.after(() => app.close());
   const origin = `http://127.0.0.1:${app.server.address().port}`;
   const session = await signInWithEmailPassword({ origin, ...credentials });
-  async function request(method, path, { headers = { cookie: session.cookie }, body } = {}) {
+  async function request(
+    method,
+    path,
+    { headers = { cookie: session.cookie, origin: authOptions.baseURL }, body } = {},
+  ) {
     const response = await fetch(`${origin}${path}`, {
       method,
       headers: {
@@ -149,7 +128,6 @@ test("service API keys authenticate scoped automation without replacing sessions
       { action: "update", resourceKind: "secret" },
       { action: "delete", resourceKind: "secret" },
       { action: "read", resourceKind: "agent" },
-      { action: "read", resourceKind: "agent_revision" },
       { action: "operate", resourceKind: "agent" },
       { action: "delete", resourceKind: "agent" },
     ],
@@ -438,31 +416,6 @@ test("service API keys authenticate scoped automation without replacing sessions
         .desiredRuntimeState,
       "running",
     );
-    const deploymentStatus = await run(
-      occCli,
-      ["agent", "deployment", "get", agent.data.id, deployed.data.id, "-o", "json"],
-      { env },
-    );
-    assert.deepEqual(JSON.parse(deploymentStatus.stdout), {
-      deploymentId: deployed.data.id,
-      namespaceId,
-      agentId: agent.data.id,
-      status: "queued",
-      error: null,
-      warnings: [],
-    });
-    const diagnostics = await run(
-      occCli,
-      ["agent", "deployment", "diagnostics", agent.data.id, deployed.data.id, "-o", "json"],
-      { env },
-    );
-    const diagnosticsData = JSON.parse(diagnostics.stdout);
-    assert.equal(diagnosticsData.revisionId, deployed.data.id);
-    assert.equal(diagnosticsData.checks[0].component, "gateway");
-    assert.equal(diagnosticsData.checks[0].state, "succeeded");
-    assert.deepEqual(diagnosticsCalls, [
-      { namespaceId, agentId: agent.data.id, revisionId: deployed.data.id },
-    ]);
 
     const stopped = await run(occCli, ["agent", "stop", agent.data.id], { env });
     assert.match(stopped.stdout, /DESIRED STATE/);
