@@ -1,7 +1,7 @@
 ---
 created: 2026-09-23
 updated: "2026-09-28"
-last_updated_session: "authoring-run/4c22438e-4a96-4125-bdbb-47a3547a1232"
+last_updated_session: "authoring-run/829b465b-4176-428a-a748-59968ab63b04"
 ---
 
 # Production image upgrade flow
@@ -59,12 +59,11 @@ graph TD
 The script verifies the protected files, cluster, deployed Helm release, and
 matching OCC and Secret Installation IDs. It compares protected and live
 configuration in full, including selected image fields. It captures separate
-reviewed candidate files and rejects changes to protected identity, persistence,
-image, and broker settings. The Installation guard includes the GitHub Backend,
-Repo Driver, Compute credential-service peer, Compute identity, and cluster
-trust. The Helm guard protects broker resource references; it does not compare
-the referenced ConfigMap or Secret contents. Image flags select images after
-this comparison.
+reviewed candidate files and accepts changes only to the Slack directory proxy
+and the curated Codex PluginDriver selection. All other Helm and Installation
+settings remain protected, including new fields. The guard compares broker
+resource references, not the contents of referenced ConfigMaps or Secrets.
+Image flags select images after this comparison.
 A runtime release also reads complete authorized inventory and records every running Agent's baseline
 revision. Nonterminal deployment work, a missing active revision, or an unready
 Namespace stops preparation. Stopped and deleting Agents are excluded.
@@ -83,7 +82,7 @@ specified in the [production guide](../guides/deploy/production-upgrade.md).
 
 ### 2. Reconcile a prior attempt
 
-`scripts/upgrade-production-images:453`
+`scripts/upgrade-production-images:464`
 
 On every attempt the script rereads Helm status and values and the Installation
 Secret. Only the recorded baseline or candidate values are accepted; the
@@ -102,7 +101,7 @@ rollback. The guide describes the required attestation and recovery.
 
 ### 3. Quiesce writers and run the candidate release
 
-`scripts/upgrade-production-images:521`
+`scripts/upgrade-production-images:532`
 
 Before changing the Secret or invoking Helm, the script scales the selected API
 and worker Deployments to zero, waits until their Pods disappear, and confirms
@@ -126,7 +125,7 @@ it does not start the old image to undo a committed schema change.
 
 ### 4. Verify control-plane recovery
 
-`scripts/upgrade-production-images:586`
+`scripts/upgrade-production-images:597`
 
 The script waits for both OCC Deployments, checks their controller image and
 replica count, and checks the Installation checksum when its configuration
@@ -138,7 +137,7 @@ controller-only release then ends without requesting Agent deployments.
 
 ### 5. Deploy and verify the recorded fleet
 
-`scripts/upgrade-production-images:629`
+`scripts/upgrade-production-images:639`
 
 Before sending each ordinary exact-Agent deployment request, the script records
 an intent. Successful responses are saved atomically. On resume, existing
@@ -196,6 +195,8 @@ access, and required restore behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 11:36: Restrict candidate changes to the reviewed proxy and curated catalog settings. (authoring-run/829b465b-4176-428a-a748-59968ab63b04 - e3bcdb9b3a82d16016c023a8a77d683bf0079ce7)
 
 - 2026-09-28 08:49: Verify the named controller image across ordinary and restartable worker placement. (authoring-run/4c22438e-4a96-4125-bdbb-47a3547a1232 - dcf7c58ef3fe7f6ec6ffc33c1062fee93c9bdeb2)
 

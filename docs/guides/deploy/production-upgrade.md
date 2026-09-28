@@ -88,9 +88,10 @@ cp /secure/occ/installation.yaml /secure/occ/candidate-installation.yaml
 chmod 600 /secure/occ/candidate-values.yaml /secure/occ/candidate-installation.yaml
 ```
 
-Edit only the intended settings in these copies, such as the
+These copies may change the
 [Slack directory proxy](../integrations/slack.md#configure-both-slack-proxies)
-and [curated PluginDriver](../../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+and select the [curated Codex PluginDriver](../../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+Other configuration changes are not supported by this upgrade command.
 Review compatibility with the selected images and existing Agent drafts and
 credentials before the maintenance window. Rendering and the Helm dry run do
 not validate the Installation's Driver configuration or prove external access.

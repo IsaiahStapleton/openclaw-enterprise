@@ -559,6 +559,72 @@ test("candidate cannot change repository identity, grants, trust, or the Compute
   }
 });
 
+test("candidate cannot change cluster credentials or other protected trust settings", async (t) => {
+  for (const change of [
+    "execution-kubeconfig",
+    "gateway-routing",
+    "chatgpt-secret",
+    "service-principal",
+    "trusted-proxy",
+    "configuration-authentication",
+    "plugin-executable",
+    "plugin-hosted",
+    "plugin-null",
+    "unreviewed-values",
+  ]) {
+    await t.test(change, async (subtest) => {
+      const f = await fixture(subtest, { candidates: true, controllerOnly: true });
+      const valuesPath = join(f.directory, "candidate-values");
+      const installationPath = join(f.directory, "candidate-installation");
+      const values = JSON.parse(await readFile(valuesPath, "utf8"));
+      const installation = JSON.parse(await readFile(installationPath, "utf8"));
+      // Each candidate redirects an identity or trust boundary while retaining
+      // the supported proxy and catalog changes; preparation must stop first.
+      if (change === "execution-kubeconfig") {
+        values.executionCluster = {
+          enabled: true,
+          apiKubeconfigSecretName: "other-api",
+          workerKubeconfigSecretName: "other-worker",
+          apiCidrs: ["198.51.100.0/24"],
+        };
+      } else if (change === "gateway-routing") {
+        values.gatewayRouting = { enabled: true, apiKeySecretName: "other-routing-key" };
+      } else if (change === "chatgpt-secret") {
+        values.backend = { chatgpt: { enabled: true, secretName: "other-chatgpt" } };
+      } else if (change === "service-principal") {
+        installation.drivers.compute.configuration.servicePrincipalCredentials = {
+          mode: "projectedServiceAccountToken",
+          audience: "other-audience",
+          expirationSeconds: 900,
+        };
+      } else if (change === "trusted-proxy") {
+        installation.drivers.compute.configuration.network = {
+          gatewayTrustedProxyCidrs: ["198.51.100.0/24"],
+        };
+      } else if (change === "configuration-authentication") {
+        installation.drivers.configuration = {
+          id: "config-kubernetes",
+          configuration: {
+            authentication: { mode: "kubeconfig", kubeconfigPath: "/etc/other", context: "other" },
+          },
+        };
+      } else if (change === "plugin-executable") {
+        installation.drivers.plugin.configuration.codexExecutable = "/etc/other/codex";
+      } else if (change === "plugin-hosted") {
+        installation.drivers.plugin.configuration.catalogSource = "hosted";
+      } else if (change === "plugin-null") {
+        installation.drivers.plugin = { id: null, configuration: { catalogSource: null } };
+      } else {
+        values.controlPlane = { extraSetting: true };
+      }
+      await writeFile(valuesPath, JSON.stringify(values));
+      await writeFile(installationPath, JSON.stringify(installation));
+      await assert.rejects(f.run(), /candidate (values|Installation) change/);
+      assert.deepEqual(await f.events(), []);
+    });
+  }
+});
+
 test("controller upgrade verifies worker placement with and without a repository broker", async (t) => {
   for (const scenario of [
     { name: "broker disabled", repositoryCredentials: false, workerPlacement: "container" },
