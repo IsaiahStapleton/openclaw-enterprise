@@ -81,6 +81,15 @@ For an already installed, persistent Helm release on k3d, follow
 [local k3d image upgrades](local-k3d-image-upgrade.md) to preserve its state.
 The disposable cluster cleanup above is not an upgrade procedure.
 
+For missing DNS, denied connections, or unready Kubernetes Agents after a
+checkout update, inspect the [ordinary network profile](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
+on the affected Pod and its workload template, plus all matching NetworkPolicies.
+Rebuild the controller and deploy a new revision: preparation re-narrows the
+namespace policies and rolls Deployments onto profiled templates. OpenShell
+Sandboxes need a redeployed revision. Restarting a Pod from an old template
+retains the missing label; assigning the profile to arbitrary Pods grants
+access and is not a repair.
+
 ## Stop development safely
 
 Run the exact command under `Cleanup` in the `dev-up` output. For Podman, it

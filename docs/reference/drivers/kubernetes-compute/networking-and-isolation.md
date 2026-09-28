@@ -123,6 +123,52 @@ exact revision's policy after its Harness terminates. Channels require an approv
 literal-IP HTTP(S) proxy configured through `runtime.channels`; direct public
 channel-provider access is denied.
 
+## Explicit network profiles
+
+Ordinary DNS, model, repository-credential, authentication, channel, workspace-node,
+plugin-status and gateway/Harness allow policies require the reserved Pod label
+`openclaw.dev/network-profile=broad-egress-v1`, together with their existing
+role, Agent, namespace and revision selectors. Gateway/Harness peer selectors require the
+same profile. Missing, empty or unknown profiles receive no ordinary grant;
+the tenant and separate Gateway namespace default-deny policies still select every Pod.
+
+Compute assigns this profile when creating ordinary embedded and dedicated
+workload templates. Their existing routes and ports remain unchanged. It also
+passes the profile in provider-owned Harness requirements. Deployment readiness
+requires the expected template profile; provider Harness readiness and activation
+reject an otherwise matching Pod that omits or changes a required profile.
+
+Existing owned policy names remain stable. On the next revision preparation,
+Compute re-applies the tenant namespace policies, and the separate Gateway
+namespace policies for dedicated revisions, through the normal non-forced apply
+path; the same preparation rolls existing Deployments onto profiled templates.
+Until then, Pods from older templates keep their old grants; once policies are
+narrowed, an older Pod without the profile loses ordinary access until
+replaced. Existing OpenShell Sandboxes are not relabeled because Sandbox names
+are per revision: redeploy the Agent revision. For development, follow the
+[development recovery procedure](../../../guides/deploy/local-operations.md#build-images-for-local-kubernetes).
+
+The separately installed OpenShell gateway needs its own scoped DNS/API and
+callback policies. Its caller is the OpenShell supervisor Pod
+(`openshell.ai/managed-by=openshell`, `openshell.ai/boundary-role=supervisor`),
+which carries no `openclaw.dev` labels; supervisor-labelled peers admit it, not
+the ordinary profile. Platform services retain their existing Helm policy selectors.
+
+Known limitation: OpenShell-provisioned Harness Pods carry the ordinary profile
+today, so Compute's DNS, model and authentication grants add to OpenShell's own
+egress fence rather than being replaced by it. A provider-fenced profile for
+SandboxDriver Harness Pods is the planned follow-up.
+
+Profile assignment is a trusted controller decision. The label qualifies a Pod
+for network grants; it does not supply workload identity or authorization to
+request those grants. Operators must control workload creation, profile-label
+mutation and NetworkPolicy writes. This component does not install admission
+controls for those privileges.
+
+Kubernetes combines grants from every matching policy, so stale or additional
+allow policies can bypass this restriction. Inspect installed policies and
+verify allowed and denied connections on a cluster with NetworkPolicy enforcement.
+
 ## Private Agent gateway routes
 
 See [gateway routing with Envoy](../../gateway-routing.md) for shared infrastructure,

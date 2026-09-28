@@ -138,6 +138,13 @@ The selected Sandbox consumes the same rendered projections and explicit login
 mode in `HarnessWorkloadRequirements`. Unsupported upstream projection fails
 without a test-only credential bridge.
 
+The shared Kubernetes Deployment builder assigns the explicit ordinary
+[network profile](../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
+to each Pod template. Ordinary allow-policy targets, including workspace-node and
+plugin-status access, and gateway/Harness peers across their namespaces require
+that profile; a missing classification cannot inherit ordinary grants.
+Deployment readiness checks the template profile before accepting Ready counters.
+
 When a selected SandboxDriver provisions the dedicated Harness,
 `providerHarnessReady` lists Pods using the same Agent/revision/role labels as
 the active Service. It validates the complete observation and requires exactly

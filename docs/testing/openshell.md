@@ -157,6 +157,17 @@ that gateway. Stock OpenShell `v0.1.0` cannot receive the required app-server
 token `secretKeyRef`, plugin-runtime ConfigMap, or projected workload identity
 through its gateway configuration.
 
+The fixture gives that gateway its own scoped DNS/API access. Ordinary Harness
+DNS comes from Compute. Gateway callback policies select the OpenShell supervisor
+labels (`openshell.ai/managed-by=openshell`, `openshell.ai/boundary-role=supervisor`)
+in both directions, because the supervisor, not the Harness, calls the gateway.
+The fixture installs no namespace-wide DNS or callback grant, and the test
+requires the provider Harness Pod to carry `broad-egress-v1`. Older fixtures
+may retain broad policies or Sandbox templates without the profile. Inspect
+their ownership and replacement routes before removing stale policies, or
+recreate the disposable fixture. Reusing a Sandbox by name does not update its
+template.
+
 Positive mode bridges those shapes only inside this test. Its bootstrap Job
 mounts the app-server token Secret reference, immutable `runtime.json` and
 `config.toml` ConfigMap entries, and an audience-bound ServiceAccount token. It

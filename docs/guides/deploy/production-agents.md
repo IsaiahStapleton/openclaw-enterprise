@@ -461,7 +461,9 @@ request and a real model response](../operate/model-verification.md) over an
 operator's local Kubernetes connection.
 
 A Helm release, ready controller, or active revision does not show that the
-Agent can reach its model.
+Agent can reach its model. A missing
+[network profile](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
+denies model access; relabeling grants it.
 
 ## Attach with the OpenClaw TUI
 

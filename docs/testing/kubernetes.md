@@ -79,8 +79,8 @@ review.
 
 The suite checks tenant isolation, resource bounds, nonroot execution, seccomp,
 dropped capabilities, and a read-only root filesystem. Skipped cases prove no
-enforcement. API-plus-worker coverage uses synthetic Secrets for binding admission
-and gateway projection; genuine channel runtime needs the images and credentials below.
+enforcement. The Driver lifecycle case clones a workload Pod; removing, emptying or
+changing its network profile must deny DNS between successful controls.
 
 Live Configuration ConfigMap CRUD and least-privilege RBAC cases require the
 selected disposable cluster and tenant credentials. Without those inputs, they

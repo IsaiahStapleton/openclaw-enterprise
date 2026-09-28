@@ -1106,12 +1106,15 @@ test(
         "openclaw.dev/workload-role": "agent",
         "openclaw.dev/agent": "agent-one",
         "openclaw.dev/revision": "revision-one",
+        "openclaw.dev/network-profile": "broad-egress-v1",
       },
     };
     const allowed = (peer = source, port = 8443, protocol = "TCP", chart = objects) =>
       chartAllowsIngress(chart, destination, peer, port, protocol);
 
-    // Current Compute emits these ownership labels without a network-profile label.
+    // Compute emits these ownership labels plus the ordinary network profile on
+    // every workload Pod template. The chart selector stays profile-agnostic: the
+    // tenant-side Compute policies already gate egress on the profile.
     assert.equal(allowed(), true, "dedicated execution reaches the credential endpoint");
     const embedded = {
       ...source,

@@ -294,8 +294,10 @@ for additional execution details.
   ownership, exclusive tenant use, and no foreign NetworkPolicies.
 - **Gateway or Harness remains pending:** Check image digests, image pull
   permissions, CPU and memory limits, namespace quotas, required Secrets, and
-  workload readiness. Dedicated Codex Harness containers clear the plugin
-  readiness marker at process start so a marker left in the Pod's temporary
+  workload readiness. Check the controller-assigned
+  [network profile](kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
+  on workload templates and provider-owned Harness Pods. Dedicated Codex Harness
+  containers clear the plugin readiness marker at process start so a marker left in the Pod's temporary
   volume by a previous container attempt cannot make a restarted runtime ready.
   Access-token login retries only native process timeouts, up to three 30-second
   attempts. Credential refusals and model probes are not retried; exhausted
