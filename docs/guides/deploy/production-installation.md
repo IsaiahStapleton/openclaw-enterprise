@@ -102,7 +102,7 @@ Private registries need the same cluster/node pull credentials.
 For a local trial, [build and import the images](local-operations.md#build-images-for-local-kubernetes)
 and set `OCC_INPUT_DIRECTORY` to the generated YAML directory. For registry-backed
 installs, [check the selected image digests](../../testing/images.md#check-published-images)
-and retain their exports. Set shell
+on native hosts for their target architectures and retain their exports. Set shell
 inputs before Kubernetes commands:
 
 ```bash
