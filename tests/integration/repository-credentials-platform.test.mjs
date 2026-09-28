@@ -530,7 +530,7 @@ test(
       const retirementKey = `agent_revision:${currentRevision.id}:repository_cleanup:retire:${createHash(
         "sha256",
       )
-        .update(failed.idempotency_key)
+        .update(currentRevision.id)
         .digest("hex")}`;
       const retirement = await kube.waitFor("exact unresolved retirement Work owner", async () =>
         (await revisionWork(currentRevision)).find(

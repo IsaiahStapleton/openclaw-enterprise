@@ -11,7 +11,7 @@ ChatGPT service account), without a Sandbox Driver. Other combinations reject
 repository-bearing revisions. Helm's `Recreate` strategy prevents overlapping
 worker/credential-service owners.
 
-Only the repository consumer receives repository and model credentials. Dedicated
+Only the consumer receives repository and model credentials. Dedicated
 Slack tokens stay in the gateway. Repository profiles and model authentication
 are independent. [Kubernetes policies](drivers/kubernetes-compute/networking-and-isolation.md#networking)
 allow consumer access to the credential sidecar.
@@ -62,8 +62,8 @@ session identities and deadlines after Agent deletion, without bearers or tokens
 Agent deletion closes sessions and retires Compute. Physical deletion and live
 revision detachment require every attempt to be `disposed`. `CLOSED`, missing
 inventory and `invalidated` attempts retain cleanup Work and the deleting Agent.
-Deadlines do not settle provider cleanup. Evidence pruning and durable token
-recovery are unimplemented.
+Deadlines do not settle provider cleanup. New requests share Work by revision
+and purpose. Evidence pruning and durable token recovery are unimplemented.
 
 Worker restart can retain surviving service sessions and Compute material.
 Known closing sessions block same-revision replacement, including Compute repair,
@@ -80,8 +80,8 @@ does not establish their outcomes.
 
 ### Canonical platform registry
 
-The GitHub Backend selects one registry through `configuration.registryPath`;
-its `drivers.repo` names the selected Driver. API, worker and
+The GitHub Backend selects `configuration.registryPath` and names its Driver
+in `drivers.repo`. API, worker and
 service load the same immutable, versioned ConfigMap. The registry contains
 nonsecret identity and Namespace policy for one App installation and multiple
 repositories:

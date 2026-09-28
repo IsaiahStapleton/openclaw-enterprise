@@ -1167,25 +1167,35 @@ for (const loss of ["missing", "closed-repair"]) {
       assert.equal(cleanup.rows[0].state, "queued");
       assert.equal(cleanup.rows[0].actor_id, fixture.actor.id);
 
-      // A second queued observation models work already admitted before the
-      // prior worker stopped. Retained evidence must fence that admission too.
-      const another = {
-        id: candidate.id,
-        idempotencyKey: `agent_revision:${candidate.id}:maintenance:${Date.now()}`,
-      };
-      await fixture.state.transactWithQueue((_unit, queue) =>
-        queue.enqueue({
-          idempotencyKey: another.idempotencyKey,
-          namespaceId: candidate.namespaceId,
-          agentId: candidate.agentId,
-          revisionId: candidate.id,
-          actorId: fixture.actor.id,
-          availableAt: new Date(0),
-        }),
-      );
+      // Previously admitted maintenance observations must keep refusing the
+      // lost session without multiplying the durable retirement obligation.
       await fixture.start(compute, () => {}, undefined, undefined, fixture.createWorkerPool());
-      await fixture.work(another, "failed_permanent");
+      for (let index = 0; index < 4; index += 1) {
+        const another = {
+          id: candidate.id,
+          idempotencyKey: `agent_revision:${candidate.id}:maintenance:${Math.floor(Date.now() / repository.driver.maintenanceIntervalMs) + 2 + index}`,
+        };
+        await fixture.state.transactWithQueue((_unit, queue) =>
+          queue.enqueue({
+            idempotencyKey: another.idempotencyKey,
+            namespaceId: candidate.namespaceId,
+            agentId: candidate.agentId,
+            revisionId: candidate.id,
+            actorId: fixture.actor.id,
+            availableAt: new Date(0),
+          }),
+        );
+        await fixture.work(another, "failed_permanent");
+      }
       await fixture.stop();
+      const repeatedCleanup = await fixture.observerPool.query(
+        `SELECT state, actor_id FROM occ.controller_work
+         WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+        [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+      );
+      assert.equal(repeatedCleanup.rowCount, 1);
+      assert.equal(repeatedCleanup.rows[0].state, "queued");
+      assert.equal(repeatedCleanup.rows[0].actor_id, fixture.actor.id);
       assert.equal((await repositoryAttempts(fixture, candidate)).length, 1);
       assert.equal(repository.calls.filter(({ operation }) => operation === "open").length, 1);
       assert.equal(delivered.filter(({ kind }) => kind === "new").length, 1);
@@ -1872,7 +1882,7 @@ test(
       assert.equal(before.length, 2);
       assert.deepEqual(before.map(({ phase }) => phase).sort(), ["closing", "open"]);
       const cleanup = await fixture.observerPool.query(
-        `SELECT idempotency_key, state, actor_id FROM occ.controller_work
+        `SELECT idempotency_key, state, actor_id, claim_token FROM occ.controller_work
          WHERE revision_id = $1 AND idempotency_key LIKE $2`,
         [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:%`],
       );
@@ -1881,6 +1891,23 @@ test(
       assert.equal(cleanup.rows[0].actor_id, fixture.actor.id);
       cleanupKey = cleanup.rows[0].idempotency_key;
 
+      // Recovery transfers another stop's session cleanup while the first
+      // worker is in the external close. The Agent remains running, as when
+      // later intent supersedes an earlier stop; recovery must retain the claim.
+      const stopKey = `agent:${owner.id}:reconcile:stopped:${randomUUID()}`;
+      await fixture.state.transactWithQueue((_unit, queue) =>
+        queue.enqueue({
+          idempotencyKey: stopKey,
+          namespaceId: candidate.namespaceId,
+          agentId: candidate.agentId,
+          agentTarget: "stopped",
+          actorId: fixture.actor.id,
+        }),
+      );
+      await fixture.observerPool.query(
+        "UPDATE occ.controller_work SET attempt_count = 1 WHERE idempotency_key = $1",
+        [stopKey],
+      );
       // A separately configured queue can exhaust the original queued source
       // while its already-claimed session cleanup retains its own purpose.
       const recovery = new fixture.PostgresWorkQueue(fixture.observerPool, {
@@ -1888,8 +1915,16 @@ test(
         maxAttempts: 1,
         random: () => 0,
       });
-      assert.ok((await recovery.recoverStale()).exhaustedQueued >= 1);
+      assert.ok((await recovery.recoverStale()).exhaustedQueued >= 2);
       await fixture.work(candidate, "failed_permanent");
+      const stillClaimed = await fixture.observerPool.query(
+        "SELECT state, claim_token FROM occ.controller_work WHERE idempotency_key = $1",
+        [cleanupKey],
+      );
+      assert.deepEqual(stillClaimed.rows[0], {
+        state: "claimed",
+        claim_token: cleanup.rows[0].claim_token,
+      });
       assert.ok(
         (await repositoryAttempts(fixture, candidate)).every(({ phase }) => phase === "closing"),
       );
