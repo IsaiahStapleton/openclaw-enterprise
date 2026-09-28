@@ -612,6 +612,7 @@ test(
     let replacementFailure;
     try {
       const serviceDeath = await credentials.kill();
+      fixture.expectCrashLostAttempts(crashAttempts.filter(({ phase }) => phase === "open"));
       assert.deepEqual(serviceDeath, { pid: crashService.pid, code: null, signal: "SIGKILL" });
       assert.equal((await fixture.request("GET", path)).activeRevisionId, restarted.revision.id);
       assert.equal(fixture.endpoint, endpoint);

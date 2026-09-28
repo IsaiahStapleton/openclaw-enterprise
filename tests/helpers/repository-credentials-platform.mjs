@@ -704,6 +704,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   await startProcesses();
 
   const agents = [];
+  const crashLostAdmissions = new Set();
   scope.after(async () => {
     if (app === undefined) {
       return;
@@ -711,12 +712,19 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     for (const agent of agents) {
       await request("POST", `/namespaces/${namespace.id}/agents/${agent.id}/stop`, undefined, 202);
     }
-    await kube.waitFor("all credential attempts to settle before fixture teardown", async () => {
+    await kube.waitFor("credential attempts to settle before fixture teardown", async () => {
       const result = await pool.query(
-        "SELECT count(*)::integer AS count FROM occ.repository_session_attempts WHERE namespace_id=$1 AND phase IN ('opening','open','closing')",
+        "SELECT admission_id, phase FROM occ.repository_session_attempts WHERE namespace_id=$1 AND phase IN ('opening','open','closing')",
         [namespace.id],
       );
-      return result.rows[0].count === 0;
+      // A killed broker cannot confirm disposal for these exact sessions. Stop
+      // must leave them closing; every other attempt must still settle.
+      return (
+        result.rows.length === crashLostAdmissions.size &&
+        result.rows.every(
+          ({ admission_id, phase }) => phase === "closing" && crashLostAdmissions.has(admission_id),
+        )
+      );
     });
   });
   async function createAgent(bindings) {
@@ -958,6 +966,13 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     runningPodContainers,
     workspaceVolume,
     attempts,
+    expectCrashLostAttempts: (attempts) => {
+      for (const attempt of attempts) {
+        assert.equal(attempt.namespace_id, namespace.id);
+        assert.equal(attempt.phase, "open");
+        crashLostAdmissions.add(attempt.admission_id);
+      }
+    },
     credentials: credentialsFixture,
     control,
     events,
