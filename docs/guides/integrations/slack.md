@@ -80,6 +80,12 @@ gateway egress to its channel proxy. Provision the proxy's own listener access
 and upstream connectivity separately. Keep Slack tokens in Namespace Secrets;
 do not place them in these inputs or the proxy configuration.
 
+For an existing installation, once OCC reloads the gateway proxy setting, deploy
+a new revision for every affected running Slack Agent. Its gateway environment
+and channel NetworkPolicy are rendered during revision preparation; restarting
+OCC alone does not update existing gateways. Preserve stopped Agents' state.
+Changing only the API directory proxy does not require an Agent redeployment.
+
 Before handing off the Slack setup, verify both paths:
 
 1. In the Console, select the Slack bot Secret and search for a known user and

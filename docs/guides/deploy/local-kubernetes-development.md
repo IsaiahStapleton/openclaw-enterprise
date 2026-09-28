@@ -117,7 +117,7 @@ proxy container on the k3d network, no host-published listener is needed. Restri
 its source access to the actual traffic from this cluster, accounting for node
 source NAT.
 
-Preserve and update both generated files in the private state directory:
+Back up both generated files in the private state directory, then update them:
 
 - `installation.yaml`: set `drivers.compute.configuration.runtime.channels.proxyUrl`
   for gateway Slack messaging.
@@ -125,13 +125,52 @@ Preserve and update both generated files in the private state directory:
   channel lookup. Kubernetes-only mode runs the production API, where lookup
   stays disabled without this setting.
 
-Apply the updated Installation startup Secret and Helm values using the
-[installation procedure](production-installation.md#provision-system-secrets-and-install), retaining
-the existing release, namespace, images, and other protected inputs. Plan a
-maintenance window if Agents are already running; skip fresh bootstrap volume
-preparation for this existing installation. Do not rerun `dev-up` or
-delete the cluster to apply this configuration. Verify both directory search
-and gateway Socket Mode using the [Slack checks](../integrations/slack.md#configure-both-slack-proxies).
+Apply the edits to the existing development release with the commands below.
+Use the chart source matching the installed controller, retain its image
+references and other protected inputs, and plan a maintenance window if Agents
+are running. Confirm the release and namespace; the values below are the
+launcher defaults. The checksum rolls the API and worker even when only the
+Installation document changed.
+
+```bash
+set -euo pipefail
+umask 077
+export OCC_SLACK_STATE='<existing private state directory>'
+export OCC_SLACK_CONTEXT='<context printed by scripts/dev-up>'
+export OCC_SLACK_NAMESPACE='oce-system'
+export OCC_SLACK_RELEASE='openclaw-enterprise'
+
+node --input-type=module <<'NODE'
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const root = process.env.OCC_SLACK_STATE;
+const path = join(root, 'helm-values.json');
+const values = JSON.parse(readFileSync(path, 'utf8'));
+values.controlPlane ??= {};
+values.controlPlane.installationChecksum = createHash('sha256')
+  .update(readFileSync(join(root, 'installation.yaml'))).digest('hex');
+writeFileSync(path, JSON.stringify(values, null, 2) + '\n');
+NODE
+
+kubectl --kubeconfig "$OCC_SLACK_STATE/kubeconfig" --context "$OCC_SLACK_CONTEXT" \
+  -n "$OCC_SLACK_NAMESPACE" create secret generic occ-installation-startup \
+  --from-file=installation.yaml="$OCC_SLACK_STATE/installation.yaml" \
+  --dry-run=client -o yaml | \
+  kubectl --kubeconfig "$OCC_SLACK_STATE/kubeconfig" --context "$OCC_SLACK_CONTEXT" \
+    -n "$OCC_SLACK_NAMESPACE" apply -f -
+
+helm upgrade "$OCC_SLACK_RELEASE" deploy/helm/openclaw-enterprise \
+  --kubeconfig "$OCC_SLACK_STATE/kubeconfig" --kube-context "$OCC_SLACK_CONTEXT" \
+  --namespace "$OCC_SLACK_NAMESPACE" -f "$OCC_SLACK_STATE/helm-values.json" \
+  --wait --timeout 5m
+```
+
+Do not rerun `dev-up`, recreate bootstrap storage, or delete the cluster to apply
+this configuration. After OCC recovers, deploy a new revision for each affected
+running Slack Agent so its gateway receives the new proxy and network policy.
+Verify directory search and gateway Socket Mode using the
+[Slack checks](../integrations/slack.md#configure-both-slack-proxies).
 
 ## Verify the local boundary
 
