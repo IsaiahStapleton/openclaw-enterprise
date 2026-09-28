@@ -161,8 +161,8 @@ routing settings. Drivers without endpoint support cannot serve workspace files.
 `apps/controller/src/index.ts:createFastifyApp` requires a valid user
 session or scoped service API key. Native Agent credentials cannot invoke this
 administration surface. `GET` needs Agent `read`; `PUT` needs Agent `operate`
-and, for session callers, passes the browser CSRF boundary. OCC resolves the
-active AgentRevision before invoking Compute endpoint resolution.
+and, for session callers, passes the browser CSRF boundary. OCC then resolves
+the active AgentRevision.
 
 Only the four names are accepted. `PUT` accepts only `{ "content": "..." }`,
 rejects NUL and unpaired UTF-16 surrogates, enforces 16 KiB of UTF-8 content,
@@ -174,9 +174,8 @@ admission and native access.
 `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
 uses `ComputeDriver.getGatewayEndpoint(revision)` to resolve
 `wss://<hostname>[:<endpointPort>]/namespaces/<namespaceId>/agents/<agentId>`.
-The default hostname matches Helm's Service DNS, and the default port is `443`.
-An explicit endpoint port changes the URL authority without changing the TLS
-hostname or HTTPRoute hostname. Resolution does not prove readiness.
+The default hostname matches Helm's Service DNS and port `443`. Resolution does
+not prove readiness.
 
 `kubernetes/index.ts:reconcileGatewayRoute` provisions operator routing and a
 separate exact `/node` HTTPRoute and SecurityPolicy for dedicated runtimes.
@@ -231,11 +230,11 @@ before cleanup. Embedded storage is unchanged. New Harness PVCs use RWO; owned
 existing RWX claims retain their data. The worker stops predecessors before dedicated preparation and suppresses their
 maintenance. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage)
 owns downtime and recovery limits. These contracts require matching runtime
-images; local checks alone do not prove deployed Enterprise acceptance.
+images; local checks do not prove deployed acceptance.
 
 The API reads the mounted key for each operation, so new connections pick up
-Secret rotation without an API restart. Missing routing, missing or invalid
-key material, expired deadlines, and unavailable targets fail closed. No URL
+Secret rotation without a restart. Missing routing, missing or invalid
+keys, expired deadlines, and unavailable targets fail closed. No URL
 or credential comes from caller JSON or headers.
 
 ### 7. Envoy authenticates and routes the native connection
@@ -323,7 +322,7 @@ replays it. The native client closes in the operation's cleanup path.
 
 - 2026-09-27 05:17: Give native workspace initialization the Gateway resource budget. (01a0cf72-6985-7712-ba92-d8cc32470f24 - c0f792d5b92e2dee596711654784759d327e0817)
 
-- 2026-09-26 10:10: Document optional non-default Gateway endpoint ports for generated WSS URLs. (authoring-run/a4d4256b-3bac-4c88-84aa-cd3501b80aa8 - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
+- 2026-09-26 10:10: Documented Gateway endpoint ports. (authoring-run/a4d4256b-3bac-4c88-84aa-cd3501b80aa8 - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
 
 - 2026-09-24 11:28: Document exclusive dedicated preparation and durable RWO workspaces in the accompanying change. (01a0cf72-6985-7712-ba92-d8cc32470f24 - 14a4508baad876d3eea4e6fe6388f8d8a91559b7)
 

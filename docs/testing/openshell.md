@@ -153,16 +153,6 @@ high loopback port allocated by the Podman verification relay. The real fixture
 also gives the delegated Sandbox the same 2 GiB Harness memory limit as
 Kubernetes Compute; the cluster's 1 GiB container default is insufficient while
 the native worker installs its Gateway bundle.
-`./scripts/k3d test --harness openclaw` selects this case. To keep the proven
-topology running after its real turn and expose the OpenClaw Control UI and OCC
-console on loopback, run:
-
-```sh
-./scripts/k3d demo --harness openclaw
-```
-
-The demo uses the same verification-only compatibility bridge; it does not
-promote that bridge into a supported production path.
 
 Use an OCE runtime image built from the OpenClaw source commit pinned by
 `deploy/runtime/Dockerfile`. The native proof requires the environment-managed
@@ -172,6 +162,32 @@ requires the `node run --pair-if-needed` and `--commands` CLI options. The test
 configures the private Gateway with its fully qualified `.svc.cluster.local`
 hostname so OpenShell policy DNS, the listener certificate, the HTTPRoute, and
 node pairing use the same name.
+
+### Native OpenClaw with k3d
+
+The [k3d helper](kubernetes.md#develop-with-local-containers-and-k3d) selects
+the native case with `--harness openclaw`:
+
+```sh
+./scripts/k3d test --harness openclaw
+./scripts/k3d demo --harness openclaw
+```
+
+This selection prepares the pinned OpenShell lane, builds the sibling
+`../openclaw` checkout, and records its commit with the prepared environment.
+Set `OCC_K3D_OPENCLAW_SOURCE` to another absolute source checkout. Codex and
+native OpenClaw use separate helper-owned state. `demo` keeps the proven topology
+running after its real turn, opens the Control UI's new-session flow and the OCC
+console on loopback, and prints its isolated integration username instead of
+using the development login. It leaves the dedicated worker slot free, so the
+first browser session uses the dedicated-native profile without the Gateway
+receiving the Harness's model credential.
+
+Without `--harness`, `copy` selects the one active demo and `down` removes both
+helper-owned Harness environments; pass `--harness codex` or
+`--harness openclaw` to select one. Both commands use the same
+verification-only compatibility bridge; it does not promote that bridge into a
+supported production path.
 
 ### Test bridge and upstream prerequisite
 
