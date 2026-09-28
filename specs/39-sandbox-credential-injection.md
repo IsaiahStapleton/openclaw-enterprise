@@ -105,7 +105,7 @@ selection.
 
 ### Driver interface
 
-This proposed shape differs from the [current interface](../docs/reference/drivers/credential-gateway.md).
+This proposed shape differs from the [current interface](https://github.com/openclaw/openclaw-enterprise/blob/ec103d947abb40b21411e5b8bdede7774ae35df1/docs/reference/drivers/credential-gateway.md).
 
 ```ts
 interface CredentialGatewayDriver extends Driver {
@@ -367,8 +367,8 @@ The implementation PR updates:
 registration, removal, attachment, and status for the `openai` source type. A
 real OpenShell model turn used the injected key while the Harness held only the
 placeholder. The current contract is owned by
-[Credential Gateway](../docs/reference/drivers/credential-gateway.md) and
-[credential sources](../docs/reference/credential-sources.md).
+[Credential Gateway](https://github.com/openclaw/openclaw-enterprise/blob/ec103d947abb40b21411e5b8bdede7774ae35df1/docs/reference/drivers/credential-gateway.md) and
+[credential sources](https://github.com/openclaw/openclaw-enterprise/blob/ec103d947abb40b21411e5b8bdede7774ae35df1/docs/reference/credential-sources.md).
 
 The gateway copy does not follow Secret changes or grant removal; refresh and
 bounded withdrawal remain future work. The 70-second delay below does not prove
