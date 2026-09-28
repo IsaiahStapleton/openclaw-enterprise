@@ -1033,65 +1033,73 @@ export class PostgresPlatformState implements PlatformStateStore {
   ): Promise<PersistedNativeIAMState> {
     let installationId: string | undefined;
     await this.transact(async (unit) => {
-      const context = this.contexts.get(unit);
-      if (context === undefined) {
-        throw new DependencyUnavailableError("The platform transaction is unavailable.");
-      }
-      const installation = await this.currentInstallation(context);
-      if (installation === undefined) {
-        throw new ScopeViolationError("IAM state requires an initialized Installation.");
-      }
-      installationId = installation.id;
-      if (seed.roles.length > 0) {
-        throw new ScopeViolationError("Account provisioning must bind an existing IAM Role.");
-      }
-      for (const binding of seed.bindings) {
-        if (
-          binding.subjectKind !== "identity" ||
-          binding.subjectId !== seed.principal.id ||
-          binding.resourceKind !== "installation" ||
-          binding.resourceId !== installation.id ||
-          binding.namespaceId !== undefined
-        ) {
-          throw new ScopeViolationError(
-            "Account provisioning requires an exact Installation binding.",
-          );
-        }
-      }
-      await context.client.query(
-        `INSERT INTO occ.iam_identities (id, namespace_id, agent_id, kind, issuer, subject)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          seed.principal.id,
-          null,
-          null,
-          seed.principal.kind,
-          seed.principal.issuer,
-          seed.principal.subject,
-        ],
-      );
-      for (const binding of seed.bindings) {
-        await context.client.query(
-          `INSERT INTO occ.iam_access_bindings
-           (id, namespace_id, identity_subject_id, group_subject_id, role_id,
-            resource_kind, resource_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [
-            binding.id,
-            null,
-            binding.subjectId,
-            null,
-            binding.roleId,
-            binding.resourceKind,
-            binding.resourceId,
-          ],
-        );
-      }
+      installationId = await this.insertNativeIAMPrincipal(unit, seed);
       if (auditEvent !== undefined) {
         await unit.audit.append(auditEvent);
       }
     });
     return this.loadNativeIAMState(installationId);
+  }
+
+  /** Inserts one account Principal and its exact Installation bindings in the caller's transaction. */
+  async insertNativeIAMPrincipal(
+    unit: PlatformUnitOfWork,
+    seed: PersistedNativeIAMPrincipalSeed,
+  ): Promise<string> {
+    const context = this.contexts.get(unit);
+    if (context === undefined) {
+      throw new DependencyUnavailableError("The platform transaction is unavailable.");
+    }
+    const installation = await this.currentInstallation(context);
+    if (installation === undefined) {
+      throw new ScopeViolationError("IAM state requires an initialized Installation.");
+    }
+    if (seed.roles.length > 0) {
+      throw new ScopeViolationError("Account provisioning must bind an existing IAM Role.");
+    }
+    for (const binding of seed.bindings) {
+      if (
+        binding.subjectKind !== "identity" ||
+        binding.subjectId !== seed.principal.id ||
+        binding.resourceKind !== "installation" ||
+        binding.resourceId !== installation.id ||
+        binding.namespaceId !== undefined
+      ) {
+        throw new ScopeViolationError(
+          "Account provisioning requires an exact Installation binding.",
+        );
+      }
+    }
+    await context.client.query(
+      `INSERT INTO occ.iam_identities (id, namespace_id, agent_id, kind, issuer, subject)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        seed.principal.id,
+        null,
+        null,
+        seed.principal.kind,
+        seed.principal.issuer,
+        seed.principal.subject,
+      ],
+    );
+    for (const binding of seed.bindings) {
+      await context.client.query(
+        `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, group_subject_id, role_id,
+          resource_kind, resource_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          binding.id,
+          null,
+          binding.subjectId,
+          null,
+          binding.roleId,
+          binding.resourceKind,
+          binding.resourceId,
+        ],
+      );
+    }
+    return installation.id;
   }
 
   async close(): Promise<void> {
