@@ -25,8 +25,14 @@ import {
 } from "@openclaw-enterprise/occ";
 import type { IAMDriver } from "@openclaw-enterprise/contracts";
 import { createHumanLogin, type GitHubLoginConfiguration } from "./github.ts";
+import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
+export {
+  clientAddressConfiguration,
+  resolveClientAddress,
+  type ClientAddressConfiguration,
+} from "./client-address.ts";
 import type {
   AdmissionHeaders,
   AdmissionRequest,
@@ -66,6 +72,8 @@ export interface ControllerAuthOptions {
   readonly secureCookies?: boolean;
   readonly sharedCookieDomain?: string;
   readonly humanLogin?: ReturnType<typeof createHumanLogin>;
+  /** Trusted proxies whose client-address header keys sign-in admission. */
+  readonly clientAddress?: ClientAddressConfiguration;
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
@@ -839,7 +847,17 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     }
     const headers = authHeaders(request.headers);
     headers.set("host", new URL(options.baseURL).host);
-    headers.set("x-occ-client-ip", request.ip);
+    // Sign-in admission keys on this value; Better Auth reads only this address header.
+    headers.set(
+      "x-occ-client-ip",
+      resolveClientAddress(
+        options.clientAddress,
+        request.ip,
+        options.clientAddress === undefined
+          ? undefined
+          : request.headers[options.clientAddress.header],
+      ),
+    );
     // The public wrapper already applies the established browser/CLI origin contract.
     if (!headers.has("origin") && (path === "/oce/password" || path === "/oce/sign-out")) {
       headers.set("origin", expectedBrowserOrigin);
@@ -1112,6 +1130,12 @@ export async function createPostgresControllerAuth(
     }
     activationSkipped = (await persistence!.activateRecovery(github.recoveryUserId, principal.id))
       .skipped;
+    const designation = await persistence!.recoveryDesignation();
+    if (!designation) {
+      throw new Error("Recovery designation is unavailable.");
+    }
+    // The recovery account's password lane stays admitted under sign-in floods.
+    humanLogin!.designateRecovery(designation.email);
   }
   return {
     ...auth,

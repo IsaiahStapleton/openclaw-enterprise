@@ -239,13 +239,14 @@ account read shows present state, **not a receipt**: the original transaction ma
 still be running. Resolve uncertainty before choosing a new action and version.
 Password reset, deletion, and recovery replacement remain deferred.
 
-The controller admits at most 30 password requests per minute with four active,
-and 60 GitHub start/callback requests per minute with eight active. Invalid
-callbacks consume that budget before parsing or provider work. State caps pending
-attempt rows at 1,000 per Installation and removes at most 100 expired rows per
-start. Token exchange and profile retrieval share a ten-second deadline, refuse
-redirects, and accept at most 64 KiB per response. These process-local limits
-require the single-controller topology.
+Password sign-in allows 10 requests/minute, two active, per client address and
+per email; GitHub start/callback, including invalid callbacks, allows 30 and four
+per address. Global caps: four and eight active. The recovery email has a
+reserved lane (20, two active). A 4,096-key table bounds memory. Clients behind
+an ingress share its address unless
+[trusted proxies](cheatsheets/environment-variables.md#controller-and-authentication)
+are set. Pending attempts cap at 1,000. Provider calls share a ten-second
+deadline, refuse redirects, and read at most 64 KiB. Limits are per controller.
 
 ## Native admin shared sessions
 

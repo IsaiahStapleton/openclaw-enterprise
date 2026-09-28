@@ -13,6 +13,7 @@ import {
 import {
   betterAuthIssuer,
   createPostgresControllerAuth,
+  type ClientAddressConfiguration,
   type GitHubLoginConfiguration,
   type PreparedAuthAccount,
 } from "../auth/index.ts";
@@ -44,6 +45,7 @@ export interface ProductionConfig {
   readonly authSecret: string;
   readonly authBaseURL: string;
   readonly github?: GitHubLoginConfiguration;
+  readonly clientAddress?: ClientAddressConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly logger?: OccLogger;
@@ -109,6 +111,7 @@ export async function composeProduction(config: ProductionConfig) {
       state,
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
     });
     if (auth.activationSkipped !== undefined && config.logger !== undefined) {
       emitOccLogEvent(config.logger, {
@@ -256,6 +259,7 @@ export async function composeProduction(config: ProductionConfig) {
         installationId: persistedInstallation.id,
       },
       maxBodyBytes: 64 * 1024,
+      ...(config.clientAddress === undefined ? {} : { trustedProxies: config.clientAddress }),
       ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));
