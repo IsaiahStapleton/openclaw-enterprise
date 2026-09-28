@@ -3268,15 +3268,18 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             "Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
           tags: ["Authentication"],
           security: [],
-          response: responses({
-            type: "object",
-            additionalProperties: false,
-            required: ["url", "attemptId"],
-            properties: {
-              url: { type: "string", format: "uri" },
-              attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" },
-            },
-          }),
+          response: {
+            ...responses({
+              type: "object",
+              additionalProperties: false,
+              required: ["url", "attemptId"],
+              properties: {
+                url: { type: "string", format: "uri" },
+                attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" },
+              },
+            }),
+            403: { description: "Forbidden", ...error },
+          },
         },
       },
       async (request, reply) => options.auth.githubStart(request, reply),
@@ -3312,12 +3315,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             required: ["attemptId"],
             properties: { attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
           },
-          response: responses({
-            type: "object",
-            additionalProperties: false,
-            required: ["sessionKey"],
-            properties: { sessionKey: { type: "string" } },
-          }),
+          response: {
+            ...responses({
+              type: "object",
+              additionalProperties: false,
+              required: ["sessionKey"],
+              properties: { sessionKey: { type: "string" } },
+            }),
+            403: { description: "Forbidden", ...error },
+          },
         },
       },
       async (request, reply) => options.auth.githubResult(request, reply),

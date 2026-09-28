@@ -547,6 +547,7 @@ Confirm which session a GitHub sign-in created
 | --- | --- |
 | `200` | OK |
 | `401` | Unauthorized |
+| `403` | Forbidden |
 | `503` | Service Unavailable |
 
 **`200` response body:** `application/json`
@@ -574,6 +575,7 @@ Start GitHub sign-in for an enrolled account
 | --- | --- |
 | `200` | OK |
 | `401` | Unauthorized |
+| `403` | Forbidden |
 | `503` | Service Unavailable |
 
 **`200` response body:** `application/json`
