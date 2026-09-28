@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-09-23
-last_updated_session: public-pr/305
+updated: 2026-09-25
+last_updated_session: 01a0d992-db83-7843-b40c-355c0f2c2b9a
 ---
 
 # Bootstrap and human authentication flow
@@ -127,7 +127,10 @@ retains its non-secret IDs. Lost output does not trigger regeneration; normal
 `apps/controller/src/auth/index.ts:createControllerAuth` configures Better Auth
 email/password authentication, protected session cookies, and durable PostgreSQL
 storage. Sign-in returns only `{ authenticated: true }`; the session token stays
-in its HttpOnly cookie and is omitted from session-inspection responses. Sign-out
+in its HttpOnly cookie and is omitted from session-inspection responses.
+`safeSessionResponse` projects the noncredential session record ID as `sessionKey`
+alongside public user identity. Console compares it to invalidate retained views
+and drafts after a new session, including for the same user. Sign-out
 revokes the session, and public signup is disabled.
 
 When GitHub is configured, `apps/controller/src/auth/github.ts:createHumanLogin`
@@ -258,6 +261,8 @@ infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-25 17:27: Trace noncredential session identity for Console lifetime invalidation in accompanying changes. (01a0d992-db83-7843-b40c-355c0f2c2b9a - 64ab72aed5c4926e4a2080ade91d785e531801a2)
 
 - 2026-09-23 18:50: Trace shared GitHub App login without OAuth scopes and discarded App credential data in the accompanying source change. (public-pr/305 - e9a16a23f1c3a5bc9a26e1ca13022b769bae5e7a)
 

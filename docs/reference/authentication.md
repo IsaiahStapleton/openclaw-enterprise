@@ -100,8 +100,13 @@ header keep the documented sign-in/sign-out flow.
 | Operation                      | Supported behavior                                                                                                                                          |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/auth/sign-in/email` | Verifies an existing account's email and password and issues a session cookie. The JSON response confirms authentication without returning a session token. |
-| `GET /api/auth/session`        | Returns safe account identity for a valid session or `data: null` without one. Inspecting the session is optional.                                          |
+| `GET /api/auth/session`        | Returns safe account identity and a noncredential `sessionKey`, or `data: null` without a valid session.                                                    |
 | `POST /api/auth/sign-out`      | Revokes the current session. Protected API requests using that session subsequently return `401`.                                                           |
+
+The `sessionKey` identifies the current session record, stays stable across reads,
+and changes on a new sign-in, including for the same account. It cannot authenticate
+requests; the session token remains in its HttpOnly cookie. Console uses this key
+to discard retained content and drafts when the session changes.
 
 For example, the sign-in body is:
 
@@ -139,8 +144,7 @@ development does not qualify deployed HTTPS.
 
 HTTPS sessions use `__Host-openclaw_occ.session_token`, `Secure`, `HttpOnly`,
 `Path=/`, and no `Domain`, preventing sibling hosts from planting that cookie.
-Session inspection, protected requests, and logout reject duplicate active-session
-cookie names.
+Session reads, protected requests, and logout reject duplicate session cookies.
 
 Provision password accounts and explicit IAM grants before activation. Startup
 rejects unsupported or incomplete account populations. Activation enrolls existing
@@ -161,13 +165,11 @@ the private key stays with the existing repository credential consumer.
 OCE requests no OAuth scopes. [App permissions and user access](https://docs.github.com/en/apps/creating-github-apps/writing-code-for-a-github-app/building-a-login-with-github-button-with-a-github-app#specify-additional-parameters)
 govern the bearer token, which may carry repository authority; `read:user` would
 not restrict it. Login uses only [`GET /user`](https://docs.github.com/en/rest/users/users#get-the-authenticated-user),
-then discards access/refresh tokens, expiry, and scope data without retention in
-accounts, sessions, responses, or audit. It performs no refresh, creates no
+then discards access/refresh tokens, expiry, and scope data without retaining them. It performs no refresh, creates no
 repository grants, and gives no provider credentials to repository consumers or Agents.
 
-Changing client ID requires administrator attachment under the new provider
-instance and a fresh login attempt. Secret rotation preserves enrollment but
-invalidates pending attempts. Email and mutable login names are not identity
+A new client ID requires reattachment under the new provider instance. Secret
+rotation preserves enrollment but invalidates pending attempts. Email and mutable login names are not identity
 keys; GitHub accounts need not expose email.
 
 A human Installation administrator reads `GET /api/auth/accounts/:userId` with
@@ -184,17 +186,16 @@ user, email association, signup, identity transfer, and self-service linking are
 rejected. For unknown identities, follow the
 [enrollment procedure](../guides/deploy/production-installation.md#enable-github-browser-sign-in).
 
-`GET /api/auth/providers` returns `data: {"github": true}` when enabled, otherwise
-`false`. The Console shows **Continue with GitHub** after successful discovery;
-password login remains available if discovery fails. Clicking sends a same-origin
-`POST /api/auth/providers/github/start`, returning `data.url` and a browser-binding
-cookie. The browser navigates there. Other provider names return `404`; callers
-cannot select callback or return destinations.
+`GET /api/auth/providers` returns `data: {"github": true}` when enabled. A
+same-origin `POST /api/auth/providers/github/start` returns `data.url` and sets a
+browser-binding cookie. Other provider names return `404`; callers cannot select
+callback or return destinations. The [Console flow](../flows/platform-console.md#2-resolve-the-session-before-private-reads)
+owns button and error display.
 
 The callback consumes a short-lived, browser-bound attempt once before code
 exchange and resolves the immutable numeric GitHub user ID's exact enrollment.
 Unknown identities fail without signup. Success returns to `/console/`; failure
-returns to `/console/?authError=github` with a generic message and no automatic retry.
+returns to `/console/?authError=github` without automatic retry.
 
 ### Session and recovery controls
 
@@ -228,11 +229,10 @@ Send `{"expectedVersion":1}` with the version just read for these operations:
 These operations serialize with session issuance and leave IAM grants unchanged.
 Logout commits revocation and audit before clearing the cookie. An unknown administrative COMMIT
 returns `503 DEPENDENCY_UNAVAILABLE` with an explicit unknown-outcome message;
-it never reports success or triggers automatic replay or compensation. A
-separately authorized account read shows present state, **not a receipt** proving
-which request caused it. If the original transaction may still be running, wait
-or report unavailable; absent visible effects do not prove rollback. Operators
-must resolve uncertainty before deliberately choosing a new action and version.
+it never reports success or triggers automatic replay or compensation. An
+account read shows present state, **not a receipt** for any request. The original
+transaction may still be running; absent effects do not prove rollback. Resolve
+uncertainty before deliberately choosing a new action and version.
 Account reenablement, password reset, deletion, and recovery replacement remain
 deferred.
 

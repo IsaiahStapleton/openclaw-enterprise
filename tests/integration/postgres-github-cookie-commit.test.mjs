@@ -171,7 +171,7 @@ test(
     const ambiguousLogout = await ordinary.inject({
       method: "POST",
       url: "/api/auth/sign-out",
-      headers: { cookie: `${cookieName}=malformed; ${cookie}` },
+      headers: { cookie: `${cookieName}=malformed; ${cookie}`, origin },
     });
     assert.equal(ambiguousLogout.statusCode, 401, ambiguousLogout.body);
     assert.equal(ambiguousLogout.headers["set-cookie"], undefined);
@@ -193,7 +193,7 @@ test(
     const unknownLogout = await logout.inject({
       method: "POST",
       url: "/api/auth/sign-out",
-      headers: { cookie },
+      headers: { cookie, origin },
     });
     assert.equal(logoutProxy.observedCommit, true);
     assert.equal(unknownLogout.statusCode, 503, unknownLogout.body);
