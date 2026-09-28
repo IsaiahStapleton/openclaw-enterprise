@@ -334,10 +334,10 @@ test("production native examples satisfy the current Helm, Installation, and PVC
   assert.equal(drivers.installation.occ.cluster, "production-west");
   assert.deepEqual(drivers.installation.backend, []);
   assert.equal(drivers.installation.presets.includeDefaults, true);
-  assert.deepEqual(
-    drivers.defaultPresets.map(({ name }) => name).sort(),
-    ["Standard Codex", "Standard OpenClaw"],
-  );
+  assert.deepEqual(drivers.defaultPresets.map(({ name }) => name).sort(), [
+    "Standard Codex",
+    "Standard OpenClaw",
+  ]);
   assert.equal(drivers.pluginDriver.id, "codex-plugin");
   assert.equal(drivers.pluginDriver.discoveryCredential, "none");
   const catalog = await drivers.pluginDriver.discoverCatalog({ q: "Linear" });
