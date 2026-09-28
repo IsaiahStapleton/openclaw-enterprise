@@ -52,6 +52,11 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
 
 ## Additional checks
 
+- [Personal device login](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)
+  requires Namespace `agent:create`, or exact `agent:read` and `agent:update` for
+  an existing Agent. Start also requires `secret:create`; polling, cancellation,
+  and discovery require exact `secret:operate` and the initiating actor.
+
 - [Channel directory lookup](../api.md#post-namespacesnamespaceidchanneldirectorylookup)
   requires `agent:create` in the Namespace, or `agent:update` or
   `configuration:update` on the exact edit target, plus `secret:operate` on the

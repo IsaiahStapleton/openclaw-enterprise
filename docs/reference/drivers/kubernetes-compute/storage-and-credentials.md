@@ -103,9 +103,22 @@ from the default StorageClass, mounted only by its Harness:
 
 | Subpath                                       | Harness mount                        |
 | --------------------------------------------- | ------------------------------------ |
+| `codex-home` (OAuth only)                     | `/home/node/.codex`                  |
 | `workspace`                                   | `/home/node/workspace`               |
 | `generated-images`                            | `/home/node/.codex/generated_images` |
 | `workspace-node-<agent-hash>-<revision-hash>` | `/home/node/.openclaw-node`          |
+
+OAuth's private `codex-home` directory is excluded from workspace serving and
+Sandbox mounts. It retains the complete native `auth.json`, including rotated
+refresh tokens and account metadata. Only the bootstrap workload and dedicated
+Codex workload mount it; the separate Gateway receives no model credential.
+
+**Launch scope:** persistent runtime-owned credentials deliberately replace the
+planned token broker for P0. Brokerage is separate work in progress. After the
+initial handoff, OCC retains a consumed source marker and never restores the
+original token pair. Restarts and revisions reopen the current disk bundle.
+Loss of the claim or credential file requires a new login and explicit deployment.
+This version has no broker-based backup, recovery, or shared refresh ownership.
 
 The revision-specific directory retains file-node identity across Pod replacement.
 Sessions stay on the private Gateway claim. Selected generated-image bytes return

@@ -39,6 +39,8 @@ The new policy paths still need
 [real Agent verification](../testing/plugins.md#current-proof-notes). There is
 no bundled Claude PluginDriver.
 
+OAuth discovery needs [another login after deployment](../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login).
+
 ## Lifecycle
 
 Adding a plugin to the Agent requests installation on deployment; it does not

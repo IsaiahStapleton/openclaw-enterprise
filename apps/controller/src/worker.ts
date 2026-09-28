@@ -2017,7 +2017,7 @@ export class ControllerWorker {
     }
     const refs = uniqueSecretRefs(secretBindings.bindings);
     const auth = revision.harnessAuth;
-    if (auth.method === "api_key" || auth.method === "codex_pat") {
+    if (auth.method === "api_key" || auth.method === "codex_pat" || auth.method === "oauth") {
       if (auth.source?.kind !== "secret" || auth.source.namespaceId !== revision.namespaceId) {
         return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
       }
@@ -2258,7 +2258,11 @@ export class ControllerWorker {
     }
 
     let harnessAuth: ResolvedHarnessAuth;
-    if (revision.harnessAuth.method === "api_key" || revision.harnessAuth.method === "codex_pat") {
+    if (
+      revision.harnessAuth.method === "api_key" ||
+      revision.harnessAuth.method === "codex_pat" ||
+      revision.harnessAuth.method === "oauth"
+    ) {
       const auth = revision.harnessAuth;
       if (typeof secretDriverId !== "string" || auth.secretDriverId !== secretDriverId) {
         return { result: { outcome: "permanent", code: "SECRET_DRIVER_MISMATCH" } };

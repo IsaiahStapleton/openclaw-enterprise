@@ -88,6 +88,48 @@ and explicitly deploy each intended consumer. Account deletion performs upstream
 cleanup and is blocked by Agent drafts, active revisions, and pending deployments;
 inactive history alone does not retain the source indefinitely.
 
+## Use a personal Codex login
+
+Start `POST /namespaces/:namespaceId/agents/device-authorizations` with
+`{ "harnessId": "codex" }`. Open the returned verification link, enter the
+displayed code, and complete sign-in. Poll the returned Secret ID through
+`POST /namespaces/:namespaceId/agents/device-authorizations/:secretId/poll`
+until the status is `ready`. Bind the returned `source` with `method: "oauth"`
+for dedicated Codex without a Sandbox Driver.
+Device authorization must be enabled for the upstream account or workspace.
+OCE stores the resulting native bundle in its Secret backend; the browser receives
+only a source reference. Use that login to search and select plugins, then create
+and deploy the Agent. Starting login requires Agent-create and Secret-create
+permission in the Namespace; polling and use also require exact Secret `operate`.
+
+The first deployment copies the bundle to the Agent's private persistent disk,
+confirms the copy, and erases OCE's credential copy before starting Codex. Codex
+then owns refresh. Later revisions preserve the selected source and reuse the
+current bundle on that disk. Do not edit or restore the consumed Secret's value.
+Its retained metadata identifies the owning Agent and storage.
+
+For plugin changes on an existing Agent, start another login beneath
+`/namespaces/:namespaceId/agents/:agentId/device-authorizations`. Use its
+reference as `oauthLogin` in that Agent's plugin discovery requests. This login
+requires Agent `read`/`update` plus Secret permissions. It supplies discovery without changing the deployed source. Saving
+plugin selections preserves the running Agent's credential. Cancelling a login
+only discards OCE's local copy; OCE does not revoke the upstream session.
+
+A pending login expires after the provider's device deadline, at most 15 minutes.
+A completed login is available in OCE for 24 hours before handoff; OCE does not
+refresh it. If discovery rejects an expired access token, start a fresh login.
+Discard abandoned logins, then delete their unreferenced Secrets through the
+normal Secret API. An interrupted token exchange requires a fresh login.
+
+If private storage or its credential file is lost, start a new Agent-scoped login,
+update its `harnessAuth` to the new source, and deploy. An explicit replacement
+source installs a new bundle after the previous workload stops. An unchanged
+source can never reseed a missing bundle. Provider revocation also requires
+reconnecting. Ordinary revision changes do not need another runtime login.
+
+This is deliberate launch scope: durable token brokerage is separate work in
+progress. See [storage and limits](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage).
+
 ## Preserve administrator recovery
 
 Replace the mounted auth signing Secret through the deployment owner and restart

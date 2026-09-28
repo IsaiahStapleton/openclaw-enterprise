@@ -2,7 +2,7 @@ import { defaultAgentModel } from "../../apps/controller/src/console/agents/star
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -13,6 +13,7 @@ import { GATEWAY_RUNTIME_ENTRYPOINT as DOCKER_GATEWAY_RUNTIME_ENTRYPOINT } from 
 import {
   AGENT_WITH_NODE_ENTRYPOINT,
   AGENT_RUNTIME_ENTRYPOINT,
+  CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT as KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
   GATEWAY_STOP_TIMEOUT_MS,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
@@ -40,6 +41,58 @@ const imageTestOptions =
         skip: "Set OCC_TEST_RUNTIME_IMAGE to a locally built OpenClaw runtime image tag.",
       }
     : {};
+
+test("Codex OAuth bootstrap preserves rotated credentials and requires a new source after disk loss", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "oce-oauth-bootstrap-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const codexHome = join(directory, "codex-home");
+  const seedPath = join(directory, "seed.json");
+  const authPath = join(codexHome, "auth.json");
+  const auth = {
+    auth_mode: "chatgpt",
+    tokens: { id_token: "test-id", access_token: "test-access", refresh_token: "test-refresh" },
+    last_refresh: "2026-09-28T00:00:00Z",
+  };
+  await writeFile(seedPath, JSON.stringify(auth));
+  const run = (sourceUid = "source-1", volumeUid = "volume-1") =>
+    execute(process.execPath, ["-e", CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT], {
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        OCE_CODEX_OAUTH_SOURCE_UID: sourceUid,
+        OCE_CODEX_OAUTH_VOLUME_UID: volumeUid,
+        OCE_CODEX_OAUTH_SEED_PATH: seedPath,
+      },
+    });
+  await run();
+  assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), auth);
+  assert.equal((await stat(authPath)).mode & 0o777, 0o600);
+
+  // Exercise the real seed script against a native-style atomic replacement, without provider calls.
+  const refreshed = {
+    ...auth,
+    tokens: { ...auth.tokens, access_token: "rotated-access", refresh_token: "rotated-refresh" },
+  };
+  await writeFile(`${authPath}.native`, JSON.stringify(refreshed), { mode: 0o600 });
+  await rename(`${authPath}.native`, authPath);
+  await run();
+  assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), refreshed);
+  await assert.rejects(
+    run("source-1", "replacement-volume"),
+    /could not initialize private credentials/,
+  );
+  await rm(authPath);
+  await assert.rejects(run(), /could not initialize private credentials/);
+  await assert.rejects(readFile(authPath), { code: "ENOENT" });
+
+  // An explicitly selected fresh authorization may replace the previous generation after shutdown.
+  await run("source-2");
+  assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), auth);
+  assert.deepEqual(JSON.parse(await readFile(join(codexHome, ".oce-oauth.json"), "utf8")), {
+    sourceUid: "source-2",
+    volumeUid: "volume-1",
+  });
+});
 
 test("runtime image seccomp option requires the CI-prepared profile record", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "oce-runtime-seccomp-profile-"));

@@ -78,6 +78,7 @@ import {
 } from "../workspace-setup-runtime.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { discoverHarnessModels } from "../model-discovery.ts";
+import { pollHarnessDeviceAuthorization, startHarnessDeviceAuthorization } from "../device-auth.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import { unsupportedNativeGatewayAuthFields } from "../../../gateway/auth-fields.ts";
 import type { GatewayNodeEnrollment } from "../../../gateway/node-enrollment-client.ts";
@@ -98,6 +99,7 @@ import {
   AGENT_READINESS_ENTRYPOINT,
   AGENT_RUNTIME_ENTRYPOINT,
   AGENT_WITH_NODE_ENTRYPOINT,
+  CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
   GATEWAY_READINESS_ENTRYPOINT,
   GATEWAY_STOP_TIMEOUT_MS,
@@ -429,6 +431,12 @@ function prepareHarnessAuth(
       credentialSource: resolvedAuth.source,
     };
   } else if (
+    resolvedAuth.method === "oauth" &&
+    harness.mode === "dedicated" &&
+    harness.id === "codex"
+  ) {
+    environment.push({ name: "OCE_CODEX_OAUTH_SOURCE_UID", value: resolvedAuth.backendRef.uid });
+  } else if (
     resolvedAuth.method === "codex_pat" &&
     harness.mode === "dedicated" &&
     harness.id === "codex"
@@ -510,6 +518,10 @@ const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
   ["media", "/home/node/.openclaw/media"],
 ] as const);
 const HARNESS_WORKSPACE_VOLUME = "openclaw-workspace";
+const HARNESS_AUTH_VOLUME = "openclaw-harness-auth";
+const OAUTH_AGENT_ANNOTATION = "openclaw.dev/oauth-agent-id";
+const OAUTH_VOLUME_ANNOTATION = "openclaw.dev/oauth-volume-uid";
+const OAUTH_PHASE_ANNOTATION = "openclaw.dev/oauth-phase";
 const HARNESS_WORKSPACE_SIZE = "40Gi";
 type WorkspaceRole = "agent" | "gateway";
 const HARNESS_WORKSPACE_CATEGORIES = Object.freeze([
@@ -979,6 +991,8 @@ function harnessModelAuthentication(configuration: OpenClawConfigurationDocument
 
 export class KubernetesComputeDriver implements ComputeDriver {
   readonly discoverHarnessModels = discoverHarnessModels;
+  readonly startHarnessDeviceAuthorization = startHarnessDeviceAuthorization;
+  readonly pollHarnessDeviceAuthorization = pollHarnessDeviceAuthorization;
 
   requiresStoppedPredecessors(revision: AgentRevision): boolean {
     return revision.harness.mode === "dedicated";
@@ -1433,6 +1447,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       !auth ||
       (auth.method !== "api_key" &&
         auth.method !== "codex_pat" &&
+        auth.method !== "oauth" &&
         auth.method !== "chatgpt_service_account" &&
         auth.method !== "credential_source") ||
       (embedded && auth.method !== "api_key")
@@ -2268,6 +2283,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("AgentRevision Harness execution topology is unsupported.");
     }
     const sandboxDriver = this.sandboxDriverForRevision(revision);
+    if (revision.harnessAuth.method === "oauth" && sandboxDriver !== undefined) {
+      throw new ConfigurationFailure("OAuth requires the Compute-owned dedicated Codex Harness.");
+    }
     if (sandboxDriver !== undefined && embedded) {
       throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
@@ -2542,6 +2560,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
         gatewayOwnership,
         gatewayNamespace,
       );
+    }
+    if (revision.harnessAuth.method === "oauth") {
+      if (!(await this.prepareOAuthCredentials(revision, context, namespace))) {
+        return result;
+      }
     }
     const deliveredHarnessAuth = await this.deliverHarnessAuth(
       admittedRevision,
@@ -3063,6 +3086,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new Error("The exact AgentRevision workspace node is not enrolled.");
     }
+    const activatedHarnessAuth =
+      revision.harnessAuth.method === "oauth"
+        ? await this.deliverHarnessAuth(admittedRevision, context, harnessAuth, namespace)
+        : harnessAuth;
     const renderAgentDeployment = (environment: Readonly<Record<string, string>>) =>
       this.deployment(
         revisionName,
@@ -3076,7 +3103,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         undefined,
         false,
         undefined,
-        harnessAuth,
+        activatedHarnessAuth,
         [],
         [],
         pluginRuntime,
@@ -3392,6 +3419,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (revision.harness.mode === "embedded") {
       return;
     }
+    if (revision.harnessAuth.method === "oauth") {
+      await this.removeOAuthBootstrap(revision, namespace);
+    }
     const sandboxDriver = this.sandboxDriverForRevision(revision);
     const computeOwnsWorkload = sandboxDriver?.provisionHarness === undefined;
     if (computeOwnsWorkload) {
@@ -3426,6 +3456,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     revision: AgentRevision,
     namespace: string,
     role: "agent" | "gateway",
+    workloadName?: string,
   ): Promise<void> {
     const clients = await this.clients();
     const signal = this.operationSignal();
@@ -3434,6 +3465,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       "openclaw.dev/agent": revision.agentId,
       "openclaw.dev/revision": revision.id,
       "openclaw.dev/workload-role": role,
+      ...(workloadName === undefined ? {} : { "app.kubernetes.io/name": workloadName }),
     };
     const timeoutMs =
       role === "gateway"
@@ -7364,7 +7396,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "Harness authentication delivery context is missing or invalid.",
       );
     }
-    if (auth.method === "api_key" || auth.method === "codex_pat") {
+    if (auth.method === "api_key" || auth.method === "codex_pat" || auth.method === "oauth") {
       const { backendRef, ...snapshot } = auth;
       if (
         !isDeepStrictEqual(snapshot, revision.harnessAuth) ||
@@ -7482,6 +7514,319 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return `harness-secrets-${sha256Hex(agentId, 12)}-${sha256Hex(revisionId, 12)}`;
   }
 
+  private oauthBootstrapName(revision: AgentRevision): string {
+    return `oauth-bootstrap-${sha256Hex(revision.agentId, 12)}-${sha256Hex(revision.id, 12)}`;
+  }
+
+  private async oauthSource(
+    revision: AgentRevision,
+    context: ComputeRevisionContext | undefined,
+  ): Promise<ManagedKubernetesObject<"Secret">> {
+    const auth = context?.harnessAuth;
+    if (auth?.method !== "oauth") {
+      throw new ConfigurationFailure("OAuth delivery context is missing.");
+    }
+    const source = await this.get("Secret", auth.backendRef.name, auth.backendRef.namespaceName);
+    if (
+      source === undefined ||
+      source.metadata.deletionTimestamp !== undefined ||
+      source.metadata.uid !== auth.backendRef.uid ||
+      source.metadata.annotations?.["openclaw.dev/namespace-id"] !== revision.namespaceId ||
+      source.metadata.annotations?.["openclaw.dev/secret-id"] !== auth.source.id ||
+      source.metadata.annotations?.["openclaw.dev/secret-driver-id"] !== auth.secretDriverId
+    ) {
+      throw new OwnershipFailure("OAuth credential source is unavailable or changed ownership.");
+    }
+    return source;
+  }
+
+  private async prepareOAuthCredentials(
+    revision: AgentRevision,
+    context: ComputeRevisionContext | undefined,
+    namespace: string,
+  ): Promise<boolean> {
+    const auth = context?.harnessAuth;
+    if (auth?.method !== "oauth" || this.options.runtime === undefined) {
+      throw new ConfigurationFailure("OAuth requires a managed Codex runtime.");
+    }
+    const ownership = this.pluginRuntimeOwnership(revision);
+    const volume = await this.getOwned(
+      "PersistentVolumeClaim",
+      this.harnessWorkspaceClaimName(revision.agentId),
+      namespace,
+      { namespaceId: revision.namespaceId, agentId: revision.agentId },
+    );
+    const volumeUid = required(volume?.metadata.uid, "OAuth durable volume UID");
+    let source = await this.oauthSource(revision, context);
+    const annotations = source.metadata.annotations ?? {};
+    const phase = annotations[OAUTH_PHASE_ANNOTATION];
+    if (
+      phase !== undefined &&
+      (!["claimed", "consumed"].includes(phase) ||
+        annotations[OAUTH_AGENT_ANNOTATION] !== revision.agentId ||
+        annotations[OAUTH_VOLUME_ANNOTATION] !== volumeUid)
+    ) {
+      throw new OwnershipFailure(
+        "OAuth credentials belong to another Agent or require reconnect after storage loss.",
+      );
+    }
+    let envelope: Record<string, unknown>;
+    try {
+      envelope =
+        asRecord(
+          JSON.parse(
+            Buffer.from(
+              required(source.data?.[auth.backendRef.key], "OAuth value"),
+              "base64",
+            ).toString("utf8"),
+          ),
+        ) ?? {};
+    } catch {
+      throw new ConfigurationFailure("OAuth credential source is invalid.");
+    }
+    if (
+      envelope.kind !== "harness_device_authorization" ||
+      envelope.version !== 1 ||
+      envelope.namespaceId !== revision.namespaceId ||
+      envelope.harnessId !== "codex" ||
+      (envelope.agentId !== undefined && envelope.agentId !== revision.agentId)
+    ) {
+      throw new OwnershipFailure("OAuth authorization does not match this Agent.");
+    }
+    if (phase === "consumed") {
+      if (
+        envelope.phase !== "consumed" ||
+        envelope.agentId !== revision.agentId ||
+        envelope.volumeUid !== volumeUid
+      ) {
+        throw new OwnershipFailure("Consumed OAuth credentials cannot be replaced; sign in again.");
+      }
+      await this.removeOAuthBootstrap(revision, namespace);
+      return true;
+    }
+    let nativeAuth: Record<string, unknown>;
+    try {
+      const credential = asRecord(JSON.parse(String(envelope.credential)));
+      nativeAuth = asRecord(credential?.auth) ?? {};
+      const tokens = asRecord(nativeAuth.tokens);
+      if (
+        envelope.phase !== "ready" ||
+        typeof envelope.expiresAt !== "string" ||
+        !(Date.parse(envelope.expiresAt) > Date.now()) ||
+        credential?.version !== 1 ||
+        credential.provider !== "codex" ||
+        credential.state !== "ready" ||
+        nativeAuth.auth_mode !== "chatgpt" ||
+        ![tokens?.id_token, tokens?.access_token, tokens?.refresh_token].every(isNonEmptyString)
+      ) {
+        throw new Error();
+      }
+    } catch {
+      throw new ConfigurationFailure("OAuth authorization is unavailable; sign in again.");
+    }
+    const clients = await this.clients();
+    const replaceSource = async (nextPhase: "claimed" | "consumed", value?: unknown) => {
+      try {
+        await this.request(
+          () =>
+            clients.core.replaceNamespacedSecret({
+              name: source.metadata.name,
+              namespace: auth.backendRef.namespaceName,
+              body: {
+                ...source,
+                metadata: {
+                  ...source.metadata,
+                  resourceVersion: required(
+                    source.metadata.resourceVersion,
+                    "OAuth source version",
+                  ),
+                  annotations: {
+                    ...source.metadata.annotations,
+                    [OAUTH_AGENT_ANNOTATION]: revision.agentId,
+                    [OAUTH_VOLUME_ANNOTATION]: volumeUid,
+                    [OAUTH_PHASE_ANNOTATION]: nextPhase,
+                  },
+                },
+                ...(value === undefined
+                  ? {}
+                  : {
+                      data: {
+                        [auth.backendRef.key]: Buffer.from(JSON.stringify(value)).toString(
+                          "base64",
+                        ),
+                      },
+                    }),
+              },
+            }),
+          { mutating: true },
+        );
+      } catch {
+        this.operationSignal()?.throwIfAborted();
+        throw new DependencyUnavailableError("OAuth credential handoff could not be confirmed.");
+      }
+      source = await this.oauthSource(revision, context);
+    };
+    if (phase === undefined) {
+      await replaceSource("claimed");
+    }
+    const name = this.oauthBootstrapName(revision);
+    const seed = await this.getOwned("Secret", name, namespace, ownership);
+    const data = { "auth.json": Buffer.from(JSON.stringify(nativeAuth)).toString("base64") };
+    if (seed !== undefined && !isDeepStrictEqual(seed.data, data)) {
+      throw new OwnershipFailure("OAuth bootstrap source changed during handoff.");
+    }
+    if (seed === undefined) {
+      try {
+        await this.request(
+          () =>
+            clients.core.createNamespacedSecret({
+              namespace,
+              body: {
+                ...this.manifest("v1", "Secret", name, ownership, namespace),
+                immutable: true,
+                type: "Opaque",
+                data,
+              },
+            }),
+          { mutating: true },
+        );
+      } catch {
+        this.operationSignal()?.throwIfAborted();
+        throw new DependencyUnavailableError("OAuth bootstrap delivery could not be confirmed.");
+      }
+    }
+    await this.reconcile(
+      this.oauthBootstrapDeployment(revision, namespace, volumeUid, auth.backendRef.uid),
+      ownership,
+      namespace,
+    );
+    const deployment = await this.getOwned("Deployment", name, namespace, ownership);
+    if (deployment === undefined || !this.deploymentReady(deployment)) {
+      return false;
+    }
+    // Native code cannot refresh until the original bundle has been irreversibly consumed.
+    await replaceSource("consumed", {
+      kind: "harness_device_authorization",
+      version: 1,
+      harnessId: "codex",
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+      phase: "consumed",
+      volumeUid,
+    });
+    await this.removeOAuthBootstrap(revision, namespace);
+    return true;
+  }
+
+  private oauthBootstrapDeployment(
+    revision: AgentRevision,
+    namespace: string,
+    volumeUid: string,
+    sourceUid: string,
+  ): ManagedKubernetesObject<"Deployment"> {
+    const name = this.oauthBootstrapName(revision);
+    const ownership = this.pluginRuntimeOwnership(revision);
+    const manifest = this.manifest("apps/v1", "Deployment", name, ownership, namespace);
+    const labels = {
+      ...manifest.metadata.labels,
+      "app.kubernetes.io/name": name,
+      "openclaw.dev/workload-role": "agent",
+    };
+    return {
+      ...manifest,
+      spec: {
+        replicas: 1,
+        strategy: { type: "Recreate" },
+        selector: { matchLabels: { "app.kubernetes.io/name": name } },
+        template: {
+          metadata: { labels },
+          spec: {
+            automountServiceAccountToken: false,
+            securityContext: {
+              runAsNonRoot: true,
+              runAsUser: 1000,
+              runAsGroup: 1000,
+              fsGroup: 1000,
+              seccompProfile: { type: "RuntimeDefault" },
+            },
+            volumes: [
+              {
+                name: "auth",
+                persistentVolumeClaim: {
+                  claimName: this.harnessWorkspaceClaimName(revision.agentId),
+                },
+              },
+              { name: "seed", secret: { secretName: name, defaultMode: 0o440 } },
+            ],
+            containers: [
+              {
+                name: "oauth-bootstrap",
+                image: this.options.images.agent,
+                imagePullPolicy: "IfNotPresent",
+                command: ["node", "-e"],
+                args: [CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT + "\nsetInterval(() => {}, 60000);"],
+                env: [
+                  { name: "CODEX_HOME", value: "/auth/codex-home" },
+                  { name: "OCE_CODEX_OAUTH_SOURCE_UID", value: sourceUid },
+                  { name: "OCE_CODEX_OAUTH_VOLUME_UID", value: volumeUid },
+                  { name: "OCE_CODEX_OAUTH_SEED_PATH", value: "/seed/auth.json" },
+                ],
+                volumeMounts: [
+                  { name: "auth", mountPath: "/auth" },
+                  { name: "seed", mountPath: "/seed", readOnly: true },
+                ],
+                readinessProbe: {
+                  exec: {
+                    command: [
+                      "node",
+                      "-e",
+                      'const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync("/auth/codex-home/.oce-oauth.json","utf8")); process.exit(r.sourceUid===process.env.OCE_CODEX_OAUTH_SOURCE_UID && r.volumeUid===process.env.OCE_CODEX_OAUTH_VOLUME_UID ? 0 : 1);',
+                    ],
+                  },
+                  periodSeconds: 2,
+                },
+                resources: this.options.resources.agent,
+                securityContext: {
+                  allowPrivilegeEscalation: false,
+                  readOnlyRootFilesystem: true,
+                  capabilities: { drop: ["ALL"] },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  private async removeOAuthBootstrap(revision: AgentRevision, namespace: string): Promise<void> {
+    const name = this.oauthBootstrapName(revision);
+    const ownership = this.pluginRuntimeOwnership(revision);
+    const deployment = await this.getOwned("Deployment", name, namespace, ownership);
+    if (deployment !== undefined) {
+      const clients = await this.clients();
+      await this.request(
+        () =>
+          clients.apps.deleteNamespacedDeployment({
+            name,
+            namespace,
+            body: {
+              preconditions: {
+                uid: required(deployment.metadata.uid, "OAuth bootstrap UID"),
+                resourceVersion: required(
+                  deployment.metadata.resourceVersion,
+                  "OAuth bootstrap version",
+                ),
+              },
+            },
+          }),
+        { mutating: true },
+      );
+    }
+    await this.waitForRevisionPodsToTerminate(revision, namespace, "agent", name);
+    await this.deleteOwnedNamespacedResource("Secret", name, ownership, namespace);
+  }
+
   private async deliverHarnessAuth(
     revision: AgentRevision,
     context: ComputeRevisionContext | undefined,
@@ -7493,6 +7838,28 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const auth = context?.harnessAuth;
     if (auth === undefined) {
       throw new ConfigurationFailure("Resolved Harness authentication is required.");
+    }
+    if (auth.method === "oauth") {
+      const source = await this.oauthSource(revision, context);
+      if (
+        source.metadata.annotations?.[OAUTH_PHASE_ANNOTATION] !== "consumed" ||
+        source.metadata.annotations?.[OAUTH_AGENT_ANNOTATION] !== revision.agentId
+      ) {
+        throw new OwnershipFailure("OAuth credential handoff is incomplete.");
+      }
+      prepared = {
+        ...prepared,
+        environment: [
+          ...prepared.environment,
+          {
+            name: "OCE_CODEX_OAUTH_VOLUME_UID",
+            value: required(
+              source.metadata.annotations[OAUTH_VOLUME_ANNOTATION],
+              "OAuth volume UID",
+            ),
+          },
+        ],
+      };
     }
     for (const environment of prepared.environment) {
       const ref = environment.valueFrom?.secretKeyRef;
@@ -7959,6 +8326,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
         persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(agentId) },
       });
       volumeMounts.push(...this.harnessWorkspaceVolumeMounts());
+      if (harnessAuth?.loginMode === "oauth") {
+        // Deliberate P0 scope: native Codex owns refresh on this private disk;
+        // OCE cannot refresh, recover a lost bundle, or share it after handoff.
+        // TODO(token-broker): Replace this handoff with broker-managed custody.
+        // Token brokerage is separate work in progress, not part of this launch.
+        volumes.push({
+          name: HARNESS_AUTH_VOLUME,
+          persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(agentId) },
+        });
+        volumeMounts.push({
+          name: HARNESS_AUTH_VOLUME,
+          mountPath: "/home/node/.codex",
+          subPath: "codex-home",
+        });
+      }
     }
     if (dedicated && role === "gateway") {
       // This is the logical workspace key; file access goes through the paired node.

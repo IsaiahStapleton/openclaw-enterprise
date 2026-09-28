@@ -43,6 +43,24 @@ const RuntimeFailureIdentifier = Type.String({
   pattern: "^[A-Za-z0-9._~:@-]{1,64}$",
 });
 
+export const AgentDeviceAuthorizationResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        source: SecretReference,
+        status: Type.Union([Type.Literal("pending"), Type.Literal("ready")]),
+        verificationUrl: Type.String({ format: "uri" }),
+        userCode: Type.String(),
+        expiresAt: Timestamp,
+        intervalSeconds: Type.Integer({ minimum: 1 }),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
 export const AgentModelListResponse = Type.Object(
   {
     data: Type.Array(

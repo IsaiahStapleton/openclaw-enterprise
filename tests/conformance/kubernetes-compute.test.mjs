@@ -41,18 +41,17 @@ const apiKeyAuth = {
 
 function authContext(revision, namespace = kubernetesGatewayNamespaceName(tenant.id)) {
   return {
-    harnessAuth:
-      revision.harnessAuth.method === "api_key" || revision.harnessAuth.method === "codex_pat"
-        ? {
-            ...revision.harnessAuth,
-            backendRef: {
-              namespaceName: namespace,
-              name: "occ-model-key",
-              key: "value",
-              uid: "model-secret-uid",
-            },
-          }
-        : revision.harnessAuth,
+    harnessAuth: ["api_key", "codex_pat", "oauth"].includes(revision.harnessAuth.method)
+      ? {
+          ...revision.harnessAuth,
+          backendRef: {
+            namespaceName: namespace,
+            name: "occ-model-key",
+            key: "value",
+            uid: "model-secret-uid",
+          },
+        }
+      : revision.harnessAuth,
   };
 }
 
@@ -7384,6 +7383,142 @@ function workspaceSetupFixture(embedded, runtime = true) {
   const context = { ...authContext(revision), workspaceSetup: setup };
   return { driver, revision, namespace, objects, records, state, setup, context };
 }
+
+test("Kubernetes OAuth handoff consumes the source before native startup and reuses private storage", async () => {
+  const { driver, revision, namespace, objects, records, state, context } =
+    workspaceSetupFixture(false);
+  revision.harnessAuth = { ...apiKeyAuth, method: "oauth" };
+  context.harnessAuth = authContext(revision).harnessAuth;
+  const sourceKey = `Secret:${context.harnessAuth.backendRef.namespaceName}:occ-model-key`;
+  const source = objects.get(sourceKey);
+  source.metadata.annotations = {
+    "openclaw.dev/namespace-id": tenant.id,
+    "openclaw.dev/secret-id": apiKeyAuth.source.id,
+    "openclaw.dev/secret-driver-id": apiKeyAuth.secretDriverId,
+  };
+  source.data.value = Buffer.from(
+    JSON.stringify({
+      kind: "harness_device_authorization",
+      version: 1,
+      actorId: "admin",
+      namespaceId: tenant.id,
+      harnessId: "codex",
+      phase: "ready",
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      credential: JSON.stringify({
+        version: 1,
+        provider: "codex",
+        state: "ready",
+        auth: {
+          auth_mode: "chatgpt",
+          tokens: {
+            id_token: "test-id",
+            access_token: "test-access",
+            refresh_token: "test-refresh",
+          },
+        },
+      }),
+    }),
+  ).toString("base64");
+
+  // Only the trusted seed writer may run while OCE still holds a usable bundle.
+  assert.equal((await driver.prepareRevision(revision, context)).ready, false);
+  assert.equal(objects.get(sourceKey).metadata.annotations["openclaw.dev/oauth-phase"], "claimed");
+  const bootstrap = [...objects.values()].find(
+    ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("oauth-bootstrap-"),
+  );
+  assert.ok(bootstrap);
+  assert.equal(bootstrap.spec.template.spec.automountServiceAccountToken, false);
+  assert.equal(
+    records.some(
+      ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("agent-"),
+    ),
+    false,
+  );
+
+  await assert.rejects(
+    driver.prepareRevision(
+      { ...revision, agentId: `${revision.agentId}-other` },
+      { harnessAuth: context.harnessAuth },
+    ),
+    /OAuth credentials belong to another Agent/,
+  );
+
+  // Transport reports the seed writer ready; production preparation must clear the source first.
+  state.ready = true;
+  assert.equal((await driver.prepareRevision(revision, context)).ready, true);
+  const consumed = objects.get(sourceKey);
+  const envelope = JSON.parse(Buffer.from(consumed.data.value, "base64"));
+  assert.equal(envelope.phase, "consumed");
+  assert.equal(envelope.agentId, revision.agentId);
+  assert.equal(envelope.credential, undefined);
+  const consumeIndex = records.findIndex(
+    ({ kind, metadata }) =>
+      kind === "Secret" && metadata.annotations?.["openclaw.dev/oauth-phase"] === "consumed",
+  );
+  const launchIndex = records.findIndex(
+    ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("agent-"),
+  );
+  assert.ok(consumeIndex >= 0 && consumeIndex < launchIndex);
+  assert.equal(
+    [...objects.values()].some(({ metadata }) => metadata.name.startsWith("oauth-bootstrap-")),
+    false,
+  );
+  const harness = records[launchIndex];
+  const pod = harness.spec.template.spec;
+  const native = pod.containers[0];
+  assert.equal(native.env.find(({ name }) => name === "CODEX_LOGIN_MODE").value, "oauth");
+  assert.equal(
+    native.env.some(({ name }) => ["CODEX_ACCESS_TOKEN", "OPENAI_API_KEY"].includes(name)),
+    false,
+  );
+  const authMount = native.volumeMounts.find(({ mountPath }) => mountPath === "/home/node/.codex");
+  assert.equal(authMount.subPath, "codex-home");
+  const claimName = pod.volumes.find(({ name }) => name === authMount.name).persistentVolumeClaim
+    .claimName;
+  assert.equal(
+    envelope.volumeUid,
+    objects.get(`PersistentVolumeClaim:${namespace}:${claimName}`).metadata.uid,
+  );
+  const gateway = records.find(
+    ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("gateway-"),
+  );
+  assert.equal(
+    gateway.spec.template.spec.volumes.some(({ name }) => name === authMount.name),
+    false,
+  );
+
+  // A later revision has no usable OCE bundle: it selects the same durable native generation.
+  const later = { ...revision, id: `${revision.id}-next`, revision: revision.revision + 1 };
+  const previousWrites = records.length;
+  assert.equal((await driver.prepareRevision(later, context)).ready, true);
+  assert.equal(
+    records
+      .slice(previousWrites)
+      .some(({ metadata }) => metadata.name.startsWith("oauth-bootstrap-")),
+    false,
+  );
+  const laterHarness = records
+    .slice(previousWrites)
+    .find(({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("agent-"));
+  assert.equal(
+    laterHarness.spec.template.spec.volumes.find(({ name }) => name === authMount.name)
+      .persistentVolumeClaim.claimName,
+    claimName,
+  );
+
+  // Losing/replacing the volume must fail closed; the consumed source cannot restore stale tokens.
+  objects.get(`PersistentVolumeClaim:${namespace}:${claimName}`).metadata.uid =
+    "replacement-volume";
+  await assert.rejects(
+    driver.prepareRevision(later, context),
+    /require reconnect after storage loss/,
+  );
+  assert.equal(
+    [...objects.values()].some(({ metadata }) => metadata.name.startsWith("oauth-bootstrap-")),
+    false,
+  );
+});
 
 for (const embedded of [true, false]) {
   test(`Kubernetes ${embedded ? "embedded" : "dedicated"} setup stays private and retains only its completion guard`, async () => {

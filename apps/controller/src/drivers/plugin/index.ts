@@ -386,7 +386,12 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
   }
 
   async discoverCatalog(
-    input: { readonly accessToken?: string; readonly cursor?: string; readonly q?: string },
+    input: {
+      readonly accessToken?: string;
+      readonly credential?: { readonly kind: "oauth"; readonly value: string };
+      readonly cursor?: string;
+      readonly q?: string;
+    },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     if (this.catalogSource === "openai-curated") {
@@ -404,21 +409,15 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
         setup: CURATED_SETUP,
       };
     }
-    if (input.accessToken === undefined) {
-      throw new PluginDiscoveryError("credentials_rejected");
-    }
-    return discoverHostedPlugins(
-      {
-        accessToken: input.accessToken,
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-        ...(input.q === undefined ? {} : { q: input.q }),
-      },
-      signal,
-    );
+    return discoverHostedPlugins(input, signal);
   }
 
   async getCatalogPlugin(
-    input: { readonly accessToken?: string; readonly pluginId: string },
+    input: {
+      readonly accessToken?: string;
+      readonly credential?: { readonly kind: "oauth"; readonly value: string };
+      readonly pluginId: string;
+    },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry> {
     if (this.catalogSource === "openai-curated") {
@@ -428,10 +427,7 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
       }
       return this.catalog([entry])[0]!;
     }
-    if (input.accessToken === undefined) {
-      throw new PluginDiscoveryError("credentials_rejected");
-    }
-    return getHostedPlugin({ accessToken: input.accessToken, pluginId: input.pluginId }, signal);
+    return getHostedPlugin(input, signal);
   }
 
   constructor(

@@ -1794,6 +1794,63 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 
 }
 `;
 
+export const CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT = String.raw`
+try {
+const fs = require("node:fs");
+const path = require("node:path");
+const directory = process.env.CODEX_HOME;
+const expected = {
+  sourceUid: process.env.OCE_CODEX_OAUTH_SOURCE_UID,
+  volumeUid: process.env.OCE_CODEX_OAUTH_VOLUME_UID,
+};
+if (!directory || !expected.sourceUid || !expected.volumeUid) {
+  throw new Error("OAuth bootstrap identity is missing.");
+}
+const authPath = path.join(directory, "auth.json");
+const receiptPath = path.join(directory, ".oce-oauth.json");
+const validAuth = (auth) => auth?.auth_mode === "chatgpt" &&
+  [auth.tokens?.id_token, auth.tokens?.access_token, auth.tokens?.refresh_token]
+    .every((value) => typeof value === "string" && value.trim().length > 0);
+fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+let receipt;
+if (fs.existsSync(receiptPath)) {
+  receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+}
+if (receipt?.sourceUid === expected.sourceUid) {
+  if (receipt.volumeUid !== expected.volumeUid ||
+    !validAuth(JSON.parse(fs.readFileSync(authPath, "utf8")))) {
+    throw new Error("OAuth runtime credentials require reconnect.");
+  }
+} else {
+  const auth = JSON.parse(fs.readFileSync(process.env.OCE_CODEX_OAUTH_SEED_PATH, "utf8"));
+  if (!validAuth(auth)) {
+    throw new Error("OAuth bootstrap credentials are invalid.");
+  }
+  const writeJson = (target, value) => {
+    const temporary = target + ".bootstrap";
+    const descriptor = fs.openSync(temporary, "w", 0o600);
+    try {
+      fs.writeFileSync(descriptor, JSON.stringify(value));
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    fs.renameSync(temporary, target);
+  };
+  writeJson(authPath, auth);
+  writeJson(receiptPath, expected);
+  const descriptor = fs.openSync(directory, "r");
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+} catch {
+  throw new Error("OAuth bootstrap could not initialize private credentials.");
+}
+`;
+
 export const AGENT_RUNTIME_ENTRYPOINT = String.raw`
 const { createHash } = require("node:crypto");
 const { mkdirSync, mkdtempSync, rmSync } = require("node:fs");
@@ -1819,6 +1876,10 @@ if (loginMode === "api_key") {
 } else if (loginMode === "chatgpt_service_account") {
   if (!nonempty(accessToken) || !nonempty(workspaceId) || apiKey !== undefined) {
     throw new Error("Codex service-account authentication configuration is invalid.");
+  }
+} else if (loginMode === "oauth") {
+  if (apiKey !== undefined || accessToken !== undefined || workspaceId !== undefined) {
+    throw new Error("Codex OAuth authentication configuration is invalid.");
   }
 } else {
   throw new Error("Codex authentication mode is missing or unsupported.");
@@ -1846,16 +1907,35 @@ const loginArguments = loginMode === "api_key"
       "--with-access-token",
     ];
 let login;
-for (let attempt = 0; attempt < 3; attempt++) {
-  login = spawnSync("codex", loginArguments, {
-    input: loginMode === "api_key" ? apiKey : accessToken,
-    encoding: "utf8",
-    stdio: ["pipe", "ignore", "pipe"],
-    timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
-  });
-  // Access-token login validates the same credential remotely before saving it.
-  // A cold-node network timeout may recover; refusals and model calls are not retried.
-  if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") break;
+if (loginMode === "oauth") {
+  try {
+    const fs = require("node:fs");
+    const receipt = JSON.parse(fs.readFileSync(process.env.CODEX_HOME + "/.oce-oauth.json", "utf8"));
+    const auth = JSON.parse(fs.readFileSync(process.env.CODEX_HOME + "/auth.json", "utf8"));
+    const valid = receipt.sourceUid === process.env.OCE_CODEX_OAUTH_SOURCE_UID &&
+      receipt.volumeUid === process.env.OCE_CODEX_OAUTH_VOLUME_UID &&
+      typeof receipt.sourceUid === "string" && typeof receipt.volumeUid === "string" &&
+      auth.auth_mode === "chatgpt" &&
+      [auth.tokens?.id_token, auth.tokens?.access_token, auth.tokens?.refresh_token]
+        .every((value) => typeof value === "string" && value.trim().length > 0);
+    login = { status: valid ? 0 : 1 };
+  } catch {
+    login = { status: 1 };
+  }
+} else {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    login = spawnSync("codex", loginArguments, {
+      input: loginMode === "api_key" ? apiKey : accessToken,
+      encoding: "utf8",
+      stdio: ["pipe", "ignore", "pipe"],
+      timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+    });
+    // Access-token login validates the same credential remotely before saving it.
+    // A cold-node network timeout may recover; refusals and model calls are not retried.
+    if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") {
+      break;
+    }
+  }
 }
 if (login.status !== 0 || login.error) {
   holdFailedAuthentication("login", "LOGIN_FAILED");
@@ -1970,6 +2050,7 @@ const child = spawn(
     "shell_environment_policy.experimental_use_profile=false",
     "-c",
     "shell_environment_policy.set.PATH=" + JSON.stringify(process.env.PATH ?? ""),
+    ...(loginMode === "oauth" ? ["-c", "cli_auth_credentials_store=file"] : []),
     "app-server",
     "--listen",
     "ws://0.0.0.0:" + process.env.APP_SERVER_PORT,
