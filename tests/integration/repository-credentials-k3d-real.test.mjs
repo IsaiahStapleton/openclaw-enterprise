@@ -305,6 +305,8 @@ function installedRepositoryJourney(mode, profile = "git-full") {
     assert.equal((await observe("GET", `git/ref/heads/${branch}`, undefined, 404)).status, 404);
     let agent;
     let workerPod;
+    let workerImage;
+    let brokerImageId;
     let revision;
     let gateway;
     let attempt;
@@ -442,8 +444,29 @@ function installedRepositoryJourney(mode, profile = "git-full") {
             p.status.conditions?.some((c) => c.type === "Ready" && c.status === "True"),
         );
         assert.ok(pod, `${component} must be installed and Ready`);
-        const container = pod.spec.containers.find((c) => c.name === component);
-        assert.ok(container);
+        // The recovery chart runs the worker as a restartable init container;
+        // the current chart runs it as an ordinary container.
+        const matches = [
+          ...(pod.spec.containers ?? [])
+            .filter((c) => c.name === component)
+            .map((container) => ({
+              container,
+              kind: "container",
+              statuses: pod.status.containerStatuses,
+            })),
+          ...(pod.spec.initContainers ?? [])
+            .filter((c) => c.name === component)
+            .map((container) => ({
+              container,
+              kind: "initContainer",
+              statuses: pod.status.initContainerStatuses,
+            })),
+        ];
+        assert.equal(matches.length, 1, `${component} must appear in exactly one container list`);
+        const { container, kind, statuses } = matches[0];
+        if (component === "api") {
+          assert.equal(kind, "container");
+        }
         assert.equal(container.image, images.controller);
         assert.ok(
           !(container.env ?? []).some((e) => /OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN/.test(e.name)),
@@ -455,10 +478,23 @@ function installedRepositoryJourney(mode, profile = "git-full") {
         );
         if (component === "worker") {
           workerPod = pod;
+          if (kind === "initContainer") {
+            assert.equal(container.restartPolicy, "Always");
+          }
+          const workerStatus = statuses?.find((status) => status.name === "worker");
+          assert.equal(workerStatus?.ready, true, "worker container must be ready");
+          assert.ok(workerStatus.imageID, "worker image ID must be observed");
+          workerImage = { kind, imageId: workerStatus.imageID };
           assert.equal(
             pod.spec.containers.find((c) => c.name === "repository-credentials")?.image,
             images.credentials,
           );
+          const brokerStatus = pod.status.containerStatuses?.find(
+            (status) => status.name === "repository-credentials",
+          );
+          assert.equal(brokerStatus?.ready, true, "repository broker container must be ready");
+          assert.ok(brokerStatus.imageID, "repository broker image ID must be observed");
+          brokerImageId = brokerStatus.imageID;
         }
       }
       // Sidecar readiness alone cannot prove the worker sees the shared socket:
@@ -906,10 +942,8 @@ function installedRepositoryJourney(mode, profile = "git-full") {
         versions,
         runtimeImageId: gateway.status.containerStatuses.find((status) => status.name === "gateway")
           ?.imageID,
-        workerImageIds: workerPod.status.containerStatuses.map((status) => ({
-          name: status.name,
-          imageID: status.imageID,
-        })),
+        workerImage,
+        brokerImageId,
       });
       const sessionKey = `agent:main:repository-proof-${f.suffix}`;
       const checkout = `${workspace}/${repository.split("/")[1]}`;

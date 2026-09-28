@@ -138,8 +138,11 @@ Preparation verifies the supplied registry digests against Docker, imports the
 selected platform images into the disposable cluster, and supplies kubeconfig and
 context. Docker archive import can produce a different platform-manifest digest:
 retain the private preparation state and record its source references, host image
-IDs and imported references alongside the observed Pod image IDs. This local
-import does not prove that a production registry serves an identical manifest;
+IDs and imported references alongside the separately observed worker and broker
+Pod image IDs. The worker image comes from its actual container status, including
+restartable init-container status in the recovery chart. Agent-stop disposal is
+not evidence of graceful broker shutdown or recovery after forced termination.
+This local import does not prove that a production registry serves an identical manifest;
 verify production pull and deployed image identity separately. Preparation also
 installs the pinned Envoy Gateway and cert-manager controllers. Dedicated
 setup enables the production Helm private route and CA, admits only the observed
