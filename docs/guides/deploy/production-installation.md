@@ -65,14 +65,10 @@ run `docker login <registry-host>` using your approved credentials; for private
 ECR, follow [ECR authentication](eks.md#authenticate-the-image-builder-to-ecr).
 Keep any registry and platform exports from that step.
 
-The runtime must include the channel plugins its Agents enable, with their
-runtime dependencies available from a fresh home directory. The standard recipe
-packages Slack and Codex. Verify plugin loading and the gateway's supported
-Codex app-server version before publishing; use the
-[runtime image checks](../../../deploy/runtime/README.md#verify-the-local-image).
-Use the same verified runtime image for both slots unless you have separately
-verified the gateway/Codex image pair. Runtime package installation at gateway
-startup is not part of this deployment procedure.
+The commands below push candidate images; verify them before installation. Stop
+on failure and retain the build metadata. The standard runtime packages Slack and Codex. Use the same verified runtime for both
+slots unless you have separately verified the gateway/Codex image pair. Runtime
+package installation at gateway startup is not supported.
 
 ```bash
 # Build from a clean checkout.
@@ -81,30 +77,31 @@ export OCC_IMAGE_REPOSITORY="${OCC_IMAGE_REPOSITORY:-$OCC_IMAGE_REGISTRY/your-te
 export OCC_IMAGE_TAG="$(git rev-parse HEAD)"
 export OCC_IMAGE_PLATFORM="${OCC_IMAGE_PLATFORM:-linux/amd64}"
 export NODE_BASE_IMAGE='docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584'
+OCC_IMAGE_METADATA="$(mktemp -d)"
 
 docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
+  --metadata-file "$OCC_IMAGE_METADATA/controller.json" \
   --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
   --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
   --label "org.opencontainers.image.revision=$OCC_IMAGE_TAG" \
   -t "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" .
 docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" \
+  --metadata-file "$OCC_IMAGE_METADATA/runtime.json" \
   --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
+  --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
   -f deploy/runtime/Dockerfile \
   -t "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" .
 
-CONTROLLER_DIGEST="$(docker buildx imagetools inspect \
-  "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" \
-  --format '{{json .Manifest}}' | yq -p=json -r '.digest')"
-RUNTIME_DIGEST="$(docker buildx imagetools inspect \
-  "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" \
-  --format '{{json .Manifest}}' | yq -p=json -r '.digest')"
+CONTROLLER_DIGEST="$(yq -p=json -e -r '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' "$OCC_IMAGE_METADATA/controller.json")"
+RUNTIME_DIGEST="$(yq -p=json -e -r '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' "$OCC_IMAGE_METADATA/runtime.json")"
 export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
 export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
 ```
 
-After both builds and digest lookups succeed, retain the digests for YAML
-configuration. Configure private registry pull credentials for control-plane
-and tenant Pods; builder login does not authenticate nodes.
+Before installation, run the [image checks](../../testing/images.md#check-published-images)
+against these exact digests on a native host for each target architecture; all checks must pass
+without skips. Use these digests in YAML. Configure private registry pull
+credentials for control-plane and tenant Pods; builder login does not authenticate nodes.
 
 ## Configure the Installation
 

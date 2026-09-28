@@ -24,13 +24,12 @@ GitHub permissions, or hosted publication. Without the selector the test skips.
 
 ### Check published images
 
-On a `linux/amd64` or `linux/arm64` host, follow [Use published images](../guides/deploy/production-installation.md#use-published-images)
-to authenticate to private GHCR and export `CONTROLLER_IMAGE` and `RUNTIME_IMAGE`.
-Docker pulls the variant matching the host. These commands check that variant;
-they do not test both architectures in one invocation. Run from the repository
-root with the [local test prerequisites](local.md).
-To reproduce the published release's checks, use its recorded source revision;
-when validating source changes, build images from that checkout instead.
+On a `linux/amd64` or `linux/arm64` host, select the immutable
+`CONTROLLER_IMAGE` and `RUNTIME_IMAGE` exports from [Use published images](../guides/deploy/production-installation.md#use-published-images)
+or [Build and publish production images](../guides/deploy/production-installation.md#build-and-publish-production-images).
+Use the source revision that produced the images. Docker pulls the variant
+matching the host; run these checks on a native host for each target architecture.
+Run from the repository root with the [local test prerequisites](local.md).
 
 ```bash
 docker pull "$CONTROLLER_IMAGE"
@@ -42,11 +41,11 @@ OCC_TEST_RUNTIME_IMAGE="$RUNTIME_IMAGE" \
     tests/integration/repository-runtime-volume.test.mjs
 ```
 
-All three image suites must run without skips. If the registry denies a pull, check
-the account's package access and token scope; successful `git clone` alone does not
-establish `read:packages` token scope. These checks verify the release images,
-not unbuilt changes in the working tree. Source CI continues to build the
-revision it tests.
+All three image suites must run without skips before installation. Use these same
+digest references in the Installation; rebuilding or changing them requires new
+checks. If GHCR denies a pull, check the account's package access and token scope;
+successful `git clone` alone does not establish `read:packages` token scope.
+These checks verify the selected images, not unbuilt changes in the working tree.
 
 ### Build images from the checkout
 
