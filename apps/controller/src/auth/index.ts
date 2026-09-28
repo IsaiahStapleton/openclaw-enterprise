@@ -5,6 +5,7 @@ import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { APIError, betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { splitSetCookieHeader } from "better-auth/cookies";
+import { hashPassword } from "better-auth/crypto";
 import { memoryAdapter, type MemoryDB } from "better-auth/adapters/memory";
 import { apiKey } from "@better-auth/api-key";
 import type { ApiKey } from "@better-auth/api-key/types";
@@ -37,6 +38,8 @@ import { AdmissionFailure } from "../admission/admission-verifier.ts";
 
 export const OCC_BETTER_AUTH_ISSUER_PREFIX = "occ:installation:";
 export const OCC_AUTH_COOKIE_PREFIX = "openclaw_occ";
+const LOCAL_PASSWORD_MIN_LENGTH = 12;
+const LOCAL_PASSWORD_MAX_LENGTH = 128;
 export const OCC_SHARED_AUTH_COOKIE_PREFIX = "openclaw_occ_shared";
 export const OCC_SERVICE_KEY_HEADER = "x-api-key";
 const SERVICE_KEY_CONFIG = "occ-service";
@@ -659,8 +662,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       enabled: true,
       disableSignUp: true,
       requireEmailVerification: false,
-      minPasswordLength: 12,
-      maxPasswordLength: 128,
+      minPasswordLength: LOCAL_PASSWORD_MIN_LENGTH,
+      maxPasswordLength: LOCAL_PASSWORD_MAX_LENGTH,
     },
     trustedOrigins: [options.baseURL],
     rateLimit: { enabled: humanLogin === undefined },
@@ -984,6 +987,41 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   };
 }
 
+/** Startup and stopped maintenance share this one-way activation path. */
+export async function activateRecoveryAccount(
+  persistence: PostgresHumanAuthentication,
+  iamDriver: IAMDriver,
+  installationId: string,
+  recoveryUserId: string,
+): Promise<void> {
+  const principal = await iamDriver.lookupIdentity({
+    issuer: betterAuthIssuer(installationId),
+    subject: recoveryUserId,
+  });
+  if (!principal || principal.kind !== "principal") {
+    throw new Error("Recovery Principal is unavailable.");
+  }
+  const decision = await iamDriver.authorize({
+    principalId: principal.id,
+    action: "administer",
+    resource: { kind: "installation", id: installationId },
+  });
+  if (!decision.allowed || decision.driverId !== iamDriver.id) {
+    throw new Error("Recovery account must administer the Installation.");
+  }
+  await persistence.activateRecovery(recoveryUserId, principal.id);
+}
+
+/** Hash a local password exactly as the controller's password sign-in verifies it. */
+export async function hashLocalPassword(password: string): Promise<string> {
+  if (password.length < LOCAL_PASSWORD_MIN_LENGTH || password.length > LOCAL_PASSWORD_MAX_LENGTH) {
+    throw new Error(
+      `Passwords must contain ${LOCAL_PASSWORD_MIN_LENGTH} to ${LOCAL_PASSWORD_MAX_LENGTH} characters.`,
+    );
+  }
+  return hashPassword(password);
+}
+
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
@@ -1024,22 +1062,12 @@ export async function createPostgresControllerAuth(
   // Finish static auth initialization before the one-way activation transaction.
   await auth.auth.$context;
   if (github !== undefined) {
-    const principal = await iamDriver!.lookupIdentity({
-      issuer: betterAuthIssuer(options.installationId),
-      subject: github.recoveryUserId,
-    });
-    if (!principal || principal.kind !== "principal") {
-      throw new Error("Recovery Principal is unavailable.");
-    }
-    const decision = await iamDriver!.authorize({
-      principalId: principal.id,
-      action: "administer",
-      resource: { kind: "installation", id: options.installationId },
-    });
-    if (!decision.allowed || decision.driverId !== iamDriver!.id) {
-      throw new Error("Recovery account must administer the Installation.");
-    }
-    await persistence!.activateRecovery(github.recoveryUserId, principal.id);
+    await activateRecoveryAccount(
+      persistence!,
+      iamDriver!,
+      options.installationId,
+      github.recoveryUserId,
+    );
   }
   return {
     ...auth,
