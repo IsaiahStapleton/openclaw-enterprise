@@ -31,6 +31,7 @@ export const AuthApiKeySwitch = {
 };
 export const AuthRuntime = { ...story("authRuntime"), name: "Operator-managed authentication" };
 export const AuthService = { ...story("authService"), name: "ChatGPT service account" };
+export const AuthOAuthReconnect = story("authOAuthReconnect");
 
 export const AuthSecretReplacement = {
   ...story("authSecretReplacement"),
