@@ -230,12 +230,14 @@ after its reference dependencies are cleared; see [Delete](#delete).
 
 Delete only unreferenced Secrets. This example uses an authenticated human
 session from [service-key recovery](../../guides/deploy/service-keys.md#sign-in-as-a-human-administrator)
-at the configured `OCC_URL`:
+at the configured `OCC_URL`. Set `OCC_ORIGIN` to the configured Console origin
+from `OCC_AUTH_BASE_URL` (scheme, host, and optional port only):
 
 ```bash
 curl -fsS \
   "$OCC_URL/namespaces/$NAMESPACE_ID/secrets/$SECRET_ID" \
   -X DELETE \
+  -H "Origin: $OCC_ORIGIN" \
   -b "$OCC_SESSION_COOKIE_JAR"
 ```
 
