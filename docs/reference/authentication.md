@@ -88,12 +88,16 @@ File existence alone is not proof of successful initialization.
 
 ## Browser request origin
 
-Browser sign-in and sign-out requests must use the origin configured by
-`OCC_AUTH_BASE_URL`. An explicit untrusted or malformed `Origin` is rejected
-before password verification or session revocation. A request marked
-`Sec-Fetch-Site: cross-site` without an Origin is also rejected. Rejection leaves
-an existing session intact. Command-line clients that send neither browser
-header keep the documented sign-in/sign-out flow.
+Controller API requests that use a session cookie for a mutation must include an
+`Origin` matching the origin of `OCC_AUTH_BASE_URL`. This includes sign-out. A missing,
+malformed, or different origin is rejected with `403`. If `Sec-Fetch-Site` is
+present, it must be `same-origin`. Safe reads do not require an Origin.
+
+Sign-in rejects an explicitly untrusted or malformed Origin and also rejects
+`Sec-Fetch-Site: cross-site` when Origin is missing. Command-line sign-in may
+omit both headers. For later cookie-authenticated mutations, command-line clients
+must provide the configured Origin. An explicitly supplied service API key does
+not require Origin, and an invalid key never falls back to a session cookie.
 
 ## Session lifecycle
 
@@ -205,15 +209,15 @@ returns to `/console/?authError=github` without automatic retry.
 Enabling this profile applies the same admission rules to password and GitHub
 sessions: an eight-hour absolute lifetime without refresh, current account and
 method checks, and required audit before a cookie is released or, on logout,
-cleared. Existing sessions without the profile's account/method binding are
+cleared. Older sessions without account/method binding are
 rejected; users sign in again. Activation is one-way: removing GitHub
 configuration fails startup, and the database refuses sessions from older
-binaries. To return to password-only sign-in, [deactivate](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in) with the API stopped.
+binaries. Returning to password-only sign-in needs [stopped maintenance](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in).
 
 The recovery user must already have a usable local password, the exact
 Installation Principal, and native IAM Installation `administer` authority.
 The designation is fixed, and account disablement refuses this user. Keep its
-password in protected operator custody; out-of-band database or policy changes
+password in protected custody; out-of-band database or policy changes
 can still remove recovery. Password login does not depend on GitHub availability.
 
 Account reads and mutations require a human session, exact `Origin`, and
@@ -221,7 +225,7 @@ Installation `administer`; service keys are refused. State locks actor and targe
 accounts, rechecks the actor session, and requires the target's `expectedVersion`. A concurrent logout or revocation can invalidate
 the actor; a stale target version returns `409 RESOURCE_CONFLICT`.
 
-Send `{"expectedVersion":1}` with the version just read for these operations:
+Send the version just read, such as `{"expectedVersion":1}`:
 
 | Operation                                                  | Effect                                                                                     |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
@@ -231,8 +235,8 @@ Send `{"expectedVersion":1}` with the version just read for these operations:
 | `POST /api/auth/accounts/:userId/methods/:methodId/detach` | Removes one attached external identity and its sessions; password methods return `409`.    |
 
 These operations serialize with session issuance and leave IAM grants unchanged.
-An unknown administrative COMMIT returns `503 DEPENDENCY_UNAVAILABLE` with an explicit unknown-outcome message;
-it never reports success or triggers automatic replay or compensation. An
+An unknown administrative COMMIT returns `503 DEPENDENCY_UNAVAILABLE` with an
+unknown-outcome message, never success, automatic replay, or compensation. An
 account read shows present state, **not a receipt**: the original transaction may
 still be running. Resolve uncertainty before choosing a new action and version.
 Password reset, deletion, and recovery replacement remain deferred.

@@ -277,6 +277,10 @@
       "path": "tests/conformance/postgres-transaction-commit.test.mjs"
     },
     {
+      "path": "tests/conformance/postgres-transaction-unknown-commit.test.mjs",
+      "expectedTests": ["lost COMMIT response returns unknown without waiting for a hung rollback"]
+    },
+    {
       "path": "tests/integration/native-admin-access.test.mjs",
       "expectedTests": [
         "native admin status requires exact Agent administer and reports lifecycle availability",
@@ -381,6 +385,12 @@
     },
     {
       "path": "tests/integration/repository-runtime-materialization.test.mjs"
+    },
+    {
+      "path": "tests/integration/kubernetes-peer-status.test.mjs",
+      "expectedTests": [
+        "real peer-status HTTPS transport authenticates its revision and verifies server trust"
+      ]
     },
     {
       "path": "tests/integration/runtime-assets.test.mjs"
