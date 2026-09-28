@@ -443,8 +443,17 @@ test("activation refuses a missing or foreign workspace node before changing the
       },
     },
     networking: {
-      async readNamespacedNetworkPolicy({ name }) {
-        return structuredClone(policies.find((policy) => policy.metadata.name === name));
+      async readNamespacedNetworkPolicy({ name, namespace: target }) {
+        return structuredClone(
+          (target === namespace
+            ? policies
+            : driver.networkPolicies({ namespaceId: tenant.id }, { name: target, plane: "control" })
+          ).find((policy) => policy.metadata.name === name),
+        );
+      },
+      // Preparation re-applies the namespace policies it just observed; activation never does.
+      async patchNamespacedNetworkPolicy({ body }) {
+        return structuredClone(body);
       },
     },
   });
@@ -7807,11 +7816,14 @@ test("Kubernetes workspace setup redacts backend failures and refuses foreign pr
     ({ kind, metadata }) => kind === "Secret" && metadata.name.startsWith("workspace-setup-"),
   );
   secret.metadata.annotations["openclaw.dev/agent-id"] = "another-agent";
-  const before = fixture.records.length;
+  // Namespace NetworkPolicies are re-applied on every preparation; nothing else may be written.
+  const workloadWrites = () =>
+    fixture.records.filter(({ kind }) => kind !== "NetworkPolicy").length;
+  const before = workloadWrites();
   await assert.rejects(fixture.driver.prepareRevision(fixture.revision, fixture.context), {
     message: "Workspace setup private delivery is unavailable.",
   });
-  assert.equal(fixture.records.length, before);
+  assert.equal(workloadWrites(), before);
 });
 
 for (const embedded of [true, false]) {
@@ -8774,3 +8786,86 @@ test("ordinary network profile selectors remain detached across caller results",
   assert.equal(second.spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
   assert.equal(second.spec.podSelector.matchLabels["openclaw.dev/agent"], revision.agentId);
 });
+
+// Before the explicit profile, allow-dns selected every Pod and allow-gateway-ingress selected
+// only the workload role. Namespace policies are created while a namespace provisions, so an
+// upgrade must re-apply them to namespaces that are already Active.
+function preUpgradeNamespacePolicies(driver, target) {
+  return driver.networkPolicies({ namespaceId: tenant.id }, target).map((policy) => {
+    const legacy = structuredClone(policy);
+    legacy.metadata.uid = `${target.name}-${policy.metadata.name}-legacy-uid`;
+    legacy.metadata.resourceVersion = "1";
+    if (policy.metadata.name === "allow-dns") {
+      legacy.spec.podSelector = {};
+    } else if (policy.metadata.name === "allow-gateway-ingress") {
+      legacy.spec.podSelector = {
+        matchLabels: withProfile(policy.spec.podSelector.matchLabels, undefined),
+      };
+    }
+    return legacy;
+  });
+}
+
+for (const embedded of [true, false]) {
+  test(`${embedded ? "embedded" : "dedicated"} preparation narrows pre-upgrade namespace policies`, async () => {
+    const { driver, revision, namespace, objects, records, context } =
+      workspaceSetupFixture(embedded);
+    const control = kubernetesGatewayNamespaceName(tenant.id);
+    const targets = [
+      { name: namespace, plane: "execution" },
+      ...(embedded ? [] : [{ name: control, plane: "control" }]),
+    ];
+    assert.deepEqual(
+      driver.networkPolicies({ namespaceId: tenant.id }, targets[0]).map((p) => p.metadata.name),
+      // deleteOwnedNamespaceResources removes these exact names; the narrowing renamed none.
+      ["default-deny", "allow-dns", "allow-gateway-ingress"],
+    );
+    for (const target of targets) {
+      for (const legacy of preUpgradeNamespacePolicies(driver, target)) {
+        objects.set(`NetworkPolicy:${target.name}:${legacy.metadata.name}`, legacy);
+      }
+    }
+    const clients = await driver.apiClients;
+    const patch = clients.networking.patchNamespacedNetworkPolicy;
+    const requests = [];
+    clients.networking.patchNamespacedNetworkPolicy = async (request, ...rest) => {
+      requests.push(structuredClone(request));
+      return patch(request, ...rest);
+    };
+
+    // A namespace that never finished provisioning is still reported unready, without writes.
+    const missing = objects.get(`NetworkPolicy:${namespace}:allow-dns`);
+    objects.delete(`NetworkPolicy:${namespace}:allow-dns`);
+    assert.equal((await driver.prepareRevision(revision, context)).ready, false);
+    assert.equal(records.length, 0);
+    assert.equal(requests.length, 0);
+    objects.set(`NetworkPolicy:${namespace}:allow-dns`, missing);
+
+    await driver.prepareRevision(revision, context);
+    for (const target of targets) {
+      for (const name of ["allow-dns", "allow-gateway-ingress"]) {
+        const applied = requests.filter(
+          ({ namespace: patched, body }) => patched === target.name && body.metadata.name === name,
+        );
+        assert.equal(applied.length, 1, `${target.name}/${name}`);
+        const [request] = applied;
+        assert.equal(request.fieldManager, "openclaw-enterprise-compute");
+        assert.equal(request.force, false);
+        assert.equal(
+          request.body.spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL],
+          ORDINARY_PROFILE,
+          `${target.name}/${name}`,
+        );
+        const stored = objects.get(`NetworkPolicy:${target.name}:${name}`);
+        assert.equal(stored.metadata.uid, `${target.name}-${name}-legacy-uid`);
+        assert.equal(stored.spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+      }
+      const deny = objects.get(`NetworkPolicy:${target.name}:default-deny`);
+      assert.deepEqual(deny.spec.podSelector, {});
+    }
+    assert.equal(
+      requests.some(({ namespace: patched }) => patched === control),
+      !embedded,
+    );
+  });
+}
