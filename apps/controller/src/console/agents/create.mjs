@@ -699,9 +699,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   });
   model.addEventListener("change", () => updateModelConfiguration());
   harness.addEventListener("change", () => {
-    if (harness.value === "codex") {
-      mode.value = "dedicated";
-    }
+    // Embedded is OpenClaw's default because dedicated OpenClaw needs a provisioning
+    // Sandbox Driver; operators opt into it through Execution mode.
+    mode.value = harness.value === "codex" ? "dedicated" : "embedded";
     // Service account tokens cannot authenticate OpenClaw; require a new API key.
     if (!binding && harness.value === "openclaw" && authMethod.value === "codex_pat") {
       authMethod.value = "api_key";
@@ -1508,11 +1508,11 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     const selected = values.agents?.defaults?.model;
     const primaryModel = typeof selected === "string" ? selected : selected?.primary;
     const fallbackPrefixes =
-      mode.value === "dedicated" ? ["openai/", "codex/"] : [`${nativeProvider.value}/`];
+      harness.value === "codex" ? ["openai/", "codex/"] : [`${nativeProvider.value}/`];
     // Bound credentials must keep their provider; dedicated Presets support both native prefixes.
     const primaryPrefixes = hasBoundModelCredential
       ? fallbackPrefixes
-      : [mode.value === "dedicated" ? "codex/" : `${nativeProvider.value}/`];
+      : [harness.value === "codex" ? "codex/" : `${nativeProvider.value}/`];
     if (
       (!binding || hasBoundModelCredential) &&
       !primaryPrefixes.some((prefix) => primaryModel === `${prefix}${model.value.trim()}`)
