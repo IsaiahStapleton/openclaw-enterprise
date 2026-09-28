@@ -437,8 +437,8 @@ The published controller lacks GitHub sign-in; [build a compatible image](#build
 Follow the [single-controller profile](../../reference/authentication.md#github-sign-in-for-existing-accounts)
 during stopped maintenance.
 
-Activation is one-way. Account creation stays frozen afterwards
-(`409 RESOURCE_CONFLICT`), and there is no rollback other than keeping the
+Activation is one-way. The database refuses sessions from older images,
+and there is no rollback other than keeping the
 `OCC_AUTH_GITHUB_*` environment set. The Helm chart cannot yet carry those
 variables: out-of-band values vanish on the next `helm upgrade`, and the
 controller then fails startup.
@@ -447,7 +447,7 @@ Before activation, set `agentNativeAdmin.enabled: false` in protected Helm value
 and rerender. The API environment must set `OCC_AGENT_NATIVE_ADMIN_ENABLED=false`
 and omit `OCC_AUTH_COOKIE_DOMAIN`; keep workspace routing enabled.
 
-1. Provision password accounts and grants; verify password recovery. Register
+1. Verify password recovery. Register
    the GitHub App callback and protect its **client ID** (not App ID) and secret
    as the [reference](../../reference/authentication.md#github-sign-in-for-existing-accounts) describes.
 2. Close ingress. Disable automatic restarts, rollouts, and policy/provisioning
@@ -455,8 +455,8 @@ and omit `OCC_AUTH_COOKIE_DOMAIN`; keep workspace routing enabled.
    chart, scale `deployment/openclaw-enterprise-api` to zero and wait for its
    Pods to disappear. If exclusion cannot be established, stop here.
 3. Start only the compatible binary with complete protected configuration.
-   Startup enrolls existing accounts and invalidates unbound sessions before
-   serving. After a failure, keep ingress closed.
+   Startup enrolls qualifying accounts, logs any it skips, and invalidates
+   unbound sessions before serving. After a failure, keep ingress closed.
 4. Through restricted access, verify password recovery, new session admission,
    the expected Namespaces and existing Agent detail, and rejected stale sessions.
    Reopen ingress only after these checks, retaining one serving controller.

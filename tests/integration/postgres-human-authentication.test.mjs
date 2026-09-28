@@ -126,36 +126,111 @@ test(
       return store.changeAccount(userId, operation, admin, target.version);
     }
 
+    const authContext = await auth.auth.$context;
+    async function preparedAccount(label) {
+      return {
+        id: randomUUID(),
+        email: `${label}-${suffix}@example.test`,
+        name: label,
+        passwordHash: await authContext.password.hash(password),
+        credentialId: randomUUID(),
+      };
+    }
+    async function rowCounts(userId, principalId) {
+      const { rows } = await pool.query(
+        `SELECT (SELECT count(*) FROM occ."user" WHERE id=$1)::int AS users,
+          (SELECT count(*) FROM occ.account WHERE user_id=$1)::int AS methods,
+          (SELECT count(*) FROM occ.iam_identities WHERE id=$2)::int AS principals,
+          (SELECT count(*) FROM occ.iam_access_bindings WHERE identity_subject_id=$2)::int AS bindings,
+          (SELECT count(*) FROM occ.human_authentication_accounts WHERE user_id=$1)::int AS enrolled`,
+        [userId, principalId],
+      );
+      return rows[0];
+    }
+    // A password user without a Principal, as an interrupted legacy creation leaves.
+    const orphan = await auth.createAccount({ email: `orphan-${suffix}@example.test`, password });
+    const early = await preparedAccount("early");
+    const earlySeed = auth.principalSeed(early, { roleId });
+
     await context.test(
-      "activation rejects an incomplete existing population without partial enrollment",
+      "provisioning before activation writes the account and its enrolment together",
       async () => {
-        const incomplete = await auth.createAccount({
-          email: `incomplete-${suffix}@example.test`,
-          password,
+        await persistence.provisionPasswordAccount(early, earlySeed);
+        assert.deepEqual(await rowCounts(early.id, earlySeed.principal.id), {
+          users: 1,
+          methods: 1,
+          principals: 1,
+          bindings: 1,
+          enrolled: 1,
         });
-        await assert.rejects(persistence.activateRecovery(recoveryUser.id, recoveryPrincipal.id), {
-          name: "ScopeViolationError",
-        });
-        assert.equal(await persistence.recoveryDesignation(), undefined);
-        assert.equal(
-          (await pool.query("SELECT count(*)::int AS count FROM occ.human_authentication_accounts"))
-            .rows[0].count,
-          0,
-        );
-        await pool.query('DELETE FROM occ."user" WHERE id=$1', [incomplete.id]);
+        assert.equal((await persistence.snapshotPassword(early.email)).user.id, early.id);
       },
     );
+
+    const fenceMessage =
+      /Human sign-in is activated; sessions require a controller that enforces authentication bindings/;
+    async function insertUnboundSession(userId) {
+      const record = sessionRecord(userId);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // The deferred fence admits the statement and decides at COMMIT.
+        await client.query(
+          `INSERT INTO occ.session (id, token, user_id, created_at, updated_at, expires_at)
+           VALUES ($1,$2,$3,$4,$4,$5)`,
+          [record.id, record.token, userId, record.createdAt, record.expiresAt],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+      return record;
+    }
+    async function sessionCount(userId) {
+      return (
+        await pool.query("SELECT count(*)::int AS count FROM occ.session WHERE user_id=$1", [
+          userId,
+        ])
+      ).rows[0].count;
+    }
+
+    await context.test("unbound application sessions commit before activation", async () => {
+      const unbound = await insertUnboundSession(person.id);
+      assert.equal(
+        (await pool.query("SELECT id FROM occ.session WHERE id=$1", [unbound.id])).rowCount,
+        1,
+      );
+      // The same unguarded composition used after activation below signs in here.
+      const before = await sessionCount(person.id);
+      await auth.auth.api.signInEmail({ body: { email: person.email, password } });
+      assert.equal(await sessionCount(person.id), before + 1);
+    });
 
     await context.test(
       "activation is fixed and removes legacy sessions; recovery remains usable",
       async () => {
-        await persistence.activateRecovery(recoveryUser.id, recoveryPrincipal.id);
-        await peer.activateRecovery(recoveryUser.id, recoveryPrincipal.id);
+        assert.deepEqual(
+          await persistence.activateRecovery(recoveryUser.id, recoveryPrincipal.id),
+          { skipped: [orphan.id] },
+        );
+        assert.deepEqual(await peer.activateRecovery(recoveryUser.id, recoveryPrincipal.id), {
+          skipped: [],
+        });
         assert.equal(
           (await pool.query("SELECT count(*)::int AS count FROM occ.human_authentication_accounts"))
             .rows[0].count,
-          2,
+          3,
         );
+        const activation = (await state.transact((unit) => unit.audit.list())).find(
+          (event) => event.action === "authentication.recovery.activate",
+        );
+        assert.deepEqual(activation.details.skipped, [orphan.id]);
+        // The skipped account stays unenrolled and is refused like a bad password.
+        assert.equal(await persistence.snapshotPassword(orphan.email), undefined);
+        assert.equal((await persistence.snapshotPassword(early.email)).user.id, early.id);
         await signInAdmin();
         assert.deepEqual(await persistence.recoveryDesignation(), {
           userId: recoveryUser.id,
@@ -191,6 +266,92 @@ test(
         assert.equal((await peer.currentSession(session.token)).user.id, recoveryUser.id);
         await peer.revokeSession(session.token);
         assert.equal(await persistence.currentSession(session.token), undefined);
+      },
+    );
+
+    await context.test(
+      "after activation unbound sessions fail at COMMIT and bound issuance still commits",
+      async () => {
+        const before = await sessionCount(person.id);
+        await assert.rejects(insertUnboundSession(person.id), fenceMessage);
+        assert.equal(await sessionCount(person.id), before);
+        const snapshot = await persistence.snapshotPassword(person.email);
+        const issued = await persistence.issueSession(snapshot.proof, sessionRecord(person.id));
+        assert.equal(await sessionCount(person.id), before + 1);
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT 1 FROM occ.human_authentication_sessions WHERE session_id=$1 AND user_id=$2",
+              [issued.id, person.id],
+            )
+          ).rowCount,
+          1,
+        );
+        assert.equal((await peer.currentSession(issued.token)).user.id, person.id);
+        await peer.revokeSession(issued.token);
+      },
+    );
+
+    await context.test("an older controller image cannot sign in after activation", async () => {
+      // The unguarded composition is what a pre-activation image runs: plain
+      // Better Auth sessions over the same database, with no binding rows.
+      const before = await sessionCount(person.id);
+      await assert.rejects(auth.auth.api.signInEmail({ body: { email: person.email, password } }));
+      assert.equal(await sessionCount(person.id), before);
+    });
+
+    await context.test(
+      "provisioning after activation is atomic, enrolled and rejects duplicate email",
+      async () => {
+        const created = await preparedAccount("provisioned");
+        const createdSeed = auth.principalSeed(created, { roleId });
+        await peer.provisionPasswordAccount(created, createdSeed);
+        assert.deepEqual(await rowCounts(created.id, createdSeed.principal.id), {
+          users: 1,
+          methods: 1,
+          principals: 1,
+          bindings: 1,
+          enrolled: 1,
+        });
+        const snapshot = await persistence.snapshotPassword(created.email);
+        assert.equal(snapshot.proof.principalId, createdSeed.principal.id);
+        const session = await persistence.issueSession(snapshot.proof, sessionRecord(created.id));
+        assert.equal((await peer.currentSession(session.token)).user.id, created.id);
+        assert.equal((await persistence.readAccount(created.id, admin)).version, 1);
+
+        const duplicate = { ...(await preparedAccount("duplicate")), email: created.email };
+        await assert.rejects(
+          persistence.provisionPasswordAccount(
+            duplicate,
+            auth.principalSeed(duplicate, { roleId }),
+          ),
+          { name: "UserAlreadyExistsError" },
+        );
+
+        const failing = await preparedAccount("failing");
+        const failingSeed = auth.principalSeed(failing, { roleId });
+        const failingState = new PostgresPlatformState(
+          transportPool(pool, async (client, sql, parameters) => {
+            if (sql.includes("INSERT INTO occ.human_authentication_accounts")) {
+              throw Object.assign(new Error("Simulated enrolment failure"), { code: "08006" });
+            }
+            return client.query(sql, parameters);
+          }),
+        );
+        await assert.rejects(
+          new PostgresHumanAuthentication(
+            failingState,
+            installation.id,
+            issuer,
+          ).provisionPasswordAccount(failing, failingSeed),
+        );
+        assert.deepEqual(await rowCounts(failing.id, failingSeed.principal.id), {
+          users: 0,
+          methods: 0,
+          principals: 0,
+          bindings: 0,
+          enrolled: 0,
+        });
       },
     );
 
@@ -629,6 +790,82 @@ test(
             (event) =>
               event.action === "authentication.account.disable" &&
               event.actorId === recoveryPrincipal.id,
+          ),
+        );
+      },
+    );
+
+    await context.test("enable restores a disabled account under a new version", async () => {
+      const disabled = await persistence.readAccount(person.id, admin);
+      assert.equal(disabled.disabled, true);
+      await persistence.changeAccount(person.id, "enable", admin, disabled.version);
+      const enabled = await peer.readAccount(person.id, admin);
+      assert.equal(enabled.disabled, false);
+      assert.equal(enabled.version, disabled.version + 1);
+      assert.ok(await persistence.snapshotPassword(person.email));
+      await assert.rejects(peer.changeAccount(person.id, "enable", admin, enabled.version), {
+        name: "ResourceConflictError",
+      });
+      await assert.rejects(peer.changeAccount(person.id, "enable", admin, disabled.version), {
+        name: "ResourceConflictError",
+      });
+    });
+
+    await context.test(
+      "detach removes only an external identity and invalidates its sessions",
+      async () => {
+        const external = await persistence.snapshotExternal(providerId, subject);
+        const session = await persistence.issueSession(external.proof, sessionRecord(person.id));
+        const target = await persistence.readAccount(person.id, admin);
+        const credential = target.methods.find((method) => method.providerId === "credential");
+        const recoveryCredential = (await persistence.readAccount(recoveryUser.id, admin))
+          .methods[0];
+        for (const [userId, methodId] of [
+          [person.id, credential.methodId],
+          [recoveryUser.id, recoveryCredential.methodId],
+          [recoveryUser.id, external.proof.methodId],
+        ]) {
+          const version = (await persistence.readAccount(userId, admin)).version;
+          await assert.rejects(persistence.detachExternal(userId, methodId, admin, version), {
+            name: "ResourceConflictError",
+          });
+        }
+        await assert.rejects(
+          persistence.detachExternal(person.id, external.proof.methodId, admin, target.version - 1),
+          { name: "ResourceConflictError" },
+        );
+        assert.deepEqual(
+          await peer.detachExternal(person.id, external.proof.methodId, admin, target.version),
+          { methodId: external.proof.methodId, providerId },
+        );
+        const detached = await persistence.readAccount(person.id, admin);
+        assert.equal(detached.version, target.version + 1);
+        assert.deepEqual(
+          detached.methods.map((method) => method.methodId),
+          [credential.methodId],
+        );
+        assert.equal(await persistence.currentSession(session.token), undefined);
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT count(*)::int AS count FROM occ.human_authentication_sessions WHERE method_id=$1",
+              [external.proof.methodId],
+            )
+          ).rows[0].count,
+          0,
+        );
+        assert.equal(await persistence.snapshotExternal(providerId, subject), undefined);
+        await assert.rejects(
+          persistence.issueSession(external.proof, sessionRecord(person.id)),
+          /no longer current/,
+        );
+        assert.ok(await persistence.snapshotPassword(person.email));
+        const audits = await state.transact((unit) => unit.audit.list());
+        assert.ok(
+          audits.some(
+            (event) =>
+              event.action === "authentication.method.detach" &&
+              event.details.methodId === external.proof.methodId,
           ),
         );
       },

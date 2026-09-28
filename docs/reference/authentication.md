@@ -137,8 +137,8 @@ GitHub sign-in requires one serving controller, one Installation, PostgreSQL wit
 its restricted application role, native IAM, one GitHub App on github.com, and one
 canonical HTTPS Console origin with host-only cookies. Shared-cookie native
 administration, other session readers, rolling or mixed-version serving, and
-mutable Installation policy are unsupported. Keep bootstrap, seeding, account
-provisioning, external policy writers, and recovery-affecting changes stopped.
+mutable Installation policy are unsupported. Keep bootstrap, seeding, external
+policy writers, and recovery-affecting changes stopped.
 Native IAM's policy read remains separate from State's actor guard. Loopback
 development does not qualify deployed HTTPS.
 
@@ -146,9 +146,8 @@ HTTPS sessions use `__Host-openclaw_occ.session_token`, `Secure`, `HttpOnly`,
 `Path=/`, and no `Domain`, preventing sibling hosts from planting that cookie.
 Session reads, protected requests, and logout reject duplicate session cookies.
 
-Provision password accounts and explicit IAM grants before activation. Startup
-rejects unsupported or incomplete account populations. Activation enrolls existing
-password accounts; account creation then stays frozen (see
+Activation enrolls qualifying existing accounts and reports the rest, which cannot
+sign in. Creation continues and enrolls new accounts in the same transaction (see
 [Account provisioning](#account-provisioning)).
 Set all three API-process variables; partial configuration fails startup:
 
@@ -173,9 +172,9 @@ not restrict it. Login uses only [`GET /user`](https://docs.github.com/en/rest/u
 then discards tokens, expiry, and scope data. It performs no refresh, creates no
 repository grants, and gives no provider credentials to repository consumers or Agents.
 
-A new client ID requires reattachment under a new provider instance. Secret
-rotation preserves enrollment and invalidates pending attempts. Emails and login
-names are not identity keys.
+A new client ID requires reattachment under a new provider instance; then detach
+old methods by `methodId`. Secret rotation preserves enrollment and invalidates
+pending attempts. Emails and login names are not identity keys.
 
 A human Installation administrator reads `GET /api/auth/accounts/:userId`
 ([requirements](#session-and-recovery-controls)). Its no-store response
@@ -209,8 +208,9 @@ sessions: an eight-hour absolute lifetime without refresh, current account and
 method checks, and required audit before a cookie is released or, on logout,
 cleared. Existing sessions without the profile's account/method binding are
 rejected; users sign in again. Activation is one-way: removing GitHub
-configuration fails startup, and old binaries are unfenced and unsupported. There
-is no rollback other than keeping the `OCC_AUTH_GITHUB_*` environment set.
+configuration fails startup, and the database refuses sessions from older
+binaries. There is no rollback other than keeping the `OCC_AUTH_GITHUB_*`
+environment set.
 
 The recovery user must already have a usable local password, the exact
 Installation Principal, and native IAM Installation `administer` authority.
@@ -225,18 +225,19 @@ the actor; a stale target version returns `409 RESOURCE_CONFLICT`.
 
 Send `{"expectedVersion":1}` with the version just read for these operations:
 
-| Operation                                 | Effect                                                                                                                    |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/accounts/:userId/disable` | Disables the account and invalidates its sessions and pending authentication proofs; rejects the protected recovery user. |
-| `POST /api/auth/accounts/:userId/revoke`  | Invalidates all account sessions and pending proofs while preserving fresh sign-in, including recovery password sign-in.  |
+| Operation                                                  | Effect                                                                                     |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `POST /api/auth/accounts/:userId/disable`                  | Disables the account, invalidating sessions and pending proofs; refuses the recovery user. |
+| `POST /api/auth/accounts/:userId/enable`                   | Re-enables a disabled account; users sign in again.                                        |
+| `POST /api/auth/accounts/:userId/revoke`                   | Invalidates all account sessions and pending proofs; fresh sign-in still works.            |
+| `POST /api/auth/accounts/:userId/methods/:methodId/detach` | Removes one attached external identity and its sessions; password methods return `409`.    |
 
 These operations serialize with session issuance and leave IAM grants unchanged.
 An unknown administrative COMMIT returns `503 DEPENDENCY_UNAVAILABLE` with an explicit unknown-outcome message;
 it never reports success or triggers automatic replay or compensation. An
 account read shows present state, **not a receipt**: the original transaction may
 still be running. Resolve uncertainty before choosing a new action and version.
-Account reenablement, password reset, deletion, and recovery replacement remain
-deferred.
+Password reset, deletion, and recovery replacement remain deferred.
 
 The controller admits at most 30 password requests per minute with four active,
 and 60 GitHub start/callback requests per minute with eight active. Invalid
@@ -278,15 +279,13 @@ activity does not renew the console session.
 
 ## Account provisioning
 
-Before GitHub activation, `POST /api/auth/accounts` requires a human session and
-`administer` on the singleton Installation. After activation account creation is
-frozen: the endpoint returns `409 RESOURCE_CONFLICT` before any account or IAM
-write, and no other onboarding path exists yet. Provision accounts beforehand;
-using an old binary to bypass the freeze is unsupported.
+`POST /api/auth/accounts` requires a human session and `administer` on the
+singleton Installation, and stays available with GitHub sign-in enabled. One
+transaction writes the account, its Principal and grant, and its enrollment;
+attach GitHub afterwards with the attach operation.
 
-In the password-only profile, the endpoint creates a Better Auth account, its
-explicit IAM Principal, and an AccessBinding to an existing Role. The request must supply `roleId`; it cannot
-implicitly create a Role or infer a grant from the account's email or session.
+The request must supply the `roleId` of an existing Role; the endpoint cannot
+create a Role or infer a grant from the account's email or session.
 Creating an account does not sign it in or issue a session.
 
 A representative provisioning body is:

@@ -68,6 +68,7 @@ import {
   NamespaceNotReadyError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  UserAlreadyExistsError,
   type DeploymentStatusResult,
   type AgentProvisioningProgress,
   type ProvisionAgentInput,
@@ -80,6 +81,7 @@ import {
   normalizeSharedCookieDomain,
   OCC_SERVICE_KEY_HEADER,
   type ControllerAuth,
+  type PreparedAuthAccount,
 } from "./auth/index.ts";
 import { CONSOLE_CONTENT_SECURITY_POLICY, readConsoleAsset } from "./console-assets.ts";
 import {
@@ -151,9 +153,11 @@ export interface ControllerAppOptions {
   readonly nativeAdmin?: NativeAdminAccessConfig;
   readonly nativeAdminGatewayApiKey?: () => Promise<string>;
   readonly publicOrigin?: string;
+  /** Writes the prepared account with its Principal, bindings and enrolment atomically. */
   readonly provisionAuthAccount?: (
     seed: AuthPrincipalSeed,
     auditEvent: AuditEvent,
+    prepared: PreparedAuthAccount,
   ) => Promise<void>;
   readonly auditEventFactory?: AuditEventFactory;
   readonly logger?: FastifyBaseLogger;
@@ -3381,12 +3385,33 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         summary: "Disable a human account",
       },
       {
+        operationName: "enable",
+        path: "/api/auth/accounts/:userId/enable",
+        operationId: "enableAuthAccount",
+        summary: "Re-enable a disabled human account",
+      },
+      {
         operationName: "revoke",
         path: "/api/auth/accounts/:userId/revoke",
         operationId: "revokeAuthAccountSessions",
         summary: "Revoke all sessions for a human account",
       },
+      {
+        operationName: "detach",
+        path: "/api/auth/accounts/:userId/methods/:methodId/detach",
+        operationId: "detachAuthMethod",
+        summary: "Detach an external sign-in identity from an account",
+      },
     ] as const;
+    const methodParams = {
+      type: "object",
+      additionalProperties: false,
+      required: ["userId", "methodId"],
+      properties: {
+        userId: { type: "string", minLength: 1, maxLength: 200 },
+        methodId: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    };
     for (const { operationName, path, operationId, summary } of accountOperations) {
       const operation = {
         operationId,
@@ -3413,7 +3438,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             "x-openclaw-permissions": [
               { action: "administer", resourceKind: "installation", scope: "requested" },
             ],
-            params: accountParams,
+            params: operationName === "detach" ? methodParams : accountParams,
             body: {
               type: "object",
               additionalProperties: false,
@@ -3442,15 +3467,24 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         },
         async (request, reply) => {
           const context = contexts.get(request);
-          if (!context || !options.auth.attachGitHub || !options.auth.changeAccount) {
+          if (!context || !options.auth.readAccount || !options.auth.changeAccount) {
             throw dependencyUnavailable();
           }
           const actor = await humanAccountActor(request, operation, context);
           const { expectedVersion } = request.body as { expectedVersion: number };
           const { userId } = request.params as { userId: string };
           if (operationName === "github") {
+            if (!options.auth.attachGitHub || !options.auth.githubEnabled) {
+              throw failure(409, "RESOURCE_CONFLICT", "GitHub sign-in is not configured.");
+            }
             const { subject } = request.body as { subject: string };
             await options.auth.attachGitHub(userId, subject, actor, expectedVersion);
+          } else if (operationName === "detach") {
+            if (!options.auth.detachMethod) {
+              throw dependencyUnavailable();
+            }
+            const { methodId } = request.params as { methodId: string };
+            await options.auth.detachMethod(userId, methodId, actor, expectedVersion);
           } else {
             await options.auth.changeAccount(userId, operationName, actor, expectedVersion);
           }
@@ -3610,21 +3644,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           context,
         );
 
-        // TODO(human-account-provisioning): restore creation with acknowledged currentness enrollment.
-        if (options.auth.githubEnabled) {
-          throw failure(
-            409,
-            "RESOURCE_CONFLICT",
-            "Provision accounts before activating GitHub sign-in.",
-          );
-        }
-
-        const account = await options.auth.createAccount({
+        const prepared = await options.auth.prepareAccount({
           email,
           password,
           ...(name === undefined ? {} : { name }),
         });
-        const seed = options.auth.principalSeed(account, { roleId });
+        const seed = options.auth.principalSeed(prepared, { roleId });
         const auditEvent = event(
           createAuthAccountOperation,
           request,
@@ -3634,25 +3659,23 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           decision.evidence,
         );
         try {
-          await options.provisionAuthAccount(seed, auditEvent);
+          await options.provisionAuthAccount(seed, auditEvent, prepared);
         } catch (error) {
-          try {
-            await options.auth.deleteAccount(account);
-          } catch {
-            // The failed provisioning path still returns the original dependency error.
-          }
           throw error instanceof RequestFailure
             ? error
-            : error instanceof AuthAccountRoleNotFoundError
-              ? failure(
-                  400,
-                  "INVALID_REQUEST",
-                  "The request does not match the operation contract.",
-                )
-              : new DependencyUnavailableError(
-                  error instanceof Error ? error.message : "Auth account provisioning failed.",
-                );
+            : error instanceof UserAlreadyExistsError
+              ? failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.")
+              : error instanceof AuthAccountRoleNotFoundError
+                ? failure(
+                    400,
+                    "INVALID_REQUEST",
+                    "The request does not match the operation contract.",
+                  )
+                : new DependencyUnavailableError(
+                    error instanceof Error ? error.message : "Auth account provisioning failed.",
+                  );
         }
+        const account = prepared;
         reply.status(201).send({
           data: {
             id: account.id,

@@ -207,16 +207,12 @@ closed. Bearer credentials and caller-supplied identity headers are rejected.
 ### 5. Provision additional accounts
 
 `apps/controller/src/index.ts:createFastifyApp` permits an authorized human
-Installation administrator to create another account only before GitHub
-activation. The activated route and auth helper refuse creation before the first
-user/password/IAM write. This temporary freeze ends when the provisioning owner
-adds acknowledged currentness enrollment.
-
-The unconfigured password-only path creates a Better Auth user, then provisions
-its Principal, explicit existing-role binding, and audit through State. These are
-separate transactions; its existing cleanup on provisioning failure is not an
-atomic end-to-end rollback guarantee. Account creation issues no session and
-infers no grants.
+Installation administrator to create another account, with or without GitHub
+sign-in. `prepareAccount` validates and hashes the password without writing; the
+PostgreSQL composition then calls `provisionPasswordAccount`, which writes the
+user, password method, Principal, explicit existing-role binding, enrollment,
+and audit in one State transaction, so a failure leaves no partial account.
+Account creation issues no session and infers no grants.
 
 ## Debugging and Verification
 
