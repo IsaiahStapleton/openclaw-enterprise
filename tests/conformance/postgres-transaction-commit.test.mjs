@@ -231,7 +231,10 @@ test("observed client error during a resolved BEGIN prevents callback and later 
 test("an observed client error is preserved even with a server-looking code", async () => {
   const failure = Object.assign(new Error("client transport failure"), { code: "23514" });
   const p = protocol({ on: (listener) => listener(failure) });
-  await assert.rejects(p.state.transact(async () => 1), (error) => error === failure);
+  await assert.rejects(
+    p.state.transact(async () => 1),
+    (error) => error === failure,
+  );
   assert.deepEqual(p.calls, []);
   assert.equal(p.releases(), 1);
   assert.equal(p.hasTransportListener(), false);
@@ -309,7 +312,10 @@ test("observed client error during resolved COMMIT remains unknown", async () =>
       return { command: "COMMIT", rows: [], rowCount: 0 };
     },
   });
-  await assert.rejects(p.state.transact(async () => 1), PostgresCommitOutcomeUnknownError);
+  await assert.rejects(
+    p.state.transact(async () => 1),
+    PostgresCommitOutcomeUnknownError,
+  );
   assert.deepEqual(p.calls, ["BEGIN", "COMMIT"]);
   assert.equal(p.releases(), 1);
 });
@@ -323,7 +329,10 @@ test("observed client error during release after acknowledged COMMIT remains unk
     },
     removeListener: () => order.push("removeListener"),
   });
-  await assert.rejects(p.state.transact(async () => 1), PostgresCommitOutcomeUnknownError);
+  await assert.rejects(
+    p.state.transact(async () => 1),
+    PostgresCommitOutcomeUnknownError,
+  );
   assert.deepEqual(p.calls, ["BEGIN", "COMMIT"]);
   assert.deepEqual(order, ["release", "removeListener"]);
   assert.equal(p.releases(), 1);
