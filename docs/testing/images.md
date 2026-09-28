@@ -29,6 +29,23 @@ the images. Docker pulls the variant matching the host; run these checks on a
 native host for each target architecture. Run from the repository root with the
 [local test prerequisites](local.md).
 
+On each check host, authenticate Docker to the selected private registry with
+pull access to both repositories. The temporary Skopeo auth file used for
+[private image delivery](../guides/deploy/private-registry-images.md) does not
+authenticate Docker. For ECR, set `AWS_REGION` and `ECR_REGISTRY` to the target
+Region and registry, then run:
+
+```bash
+aws ecr get-login-password --region "$AWS_REGION" | \
+  docker login --username AWS --password-stdin "$ECR_REGISTRY"
+```
+
+ECR credentials expire; authenticate again if needed. For GHCR, follow
+[Use published images](../guides/deploy/production-installation.md#use-published-images).
+For another private registry, follow its Docker login procedure. Protect Docker
+credentials according to your registry policy. This login does not grant nodes
+pull access.
+
 For a current release or custom pair selected for installation, set the check-only
 variables from the immutable `CONTROLLER_IMAGE` and `RUNTIME_IMAGE` exports:
 
