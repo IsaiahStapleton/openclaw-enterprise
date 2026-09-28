@@ -15,41 +15,32 @@ Run from the repository root; retain protected files for
 
 ## Use published images
 
-To install, select a verified release or custom controller image supporting
+Install with a verified release or custom controller image supporting
 `catalogSource: openai-curated` and the
 [origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
-plus a compatible runtime. Export their immutable digests as `CONTROLLER_IMAGE`
-and `RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images).
+plus a compatible runtime. Export their digests as `CONTROLLER_IMAGE` and
+`RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images).
 
-The published controller supports the curated catalog but predates the origin
-check; no release meeting current production requirements has been verified for
-this guide. Use it only for image tests or workflows targeting its recorded source.
-Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
-matching-architecture startup checks and remote digest verification in
-[publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
-Their multi-platform indexes select the node variant. Publication does not
-establish production deployment readiness.
+The published pair from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
+startup checks and remote digest verification in
+[publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910)
+but predates the origin check. Use it only for image tests or workflows targeting
+that source; no release meeting current production requirements is verified here.
 
-Obtain read access to both GHCR packages. Authenticate with a GitHub personal
-access token **(classic)** with
-`read:packages`; authorize organization SSO if required. Replace the username
-below and enter the token at Docker's password prompt, never in the command. See
-[GitHub's registry authentication instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry).
+For historical [image tests](../../testing/images.md#check-published-images), obtain
+GHCR read access, log in with a classic personal access token with `read:packages`
+(SSO-authorized if required) at Docker's password prompt, never in the command
+([GitHub instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry)),
+and export the pair:
 
 ```bash
 docker login ghcr.io --username '<your-github-username>'
-```
-
-For historical [image tests](../../testing/images.md#check-published-images), export:
-
-```bash
 export HISTORICAL_CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
 export HISTORICAL_RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
 ```
 
 Configure approved pull credentials for **control-plane and tenant Pods**;
-`docker login` does not authenticate cluster nodes. To install, continue with the
-verified current pair.
+`docker login` does not authenticate cluster nodes.
 
 ## Build and publish production images
 
@@ -103,16 +94,15 @@ export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
 export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
 ```
 
-Continue only after both builds and digest lookups succeed. Retain their exports.
-Private registries need cluster/node pull credentials for control-plane and tenant Pods;
-`docker login` authenticates only the builder.
+Continue only after both builds and digest lookups succeed; retain their exports.
+Private registries need the same cluster/node pull credentials.
 
 ## Configure the Installation
 
 For a local trial, [build and import the images](local-operations.md#build-images-for-local-kubernetes)
 and set `OCC_INPUT_DIRECTORY` to the generated YAML directory. For registry-backed
 installs, [check the selected image digests](../../testing/images.md#check-published-images)
-on native hosts for their target architectures and retain their exports. Set shell
+and retain their exports. Set shell
 inputs before Kubernetes commands:
 
 ```bash
@@ -230,12 +220,12 @@ test "$BOOTSTRAP_CLAIM" = "$(yq e -r '.metadata.name' "$OCC_INPUT_DIRECTORY/boot
 Prepare these Secret inputs under `/secure/occ`, each containing one raw value
 without quotes or a variable assignment.
 
-| File                  | Contents and source                                                                                                                                                                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Obtain it from your database administrator or provider. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`.                   |
-| `occ-migration-url`   | Connection URL for a separate role allowed to apply schema migrations. It targets the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker. |
-| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set; the example mount path is `/etc/openclaw/database-ca/ca.pem`.                                                                |
-| `occ-auth-secret`     | A random secret used to sign and verify user sessions. Generate it once for this Installation with the command below, then retain it across redeployments. It is separate from the administrator password, service API key, and model-provider key.                             |
+| File                  | Contents and source                                                                                                                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Obtain it from your database administrator or provider. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`. |
+| `occ-migration-url`   | URL for a separate schema-migration role on the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker.                     |
+| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set; the example mount path is `/etc/openclaw/database-ca/ca.pem`.                                              |
+| `occ-auth-secret`     | Random session-signing secret. Generate it once with the command below and retain it across redeployments; it is separate from other credentials.                                                                                                             |
 
 Save both database URLs in protected files, replacing placeholders and preserving
 required TLS options. For managed PostgreSQL roots supplied through `database.caSecretName`,
