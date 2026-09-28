@@ -9,8 +9,34 @@ To deploy through the browser, see [Create and deploy Agents in the console](../
 
 ## Connect to your Installation
 
-From the root of a trusted OpenClaw Enterprise checkout, install `occ` on your
-Go binary path:
+For a published OCE version, download the binary matching your machine from
+the [GitHub Releases page](https://github.com/openclaw/openclaw-enterprise/releases).
+The assets are named `occ-v<version>-<os>-<arch>` for macOS (`darwin`) and Linux,
+on `amd64` or `arm64`. Download `SHA256SUMS` from the same release and compare
+the selected binary's SHA-256 before making it executable. Private repository
+downloads require GitHub access. For example, with the GitHub CLI:
+
+```bash
+export OCE_VERSION='v<release-version>'
+export OCC_ASSET="occ-${OCE_VERSION}-darwin-arm64" # Choose your OS and CPU.
+gh release download "$OCE_VERSION" \
+  --repo openclaw/openclaw-enterprise \
+  --pattern "$OCC_ASSET" --pattern SHA256SUMS
+expected="$(awk -v name="$OCC_ASSET" '$2 == name { print $1 }' SHA256SUMS)"
+test -n "$expected"
+actual="$(shasum -a 256 "$OCC_ASSET" | awk '{ print $1 }')"
+test "$actual" = "$expected"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "$OCC_ASSET" "$HOME/.local/bin/occ"
+"$HOME/.local/bin/occ" --version
+```
+
+Ensure `$HOME/.local/bin` is on `PATH`. On Linux, use
+`sha256sum "$OCC_ASSET"` in place of `shasum -a 256` if `shasum` is not
+installed. The printed CLI version should match the selected release.
+
+To build from a trusted source checkout instead, run this from its root to
+install `occ` on your Go binary path:
 
 ```bash
 go install ./cmd/occ
@@ -18,6 +44,8 @@ go install ./cmd/occ
 
 Ensure that directory is on `PATH`. To use the binary inside the checkout
 instead, run `pnpm cli:build` and substitute `./bin/occ` for `occ` below.
+`occ dev up` and `occ dev down` still require a source checkout even when the
+binary came from a GitHub Release.
 
 Set the endpoint and the service-key file supplied by your administrator or
 created during [bootstrap](../reference/authentication/service-api-keys.md#retrieve-the-bootstrap-service-key):
