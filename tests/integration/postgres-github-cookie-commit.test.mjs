@@ -215,6 +215,35 @@ test(
       1,
     );
 
+    // Headerless (CLI) sign-out on the humanLogin profile goes through
+    // runPrivateEndpoint's /oce/sign-out Origin synthesis. Main still accepts
+    // it; once #509 lands and sign-out requires a browser Origin, this flips
+    // to 403 and the synthesis branch goes away.
+    const headerlessLogin = await ordinary.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      payload: { email, password },
+    });
+    assert.equal(headerlessLogin.statusCode, 200, headerlessLogin.body);
+    const headerlessCookie = cookieHeaderFromSetCookie(headerlessLogin.headers["set-cookie"]);
+    const headerlessLogout = await ordinary.inject({
+      method: "POST",
+      url: "/api/auth/sign-out",
+      headers: { cookie: headerlessCookie },
+    });
+    assert.equal(headerlessLogout.statusCode, 200, headerlessLogout.body);
+    assert.notEqual(
+      headerlessLogout.headers["set-cookie"],
+      undefined,
+      "committed headerless logout clears the browser cookie",
+    );
+    assert.equal(
+      (
+        await ordinary.inject({ url: "/api/auth/session", headers: { cookie: headerlessCookie } })
+      ).json().data,
+      null,
+    );
+
     const adminLogin = await ordinary.inject({
       method: "POST",
       url: "/api/auth/sign-in/email",
