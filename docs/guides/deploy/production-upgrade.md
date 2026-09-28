@@ -238,6 +238,8 @@ After activation, do not roll back; fix forward. The database refuses sessions
 that the previous controller issues without a human sign-in binding, so it
 cannot sign anyone in, and existing sessions expire within 8 hours. Never run
 the previous and current controllers together.
+To roll back anyway, first return to password-only sign-in with
+[stopped maintenance](auth-maintenance.md#deactivate-github-sign-in).
 
 ## Current limits
 

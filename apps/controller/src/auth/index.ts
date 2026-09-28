@@ -5,6 +5,7 @@ import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { APIError, betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { splitSetCookieHeader } from "better-auth/cookies";
+import { hashPassword } from "better-auth/crypto";
 import { memoryAdapter, type MemoryDB } from "better-auth/adapters/memory";
 import { apiKey } from "@better-auth/api-key";
 import type { ApiKey } from "@better-auth/api-key/types";
@@ -17,7 +18,11 @@ import {
 } from "@openclaw-enterprise/iam";
 import {
   PostgresHumanAuthentication,
+  ScopeViolationError,
+  type HumanAuthenticationActivation,
+  type HumanAuthenticationActivationHooks,
   type HumanAuthenticationActor,
+  type HumanAuthenticationRecovery,
   type HumanAuthenticationAccount,
   type PostgresPool,
   type PostgresPlatformState,
@@ -45,6 +50,8 @@ import { AdmissionFailure } from "../admission/admission-verifier.ts";
 
 export const OCC_BETTER_AUTH_ISSUER_PREFIX = "occ:installation:";
 export const OCC_AUTH_COOKIE_PREFIX = "openclaw_occ";
+const LOCAL_PASSWORD_MIN_LENGTH = 12;
+const LOCAL_PASSWORD_MAX_LENGTH = 128;
 export const OCC_SHARED_AUTH_COOKIE_PREFIX = "openclaw_occ_shared";
 export const OCC_SERVICE_KEY_HEADER = "x-api-key";
 const SERVICE_KEY_CONFIG = "occ-service";
@@ -85,6 +92,8 @@ export interface PostgresControllerAuthOptions extends Omit<
   readonly state?: PostgresPlatformState;
   readonly iamDriver?: IAMDriver;
   readonly github?: GitHubLoginConfiguration;
+  /** Receives nonfatal startup conditions as structured log events. */
+  readonly onWarning?: (event: { readonly event: string; readonly message: string }) => void;
 }
 
 export interface AuthenticatedAccount {
@@ -117,6 +126,8 @@ export interface ControllerAuth {
   readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
   readonly githubEnabled: boolean;
+  /** Provider-instance key for GitHub identities; set only while GitHub sign-in is configured. */
+  readonly githubProviderId?: string;
   /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
   readonly activationSkipped?: readonly string[];
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
@@ -138,6 +149,18 @@ export interface ControllerAuth {
     actor: HumanAuthenticationActor,
     expectedVersion: number,
   ): Promise<void>;
+  readRecovery?(actor: HumanAuthenticationActor): Promise<HumanAuthenticationRecovery>;
+  replaceRecovery?(
+    userId: string,
+    principalId: string,
+    expectedCurrentUserId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<HumanAuthenticationRecovery & { changed: boolean }>;
+  enrolAccount?(
+    userId: string,
+    actor: HumanAuthenticationActor,
+  ): Promise<{ principalId: string; version: number; created: boolean }>;
   detachMethod?(
     userId: string,
     methodId: string,
@@ -757,8 +780,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       enabled: true,
       disableSignUp: true,
       requireEmailVerification: false,
-      minPasswordLength: 12,
-      maxPasswordLength: 128,
+      minPasswordLength: LOCAL_PASSWORD_MIN_LENGTH,
+      maxPasswordLength: LOCAL_PASSWORD_MAX_LENGTH,
     },
     trustedOrigins: [options.baseURL],
     rateLimit: { enabled: humanLogin === undefined },
@@ -1197,10 +1220,58 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   };
 }
 
+/**
+ * Startup and stopped maintenance share this one-way activation path. GitHub sign-in
+ * requires the native IAM Driver, so both authorize through it. The configured recovery
+ * user id only seeds the first activation: once a designation exists (possibly moved by an
+ * online replacement) it is kept, and `seedIgnored` reports a differing seed. Every call
+ * re-checks the actual holder. Refused preconditions throw ScopeViolationError.
+ */
+export async function activateRecoveryAccount(
+  persistence: PostgresHumanAuthentication,
+  iamDriver: NativeIAMDriver,
+  installationId: string,
+  seedRecoveryUserId: string,
+  hooks?: HumanAuthenticationActivationHooks,
+): Promise<HumanAuthenticationActivation & { recoveryUserId: string; seedIgnored: boolean }> {
+  const existing = await persistence.recoveryDesignation();
+  const seedIgnored = existing !== undefined && existing.userId !== seedRecoveryUserId;
+  const recoveryUserId = seedIgnored ? existing.userId : seedRecoveryUserId;
+  // Its Principal must still administer the Installation; activateRecovery re-checks
+  // enrolment, enabled state and the password.
+  const principal = await iamDriver.lookupIdentity({
+    issuer: betterAuthIssuer(installationId),
+    subject: recoveryUserId,
+  });
+  if (!principal || principal.kind !== "principal") {
+    throw new ScopeViolationError("Recovery Principal is unavailable.");
+  }
+  const decision = await iamDriver.authorize({
+    principalId: principal.id,
+    action: "administer",
+    resource: { kind: "installation", id: installationId },
+  });
+  if (!decision.allowed || decision.driverId !== iamDriver.id) {
+    throw new ScopeViolationError("Recovery account must administer the Installation.");
+  }
+  const activation = await persistence.activateRecovery(recoveryUserId, principal.id, hooks);
+  return { ...activation, recoveryUserId, seedIgnored };
+}
+
+/** Hash a local password exactly as the controller's password sign-in verifies it. */
+export async function hashLocalPassword(password: string): Promise<string> {
+  if (password.length < LOCAL_PASSWORD_MIN_LENGTH || password.length > LOCAL_PASSWORD_MAX_LENGTH) {
+    throw new Error(
+      `Passwords must contain ${LOCAL_PASSWORD_MIN_LENGTH} to ${LOCAL_PASSWORD_MAX_LENGTH} characters.`,
+    );
+  }
+  return hashPassword(password);
+}
+
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, state, iamDriver, github, ...controllerOptions } = options;
+  const { pool, state, iamDriver, github, onWarning, ...controllerOptions } = options;
   const persistence =
     state === undefined
       ? undefined
@@ -1238,28 +1309,27 @@ export async function createPostgresControllerAuth(
   await auth.auth.$context;
   let activationSkipped: readonly string[] = [];
   if (github !== undefined) {
-    const principal = await iamDriver!.lookupIdentity({
-      issuer: betterAuthIssuer(options.installationId),
-      subject: github.recoveryUserId,
-    });
-    if (!principal || principal.kind !== "principal") {
-      throw new Error("Recovery Principal is unavailable.");
+    const activation = await activateRecoveryAccount(
+      persistence!,
+      // Checked above: GitHub sign-in requires the native IAM Driver.
+      iamDriver as NativeIAMDriver,
+      options.installationId,
+      github.recoveryUserId,
+    );
+    if (activation.seedIgnored) {
+      onWarning?.({
+        event: "authentication.recovery-seed-warning",
+        message:
+          "OCC_AUTH_GITHUB_RECOVERY_USER_ID differs from the recorded recovery designation, which is kept.",
+      });
     }
-    const decision = await iamDriver!.authorize({
-      principalId: principal.id,
-      action: "administer",
-      resource: { kind: "installation", id: options.installationId },
-    });
-    if (!decision.allowed || decision.driverId !== iamDriver!.id) {
-      throw new Error("Recovery account must administer the Installation.");
-    }
-    activationSkipped = (await persistence!.activateRecovery(github.recoveryUserId, principal.id))
-      .skipped;
+    activationSkipped = activation.skipped;
     const designation = await persistence!.recoveryDesignation();
     if (!designation) {
       throw new Error("Recovery designation is unavailable.");
     }
-    // The recovery account's password lane stays admitted under sign-in floods.
+    // The recovery account's password lane stays admitted under sign-in floods. It follows the
+    // stored designation, never the environment seed, which may name a replaced holder.
     humanLogin!.designateRecovery(designation.email);
   }
   return {
@@ -1268,6 +1338,7 @@ export async function createPostgresControllerAuth(
     ...(humanLogin === undefined
       ? {}
       : {
+          githubProviderId: humanLogin.providerId,
           readAccount: (userId: string, actor: HumanAuthenticationActor) =>
             persistence!.readAccount(userId, actor),
           attachGitHub: (
@@ -1289,6 +1360,29 @@ export async function createPostgresControllerAuth(
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
+          readRecovery: (actor: HumanAuthenticationActor) => persistence!.readRecovery(actor),
+          replaceRecovery: async (
+            userId: string,
+            principalId: string,
+            expectedCurrentUserId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => {
+            const { email, ...replaced } = await persistence!.replaceRecovery(
+              userId,
+              principalId,
+              expectedCurrentUserId,
+              actor,
+              expectedVersion,
+            );
+            // Move the reserved password lane to the committed holder's email. The email comes
+            // from the replacing transaction, so no later read can fail and leave the old holder
+            // on the lane.
+            humanLogin.designateRecovery(email);
+            return replaced;
+          },
+          enrolAccount: (userId: string, actor: HumanAuthenticationActor) =>
+            persistence!.enrolAccount(userId, actor),
           detachMethod: (
             userId: string,
             methodId: string,

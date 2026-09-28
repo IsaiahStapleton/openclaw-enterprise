@@ -2107,6 +2107,9 @@ async function prepareFile({ lane, file, statePath }) {
     if (relativeFile.endsWith("occ-metrics.test.mjs")) {
       env.OCC_METRICS_TEST_MIGRATION_DATABASE_URL = database.migrationUrl;
     }
+    if (relativeFile.endsWith("auth-maintain.test.mjs")) {
+      env.OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL = database.migrationUrl;
+    }
   }
 
   if (relativeFile.endsWith("postgres-bootstrap-failures.test.mjs")) {
