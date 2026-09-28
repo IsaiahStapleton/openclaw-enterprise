@@ -1,7 +1,7 @@
 ---
 created: 2026-09-23
 updated: "2026-09-28"
-last_updated_session: "authoring-run/3c681647-a494-4613-809e-11113e5ed11c"
+last_updated_session: "authoring-run/1d4977e8-b5e5-4b20-9909-bedc3c5b3900"
 ---
 
 # Production image upgrade flow
@@ -60,7 +60,11 @@ The script verifies the protected files, cluster, deployed Helm release, and
 matching OCC and Secret Installation IDs. It compares protected and live
 configuration in full, including selected image fields. It captures separate
 reviewed candidate files and rejects changes to protected identity, persistence,
-image, and broker settings. Image flags select images after this comparison.
+image, and broker settings. The Installation guard includes the GitHub Backend,
+Repo Driver, Compute credential-service peer, Compute identity, and cluster
+trust. The Helm guard protects broker resource references; it does not compare
+the referenced ConfigMap or Secret contents. Image flags select images after
+this comparison.
 A runtime release also reads complete authorized inventory and records every running Agent's baseline
 revision. Nonterminal deployment work, a missing active revision, or an unready
 Namespace stops preparation. Stopped and deleting Agents are excluded.
@@ -189,6 +193,8 @@ access, and required restore behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 07:58: Guard repository Backend, Driver, network, and cluster trust settings during candidate preparation. (authoring-run/1d4977e8-b5e5-4b20-9909-bedc3c5b3900 - 2fd914a7273bb09e9d91543c806a4091772191f6)
 
 - 2026-09-28 07:39: Record reviewed configuration candidates and strict live baseline checks. (authoring-run/3c681647-a494-4613-809e-11113e5ed11c - ec51e917954207b49d66f3cb28a7d4887fcd9ea1)
 

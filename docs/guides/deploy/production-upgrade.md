@@ -95,9 +95,18 @@ Review compatibility with the selected images and existing Agent drafts and
 credentials before the maintenance window. Rendering and the Helm dry run do
 not validate the Installation's Driver configuration or prove external access.
 The command does not change IAM, authentication, Installation identity, database,
-bootstrap, native administration, or repository broker settings through these
-candidate files. Select controller and runtime images with their image flags;
-do not edit those image fields or the managed Installation checksum in the copies.
+bootstrap, native administration, Compute identity or cluster trust, or repository
+settings through these candidate files. Repository settings include the GitHub
+Backend and registry path, Repo Driver, and Compute credential-service peer.
+Select controller and runtime images with their image flags; do not edit those
+image fields or the managed Installation checksum in the copies.
+
+Keep the referenced repository registry ConfigMap, broker trust Secrets, and
+other external credential-service configuration unchanged through the release
+and recovery. The helper compares their configured references, not the contents
+of those Kubernetes resources. Follow the
+[repository installation guide](../repository-credentials/installation.md) to
+review their identity and policies before upgrading.
 
 Add either or both flags to any upgrade command below:
 

@@ -74,6 +74,9 @@ if (tool === 'helm') {
     state.secret = secret; save(); log('secret-replaced');
     if (take('lost-secret-response')) process.exit(9);
   } else if (args.includes('get') && args.includes('secret')) out(state.secret);
+  else if (args.includes('get') && args.includes('deployment') && args.includes('openclaw-enterprise-worker')) {
+    out({metadata: {labels: {'app.kubernetes.io/instance': 'oce'}}, spec: {template: {spec: {containers: [{name: 'repository-credentials', args: ['--public-origin', 'https://git.system.svc.cluster.local']}]}}}});
+  }
   else if (args.some((a) => a.startsWith('deployment/')) && args.includes('get')) {
     if (args.some((a) => a.startsWith('jsonpath='))) out(state.controller);
     else {
@@ -101,7 +104,10 @@ if (tool === 'helm') {
 }
 `;
 
-async function fixture(t, { agent = false, candidates = false, controllerOnly = false } = {}) {
+async function fixture(
+  t,
+  { agent = false, candidates = false, controllerOnly = false, repositoryCredentials = false } = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), "occ-upgrade-recovery-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const bin = join(directory, "bin");
@@ -114,9 +120,62 @@ async function fixture(t, { agent = false, candidates = false, controllerOnly = 
   const values = JSON.stringify({
     images: { controller },
     installation: { secretName: "occ-installation-startup", key: "installation.yaml" },
+    ...(repositoryCredentials
+      ? {
+          repositoryCredentials: {
+            enabled: true,
+            serviceName: "git",
+            hostname: "git.system.svc.cluster.local",
+            clusterDomain: "cluster.local",
+          },
+        }
+      : {}),
   });
   const installation = JSON.stringify({
-    drivers: { compute: { configuration: { images: { agent: oldRuntime, gateway: oldRuntime } } } },
+    ...(repositoryCredentials
+      ? {
+          backend: [
+            {
+              id: "github-primary",
+              type: "github",
+              configuration: { registryPath: "/etc/openclaw/repository-registry/registry.json" },
+              drivers: { repo: "repository-credentials" },
+            },
+          ],
+        }
+      : {}),
+    drivers: {
+      ...(repositoryCredentials
+        ? {
+            repo: {
+              id: "repository-credentials",
+              configuration: {
+                controlSocket: "/run/openclaw/repository-control/private/control.sock",
+                sessionDurationSeconds: 86400,
+                publicCaPath: "/etc/openclaw/repository-ca/ca.crt",
+              },
+            },
+          }
+        : {}),
+      compute: {
+        id: "compute-kubernetes",
+        configuration: {
+          authentication: { mode: "inCluster" },
+          images: { agent: oldRuntime, gateway: oldRuntime },
+          ...(repositoryCredentials
+            ? {
+                network: {
+                  repositoryCredentials: {
+                    namespace: "system",
+                    podLabels: { "app.kubernetes.io/component": "worker" },
+                    port: 8443,
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+    },
   });
   const state = {
     version: 1,
@@ -334,7 +393,11 @@ test("resume rejects malformed protected inputs before another mutation", async 
 });
 
 test("reviewed settings survive an interrupted controller upgrade without losing unrelated Secret data", async (t) => {
-  const f = await fixture(t, { candidates: true, controllerOnly: true });
+  const f = await fixture(t, {
+    candidates: true,
+    controllerOnly: true,
+    repositoryCredentials: true,
+  });
   // The Secret write succeeds, but its client loses the response before Helm.
   await f.failNext("lost-secret-response");
   await assert.rejects(f.run());
@@ -344,6 +407,18 @@ test("reviewed settings survive an interrupted controller upgrade without losing
   );
   assert.equal(liveInstallation.drivers.plugin.configuration.catalogSource, "openai-curated");
   assert.equal(liveInstallation.drivers.compute.configuration.images.gateway, oldRuntime);
+  assert.equal(
+    liveInstallation.backend[0].configuration.registryPath,
+    "/etc/openclaw/repository-registry/registry.json",
+  );
+  assert.equal(
+    liveInstallation.drivers.repo.configuration.publicCaPath,
+    "/etc/openclaw/repository-ca/ca.crt",
+  );
+  assert.equal(
+    liveInstallation.drivers.compute.configuration.network.repositoryCredentials.port,
+    8443,
+  );
   assert.equal(interrupted.secret.data.retained, "cHJlc2VydmVk");
   await f.run("--resume");
   const finalState = await f.state();
@@ -352,6 +427,7 @@ test("reviewed settings survive an interrupted controller upgrade without losing
   );
   assert.equal(liveValues.api.channelDirectoryProxyUrl, "http://198.51.100.25:3128");
   assert.equal(liveValues.images.controller, newController);
+  assert.equal(liveValues.repositoryCredentials.hostname, "git.system.svc.cluster.local");
   assert.equal(liveValues.controlPlane.installationChecksum, finalState.checksum);
   assert.equal(finalState.secret.metadata.annotations.retained, "yes");
   assert.equal((await f.events()).filter((event) => event === "secret-replaced").length, 1);
@@ -405,6 +481,62 @@ test("candidate cannot redirect the Installation Secret or change an image outsi
       }
       await writeFile(path, JSON.stringify(candidate));
       await assert.rejects(f.run(), /candidate (values|Installation) change/);
+      assert.deepEqual(await f.events(), []);
+    });
+  }
+});
+
+test("candidate cannot change repository identity, grants, trust, or the Compute peer", async (t) => {
+  for (const change of [
+    "registry",
+    "driver",
+    "duration",
+    "peer",
+    "compute-authentication",
+    "remove",
+    "add",
+  ]) {
+    await t.test(change, async (subtest) => {
+      const f = await fixture(subtest, {
+        candidates: true,
+        repositoryCredentials: change !== "add",
+      });
+      const path = join(f.directory, "candidate-installation");
+      const candidate = JSON.parse(await readFile(path, "utf8"));
+      // These inputs select a registry, grant authority, TLS trust, and the
+      // credential service's network peer; no upgrade mutation may follow drift.
+      if (change === "registry") {
+        candidate.backend[0].configuration.registryPath = "/etc/other/registry.json";
+      } else if (change === "driver") {
+        candidate.drivers.repo.configuration.publicCaPath = "/etc/other/ca.crt";
+      } else if (change === "duration") {
+        candidate.drivers.repo.configuration.sessionDurationSeconds = 3600;
+      } else if (change === "peer") {
+        candidate.drivers.compute.configuration.network.repositoryCredentials.podLabels[
+          "app.kubernetes.io/component"
+        ] = "other";
+      } else if (change === "compute-authentication") {
+        candidate.drivers.compute.configuration.authentication = {
+          mode: "kubeconfig",
+          kubeconfigPath: "/etc/other/kubeconfig",
+          context: "other",
+        };
+      } else if (change === "remove") {
+        delete candidate.drivers.repo;
+        delete candidate.backend;
+      } else {
+        candidate.drivers.repo = { id: "repository-credentials", configuration: {} };
+        candidate.backend = [
+          {
+            id: "github-primary",
+            type: "github",
+            configuration: { registryPath: "/etc/other/registry.json" },
+            drivers: { repo: "repository-credentials" },
+          },
+        ];
+      }
+      await writeFile(path, JSON.stringify(candidate));
+      await assert.rejects(f.run(), /candidate Installation changes/);
       assert.deepEqual(await f.events(), []);
     });
   }
