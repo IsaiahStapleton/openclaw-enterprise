@@ -74,6 +74,9 @@ create-only Console and API input, applied once before first runtime execution.
 [Agent presets](33-agent-presets.md) — Implementing; reusable, partial Agent launch
 templates with variables, CRUD APIs, and console selection.
 
+[GitHub sign-in for existing accounts](31-human-federated-sign-in.md) — Proposed;
+GitHub login with existing OCE accounts and permissions; implementation in PR #305.
+
 [Harness authentication bindings](30-harness-auth-binding.md) — Accepted for implementation;
 one Agent auth binding for supplied OpenAI keys and issued ChatGPT account credentials.
 

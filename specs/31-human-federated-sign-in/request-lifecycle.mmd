@@ -12,20 +12,21 @@ config:
     mirrorActors: true
 ---
 sequenceDiagram
-  participant M as Maintainer
+  participant A as Administrator
   participant B as Console
   participant C as Controller
   participant S as State
   participant G as GitHub
-  M->>M: 1. IAM administer
-  M->>S: Guard / inspect / attach
+  A->>C: 1. Account read / attach
+  C->>C: IAM administer
+  C->>S: Version check, attach + audit
   B->>C: 2. Start / callback
   C->>S: Consume attempt
   C->>G: Code exchange
   G-->>C: Numeric ID
   C->>S: Enrolled ID, session + audit
   alt Saved
-    C-->>B: Session + receipt
+    C-->>B: Cookie, redirect /console/
     B->>C: 3. Agent read
     C->>S: Check currentness
     alt Allow
@@ -35,5 +36,5 @@ sequenceDiagram
       C-->>B: Stop
     end
   else Stop
-    C-->>B: Stop without new cookie
+    C-->>B: Redirect ?authError=github
   end
