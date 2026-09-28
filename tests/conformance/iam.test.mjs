@@ -232,6 +232,113 @@ test("managed memory policy binds provisioned humans and local services to only 
   );
 });
 
+test("managed memory policy resolves identities enrolled after construction with the exact subject rule", async () => {
+  const enrolled = [];
+  const bindable = new Set(["principal-late", "service-late-a"]);
+  const platform = new InMemoryPlatformState({
+    resolveIAMIdentity: (identityId) => enrolled.find((identity) => identity.id === identityId),
+  });
+  const native = new NativeIAMDriver({
+    loadNativeIAMState: async () =>
+      platform.read(async (unit) => ({
+        // The evaluator sees only the valid subjects; State must reject the rest itself.
+        identities: enrolled.filter((identity) => bindable.has(identity.id)),
+        groups: [],
+        memberships: [],
+        restrictions: [],
+        roles: await unit.iamPolicy.listRoles("namespace-a"),
+        bindings: await unit.iamPolicy.listAccessBindings("namespace-a"),
+      })),
+  });
+  await platform.transact(async (unit) => {
+    await unit.installations.createInstallation({
+      id: "installation",
+      name: "Test",
+      createdAt: new Date().toISOString(),
+    });
+    for (const id of ["namespace-a", "namespace-b"]) {
+      await unit.namespaces.createNamespace({
+        id,
+        name: id,
+        status: "ready",
+        createdAt: new Date().toISOString(),
+      });
+    }
+    await native.createNamespaceRole(
+      { policy: unit.iamPolicy },
+      {
+        id: "namespace-reader",
+        namespaceId: "namespace-a",
+        permissions: [{ action: "read", resourceKind: "namespace" }],
+      },
+    );
+  });
+  const input = (subjectId, resourceId = "namespace-a") => ({
+    id: `binding-${subjectId}-${resourceId}`,
+    namespaceId: "namespace-a",
+    subjectKind: "identity",
+    subjectId,
+    roleId: "namespace-reader",
+    resourceKind: "namespace",
+    resourceId,
+  });
+  const bindLate = (subject) =>
+    platform.transact((unit) =>
+      native.createNamespaceAccessBinding({ policy: unit.iamPolicy }, input(subject)),
+    );
+  await assert.rejects(bindLate("principal-late"), { name: "ScopeViolationError" });
+
+  enrolled.push(
+    { kind: "principal", id: "principal-late", issuer: "https://id.example.com", subject: "late" },
+    { kind: "service_principal", id: "service-late-a", namespaceId: "namespace-a" },
+    { kind: "service_principal", id: "service-late-b", namespaceId: "namespace-b" },
+    { kind: "service_principal", id: "service-late-installation" },
+    {
+      kind: "service_principal",
+      id: "service-late-agent",
+      namespaceId: "namespace-a",
+      agentId: "a",
+    },
+    {
+      kind: "principal",
+      id: "principal-late-scoped",
+      issuer: "x",
+      subject: "y",
+      namespaceId: "namespace-a",
+    },
+  );
+  for (const subject of bindable) {
+    await bindLate(subject);
+    assert.equal(
+      (
+        await native.authorize({
+          principalId: subject,
+          action: "read",
+          resource: { kind: "namespace", id: "namespace-a", namespaceId: "namespace-a" },
+        })
+      ).allowed,
+      true,
+    );
+  }
+  for (const invalid of [
+    input("missing"),
+    input("service-late-b"),
+    input("service-late-installation"),
+    // An Agent ServicePrincipal resolves only through a live Agent.
+    input("service-late-agent"),
+    input("principal-late-scoped"),
+    input("principal-late", "namespace-b"),
+    input("principal-late", "namespace-missing"),
+  ]) {
+    await assert.rejects(
+      platform.transact((unit) =>
+        native.createNamespaceAccessBinding({ policy: unit.iamPolicy }, invalid),
+      ),
+      { name: "ScopeViolationError" },
+    );
+  }
+});
+
 test("managed Namespace Roles grant only Namespace read so a Namespace binding cannot delete it", async () => {
   const platform = new InMemoryPlatformState({ iamIdentities: identities });
   const native = new NativeIAMDriver({

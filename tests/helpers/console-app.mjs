@@ -121,8 +121,8 @@ export async function createConsoleAppFixture(t, options = {}) {
     bindings: seed.bindings.map((binding) => ({ ...binding })),
     restrictions: [],
   };
-  // These grant-free accounts are fixture setup, before the immutable identity snapshot.
-  // This does not implement dynamic production enrollment.
+  // These grant-free accounts are fixture setup. Accounts added later through
+  // createAccountWithPolicy are also shareable, because State resolves identities live.
   const provisionedAccounts = [];
   for (const label of options.provisionedPeople ?? []) {
     const personCredentials = {
@@ -144,7 +144,13 @@ export async function createConsoleAppFixture(t, options = {}) {
     }
   }
   const platformState =
-    options.state ?? new ConsolePlatformState({ auditSink, iamIdentities: policy.identities });
+    options.state ??
+    new ConsolePlatformState({
+      auditSink,
+      // Live lookup, so people enrolled after construction can be bound like in Postgres.
+      resolveIAMIdentity: (identityId) =>
+        policy.identities.find((identity) => identity.id === identityId),
+    });
   const iamDriver = new NativeIAMDriver(
     {
       async loadNativeIAMState() {

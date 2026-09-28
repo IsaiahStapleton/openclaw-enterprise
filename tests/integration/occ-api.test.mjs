@@ -519,7 +519,8 @@ async function createInjectedFixture(options = {}) {
             createController(installation) {
               const baseState = new InMemoryPlatformState({
                 auditSink,
-                iamIdentities: state.identities,
+                resolveIAMIdentity: (identityId) =>
+                  state.identities.find((identity) => identity.id === identityId),
               });
               platformState =
                 options.deploymentWorks === undefined
@@ -1012,6 +1013,72 @@ test("Namespace IAM routes bind existing humans to the exact Namespace and Agent
     `/namespaces/${namespace.id}/iam/access-bindings`,
   );
   assert.equal(bindings.data.length, 2, "rejected grants must leave policy unchanged");
+});
+
+test("Namespace IAM routes bind humans enrolled after bootstrap through the live resolver", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "late-enrolled-iam");
+  const foreign = await createNamespace(controller, "late-enrolled-foreign");
+  const agent = await createAgent(controller, namespace.id, "late-enrolled-agent");
+  const foreignAgent = await createAgent(controller, foreign.id, "late-enrolled-foreign-agent");
+  const role = await controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+    body: {
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "agent" },
+      ],
+    },
+  });
+  assert.equal(role.status, 201, JSON.stringify(role.body));
+  const bind = (subjectId, resourceKind, resourceId) =>
+    controller.request("POST", `/namespaces/${namespace.id}/iam/access-bindings`, {
+      body: { subjectKind: "identity", subjectId, roleId: role.data.id, resourceKind, resourceId },
+    });
+
+  // Enrolled after the controller and its State were built.
+  const member = await fixture.createAuthPrincipal("late-enrolled-member");
+  fixture.state.identities.push(member.principal);
+  const localService = `sp_${randomUUID()}`;
+  const foreignService = `sp_${randomUUID()}`;
+  const installationService = `sp_${randomUUID()}`;
+  fixture.state.identities.push(
+    { kind: "service_principal", id: localService, namespaceId: namespace.id },
+    { kind: "service_principal", id: foreignService, namespaceId: foreign.id },
+    { kind: "service_principal", id: installationService },
+  );
+
+  for (const [subjectId, resourceKind, resourceId] of [
+    [member.principal.id, "namespace", namespace.id],
+    [member.principal.id, "agent", agent.id],
+    [localService, "namespace", namespace.id],
+    [agent.servicePrincipalId, "namespace", namespace.id],
+  ]) {
+    const binding = await bind(subjectId, resourceKind, resourceId);
+    assert.equal(binding.status, 201, JSON.stringify(binding.body));
+    assert.equal(binding.data.subjectId, subjectId);
+  }
+
+  for (const [subjectId, resourceKind, resourceId] of [
+    [`prn_${randomUUID()}`, "namespace", namespace.id],
+    [foreignService, "namespace", namespace.id],
+    [installationService, "namespace", namespace.id],
+    [foreignAgent.servicePrincipalId, "namespace", namespace.id],
+    [member.principal.id, "namespace", foreign.id],
+    [member.principal.id, "namespace", `ns_${randomUUID()}`],
+    [member.principal.id, "agent", foreignAgent.id],
+  ]) {
+    const denied = await bind(subjectId, resourceKind, resourceId);
+    assert.equal(denied.status, 404, `${subjectId}: ${JSON.stringify(denied.body)}`);
+  }
+  const bindings = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/iam/access-bindings`,
+  );
+  assert.equal(bindings.data.length, 4, "rejected subjects must leave policy unchanged");
 });
 
 test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespace binding", async () => {

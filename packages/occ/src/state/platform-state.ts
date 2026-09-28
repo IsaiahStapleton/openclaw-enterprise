@@ -657,6 +657,16 @@ export interface InMemoryPlatformStateOptions {
   readonly auditSink?: PlatformAuditSink;
   /** Preprovisioned identities copied at construction; later input changes are not observed. */
   readonly iamIdentities?: readonly Identity[];
+  /**
+   * Live identity lookup, consulted on every AccessBinding write so identities enrolled after
+   * construction can be bound. State still applies the exact subject rule to the result.
+   */
+  readonly resolveIAMIdentity?: (identityId: string) => Identity | undefined;
+}
+
+interface IAMSubjectSource {
+  readonly identities: readonly Identity[];
+  readonly resolve: ((identityId: string) => Identity | undefined) | undefined;
 }
 
 interface PlatformSnapshot {
@@ -934,7 +944,7 @@ function assertCredentialSource(source: CredentialSource): void {
 
 function repositories(
   snapshot: PlatformSnapshot,
-  iamIdentities: readonly Identity[],
+  iamSubjects: IAMSubjectSource,
 ): PlatformUnitOfWork {
   const installations: InstallationRepository = {
     findInstallation: async (installationId) =>
@@ -2005,6 +2015,28 @@ function repositories(
         snapshot.namespaces.get(namespaceId)?.deletedAt === undefined,
     );
 
+  // A human without a Namespace, or a non-Agent ServicePrincipal of the exact Namespace.
+  const bindableIdentity = (namespaceId: string, identity: Identity | undefined): boolean =>
+    identity !== undefined &&
+    ((identity.kind === "principal" && identity.namespaceId === undefined) ||
+      (identity.kind === "service_principal" &&
+        identity.namespaceId === namespaceId &&
+        identity.agentId === undefined));
+
+  const policySubjectExists = (namespaceId: string, identityId: string): boolean => {
+    // Agent ServicePrincipals resolve only through live Agents.
+    if (namespaceServicePrincipalExists(namespaceId, identityId)) {
+      return true;
+    }
+    const resolved = iamSubjects.resolve?.(identityId);
+    if (resolved?.id === identityId && bindableIdentity(namespaceId, resolved)) {
+      return true;
+    }
+    return iamSubjects.identities.some(
+      (identity) => identity.id === identityId && bindableIdentity(namespaceId, identity),
+    );
+  };
+
   const iamPolicy: IAMPolicyRepository = {
     listRoles: async (namespaceId) =>
       Object.freeze(
@@ -2086,15 +2118,7 @@ function repositories(
       }
       if (
         binding.subjectKind !== "identity" ||
-        (!namespaceServicePrincipalExists(namespace.id, binding.subjectId) &&
-          !iamIdentities.some(
-            (identity) =>
-              identity.id === binding.subjectId &&
-              ((identity.kind === "principal" && identity.namespaceId === undefined) ||
-                (identity.kind === "service_principal" &&
-                  identity.namespaceId === namespace.id &&
-                  identity.agentId === undefined)),
-          ))
+        !policySubjectExists(namespace.id, binding.subjectId)
       ) {
         throw new ScopeViolationError(
           "The IAM AccessBinding subject does not belong to the exact Namespace.",
@@ -2321,11 +2345,14 @@ export class InMemoryPlatformState implements PlatformStateStore {
   };
   private pending: Promise<void> = Promise.resolve();
   private readonly auditSink: PlatformAuditSink | undefined;
-  private readonly iamIdentities: readonly Identity[];
+  private readonly iamSubjects: IAMSubjectSource;
 
   constructor(options: InMemoryPlatformStateOptions = {}) {
     this.auditSink = options.auditSink;
-    this.iamIdentities = immutableCopy(options.iamIdentities ?? []);
+    this.iamSubjects = {
+      identities: immutableCopy(options.iamIdentities ?? []),
+      resolve: options.resolveIAMIdentity,
+    };
   }
 
   pendingOperations(): readonly Readonly<PlatformOperation>[] {
@@ -2338,7 +2365,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
     try {
       return await work(
         createPlatformReadView(
-          repositories(cloneSnapshot(this.snapshot), this.iamIdentities),
+          repositories(cloneSnapshot(this.snapshot), this.iamSubjects),
           lifetime,
         ),
       );
@@ -2359,7 +2386,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
       const working = cloneSnapshot(this.snapshot);
       const committedAuditCount = working.audit.length;
       const result = await work(
-        bindPlatformUnitOfWork(repositories(working, this.iamIdentities), lifetime),
+        bindPlatformUnitOfWork(repositories(working, this.iamSubjects), lifetime),
       );
       await lifetime.finish();
       await this.publishAudit(working.audit.slice(committedAuditCount));
