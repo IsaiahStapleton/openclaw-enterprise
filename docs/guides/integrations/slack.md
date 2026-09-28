@@ -19,7 +19,8 @@ go to the Agent's gateway; model credentials are configured separately.
 - Choose a dedicated Agent on Kubernetes and configure its
   [model authentication](../../reference/agents.md#harness-authentication).
   Embedded execution cannot isolate channel credentials from the Harness.
-- To provision generated credentials, you need `read` and `operate` on the Agent.
+- First deployment generates required connection credentials. It requires Agent
+  `deploy`, plus Agent `read` and `operate` when generation is needed.
   Selecting Secrets requires [readable Secret metadata](../../reference/drivers/secret.md#iam)
   and caller `operate` on each selected Secret. Saving token bindings requires Configuration update and
   [Namespace IAM administration](../../reference/authorization.md#manage-namespace-policy)
@@ -28,24 +29,33 @@ go to the Agent's gateway; model credentials are configured separately.
 
 ## Connect and verify
 
-1. Open the Agent's new revision in the console and open **Channels**. Enable
-   Slack, enter the channel IDs, then either enter **Allowed channel user IDs**
-   or select **Allow everyone in these channels to mention the agent**. Leave
-   **Require mention** enabled for this setup. For each token menu, select a
-   Namespace Secret or **Create new Secret...**.
-   The modal prefills the token key and accepts its value in a password field.
+1. Open the Agent's **Create new version** draft in the console, then open
+   **Channels** and **Configure Slack** (or **Edit Slack** for an existing setup).
+   Start with **Slack credentials** at the top: select a Namespace Secret or
+   **Create new Secret...** for each token. The bot token enables channel and
+   people name lookup; the app token is used for Socket Mode. Both are required
+   before deployment. Exact-ID entry remains available without name lookup.
+   Enable Slack and choose **Channels**, then select **Specific people** or
+   **Everyone in these channels** under channel access. Leave **Require a mention**
+   enabled for this setup. New Slack setups use
+   [threaded channel replies](../../reference/configuration/secrets.md#native-channel-configuration).
+   Choose **Disabled** under **Direct-message policy** for channel-only access,
+   or keep **Allowlist** and select **Allowed people in direct messages**.
+   When creating a Secret, the modal prefills the token key and accepts its value
+   in a password field.
    **Create Secret** stores it immediately; **Save configuration** saves the
    selected bindings. Cancelling the drawer discards selections but keeps any
    newly created Secrets. If multiple Agents use this Configuration, the edit
    also affects their future deployments.
-2. Open **Credentials** and select **Provision generated runtime credentials**
-   before the first deployment. If tokens are still missing, fill them and select
+2. Open **Credentials**. If tokens are still missing, select their Secrets and
    **Save channel Secrets**. OCC stores them as Namespace Secrets, grants the
    Agent access, and saves Configuration bindings for gateway delivery. Stored
-   credentials confirm storage only; they do not prove Slack accepted them.
+   Secret bindings confirm storage only; they do not prove Slack accepted the tokens.
    Bound tokens show a synthetic password mask. To replace one token, edit that
    field and leave the other unchanged; its stored value is preserved.
-3. Select **Deploy new revision** to apply the saved bindings. After a channel
+3. Select **Deploy new version** to apply the saved bindings. OCC generates
+   missing connection credentials during the first deployment when the Compute
+   Driver requires them. After a channel
    draft or Secret value change, explicitly redeploy each consumer. Follow
    [Secret updates](../../reference/drivers/kubernetes-secret.md#update-and-redeploy)
    when replacing an existing token.
@@ -73,15 +83,18 @@ bot. To enable one-to-one messages:
    Reinstall the Slack app if the scope is new. In
    [App Home settings](https://docs.slack.dev/tools/python-slack-sdk/socket-mode/#using-socket-mode),
    enable sending messages from the **Messages** tab.
-2. Configure `allowFrom` in native Configuration JSON, save the channel draft,
-   and redeploy. The simple Slack drawer edits channel sender access; it does
-   not edit direct-message `allowFrom`.
+2. In **Channels → Edit Slack**, select **Allowlist** under **Direct-message
+   policy** and enter **Allowed DM user IDs**. Save and redeploy. Choose
+   **Disabled** to block DMs (recommended for organization-wide installs), or
+   use [Pairing or Open](../../reference/configuration/secrets.md#native-channel-configuration).
+   Channel user IDs do not grant DM access. If native `dm.enabled` is `false`,
+   enable it in native Configuration JSON before testing DMs.
 3. From an allowed user account, send the app a direct message with a new
    phrase and confirm a reply. A channel reply does not verify direct messages.
 
 ## Troubleshoot
 
-- **Credentials show Stored but the Agent does not reply:** first confirm that
+- **Credentials show Bound but the Agent does not reply:** first confirm that
   the gateway connected to Slack, the bot has joined the configured channel,
   and the channel ID is correct. Then send an explicit mention. Ask the
   operator to check gateway network access if it cannot connect.
@@ -89,8 +102,8 @@ bot. To enable one-to-one messages:
   `message.im` subscription, the installed bot token's `im:history` scope,
   and whether the sender's Slack user ID is allowed by the native `allowFrom`
   setting and direct-message policy.
-- **Credential save failed or the response was lost:** select **Refresh status**
-  before retrying. Inspect saved Secrets, IAM bindings, and Configuration after a
+- **Credential save failed or the response was lost:** reload the Agent and
+  inspect saved Secrets, IAM bindings, and Configuration before retrying after a
   partial save; those writes are separate and are not automatically rolled back.
 - **Slack replies with a model error:** check the Agent's model authentication
   and active revision independently. Slack connection alone does not establish
