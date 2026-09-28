@@ -145,7 +145,7 @@ the container's private temporary home.
 
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:installOpenClawPlugins`
 
-Embedded OpenClaw validates selections against the bundled catalog and native policy. Generated grants enter nonempty `tools.allow`,
+Embedded OpenClaw validates selections against its bundled catalog and policy. Grants enter nonempty `tools.allow`,
 otherwise `tools.alsoAllow`, preserving denies and profiles. A tool's `enabled`
 override precedes `toolDefaults.enabled`; disabled tools emit native denies.
 Master disable and operator denies prevail; `provider_default` and `none` add no
@@ -167,7 +167,7 @@ hosted app tools.
 `plugin/list` discovers the marketplace; `plugin/read` resolves selections.
 `codexRuntimeArtifact` uses concrete `detail.apps`, excluding `appTemplates`.
 `codexInstallPlan` validates policy and [component support](../reference/drivers/plugin-bundled.md)
-before `plugin/install`. Native Codex loads bundled skills. Account-wide skill
+before `plugin/install`. Codex loads bundled skills. Account-wide skill
 restrictions require native default enablement and OCE integration.
 Install rejections or missing app authentication warn. Explicit tool policies
 require `mcpServerStatus/list`'s `codex_apps` inventory; `codexAppToolSettings`
