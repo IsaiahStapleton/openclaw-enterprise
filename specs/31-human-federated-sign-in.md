@@ -186,6 +186,10 @@ Deliver one focused implementation over this RFC:
 
 The draft code and detailed API/operator references are in
 [PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305).
+Milestone M3, the stopped-maintenance command (`pnpm auth:maintain`), follows
+in a PR stacked on #305: activation, enrolment repair, recovery password reset,
+session purge, and deactivation back to the password-only profile. See the
+[operator procedure](../docs/guides/deploy/auth-maintenance.md).
 The proposed State adapter extends existing persistence; it introduces no
 separate identity service or IAM policy writer.
 

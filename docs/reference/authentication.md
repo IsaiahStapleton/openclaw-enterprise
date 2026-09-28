@@ -209,8 +209,8 @@ sessions: an eight-hour absolute lifetime without refresh, current account and
 method checks, and required audit before a cookie is released or, on logout,
 cleared. Existing sessions without the profile's account/method binding are
 rejected; users sign in again. Activation is one-way: removing GitHub
-configuration fails startup, and old binaries are unfenced and unsupported. There
-is no rollback other than keeping the `OCC_AUTH_GITHUB_*` environment set.
+configuration fails startup, and old binaries are unfenced and unsupported. To
+return to password-only sign-in, [deactivate](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in) with the API stopped.
 
 The recovery user must already have a usable local password, the exact
 Installation Principal, and native IAM Installation `administer` authority.

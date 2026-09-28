@@ -438,8 +438,8 @@ Follow the [single-controller profile](../../reference/authentication.md#github-
 during stopped maintenance.
 
 Activation is one-way. Account creation stays frozen afterwards
-(`409 RESOURCE_CONFLICT`), and there is no rollback other than keeping the
-`OCC_AUTH_GITHUB_*` environment set. The Helm chart cannot yet carry those
+(`409 RESOURCE_CONFLICT`); returning to password-only sign-in requires
+[stopped maintenance](auth-maintenance.md). The Helm chart cannot yet carry those
 variables: out-of-band values vanish on the next `helm upgrade`, and the
 controller then fails startup.
 
