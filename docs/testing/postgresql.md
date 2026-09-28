@@ -92,9 +92,10 @@ and lost COMMIT acknowledgements through the controller. It drops a real
 PostgreSQL COMMIT response through the loopback protocol proxy and verifies
 persisted state, withheld cookies, and no replay. It also checks the ordinary
 HTTP cookie boundary for login and logout, unknown administrative completion,
-and a guarded present-state read. Password sign-in and one sign-out run
-without a browser Origin header; the other sign-outs send the configured
-Origin. No live provider credential
+and a guarded present-state read. Password sign-in runs without a browser
+Origin header; a headerless sign-out is rejected with `403` and leaves the
+session current, and the other sign-outs send the configured Origin. No live
+provider credential
 is needed for these cases. Hosted PostgreSQL CI prepares Chromium after the
 frozen workspace dependencies; local runs use the prepared browser above.
 

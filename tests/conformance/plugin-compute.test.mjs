@@ -410,7 +410,7 @@ async function runCodexRuntimeHelper(runtime, handler, options = {}) {
   const sandbox = {
     JSON,
     Buffer,
-    Date,
+    Date: options.Date ?? Date,
     WebSocket: FakeWebSocket,
     setTimeout,
     clearTimeout,
@@ -492,20 +492,28 @@ test("compute renders plugin-free Codex revisions with native default-deny plugi
   assert.match(data[PLUGIN_RUNTIME_CODEX_CONFIG], /^\[apps\._default\]\nenabled = false/m);
 });
 
-test("plugin-free revisions apply an explicit empty Slack approver default and keep unrelated approvals", () => {
-  for (const candidate of [
-    revision({ pluginApprovers: [] }),
-    revision({
-      harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
-      pluginApprovers: [],
-    }),
+test("plugin-free revisions apply explicit Slack approvers and keep unrelated approvals", () => {
+  const rawSlackApprovers = [
+    { channel: "slack", id: "U456" },
+    { channel: "slack", id: "W789" },
+  ];
+  for (const [candidate, expectedApprovers] of [
+    [revision({ pluginApprovers: [] }), []],
+    [revision({ pluginApprovers: rawSlackApprovers }), ["U456", "W789"]],
+    [
+      revision({
+        harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+        pluginApprovers: rawSlackApprovers,
+      }),
+      ["U456", "W789"],
+    ],
   ]) {
     const runtime = pluginRuntimeSpecForRevision(candidate);
-    assert.deepEqual(runtime.pluginApprovers, []);
+    assert.deepEqual(runtime.pluginApprovers, candidate.pluginApprovers);
     assert.deepEqual(JSON.parse(pluginRuntimeConfigMapData(runtime)[PLUGIN_RUNTIME_MANIFEST]), {
       kind: runtime.kind,
       selections: {},
-      pluginApprovers: [],
+      pluginApprovers: candidate.pluginApprovers,
     });
     const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, [], {
       baseConfig: {
@@ -517,7 +525,7 @@ test("plugin-free revisions apply an explicit empty Slack approver default and k
     const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
     assert.deepEqual(config.approvals, {
       exec: { security: "full" },
-      plugin: { slack: { approvers: [] } },
+      plugin: { slack: { approvers: expectedApprovers } },
     });
   }
 });
@@ -1159,6 +1167,12 @@ test("Codex runtime helper keeps malformed matching install responses generic", 
   ];
   for (const [name, response] of malformedResponses) {
     await t.test(name, async () => {
+      let now = 0;
+      class FixtureDate extends Date {
+        static now() {
+          return now;
+        }
+      }
       const result = await runCodexRuntimeHelper(
         runtime,
         (method, _params, requestId) => {
@@ -1175,12 +1189,14 @@ test("Codex runtime helper keeps malformed matching install responses generic", 
             return { status: "ok", version: "test-config-1" };
           }
           if (method === "plugin/install") {
+            now = 1;
             return { __rawMessage: response(requestId) };
           }
           throw new Error(`unexpected request ${method}`);
         },
         {
           captureError: true,
+          Date: FixtureDate,
           env: {
             OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS: "1",
           },
@@ -1188,8 +1204,30 @@ test("Codex runtime helper keeps malformed matching install responses generic", 
       );
 
       assert.equal(result.error.diagnostic, undefined);
+      assert.ok(result.requests.some((request) => request.method === "plugin/install"));
     });
   }
+});
+
+test("Codex runtime cannot report installation success when its deadline expires before the first attempt", async () => {
+  let now = 0;
+  class FixtureDate extends Date {
+    static now() {
+      return now++;
+    }
+  }
+  const result = await runCodexRuntimeHelper(
+    { manifest: pluginRuntimeSpecForRevision(revision({ plugins: codexLinearPluginState() })) },
+    () => assert.fail("An expired installation must not contact the app-server"),
+    {
+      captureError: true,
+      Date: FixtureDate,
+      env: { OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS: "1" },
+    },
+  );
+  assert.match(result.error?.message ?? "", /did not reach readiness/);
+  assert.equal(result.value, undefined);
+  assert.deepEqual(result.requests, []);
 });
 
 test("Codex runtime helper keeps pre-install native uncertainty generic", async () => {
@@ -1896,7 +1934,7 @@ function enrolledNodeSecret(driver, candidate, namespace) {
       "Secret",
       driver.workspaceNodeName(candidate),
       driver.pluginRuntimeOwnership(candidate),
-      namespace,
+      { name: namespace, plane: "execution" },
     ),
     data: { deviceId: Buffer.from("fixture-node").toString("base64") },
   };
@@ -1904,16 +1942,21 @@ function enrolledNodeSecret(driver, candidate, namespace) {
 
 test("embedded plugin preparation applies runtime egress before gateway readiness", async () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
+  const rawSlackApprovers = [
+    { channel: "slack", id: "U456" },
+    { channel: "slack", id: "W789" },
+  ];
   const embedded = revision({
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     compute: { id: driver.id, implementation: driver.implementation },
     plugins: openClawPluginState(),
+    pluginApprovers: rawSlackApprovers,
   });
   const namespace = kubernetesNamespaceName(tenant.id);
   const tenantOwnership = { namespaceId: tenant.id };
   const defaultPolicies = new Map(
     driver
-      .networkPolicies(tenantOwnership, namespace)
+      .networkPolicies(tenantOwnership, { name: namespace, plane: "execution" })
       .map((policy) => [policy.metadata.name, policy]),
   );
   const configMaps = new Map();
@@ -1956,10 +1999,13 @@ test("embedded plugin preparation applies runtime egress before gateway readines
       listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [] }),
     },
   });
-  driver.resolveNamespace = async () => ({ name: namespace, external: false });
+  driver.resolveNamespace = async () => ({
+    name: { name: namespace, plane: "execution" },
+    external: false,
+  });
   driver.get = async (kind, name, target) =>
     kind === "Secret"
-      ? credentialObjects.get(`${target}:${name}`)
+      ? credentialObjects.get(`${target.name}:${name}`)
       : kind === "Namespace"
         ? {
             ...(name === cp
@@ -1970,7 +2016,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
         : undefined;
   driver.getOwned = async (kind, name, target) => {
     if (kind === "Secret" && name !== driver.workspaceNodeName(embedded)) {
-      return credentialObjects.get(`${target}:${name}`);
+      return credentialObjects.get(`${target.name}:${name}`);
     }
     if (kind === "NetworkPolicy") {
       return defaultPolicies.get(name);
@@ -1992,6 +2038,14 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     revisionId: embedded.id,
     ready: false,
   });
+  const pluginRuntimeConfigMap = reconciled.find(
+    ({ kind, metadata }) => kind === "ConfigMap" && metadata.name.startsWith("plugin-runtime-"),
+  );
+  assert.ok(pluginRuntimeConfigMap, "Kubernetes Compute must generate plugin runtime ConfigMap");
+  assert.deepEqual(
+    JSON.parse(pluginRuntimeConfigMap.data[PLUGIN_RUNTIME_MANIFEST]).pluginApprovers,
+    rawSlackApprovers,
+  );
 
   const runtimePolicyIndex = reconciled.findIndex(
     ({ kind, metadata }) =>
@@ -2024,7 +2078,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   const dedicatedTenantOwnership = { namespaceId: dedicated.namespaceId };
   const dedicatedDefaultPolicies = new Map(
     dedicatedDriver
-      .networkPolicies(dedicatedTenantOwnership, dedicatedNamespace)
+      .networkPolicies(dedicatedTenantOwnership, { name: dedicatedNamespace, plane: "execution" })
       .map((policy) => [policy.metadata.name, policy]),
   );
   const dedicatedReconciled = [];
@@ -2036,7 +2090,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
       "Secret",
       transportName,
       { namespaceId: tenant.id, agentId: dedicated.agentId },
-      cp,
+      { name: cp, plane: "execution" },
     ),
     type: "Opaque",
     data: { "app-server-token": Buffer.from("fixture-transport").toString("base64") },
@@ -2063,10 +2117,13 @@ test("embedded plugin preparation applies runtime egress before gateway readines
       listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [] }),
     },
   });
-  dedicatedDriver.resolveNamespace = async () => ({ name: dedicatedNamespace, external: false });
+  dedicatedDriver.resolveNamespace = async () => ({
+    name: { name: dedicatedNamespace, plane: "execution" },
+    external: false,
+  });
   dedicatedDriver.get = async (kind, name, target) =>
     kind === "Secret"
-      ? credentialObjects.get(`${target}:${name}`)
+      ? credentialObjects.get(`${target.name}:${name}`)
       : kind === "Namespace"
         ? {
             ...(name === cp
@@ -2077,7 +2134,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
         : undefined;
   dedicatedDriver.getOwned = async (kind, name, target) => {
     if (kind === "Secret" && name !== dedicatedDriver.workspaceNodeName(dedicated)) {
-      return credentialObjects.get(`${target}:${name}`);
+      return credentialObjects.get(`${target.name}:${name}`);
     }
     if (kind === "Secret") {
       return enrolledNodeSecret(dedicatedDriver, dedicated, dedicatedNamespace);
@@ -2235,11 +2292,22 @@ test("Kubernetes plugin runtime status requires the exact ready Pod report", asy
       });
       if (expected === "rejects") {
         await assert.rejects(
-          () => driver.pluginRuntimeStatus(candidate, namespace, "gateway", []),
+          () =>
+            driver.pluginRuntimeStatus(
+              candidate,
+              { name: namespace, plane: "execution" },
+              "gateway",
+              [],
+            ),
           DependencyUnavailableError,
         );
       } else {
-        const status = await driver.pluginRuntimeStatus(candidate, namespace, "gateway", []);
+        const status = await driver.pluginRuntimeStatus(
+          candidate,
+          { name: namespace, plane: "execution" },
+          "gateway",
+          [],
+        );
         assert.deepEqual(status, expected === "not-ready" ? undefined : expected);
       }
     });
@@ -2292,7 +2360,10 @@ test("Kubernetes startup failure evidence requires the exact runtime Pod report"
     },
   });
 
-  const observed = await driver.safeRuntimeFailureObservation(candidate, namespace);
+  const observed = await driver.safeRuntimeFailureObservation(candidate, {
+    name: namespace,
+    plane: "execution",
+  });
 
   assert.deepEqual(observed, failure);
   assert.deepEqual(requests, [
@@ -2607,6 +2678,27 @@ test("Codex runtime gates startup and readiness on a successful native authentic
   const scenarios = [
     { name: "failed login", loginStatus: 1 },
     {
+      name: "API-key login timeout is not retried",
+      loginTimeouts: 1,
+      loginAttempts: 1,
+      loginFailed: true,
+    },
+    {
+      name: "access-token spawn failure is not retried",
+      pat: true,
+      loginError: "ENOENT",
+      loginFailed: true,
+    },
+    { name: "access-token login refusal is not retried", pat: true, loginStatus: 1 },
+    {
+      name: "access-token login recovers one timeout before probing",
+      pat: true,
+      loginTimeouts: 1,
+      events: [started, assistant, completed],
+      ready: true,
+    },
+    { name: "access-token login stops after three timeouts", pat: true, loginTimeouts: 3 },
+    {
       name: "service account token uses native access-token login before probe and clears credentials",
       pat: true,
       events: [started, assistant, completed],
@@ -2660,6 +2752,7 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         let statusHandler;
         let appServerStarts = 0;
         let nativeCalls = 0;
+        let loginCalls = 0;
         const sandbox = {
           URL,
           console: {
@@ -2715,7 +2808,11 @@ test("Codex runtime gates startup and readiness on a successful native authentic
               return {
                 spawnSync(command, args, options) {
                   nativeCalls++;
-                  if (nativeCalls === 1 && scenario.pat) {
+                  const isLogin = args.includes("login");
+                  if (isLogin) {
+                    loginCalls++;
+                  }
+                  if (isLogin && scenario.pat) {
                     assert.equal(command, "codex");
                     assert.deepEqual(Array.from(args), [
                       "-c",
@@ -2725,19 +2822,26 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                     ]);
                     assert.equal(options.input, "at-fixture-token");
                   }
-                  if (nativeCalls === 2) {
+                  if (!isLogin) {
                     assert.equal(sandbox.process.env.CODEX_ACCESS_TOKEN, undefined);
                     assert.equal(sandbox.process.env.OPENAI_API_KEY, undefined);
                     assert.equal(sandbox.process.env.CODEX_CHATGPT_WORKSPACE_ID, undefined);
                   }
                   // Substitute only native process output; execute the production
                   // login/probe parser and readiness control flow unmodified.
-                  return nativeCalls === 1
-                    ? { status: scenario.loginStatus ?? 0 }
-                    : {
-                        status: scenario.probeStatus ?? 0,
-                        stdout: scenario.events.map((event) => JSON.stringify(event)).join("\n"),
-                      };
+                  if (isLogin) {
+                    if (scenario.loginError) {
+                      return { status: null, error: { code: scenario.loginError } };
+                    }
+                    if (loginCalls <= (scenario.loginTimeouts ?? 0)) {
+                      return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" } };
+                    }
+                    return { status: scenario.loginStatus ?? 0 };
+                  }
+                  return {
+                    status: scenario.probeStatus ?? 0,
+                    stdout: scenario.events.map((event) => JSON.stringify(event)).join("\n"),
+                  };
                 },
                 spawn(_command, args) {
                   assert.ok(args.includes("app-server"));
@@ -2750,7 +2854,13 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           },
         };
         vm.runInNewContext(AGENT_RUNTIME_ENTRYPOINT, sandbox);
-        assert.equal(nativeCalls, scenario.loginStatus === 1 ? 1 : 2);
+        const loginFailed =
+          scenario.loginFailed || scenario.loginStatus === 1 || scenario.loginTimeouts === 3;
+        assert.equal(
+          loginCalls,
+          scenario.loginAttempts ?? Math.min((scenario.loginTimeouts ?? 0) + 1, 3),
+        );
+        assert.equal(nativeCalls, loginCalls + (loginFailed ? 0 : 1));
         assert.ok(statusHandler);
         const runtimeStatus = readRuntimeStatusFromHandler(statusHandler);
         assert.equal(runtimeStatus.revisionId, revisionId);
@@ -2770,13 +2880,10 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           assert.ok(idleTimers[0].delay > 0);
           assert.equal(existsSync(marker), false);
           assert.equal(runtimeStatus.runtimeFailure.component, "agent");
-          assert.equal(
-            runtimeStatus.runtimeFailure.check,
-            scenario.loginStatus === 1 ? "login" : "model-probe",
-          );
+          assert.equal(runtimeStatus.runtimeFailure.check, loginFailed ? "login" : "model-probe");
           assert.equal(
             runtimeStatus.runtimeFailure.code,
-            scenario.loginStatus === 1 ? "LOGIN_FAILED" : "MODEL_PROBE_FAILED",
+            loginFailed ? "LOGIN_FAILED" : "MODEL_PROBE_FAILED",
           );
           assert.match(runtimeStatus.runtimeFailure.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
         }
@@ -3193,7 +3300,7 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    kubernetesNamespaceName(tenant.id),
+    { name: kubernetesNamespaceName(tenant.id), plane: "execution" },
     "openclaw-enterprise/agent-fixture:local",
     "agent-plugin-compute",
     "agent",
@@ -3202,11 +3309,10 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
     undefined,
     false,
     undefined,
-    driver.harnessAuthForRevision(
-      candidate,
-      harnessAuthContext(candidate),
-      kubernetesGatewayNamespaceName(tenant.id),
-    ),
+    driver.harnessAuthForRevision(candidate, harnessAuthContext(candidate), {
+      name: kubernetesGatewayNamespaceName(tenant.id),
+      plane: "control",
+    }),
     [],
     [],
     { name: "plugin-runtime-agent-plugin-compute", runtime },
@@ -3270,13 +3376,16 @@ test("Kubernetes dedicated Codex gateway mounts broker-only runtime without plug
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    "oce-plugin-compute",
+    { name: "oce-plugin-compute", plane: "execution" },
     "openclaw-enterprise/gateway-fixture:local",
     "gateway-plugin-compute",
     "gateway",
     {},
     "info",
-    driver.gatewayConfiguration(revision(), undefined, "oce-plugin-compute"),
+    driver.gatewayConfiguration(revision(), undefined, {
+      name: "oce-plugin-compute",
+      plane: "execution",
+    }),
     false,
     undefined,
     undefined,
@@ -3328,13 +3437,16 @@ test("Kubernetes embedded OpenClaw gateway mounts broker-only Codex bridge runti
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    "oce-plugin-compute",
+    { name: "oce-plugin-compute", plane: "execution" },
     "openclaw-enterprise/gateway-fixture:local",
     "gateway-plugin-compute",
     "gateway",
     {},
     "info",
-    driver.gatewayConfiguration(candidate, undefined, "oce-plugin-compute"),
+    driver.gatewayConfiguration(candidate, undefined, {
+      name: "oce-plugin-compute",
+      plane: "execution",
+    }),
     true,
     candidate.servicePrincipalId,
     driver.harnessAuthForRevision(
@@ -3350,7 +3462,7 @@ test("Kubernetes embedded OpenClaw gateway mounts broker-only Codex bridge runti
           },
         },
       },
-      "oce-plugin-compute",
+      { name: "oce-plugin-compute", plane: "execution" },
     ),
     [],
     [],
@@ -3401,7 +3513,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
   const predecessorRevisionName = `${agentName}-rev-${shortHash(predecessor.id)}`;
   const defaultPolicies = new Map(
     driver
-      .networkPolicies(tenantOwnership, namespace)
+      .networkPolicies(tenantOwnership, { name: namespace, plane: "execution" })
       .map((policy) => [policy.metadata.name, policy]),
   );
   const reconciled = [];
@@ -3422,7 +3534,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
       "Secret",
       transportName,
       { namespaceId: tenant.id, agentId: candidate.agentId },
-      cp,
+      { name: cp, plane: "execution" },
     ),
     type: "Opaque",
     data: { "app-server-token": Buffer.from("fixture-transport").toString("base64") },
@@ -3445,10 +3557,13 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
       listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [] }),
     },
   });
-  driver.resolveNamespace = async () => ({ name: namespace, external: false });
+  driver.resolveNamespace = async () => ({
+    name: { name: namespace, plane: "execution" },
+    external: false,
+  });
   driver.get = async (kind, name, target) =>
     kind === "Secret"
-      ? credentialObjects.get(`${target}:${name}`)
+      ? credentialObjects.get(`${target.name}:${name}`)
       : kind === "Namespace"
         ? {
             ...(name === cp
@@ -3459,7 +3574,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
         : undefined;
   driver.getOwned = async (kind, name, target) => {
     if (kind === "Secret" && name !== driver.workspaceNodeName(candidate)) {
-      return credentialObjects.get(`${target}:${name}`);
+      return credentialObjects.get(`${target.name}:${name}`);
     }
     if (kind === "Secret") {
       return enrolledNodeSecret(driver, candidate, namespace);
@@ -3474,7 +3589,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
           "Deployment",
           name,
           { ...tenantOwnership, agentId: candidate.agentId },
-          namespace,
+          { name: namespace, plane: "execution" },
         ),
         metadata: {
           name,
@@ -3517,7 +3632,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
                 servicePrincipalId: candidate.servicePrincipalId,
                 revisionId: candidate.id,
               },
-              namespace,
+              { name: namespace, plane: "execution" },
             )
           : structuredClone(reconciledCandidate)),
         metadata: { ...(reconciledCandidate?.metadata ?? { name }), generation: 1 },
@@ -3533,7 +3648,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
           agentId: candidate.agentId,
           servicePrincipalId: candidate.servicePrincipalId,
         },
-        namespace,
+        { name: namespace, plane: "execution" },
         { "app.kubernetes.io/name": predecessorRevisionName },
       );
     }
@@ -3579,13 +3694,16 @@ test("Kubernetes dedicated Codex gateway mounts bridge runtime and prior plugin 
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    "oce-plugin-compute",
+    { name: "oce-plugin-compute", plane: "execution" },
     "openclaw-enterprise/gateway-fixture:local",
     "gateway-plugin-compute",
     "gateway",
     {},
     "info",
-    driver.gatewayConfiguration(revision(), undefined, "oce-plugin-compute"),
+    driver.gatewayConfiguration(revision(), undefined, {
+      name: "oce-plugin-compute",
+      plane: "execution",
+    }),
     false,
     undefined,
     undefined,
@@ -3661,13 +3779,16 @@ test("Kubernetes plugin-free Codex gateway receives explicit Agent approvers", (
     const deployment = driver.deployment(
       "gateway-plugin-free",
       { namespaceId: tenant.id, agentId: agent.id, revisionId: candidate.id },
-      "oce-plugin-compute",
+      { name: "oce-plugin-compute", plane: "execution" },
       "openclaw-enterprise/gateway-fixture:local",
       "gateway-plugin-compute",
       "gateway",
       {},
       "info",
-      driver.gatewayConfiguration(candidate, undefined, "oce-plugin-compute"),
+      driver.gatewayConfiguration(candidate, undefined, {
+        name: "oce-plugin-compute",
+        plane: "execution",
+      }),
       false,
       undefined,
       undefined,

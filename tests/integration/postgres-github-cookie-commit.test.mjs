@@ -215,10 +215,10 @@ test(
       1,
     );
 
-    // Headerless (CLI) sign-out on the humanLogin profile goes through
-    // runPrivateEndpoint's /oce/sign-out Origin synthesis. Main still accepts
-    // it; once #509 lands and sign-out requires a browser Origin, this flips
-    // to 403 and the synthesis branch goes away.
+    // Headerless (CLI) sign-out is rejected: sign-out is a cookie mutation and
+    // requires the exact configured browser Origin (requireSessionMutationOrigin)
+    // before the humanLogin profile's private endpoint runs. Only password
+    // sign-in keeps the Origin synthesis for command-line clients.
     const headerlessLogin = await ordinary.inject({
       method: "POST",
       url: "/api/auth/sign-in/email",
@@ -231,17 +231,27 @@ test(
       url: "/api/auth/sign-out",
       headers: { cookie: headerlessCookie },
     });
-    assert.equal(headerlessLogout.statusCode, 200, headerlessLogout.body);
-    assert.notEqual(
+    assert.equal(headerlessLogout.statusCode, 403, headerlessLogout.body);
+    assert.equal(
       headerlessLogout.headers["set-cookie"],
       undefined,
-      "committed headerless logout clears the browser cookie",
+      "rejected headerless logout must not clear the browser cookie",
     );
     assert.equal(
       (
         await ordinary.inject({ url: "/api/auth/session", headers: { cookie: headerlessCookie } })
-      ).json().data,
-      null,
+      ).json().data.user.id,
+      recoveryUserId,
+      "rejected headerless logout leaves the session current",
+    );
+    assert.equal(
+      (
+        await observer.query(
+          "SELECT count(*)::int AS count FROM occ.audit_events WHERE action='authentication.logout'",
+        )
+      ).rows[0].count,
+      1,
+      "rejected headerless logout writes no logout audit",
     );
 
     const adminLogin = await ordinary.inject({
