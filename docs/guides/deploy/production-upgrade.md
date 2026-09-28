@@ -16,14 +16,10 @@ Before either kind of release, complete the
 [upgrade migration checklist](upgrade-checklist.md) so persisted control-plane,
 Driver, runtime, and cluster-owned state has an explicit disposition.
 
-The helper does not apply intentional non-image changes to Helm values or
-Installation configuration. A release that needs such changes depends on a
-separate reviewed configuration-update workflow and a release-specific order
-compatible with both images. Start the image helper only when its protected
-files match the live configuration. If the changes cannot be applied safely
-before the image upgrade, or no supported workflow exists, stop until a reviewed
-coordinated procedure is available; do not pass intended changes as drift to the
-image helper.
+To release reviewed settings with an image, pass separate candidate values
+and Installation files as described below. The baseline files must match live
+state, including image fields. The command rejects unexpected drift rather than
+incorporating it into a release.
 
 The command supports the production Helm and Kubernetes Compute path. It does
 not build images, create backups, provision infrastructure, or prove model and
@@ -80,6 +76,43 @@ export UPGRADE_EVIDENCE="/secure/occ/upgrades/$(date -u +%Y%m%dT%H%M%SZ)"
 
 The evidence directory must not exist. The command creates it with mode `0700`.
 
+### Include reviewed settings
+
+Keep `--values` and `--installation` as the current live baseline. For desired
+configuration changes, make separate owner-only copies and review the complete
+diff against that baseline:
+
+```bash
+cp /secure/occ/values.yaml /secure/occ/candidate-values.yaml
+cp /secure/occ/installation.yaml /secure/occ/candidate-installation.yaml
+chmod 600 /secure/occ/candidate-values.yaml /secure/occ/candidate-installation.yaml
+```
+
+Edit only the intended settings in these copies, such as the
+[Slack directory proxy](../integrations/slack.md#configure-both-slack-proxies)
+and [curated PluginDriver](../../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+Review compatibility with the selected images and existing Agent drafts and
+credentials before the maintenance window. Rendering and the Helm dry run do
+not validate the Installation's Driver configuration or prove external access.
+The command does not change IAM, authentication, Installation identity, database,
+bootstrap, native administration, or repository broker settings through these
+candidate files. Select controller and runtime images with their image flags;
+do not edit those image fields or the managed Installation checksum in the copies.
+
+Add either or both flags to any upgrade command below:
+
+```text
+--candidate-values /secure/occ/candidate-values.yaml
+--candidate-installation /secure/occ/candidate-installation.yaml
+```
+
+The helper saves the reviewed inputs in its private evidence, applies the image
+selections and preserved broker endpoint, and writes the final candidate to the
+baseline paths during the upgrade. An Installation change also updates its
+Secret and restarts OCC with the new checksum. A controller-only release still
+does not deploy Agents; plan any Agent changes separately. Keep candidate files
+unchanged and available at the same paths for recovery.
+
 ## Bind the Installation once
 
 Skip this step when the live Installation Secret already has the correct
@@ -128,8 +161,8 @@ settings. Keep the protected values equal to live values; do not add the hostnam
 manually before running the helper. It then renders the chart and performs a
 server-side dry run.
 
-The command changes `images.controller`, persists the preserved broker endpoint
-when enabled, scales the API and worker to zero, and waits for their Pods to
+The command applies reviewed candidate settings, changes `images.controller`,
+persists the preserved broker endpoint when enabled, scales the API and worker to zero, and waits for their Pods to
 terminate. It then runs Helm, waits for the API and worker, verifies their image,
 and confirms OCC authentication recovers. Helm restores the candidate
 Deployments after its initialization hooks succeed.
@@ -151,7 +184,7 @@ upgrade.
 Success looks like:
 
 ```text
-Upgraded controller image; runtime configuration stayed unchanged and no Agent deployments were requested.
+Upgraded controller image; no Agent deployments were requested.
 ```
 
 This result confirms the helper's rollout, not recovery of repository-bound
@@ -235,9 +268,10 @@ inventory and dispatch records are needed to avoid duplicate deployments. If
 preparation did not finish, the helper stopped before mutation; use a new
 evidence directory after resolving the failure. Otherwise, repeat the original
 command with the same arguments, protected file paths, kubeconfig contents,
-OCC URL, script, and chart, adding `--resume`. The helper reads the live Secret
-and Helm release first, accepts only the recorded baseline or candidate, and
-continues the recorded fleet. It rejects unrelated drift. The evidence includes
+OCC URL, script, and chart, adding `--resume`. Include the original candidate
+flags and keep their files semantically unchanged. The helper uses the recorded
+candidate, reads the live Secret and Helm release, accepts only the recorded
+baseline or candidate, and continues the recorded fleet. It rejects unrelated drift. The evidence includes
 Secret contents and must remain private.
 
 If a killed process leaves `.upgrade-lock`, first establish that no helper or
@@ -253,7 +287,7 @@ A `pending-*` Helm release must be resolved separately before the helper can
 continue. Do not start the old API or worker against a migrated database. If the
 candidate Helm revision is deployed, the helper reads it back and continues
 without rerunning Helm. Otherwise, wait
-until the initialization Pods are terminal, then run the **candidate controller
+until the initialization Job and its Pods are terminal, then run the **candidate controller
 image** with `node scripts/migrate-production.mjs --check` against the same
 retained database, using its dedicated migrator credential and required database
 CA in an authorized environment. Keep its exit-zero `migration.checked` output in

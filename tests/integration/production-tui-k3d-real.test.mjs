@@ -1264,6 +1264,24 @@ test(
         controllerImage: upgradeImages.controller,
       });
 
+      // Configure a curated catalog and an unused documentation-range proxy in
+      // the reviewed candidate; the live baseline remains unchanged until upgrade.
+      const candidateValuesPath = join(directory, "candidate-values.json");
+      const candidateInstallationPath = join(directory, "candidate-installation.json");
+      const candidateValues = JSON.parse(await run("yq", ["-o=json", ".", valuesPath]));
+      candidateValues.api = {
+        ...candidateValues.api,
+        channelDirectoryProxyUrl: "http://198.51.100.25:3128",
+      };
+      const candidateInstallation = JSON.parse(await run("yq", ["-o=json", ".", installationPath]));
+      candidateInstallation.drivers.plugin = {
+        id: "codex-plugin",
+        configuration: { catalogSource: "openai-curated" },
+      };
+      await writeFile(candidateValuesPath, JSON.stringify(candidateValues), { mode: 0o600 });
+      await writeFile(candidateInstallationPath, JSON.stringify(candidateInstallation), {
+        mode: 0o600,
+      });
       const upgradeEvidence = join(directory, "runtime-upgrade");
       const runtimeArguments = [
         "--kubeconfig",
@@ -1278,6 +1296,10 @@ test(
         valuesPath,
         "--installation",
         installationPath,
+        "--candidate-values",
+        candidateValuesPath,
+        "--candidate-installation",
+        candidateInstallationPath,
         "--runtime-image",
         upgradeImages.runtime,
         "--source-revision",
@@ -1339,6 +1361,19 @@ test(
       assert.match(
         output,
         /runtime image; controller image remained unchanged and 2 running Agents selected new revisions/u,
+      );
+      const apiDeployment = await get("deployment", "openclaw-enterprise-api");
+      const apiContainer = apiDeployment.spec.template.spec.containers.find(
+        ({ name }) => name === "api",
+      );
+      assert.equal(
+        apiContainer.env.find(({ name }) => name === "OCC_CHANNEL_DIRECTORY_PROXY_URL").value,
+        "http://198.51.100.25:3128",
+      );
+      const upgradedInstallation = JSON.parse(await run("yq", ["-o=json", ".", installationPath]));
+      assert.equal(
+        upgradedInstallation.drivers.plugin.configuration.catalogSource,
+        "openai-curated",
       );
       for (const component of ["api", "worker"]) {
         const observed = await kubectl(

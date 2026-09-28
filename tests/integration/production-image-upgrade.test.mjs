@@ -198,7 +198,7 @@ fi
       cwd: repository,
       env: environment,
     }),
-    /protected Helm values differ from the live release outside the controller image/,
+    /protected Helm values differ from the live release/,
   );
   await writeFile(protectedFiles.values, valuesDocument, { mode: 0o600 });
 
@@ -387,9 +387,5 @@ esac
   assert.match(
     await readFile(commandLog, "utf8"),
     /exec gateway-test --container gateway -- node \/app\/openclaw\.mjs doctor --lint --json --severity-min error/u,
-  );
-  assert.equal(
-    (await readFile(join(directory, "ready-evidence", "installation-checksum"), "utf8")).trim(),
-    "e".repeat(64),
   );
 });

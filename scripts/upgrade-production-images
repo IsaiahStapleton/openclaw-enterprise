@@ -6,13 +6,15 @@ usage() {
 Usage: scripts/upgrade-production-images \
   --kubeconfig FILE --context NAME --namespace NAME --release NAME \
   --values FILE --installation FILE \
+  [--candidate-values FILE] [--candidate-installation FILE] \
   [--controller-image IMAGE@sha256:DIGEST] \
   [--runtime-image IMAGE@sha256:DIGEST] \
   --source-revision FULL_GIT_SHA --evidence-dir DIRECTORY \
   [--occ PATH] [--timeout-seconds SECONDS] [--resume] [--migration-history-checked]
 
-Select at least one image. A controller-only upgrade leaves the Installation and
-Agent revisions unchanged. A runtime upgrade restarts OCC on its current image,
+Select at least one image. Candidate files contain reviewed settings changes;
+image fields are selected only by the image flags. A controller-only upgrade
+does not deploy Agent revisions. A runtime upgrade restarts OCC on its current image,
 then redeploys every Agent that was running when the command began. Resume with
 the same arguments and evidence directory after inspecting any unknown outcomes.
 OCC_URL, OCC_SERVICE_KEY_FILE, and OCC_CA_BUNDLE configure the OCC CLI connection.
@@ -59,7 +61,7 @@ json_file_name() {
   printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
 }
 
-normalize_yaml_without() {
+project_yaml() {
   local path=$1
   local filter=$2
   local output=$3
@@ -90,6 +92,8 @@ namespace=
 release=
 values=
 installation=
+requested_values=
+requested_installation=
 controller_image=
 runtime_image=
 source_revision=
@@ -101,7 +105,7 @@ migration_history_checked=0
 
 while (($#)); do
   case "$1" in
-    --kubeconfig | --context | --namespace | --release | --values | --installation | --controller-image | --runtime-image | --source-revision | --evidence-dir | --occ | --timeout-seconds)
+    --kubeconfig | --context | --namespace | --release | --values | --installation | --candidate-values | --candidate-installation | --controller-image | --runtime-image | --source-revision | --evidence-dir | --occ | --timeout-seconds)
       (($# >= 2)) || die "$1 requires a value."
       case "$1" in
         --kubeconfig) kubeconfig=$2 ;;
@@ -110,6 +114,8 @@ while (($#)); do
         --release) release=$2 ;;
         --values) values=$2 ;;
         --installation) installation=$2 ;;
+        --candidate-values) requested_values=$2 ;;
+        --candidate-installation) requested_installation=$2 ;;
         --controller-image) controller_image=$2 ;;
         --runtime-image) runtime_image=$2 ;;
         --source-revision) source_revision=$2 ;;
@@ -162,6 +168,18 @@ fi
 require_private_file "$kubeconfig"
 require_private_file "$values"
 require_private_file "$installation"
+[[ -z "$requested_values" ]] || require_private_file "$requested_values"
+[[ -z "$requested_installation" ]] || require_private_file "$requested_installation"
+# The protected baselines are replaced during execution; candidate inputs must
+# remain independent, including when different paths are hard links.
+python3 - "$values" "$installation" "$requested_values" "$requested_installation" <<'PYTHON'
+import os, sys
+paths = [path for path in sys.argv[1:] if path]
+for index, path in enumerate(paths):
+    for other in paths[:index]:
+        if os.path.samefile(path, other):
+            sys.exit("Baseline and candidate inputs must be distinct files.")
+PYTHON
 : "${OCC_URL:?Set OCC_URL to the trusted HTTPS OCC origin.}"
 [[ "$OCC_URL" == https://* ]] || die "OCC_URL must use HTTPS."
 : "${OCC_SERVICE_KEY_FILE:?Set OCC_SERVICE_KEY_FILE to a protected service-key response.}"
@@ -183,7 +201,7 @@ trap 'rmdir "$evidence_dir/.upgrade-lock" 2>/dev/null || true' EXIT
 
 # Bind resume to the same inputs and chart. Kubeconfig bytes bind the selected
 # context to the same cluster even if the file is later replaced.
-parameters=$(python3 - "$kubeconfig" "$context" "$namespace" "$release" "$values" "$installation" "$controller_image" "$runtime_image" "$source_revision" "$OCC_URL" "$occ" "${OCC_CA_BUNDLE:-}" <<'PYTHON'
+parameters=$(python3 - "$kubeconfig" "$context" "$namespace" "$release" "$values" "$installation" "$controller_image" "$runtime_image" "$source_revision" "$OCC_URL" "$occ" "${OCC_CA_BUNDLE:-}" "$requested_values" "$requested_installation" <<'PYTHON'
 import hashlib, json, os, sys
 chart = "deploy/helm/openclaw-enterprise"
 h = hashlib.sha256()
@@ -219,6 +237,8 @@ printf '%s\n' "$source_revision" >"$evidence_dir/source-revision"
 [[ -z "$runtime_image" ]] || printf '%s\n' "$runtime_image" >"$evidence_dir/runtime-image"
 cp "$values" "$evidence_dir/before-values.yaml"
 cp "$installation" "$evidence_dir/before-installation.yaml"
+[[ -z "$requested_values" ]] || cp "$requested_values" "$evidence_dir/requested-values.yaml"
+[[ -z "$requested_installation" ]] || cp "$requested_installation" "$evidence_dir/requested-installation.yaml"
 
 "${kube[@]}" --request-timeout=15s get --raw=/readyz >"$evidence_dir/kubernetes-readyz"
 helm status "$release" "${helm_args[@]}" >"$evidence_dir/before-helm-status.txt"
@@ -249,29 +269,10 @@ jq -er --arg key "$installation_key" '.data[$key]' "$live_installation_secret" |
   python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))' \
     >"$evidence_dir/before-live-installation.yaml"
 
-values_filter='.'
-if [[ -n "$controller_image" ]]; then
-  values_filter='del(.images.controller)'
-fi
-normalize_yaml_without "$values" "$values_filter" \
-  "$evidence_dir/before-values-without-controller.json"
-normalize_yaml_without "$evidence_dir/before-live-values.yaml" "$values_filter" \
-  "$evidence_dir/before-live-values-without-controller.json"
-cmp -s "$evidence_dir/before-values-without-controller.json" \
-  "$evidence_dir/before-live-values-without-controller.json" ||
-  die "the protected Helm values differ from the live release outside the controller image; refresh --values before upgrading."
-
-runtime_filter='.'
-if [[ -n "$runtime_image" ]]; then
-  runtime_filter='del(.drivers.compute.configuration.images.gateway, .drivers.compute.configuration.images.agent)'
-fi
-normalize_yaml_without "$installation" "$runtime_filter" \
-  "$evidence_dir/before-installation-without-runtime-images.json"
-normalize_yaml_without "$evidence_dir/before-live-installation.yaml" "$runtime_filter" \
-  "$evidence_dir/before-live-installation-without-runtime-images.json"
-cmp -s "$evidence_dir/before-installation-without-runtime-images.json" \
-  "$evidence_dir/before-live-installation-without-runtime-images.json" ||
-  die "the protected Installation YAML differs from the live Secret outside the runtime images; refresh --installation before upgrading."
+matches_yaml "$evidence_dir/before-values.yaml" "$evidence_dir/before-live-values.yaml" ||
+  die "the protected Helm values differ from the live release; refresh --values before upgrading."
+matches_yaml "$evidence_dir/before-installation.yaml" "$evidence_dir/before-live-installation.yaml" ||
+  die "the protected Installation YAML differs from the live Secret; refresh --installation before upgrading."
 
 "${kube[@]}" get deployments,statefulsets,pods,persistentvolumeclaims --all-namespaces \
   --output json >"$evidence_dir/before-workloads.json"
@@ -321,13 +322,13 @@ if [[ -n "$runtime_image" ]]; then
   ' "$inventory" >"$targets"
   target_count=$(wc -l <"$targets" | tr -d ' ')
 
-  current_gateway=$(yq -er '.drivers.compute.configuration.images.gateway' "$installation")
-  current_agent=$(yq -er '.drivers.compute.configuration.images.agent' "$installation")
+  current_gateway=$(yq -er '.drivers.compute.configuration.images.gateway' "$evidence_dir/before-installation.yaml")
+  current_agent=$(yq -er '.drivers.compute.configuration.images.agent' "$evidence_dir/before-installation.yaml")
   [[ "$runtime_image" != "$current_gateway" || "$runtime_image" != "$current_agent" ]] ||
     die "both runtime image slots already select the candidate digest."
 fi
 
-current_controller=$(yq -er '.images.controller' "$values")
+current_controller=$(yq -er '.images.controller' "$evidence_dir/before-values.yaml")
 if [[ -n "$controller_image" && -z "$runtime_image" && "$controller_image" == "$current_controller" ]]; then
   die "the controller image already selects the candidate digest."
 fi
@@ -335,16 +336,40 @@ selected_controller=${controller_image:-$current_controller}
 
 candidate_values="$evidence_dir/candidate-values.yaml"
 candidate_installation="$evidence_dir/candidate-installation.yaml"
-cp "$values" "$candidate_values"
-cp "$installation" "$candidate_installation"
+if [[ -n "$requested_values" ]]; then
+  cp "$evidence_dir/requested-values.yaml" "${candidate_values}.requested"
+else
+  cp "$evidence_dir/before-values.yaml" "${candidate_values}.requested"
+fi
+if [[ -n "$requested_installation" ]]; then
+  cp "$evidence_dir/requested-installation.yaml" "${candidate_installation}.requested"
+else
+  cp "$evidence_dir/before-installation.yaml" "${candidate_installation}.requested"
+fi
+# Image selection and trust, persistence, and Secret identity stay under the
+# existing upgrade contract. Compare semantic values before applying overrides.
+values_guard='{controller: .images.controller, auth: .auth, database: .database, installation: .installation, bootstrap: .bootstrap, agentNativeAdmin: .agentNativeAdmin, repositoryCredentials: .repositoryCredentials, checksum: .controlPlane.installationChecksum}'
+installation_guard='{iam: .drivers.iam, gateway: .drivers.compute.configuration.images.gateway, agent: .drivers.compute.configuration.images.agent}'
+project_yaml "$evidence_dir/before-values.yaml" "$values_guard" "$evidence_dir/values-guard.json"
+project_yaml "${candidate_values}.requested" "$values_guard" "$evidence_dir/candidate-values-guard.json"
+cmp -s "$evidence_dir/values-guard.json" "$evidence_dir/candidate-values-guard.json" ||
+  die "candidate values change an image, identity, database, broker, or managed checksum; use the image flags and preserve those settings."
+project_yaml "$evidence_dir/before-installation.yaml" "$installation_guard" "$evidence_dir/installation-guard.json"
+project_yaml "${candidate_installation}.requested" "$installation_guard" "$evidence_dir/candidate-installation-guard.json"
+cmp -s "$evidence_dir/installation-guard.json" "$evidence_dir/candidate-installation-guard.json" ||
+  die "candidate Installation changes IAM or runtime images; use the runtime image flag and preserve IAM."
+matches_yaml "${candidate_values}.requested" "${candidate_values}.requested" || die "candidate values must be a YAML object."
+matches_yaml "${candidate_installation}.requested" "${candidate_installation}.requested" || die "candidate Installation must be a YAML object."
+mv "${candidate_values}.requested" "$candidate_values"
+mv "${candidate_installation}.requested" "$candidate_installation"
 
 # Keep the endpoint already pinned by certificates and repository sessions.
 # Read it only after protected/live values and Installation identity agree.
-if [[ $(yq -r '.repositoryCredentials.enabled // false' "$values") == true ]]; then
+if [[ $(yq -r '.repositoryCredentials.enabled // false' "$evidence_dir/before-values.yaml") == true ]]; then
   broker_deployment="$evidence_dir/before-broker-deployment.json"
   "${kube[@]}" --namespace "$namespace" get deployment openclaw-enterprise-worker \
     --output json >"$broker_deployment"
-  yq -o=json '.' "$values" >"$evidence_dir/before-broker-values.json"
+  yq -o=json '.' "$evidence_dir/before-values.yaml" >"$evidence_dir/before-broker-values.json"
   broker_hostname=$(python3 - "$broker_deployment" "$evidence_dir/before-broker-values.json" "$namespace" "$release" <<'PYTHON'
 import json, re, sys
 try:
@@ -380,6 +405,9 @@ if [[ -n "$runtime_image" ]]; then
     '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
      .drivers.compute.configuration.images.agent = strenv(RUNTIME_IMAGE)' \
     "$candidate_installation"
+fi
+if ! matches_yaml "$candidate_installation" "$evidence_dir/before-live-installation.yaml"; then
+  touch "$evidence_dir/installation-changed"
   installation_checksum=$(
     python3 -c \
       'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
@@ -415,6 +443,12 @@ installation_id=$(cat "$evidence_dir/installation-id")
 installation_secret=$(cat "$evidence_dir/installation-secret-name")
 installation_key=$(cat "$evidence_dir/installation-secret-key")
 selected_controller=$(cat "$evidence_dir/selected-controller")
+if [[ -n "$requested_values" ]]; then
+  matches_yaml "$requested_values" "$evidence_dir/requested-values.yaml" || die "reviewed candidate values changed after preparation."
+fi
+if [[ -n "$requested_installation" ]]; then
+  matches_yaml "$requested_installation" "$evidence_dir/requested-installation.yaml" || die "reviewed candidate Installation changed after preparation."
+fi
 
 # Read the live state on every attempt before deciding whether a mutation is
 # needed. An accepted write whose response was lost must not be repeated.
@@ -470,9 +504,14 @@ if ((helm_complete)) && ! matches_yaml "$evidence_dir/current-live-installation.
 fi
 if [[ -f "$evidence_dir/helm-started" ]] && ((helm_complete == 0)); then
   ((migration_history_checked)) || die "Helm's outcome is unresolved. Inspect the release and initialization Job, run the candidate migration --check against the retained database, then resume with --migration-history-checked."
-  # A terminated Helm client can leave the initialization Job running. Do not
-  # replace its hook or race another migrator until all of its Pods are terminal.
-  "${kube[@]}" --namespace "$namespace" get pods \
+  # A Job with no running Pods can still create a new Pod. Require both the
+  # Job and its Pods to be terminal before another migration may start.
+  "${kube[@]}" --request-timeout=15s --namespace "$namespace" get jobs \
+    --selector "app.kubernetes.io/instance=$release,app.kubernetes.io/component=initialization" \
+    --output json >"$evidence_dir/current-initialization-jobs.json"
+  jq -e 'all(.items[]; any(.status.conditions[]?; (.type == "Complete" or .type == "Failed") and .status == "True"))' \
+    "$evidence_dir/current-initialization-jobs.json" >/dev/null || die "an initialization Job is still active; wait for it to finish before retrying Helm."
+  "${kube[@]}" --request-timeout=15s --namespace "$namespace" get pods \
     --selector "app.kubernetes.io/instance=$release,app.kubernetes.io/component=initialization" \
     --output json >"$evidence_dir/current-initialization-pods.json"
   jq -e 'all(.items[]; .status.phase == "Succeeded" or .status.phase == "Failed")' \
@@ -482,20 +521,27 @@ fi
 if ((helm_complete == 0)); then
   # Stop the old database writers before the migration hook. Other writers and
   # autoscalers must already be stopped by the operator's maintenance window.
+  deadline=$((SECONDS + timeout_seconds))
+  quiescence_remaining() {
+    remaining_seconds=$((deadline - SECONDS))
+    ((remaining_seconds > 0)) || die "OCC quiescence timed out; migration was not started."
+  }
   for component in api worker; do
     deployment="openclaw-enterprise-$component"
-    "${kube[@]}" --namespace "$namespace" get "deployment/$deployment" --output json \
+    quiescence_remaining
+    "${kube[@]}" --request-timeout="${remaining_seconds}s" --namespace "$namespace" get "deployment/$deployment" --output json \
       >"$evidence_dir/current-$component-deployment.json"
     jq -e --arg release "$release" --arg component "$component" '
       .metadata.labels["app.kubernetes.io/instance"] == $release and
       .metadata.labels["app.kubernetes.io/component"] == $component and
       (.spec.replicas == 0 or .spec.replicas == 1)
     ' "$evidence_dir/current-$component-deployment.json" >/dev/null || die "$deployment has unexpected ownership or replicas."
-    "${kube[@]}" --namespace "$namespace" scale "deployment/$deployment" --replicas=0
+    quiescence_remaining
+    "${kube[@]}" --request-timeout="${remaining_seconds}s" --namespace "$namespace" scale "deployment/$deployment" --replicas=0
   done
-  deadline=$((SECONDS + timeout_seconds))
   while true; do
-    "${kube[@]}" --namespace "$namespace" get pods \
+    quiescence_remaining
+    "${kube[@]}" --request-timeout="${remaining_seconds}s" --namespace "$namespace" get pods \
       --selector "app.kubernetes.io/name=openclaw-enterprise,app.kubernetes.io/instance=$release" \
       --output json >"$evidence_dir/quiescence-pods.json"
     if jq -e '[.items[] | select(.metadata.labels["app.kubernetes.io/component"] == "api" or .metadata.labels["app.kubernetes.io/component"] == "worker")] | length == 0' \
@@ -506,14 +552,15 @@ if ((helm_complete == 0)); then
     sleep 2
   done
   for component in api worker; do
-    "${kube[@]}" --namespace "$namespace" get "deployment/openclaw-enterprise-$component" --output json \
+    quiescence_remaining
+    "${kube[@]}" --request-timeout="${remaining_seconds}s" --namespace "$namespace" get "deployment/openclaw-enterprise-$component" --output json \
       >"$evidence_dir/quiescence-$component-deployment.json"
     jq -e '.spec.replicas == 0' "$evidence_dir/quiescence-$component-deployment.json" >/dev/null ||
       die "OCC replicas changed during quiescence; migration was not started."
   done
 
   install_atomically "$candidate_values" "$values"
-  if [[ -n "$runtime_image" ]]; then
+  if [[ -f "$evidence_dir/installation-changed" ]]; then
     install_atomically "$candidate_installation" "$installation"
     if ! matches_yaml "$evidence_dir/current-live-installation.yaml" "$candidate_installation"; then
       python3 - "$live_secret" "$candidate_installation" "$installation_key" <<'PYTHON' |
@@ -547,7 +594,7 @@ for component in api worker; do
     >"$evidence_dir/after-$component-deployment.json"
   jq -e '.spec.replicas == 1' "$evidence_dir/after-$component-deployment.json" >/dev/null ||
     die "$deployment does not have its expected replica."
-  if [[ -n "$runtime_image" ]]; then
+  if [[ -f "$evidence_dir/installation-changed" ]]; then
     installation_checksum=$(cat "$evidence_dir/installation-checksum")
     jq -e --arg checksum "$installation_checksum" \
       '.spec.template.metadata.annotations["openclaw.dev/installation-checksum"] == $checksum' \
@@ -747,5 +794,5 @@ if [[ -n "$runtime_image" && -n "$controller_image" ]]; then
 elif [[ -n "$runtime_image" ]]; then
   printf 'Upgraded runtime image; controller image remained unchanged and %s running Agents selected new revisions.\n' "$target_count"
 else
-  printf 'Upgraded controller image; runtime configuration stayed unchanged and no Agent deployments were requested.\n'
+  printf 'Upgraded controller image; no Agent deployments were requested.\n'
 fi

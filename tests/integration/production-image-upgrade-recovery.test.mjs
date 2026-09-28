@@ -13,6 +13,7 @@ const script =
   process.env.OCC_UPGRADE_SCRIPT ?? join(repository, "scripts/upgrade-production-images");
 const controller = `registry.example.invalid/controller@sha256:${"a".repeat(64)}`;
 const runtime = `registry.example.invalid/runtime@sha256:${"b".repeat(64)}`;
+const newController = `registry.example.invalid/controller@sha256:${"e".repeat(64)}`;
 const oldRuntime = `registry.example.invalid/runtime@sha256:${"c".repeat(64)}`;
 
 // This fixture substitutes the external command protocols, not the upgrade
@@ -79,6 +80,8 @@ if (tool === 'helm') {
       const component = args.find((a) => a.startsWith('deployment/')).split('-').at(-1);
       out({metadata: {labels: {'app.kubernetes.io/instance': 'oce', 'app.kubernetes.io/component': component}}, spec: {replicas: state[component], template: {metadata: {annotations: {'openclaw.dev/installation-checksum': state.checksum}}}}});
     }
+  } else if (args.includes('get') && args.includes('jobs')) {
+    out({items: state.initJobActive ? [{status: {active: 0, conditions: []}}] : []});
   } else if (args.includes('get') && args.includes('pods')) {
     const initialization = args.some((a) => a.includes('component=initialization'));
     const revision = args.some((a) => a.includes('openclaw.dev/revision=rev_new'));
@@ -98,7 +101,7 @@ if (tool === 'helm') {
 }
 `;
 
-async function fixture(t, { agent = false } = {}) {
+async function fixture(t, { agent = false, candidates = false, controllerOnly = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "occ-upgrade-recovery-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const bin = join(directory, "bin");
@@ -148,6 +151,23 @@ async function fixture(t, { agent = false } = {}) {
   })) {
     await writeFile(join(directory, name), content, { mode: 0o600 });
   }
+  if (candidates) {
+    const candidateValues = JSON.parse(values);
+    candidateValues.api = { channelDirectoryProxyUrl: "http://198.51.100.25:3128" };
+    const candidateInstallation = JSON.parse(installation);
+    candidateInstallation.drivers.plugin = {
+      id: "codex-plugin",
+      configuration: { catalogSource: "openai-curated" },
+    };
+    await writeFile(join(directory, "candidate-values"), JSON.stringify(candidateValues), {
+      mode: 0o600,
+    });
+    await writeFile(
+      join(directory, "candidate-installation"),
+      JSON.stringify(candidateInstallation),
+      { mode: 0o600 },
+    );
+  }
   const evidence = join(directory, "evidence");
   const args = [
     "--kubeconfig",
@@ -162,8 +182,15 @@ async function fixture(t, { agent = false } = {}) {
     join(directory, "values"),
     "--installation",
     join(directory, "installation"),
-    "--runtime-image",
-    runtime,
+    ...(controllerOnly ? ["--controller-image", newController] : ["--runtime-image", runtime]),
+    ...(candidates
+      ? [
+          "--candidate-values",
+          join(directory, "candidate-values"),
+          "--candidate-installation",
+          join(directory, "candidate-installation"),
+        ]
+      : []),
     "--source-revision",
     "d".repeat(40),
     "--evidence-dir",
@@ -241,6 +268,14 @@ test("failed Helm migration keeps old writers stopped and requires checked histo
   assert.equal((await f.state()).worker, 0);
   await assert.rejects(f.run("--resume"), /migration --check/);
   const state = await f.state();
+  // An active Job may schedule a replacement even with no active Pods.
+  state.initJobActive = true;
+  await writeFile(join(f.directory, "state.json"), JSON.stringify(state));
+  await assert.rejects(
+    f.run("--resume", "--migration-history-checked"),
+    /initialization Job is still active/,
+  );
+  state.initJobActive = false;
   state.initActive = true;
   await writeFile(join(f.directory, "state.json"), JSON.stringify(state));
   await assert.rejects(
@@ -296,4 +331,81 @@ test("resume rejects malformed protected inputs before another mutation", async 
   await writeFile(join(f.directory, "values"), "");
   await assert.rejects(f.run("--resume"), /protected Helm values changed/);
   assert.equal((await f.events()).filter((event) => event === "migration").length, 0);
+});
+
+test("reviewed settings survive an interrupted controller upgrade without losing unrelated Secret data", async (t) => {
+  const f = await fixture(t, { candidates: true, controllerOnly: true });
+  // The Secret write succeeds, but its client loses the response before Helm.
+  await f.failNext("lost-secret-response");
+  await assert.rejects(f.run());
+  const interrupted = await f.state();
+  const liveInstallation = JSON.parse(
+    Buffer.from(interrupted.secret.data["installation.yaml"], "base64").toString(),
+  );
+  assert.equal(liveInstallation.drivers.plugin.configuration.catalogSource, "openai-curated");
+  assert.equal(liveInstallation.drivers.compute.configuration.images.gateway, oldRuntime);
+  assert.equal(interrupted.secret.data.retained, "cHJlc2VydmVk");
+  await f.run("--resume");
+  const finalState = await f.state();
+  const liveValues = JSON.parse(
+    (await execute("yq", ["-o=json", ".", join(f.directory, "live-values")])).stdout,
+  );
+  assert.equal(liveValues.api.channelDirectoryProxyUrl, "http://198.51.100.25:3128");
+  assert.equal(liveValues.images.controller, newController);
+  assert.equal(liveValues.controlPlane.installationChecksum, finalState.checksum);
+  assert.equal(finalState.secret.metadata.annotations.retained, "yes");
+  assert.equal((await f.events()).filter((event) => event === "secret-replaced").length, 1);
+  assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+  assert.equal(finalState.dispatches, 0);
+});
+
+test("stale baseline image fields stop before any writes", async (t) => {
+  for (const file of ["values", "installation"]) {
+    await t.test(file, async (subtest) => {
+      const f = await fixture(subtest, { controllerOnly: file === "values" });
+      const path = join(f.directory, file);
+      const baseline = JSON.parse(await readFile(path, "utf8"));
+      if (file === "values") {
+        baseline.images.controller = `registry.example.invalid/controller@sha256:${"f".repeat(64)}`;
+      } else {
+        baseline.drivers.compute.configuration.images.gateway = runtime;
+      }
+      await writeFile(path, JSON.stringify(baseline));
+      await assert.rejects(f.run(), /protected (Helm values|Installation YAML) differ/);
+      assert.deepEqual(await f.events(), []);
+    });
+  }
+});
+
+test("resume refuses altered reviewed candidates before another mutation", async (t) => {
+  const f = await fixture(t, { candidates: true });
+  await f.failNext("lost-secret-response");
+  await assert.rejects(f.run());
+  const path = join(f.directory, "candidate-values");
+  const candidate = JSON.parse(await readFile(path, "utf8"));
+  candidate.api.channelDirectoryProxyUrl = "http://198.51.100.26:3128";
+  await writeFile(path, JSON.stringify(candidate));
+  await assert.rejects(f.run("--resume"), /reviewed candidate values changed after preparation/);
+  assert.equal((await f.events()).filter((event) => event === "migration").length, 0);
+});
+
+test("candidate cannot redirect the Installation Secret or change an image outside the selected flags", async (t) => {
+  for (const field of ["secret", "image"]) {
+    await t.test(field, async (subtest) => {
+      const f = await fixture(subtest, { candidates: true });
+      const path = join(
+        f.directory,
+        field === "secret" ? "candidate-values" : "candidate-installation",
+      );
+      const candidate = JSON.parse(await readFile(path, "utf8"));
+      if (field === "secret") {
+        candidate.installation.secretName = "other-installation";
+      } else {
+        candidate.drivers.compute.configuration.images.agent = runtime;
+      }
+      await writeFile(path, JSON.stringify(candidate));
+      await assert.rejects(f.run(), /candidate (values|Installation) change/);
+      assert.deepEqual(await f.events(), []);
+    });
+  }
 });

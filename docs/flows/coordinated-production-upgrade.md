@@ -1,7 +1,7 @@
 ---
 created: 2026-09-23
 updated: "2026-09-28"
-last_updated_session: "authoring-run/ef0e4dd2-3f52-48b4-a742-60dfbb85864a"
+last_updated_session: "authoring-run/3c681647-a494-4613-809e-11113e5ed11c"
 ---
 
 # Production image upgrade flow
@@ -54,12 +54,14 @@ graph TD
 
 ### 1. Prepare and freeze the target
 
-`scripts/upgrade-production-images:213`
+`scripts/upgrade-production-images:231`
 
 The script verifies the protected files, cluster, deployed Helm release, and
 matching OCC and Secret Installation IDs. It compares protected and live
-configuration outside the selected image fields. A runtime release also reads
-complete authorized inventory and records every running Agent's baseline
+configuration in full, including selected image fields. It captures separate
+reviewed candidate files and rejects changes to protected identity, persistence,
+image, and broker settings. Image flags select images after this comparison.
+A runtime release also reads complete authorized inventory and records every running Agent's baseline
 revision. Nonterminal deployment work, a missing active revision, or an unready
 Namespace stops preparation. Stopped and deleting Agents are excluded.
 
@@ -77,34 +79,38 @@ specified in the [production guide](../guides/deploy/production-upgrade.md).
 
 ### 2. Reconcile a prior attempt
 
-`scripts/upgrade-production-images:421`
+`scripts/upgrade-production-images:453`
 
 On every attempt the script rereads Helm status and values and the Installation
 Secret. Only the recorded baseline or candidate values are accepted; the
 Secret's UID, Installation annotation, and other data must match the baseline.
 Resume also binds the original kubeconfig contents, inputs, OCC URL, script,
-and chart. Unexpected drift or an in-progress Helm release stops the command.
+and chart. Candidate files must still match the saved reviewed inputs; the
+helper applies the saved candidate. Unexpected drift or an in-progress Helm
+release stops the command.
 
 If a previously started Helm release is deployed at a newer revision with the
 candidate values, the script continues without repeating Helm. Otherwise it
 requires the operator's migration-history check and refuses a retry while an
-initialization Pod remains active. A failed or disconnected migration may have
+initialization Job or Pod remains active. A failed or disconnected migration may have
 committed; the check and Job inspection are operator-owned and are not a
 rollback. The guide describes the required attestation and recovery.
 
 ### 3. Quiesce writers and run the candidate release
 
-`scripts/upgrade-production-images:483`
+`scripts/upgrade-production-images:521`
 
 Before changing the Secret or invoking Helm, the script scales the selected API
 and worker Deployments to zero, waits until their Pods disappear, and confirms
-both desired replica counts remain zero. This covers the selected Helm release;
+both desired replica counts remain zero. Kubernetes requests in this phase share
+a bounded quiescence deadline. This covers the selected Helm release;
 it does not detect independent database writers, autoscalers, or partitioned
 nodes. The operator must stop those writers and keep nodes reachable.
 
-The protected files are atomically replaced with the saved candidate. For a
-runtime release, the script reads the Secret before updating its Installation
-key, preserving other data and metadata with a resource-version precondition.
+The protected files are atomically replaced with the saved candidate. When the
+Installation changes, including a controller-only settings release, the script
+reads the Secret before updating its Installation key, preserving other data
+and metadata with a resource-version precondition.
 If the candidate is already present after a lost response, it does not write it
 again. The candidate Installation checksum is included in both OCC Pod
 templates.
@@ -116,16 +122,16 @@ it does not start the old image to undo a committed schema change.
 
 ### 4. Verify control-plane recovery
 
-`scripts/upgrade-production-images:539`
+`scripts/upgrade-production-images:586`
 
 The script waits for both OCC Deployments, checks their controller image and
-replica count, and checks the Installation checksum for a runtime release. It
+replica count, and checks the Installation checksum when its configuration changed. It
 retries authenticated OCC access and verifies the same Installation ID. A
 controller-only release then ends without requesting Agent deployments.
 
 ### 5. Deploy and verify the recorded fleet
 
-`scripts/upgrade-production-images:568`
+`scripts/upgrade-production-images:616`
 
 Before sending each ordinary exact-Agent deployment request, the script records
 an intent. Successful responses are saved atomically. On resume, existing
@@ -183,6 +189,8 @@ access, and required restore behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 07:39: Record reviewed configuration candidates and strict live baseline checks. (authoring-run/3c681647-a494-4613-809e-11113e5ed11c - ec51e917954207b49d66f3cb28a7d4887fcd9ea1)
 
 - 2026-09-28 07:02: Record quiesced migrations and resumable release and dispatch recovery. (authoring-run/ef0e4dd2-3f52-48b4-a742-60dfbb85864a - e06ff9625e72ff5ab3483a504a2f02a69a370cbb)
 
