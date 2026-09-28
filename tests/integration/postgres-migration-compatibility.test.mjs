@@ -1389,6 +1389,7 @@ test(
       [31, "backendCompleted"],
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
+      [34, "preOAuth"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1628,6 +1629,7 @@ test(
     for (const [prefix, history] of [
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
+      [34, "preOAuth"],
     ]) {
       await context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1690,6 +1692,7 @@ test(
       [31, "backendCompleted"],
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
+      [34, "preOAuth"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });

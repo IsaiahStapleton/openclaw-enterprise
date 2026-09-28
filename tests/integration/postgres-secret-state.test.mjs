@@ -450,7 +450,7 @@ test(
         namespace.id,
         source.id,
       ]),
-      { code: "23503" },
+      { code: "23001", constraint: "agents_harness_auth_secret_owner" },
     );
 
     const snapshot = revisionFor(agent, configuration, source);
