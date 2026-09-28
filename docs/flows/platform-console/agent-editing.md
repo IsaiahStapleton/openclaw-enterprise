@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-09-27
-last_updated_session: 01a0e4d1-c52a-7231-9d1f-d2ceadb556d1
+updated: 2026-09-28
+last_updated_session: authoring-run/462d5207-c3a1-4203-af4a-8db2551ccb9a
 ---
 
 # Console Agent editing and runtime requests
@@ -75,8 +75,8 @@ health. The viewed version shows its own result. **Refresh deployment** rereads
 activity and Agent selection.
 **Current observations** runs exact-version diagnostics only on demand. Its
 timestamped `succeeded`, `failed`, or `unknown` checks do not change deployment
-status. The bodyless POST requires Agent `read` and `operate` plus exact
-AgentRevision `read`.
+status; the [console reference](../../reference/console.md#inspect-detail-revisions-and-channel-drafts)
+owns its permissions.
 **Create new version** opens the saved draft; **Deploy new version** admits its
 Configuration and Agent plugin selections. **Edit current Configuration** does
 not copy historical values. Stop and deletion target the Agent.
@@ -119,10 +119,9 @@ discard channel drafts, clear Secret inputs, retain plugin selections. Pending
 channel saves and Secret creation prevent dismissal.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders Slack settings;
-only **Create new version** permits editing. Slack uses unresolved
-`SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` references and requires dedicated
-execution. The editor rejects [unsupported native shapes](../../reference/console.md#inspect-detail-revisions-and-channel-drafts).
-Teams remains in native JSON and blocks Console deployment.
+only **Create new version** permits editing. The
+[console reference](../../reference/console.md#inspect-detail-revisions-and-channel-drafts)
+owns Slack requirements and rejected native shapes; Teams remains native JSON.
 
 `agents/detail.mjs:renderConfigurationTab` reads draft Harness authentication
 from the Agent, or admitted authentication and channel `secretBindings` from the
@@ -136,7 +135,7 @@ neither collection permission nor Secret values.
 senders from DMs. Wildcard, empty, or omitted channel `users` selects **Allow
 everyone**; explicit IDs fill the mutually exclusive input. Mention
 requirements remain independent. `updatedSlack` replaces selected channels'
-`users`, preserving unrelated settings and bindings.
+`users`, preserving DM and group policies, unrelated settings, and bindings.
 
 The DM selector preserves omitted policies on existing configurations; new setup
 starts with Allowlist. `validate` rejects empty/wildcard DM allowlists and
@@ -255,14 +254,12 @@ Results are per file. Unknown write outcomes require a successful reload before
 another save; the editor never retries a write automatically.
 
 Creation uses the same channel editor to stage initial Configuration values and
-Secret bindings before its POST; see the [creation trace](../platform-console.md#3-authorize-the-selected-page-resource).
-Separately, `apps/controller/src/console/agents/create.mjs` submits the
-four workspace textarea values as `initialWorkspaceFiles` plus
-`workspaceDefaultsId` in the Agent POST. OCC stages these exact-Agent inputs
-privately until Compute initializes the workspace before execution. No deployed
-gateway is required. The [workspace setup flow](../workspace-files.md)
-owns initialization, retry, and completion cleanup; the live editor above
-becomes available after deployment.
+Secret bindings, and `apps/controller/src/console/agents/create.mjs` submits the
+four workspace textareas as `initialWorkspaceFiles`; see the
+[creation trace](../platform-console.md#3-authorize-the-selected-page-resource).
+OCC stages them privately until Compute initializes the workspace, without a
+deployed gateway. The [workspace setup flow](../workspace-files.md) owns
+initialization, retry, and cleanup; the live editor becomes available after deployment.
 
 <span id="stop-agent"></span>
 
@@ -305,43 +302,6 @@ blocks another write until a successful read establishes the current state; the 
 [Agent deletion reference](../../reference/agents.md#deletion) covers the
 subsequent worker cleanup and the Namespace-owned resources it preserves.
 
-### Preserve Slack policy during edits
-
-`apps/controller/src/console/channels/slack.mjs:supportSlack` checks whether the
-channel editor can preserve the stored settings. Existing `dmPolicy` and
-`groupPolicy` values do not block editing. `updatedSlack` copies those values
-unchanged, including their absence, when saving channel IDs, channel sender
-users, or mention settings. It preserves unrelated properties on selected
-channel entries, then writes the selected channels' `users` lists from the
-drawer. The everyone option writes `users: ["*"]` on each selected channel;
-direct-message `allowFrom` is not changed by channel edits. Only a new Slack
-configuration receives allowlist defaults. Existing channel maps with mixed
-sender lists or a `*` channel entry are rejected by the simple editor so native
-Configuration JSON remains the source of truth.
-
-### Share and remove explicit Agent access
-
-`apps/controller/src/console/agents/access.mjs:renderAgentAccess`
-
-Agent detail mounts sharing independently of revision/configuration reads and
-native admission. The panel reads the selected Namespace's existing `/iam/roles`
-and `/iam/access-bindings` endpoints. A policy `403` leaves the other panels
-usable; a current `401` retains global session expiry.
-
-Submission rereads policy, finds or creates an immutable Role by exact Namespace
-and permissions, then binds Namespace read to the exact Namespace. Only after
-that response does it find or create the exact Agent read/administer Role and
-bind it to the selected Agent. The server validates the supplied subject and
-resource on each write. Confirmed progress survives later failure; unknown
-results disable mutations until an explicit current-policy refresh. Readback is
-configuration evidence, not a historical receipt, and never triggers a write.
-
-Removal addresses only the selected Agent binding. The request client's existing
-success envelope handling also accepts the API's empty `204` deletion response.
-The panel retains discovery grants and explains other possible access sources.
-It stops at policy configuration; native gateway admission and runtime readiness
-remain owned by the [native admin flow](../agent-native-admin.md).
-
 ## Debugging and Verification
 
 - A denied Secret list requires collection `read`; a missing menu entry may lack
@@ -368,12 +328,15 @@ remain owned by the [native admin flow](../agent-native-admin.md).
 - [Console reference](../../reference/console.md)
 - [Agent lifecycle reference](../../reference/agents.md#deletion)
 - [Agent plugin flow](../agent-plugins.md)
+- [Agent sharing flow](agent-sharing.md)
 
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 01:39: Move the sharing trace to its own flow. (authoring-run/462d5207-c3a1-4203-af4a-8db2551ccb9a - 4f32ebbca5d699296a142dfbd34c8ec46844fce7)
 
 - 2026-09-27 21:44: Trace backdrop dismissal through existing cancellation handlers. (01a0e4d1-c52a-7231-9d1f-d2ceadb556d1 - ab9527bb2615168649438f7f591bd098083b62cb)
 
@@ -391,8 +354,6 @@ remain owned by the [native admin flow](../agent-native-admin.md).
 - 2026-09-24 22:03: Trace shared document-local drafts, navigation capture, explicit discard, and retained save baselines. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)
 
 - 2026-09-24 06:09: Preserve current Slack editing behavior alongside existing-person sharing. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c3a3913f0aded736b17140d6caa7c5c857641a9d)
-
-- 2026-09-23 22:30: Receive the sharing and Slack policy-preservation traces from the parent flow. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 3bf606bfda107ada7e32a941c161aa0fdcbafd92)
 
 - 2026-09-23 19:52: Record unsupported mixed Slack sender lists, unrepresentable sender IDs, and channel wildcard maps in the simple drawer. (01a0d150-104a-71a3-9e56-6c5e3ee510ea - 77aedc620f443056f9ee859050b8dc657a9c3133)
 

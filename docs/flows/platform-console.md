@@ -1,15 +1,15 @@
 ---
 created: 2026-09-01
-updated: 2026-09-27
-last_updated_session: 01a0b1f2-e696-7232-a439-5b668154bcd9
+updated: 2026-09-28
+last_updated_session: authoring-run/462d5207-c3a1-4203-af4a-8db2551ccb9a
 ---
 
 # Platform console request flow
 
 ## Overview
 
-`/console/` resolves a session and renders authorized resources, including
-Agent sharing controls. The [console reference](../reference/console.md) owns user-visible behavior;
+`/console/` resolves a session and renders authorized resources.
+The [console reference](../reference/console.md) owns user-visible behavior;
 API and IAM authorize resources.
 
 ## Entry Points
@@ -49,7 +49,6 @@ graph TD
     E2 --> E3["Save supported channel draft edit"]
     E2 --> E4["Confirm Agent deletion"]
     E2 --> E5["Confirm Agent stop"]
-    E2 --> E6["Share with an existing Principal"]
   end
   subgraph Controller["Controller API"]
     E --> F["Authenticate and authorize exact scope"]
@@ -66,7 +65,6 @@ graph TD
     E3 --> O["PATCH Configuration, then grant selected Secret access"]
     E4 --> P["DELETE exact Agent"]
     E5 --> P2["POST exact Agent stop"]
-    E6 --> P3["Read policy and serialize exact Role and binding writes"]
   end
   subgraph Result["Browser result"]
     G --> I["Accept only current navigation response"]
@@ -77,9 +75,6 @@ graph TD
     O --> I
     P -->|accepted or uncertain| Q["Show status and refresh exact Agent"]
     P2 -->|accepted or uncertain| Q
-    P3 -->|confirmed steps| I
-    P3 -->|uncertain| Q2["Block writes until policy refresh"]
-    P3 -->|policy denied| K2["Keep other Agent panels available"]
     P2 -->|denied| K
     P -->|denied| K
     Q -->|Agent not found| R["Return to Agents list"]
@@ -115,7 +110,7 @@ readable Agents in the selected Namespace.
 exact Agent read, resolves its active revision, then calls its Compute Driver.
 The [Compute contract](../reference/drivers/compute.md) owns workload inspection
 and Enterprise/OpenClaw provenance. Navigation preserves `debug=true`; removing it
-stops reads. Stale responses are rejected; missing provenance stays explicit.
+stops reads. Missing provenance stays explicit.
 
 ### 2. Resolve the session before private reads
 
@@ -136,7 +131,6 @@ Debug runtime disclosures follow the same validation and retain expanded state.
 
 A changed user or session key clears retained views and drafts before further
 private reads. Missing sessions open login; failed reads offer Retry.
-Login submits credentials.
 `apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` checks browser
 Origin before sign-in/out, including SDK calls that bypass Better Auth middleware.
 Headerless CLI requests remain supported. Better Auth owns session cookies and
@@ -167,7 +161,7 @@ failure return errors.
 
 `apps/controller/src/console/agents/create.mjs:renderCreateAgent` composes Provider,
 Harness, Preset, Configuration, and workspace inputs. Provider/Harness changes
-reset incompatible credentials and model choices. The
+reset incompatible credentials and model choices while retaining unrelated JSON. The
 [creation reference](../reference/console/create-and-deploy.md) owns combinations,
 Preset constraints, token handling, permissions, and recovery.
 
@@ -183,9 +177,7 @@ Secret server-side. Pagination is upstream; filtering is local. Selecting a plug
 Credential, provider, and Harness changes clear results and invalidate pending reads.
 
 `create.mjs:MODEL_CHOICES` supplies unauthenticated static model lists and manual
-entry. Provider/Harness changes reset incompatible settings while retaining
-unrelated JSON. The [creation reference](../reference/console/create-and-deploy.md)
-owns selection and credential behavior.
+entry.
 
 `configurationTemplate` enables Control UI with loopback origins on port 18789.
 Compute supplies gateway authentication; Presets replace the starter unchanged.
@@ -227,8 +219,9 @@ without fetching values.
 ### 4–6. Edit the Agent and access runtime files
 
 [Agent editing](platform-console/agent-editing.md) traces revision rendering,
-channels, credentials, workspace files, stopping, and deletion. Responses follow
-the ordering checks below.
+channels, credentials, workspace files, stopping, and deletion;
+[Agent sharing](platform-console/agent-sharing.md) traces policy writes.
+Responses follow the ordering checks below.
 
 `channels/slack.mjs:supportSlack` rejects shapes the editor cannot preserve;
 `updatedSlack` preserves untouched policies and reply overrides. The
@@ -250,8 +243,6 @@ is mounted before applying a response; late reads cannot overwrite another tab.
 Password values clear while [draft captures](platform-console/agent-editing.md#4-render-draft-revision-or-channels) retain edits. Channel
 Secret saves update the shared draft snapshot used by other tabs and deployment
 preflight. Session expiry still clears the whole private view.
-
-See [sharing and removal](platform-console/agent-editing.md#share-and-remove-explicit-agent-access) for the exact policy-write sequence.
 
 ### 7. Commit only the current response, or clear the view
 
@@ -327,6 +318,8 @@ refresh and inspection.
 
 ## Changelog
 
+- 2026-09-28 01:39: Move the sharing trace to its child flow. (authoring-run/462d5207-c3a1-4203-af4a-8db2551ccb9a - 4f32ebbca5d699296a142dfbd34c8ec46844fce7)
+
 - 2026-09-27 19:38: Preserve validated page and tab DOM in accompanying changes. (01a0b1f2-e696-7232-a439-5b668154bcd9 - 0663fa97)
 
 - 2026-09-27 02:30: Use selected PAT Secrets for discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - ec4e9dc517497afe05be63a320542abcf61e8a55)
@@ -352,12 +345,6 @@ refresh and inspection.
 - 2026-09-24 15:44: Trace opt-in sidebar build metadata and authorized Compute image observations. (01a0c179-19f7-7111-8bb4-fc7680da5545 - 6b5c9093)
 
 - 2026-09-24 06:19: Replace Console model discovery with an intentional static starter list and preserve manual entry. (01a0d20c-dc1b-7d22-a965-60b9c244b29d - 24ecb94b)
-
-- 2026-09-24 06:09: Preserve current Slack editing behavior alongside existing-person sharing. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c3a3913f0aded736b17140d6caa7c5c857641a9d)
-
-- 2026-09-23 22:29: Receive main; consolidate the sharing trace. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - 3bf606bfda107ada7e32a941c161aa0fdcbafd92)
-
-- 2026-09-23 10:11: Trace sharing, removal and uncertain outcomes. (authoring-run/2dbd0778-19ef-4616-a799-abcfcba888e4 - ba03f19e950577141837c02dda37112fd3377dc5)
 
 - 2026-09-24 05:40: Added Create Agent plugin JSON controls and transient PAT catalog discovery; policy integration remains pending. (01a0d1dd-aa36-7622-9f43-8376f6ff935e - f62e17c)
 

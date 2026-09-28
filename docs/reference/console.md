@@ -209,35 +209,6 @@ per-channel mention settings, mixed per-channel sender lists, `*` channel maps,
 or unsupported plugin shapes. Inspect unsupported settings in the native
 Configuration view and edit them through the API or operator workflow.
 
-## Share an existing Agent
-
-Installation administrators share an Agent using an existing person's Principal ID.
-The console reuses or creates Namespace-scoped Roles for `namespace:read` and,
-separately, `agent:read` plus `agent:administer`, bound to the exact Namespace and
-Agent. Role reuse requires matching scope and permissions, regardless of name.
-Namespace read enables discovery without granting child access. The API validates
-subjects and targets. Sharing does not provision or search for accounts.
-
-The acknowledgment covers full native administration of the shared Agent,
-including its conversations, settings, tools and accessible credentials. This is
-not restricted chat or automatic personal identity for each chat. Sharing does
-not grant OCE Configuration, deployment, Secret or Agent stop permissions. The
-native launcher still requires its Installation setup and a supported runtime.
-
-**Direct Agent grants** lists explicit bindings to this Agent and their Role
-permissions. It is not an effective-access report. **Remove binding** deletes
-only that binding and preserves Namespace discovery. Other grants, groups and
-Installation administration can still provide access; accounts, Roles and
-Agents are retained.
-
-Policy mutations run sequentially. Confirmed steps remain visible after a later failure. After an uncertain response, **Refresh sharing** reads current
-Roles and bindings before another change is allowed; writes never retry
-automatically. A matching binding proves present configuration, not the outcome
-of an earlier request. Policy read denial affects only the sharing panel;
-Agent detail, native admission and stop retain their own authorization checks.
-An expired session clears the private view as usual. Follow the
-[sharing procedure](../guides/console/agent-details.md#share-with-an-existing-person).
-
 ## Stop and resume an Agent
 
 Open the Agent, select **Stop Agent**, and confirm after reviewing the effect on
@@ -268,8 +239,8 @@ as deleting; select **Refresh deletion status** to check progress. When the API
 confirms that the Agent is gone, the console returns to the Agents list in the
 same Namespace. An access-denied response stays on the detail page and tells you
 that deletion requires permission. If the console cannot confirm the outcome,
-the request may have succeeded; refresh to read the Agent's current state before
-retrying. The console does not automatically send another delete request.
+the request may have succeeded; refresh before retrying. The console never
+resends a delete request automatically.
 
 ## Failures and logout
 
@@ -327,9 +298,10 @@ result. For unavailable gateways, follow the
 
 When [Agent native admin UI access](agent-native-admin.md) is enabled, the
 Agent detail tabs, including Configuration and Workspace files, include a
-**Native admin UI** panel for callers with exact Agent `administer` permission.
-The panel is hidden when the Installation disables the feature or when the
-caller lacks that grant. An Agent that is stopped reports that it must be started,
+**Native admin UI** panel for callers with exact Agent `administer` permission;
+otherwise, or when the Installation disables the feature, it is hidden.
+Installation administrators can [share an Agent](console/agent-sharing.md)
+with an existing person. An Agent that is stopped reports that it must be started,
 including before its first deployment or after stopping clears its active
 revision. If a desired-running Agent has no active revision yet, the panel asks
 you to check the Agent's deployment and refresh access. It also reports when

@@ -287,28 +287,8 @@ the active gateway in a new tab, even while you view a draft or older revision.
 
 The native UI can change the gateway outside OCE's revision tracking. Use OCE for
 durable configuration. See [native admin access](../../reference/agent-native-admin.md)
-for permissions and stopped, unavailable, or unsupported states.
-
-## Share with an existing person
-
-As an Installation administrator, open **Share Agent** and enter the person's
-already provisioned **Principal ID**. Review the full native administration
-warning, select the acknowledgment, then choose **Share Agent**. The person gains
-Namespace discovery and access to this Agent's native conversations, settings,
-tools and accessible credentials. They do not automatically receive separate
-personal chat identity. See [sharing permissions](../../reference/console.md#share-an-existing-agent)
-for the precise grants and runtime prerequisites.
-
-Read each reported step. If a later step fails, earlier confirmed Roles or
-bindings remain. Select **Refresh sharing** after a failure, inspect the direct
-grants, and submit again only if needed. Refresh reports current configuration;
-it cannot confirm what happened to an earlier unanswered request.
-
-To withdraw one explicit Agent grant, find it under **Direct Agent grants** and
-select **Remove binding**. Namespace discovery remains, and other grants,
-groups or Installation administration may still provide access. The console
-does not delete the person, Agent or Roles. If sharing policy is denied, other
-Agent controls remain governed by their own permissions.
+for permissions and stopped, unavailable, or unsupported states. Installation
+administrators can [share an Agent](agent-sharing.md) with an existing person.
 
 ## Stop and resume
 

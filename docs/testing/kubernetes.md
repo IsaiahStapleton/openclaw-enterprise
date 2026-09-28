@@ -95,14 +95,6 @@ container network's default-route source would leave ready Pods unreachable
 through the proxy. An absent overlay route fails preparation before it publishes
 the test environment.
 
-## Native Gateway sharing
-
-Prepare `gateway-routing`, then run `native-admin-k3d-real.test.mjs`. Its embedded sharing case checks
-human cookies, exact Agent grants, denied sibling/Configuration access, the
-Console launcher and installed model turns. Removing one binding must close that
-person's WebSockets within 30 seconds while another continues.
-This does not qualify account enrollment, per-chat authority, Git or OpenShell.
-
 ## Kubernetes model turns and Secrets
 
 Follow [Codex sandbox setup](../guides/deploy/codex-sandbox.md) for seccomp
