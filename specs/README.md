@@ -48,9 +48,6 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
-[GitHub sign-in for existing accounts](31-human-federated-sign-in.md) — Proposed;
-GitHub login with existing OCE accounts and permissions.
-
 [Two-cluster Gateway execution](37-two-cluster-gateway-execution-plan.md) — Experimental implementation;
 complete local OCE setup across separate CP and DP clusters, with explicit
 cluster access and TLS transport. Broader runtime and failure-path qualification
@@ -81,6 +78,9 @@ create-only Console and API input, applied once before first runtime execution.
 
 [Agent presets](33-agent-presets.md) — Implementing; reusable, partial Agent launch
 templates with variables, CRUD APIs, and console selection.
+
+[GitHub sign-in for existing accounts](31-human-federated-sign-in.md) — Proposed;
+administrator-provisioned password accounts with an optional GitHub identity; implemented by PR #305 and its M1 follow-ups.
 
 [Harness authentication bindings](30-harness-auth-binding.md) — Accepted for implementation;
 one Agent auth binding for supplied OpenAI keys and issued ChatGPT account credentials.
