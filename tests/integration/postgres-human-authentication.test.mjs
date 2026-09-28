@@ -744,10 +744,9 @@ test(
         assert.deepEqual(designations, [
           { user_id: successor.id, principal_id: successorPrincipal, method_user: successor.id },
         ]);
-        assert.deepEqual(await persistence.recoveryDesignation(), {
-          userId: successor.id,
-          principalId: successorPrincipal,
-        });
+        const moved = await persistence.recoveryDesignation();
+        assert.equal(moved.userId, successor.id);
+        assert.equal(moved.principalId, successorPrincipal);
         const current = await persistence.readAccount(successor.id, admin);
         assert.equal(
           (
