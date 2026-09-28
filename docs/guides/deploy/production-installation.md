@@ -120,9 +120,8 @@ Set the production shell inputs before the first Kubernetes command. For a local
 Kubernetes trial, [build and import the test images](local-operations.md#build-images-for-local-kubernetes)
 to produce YAML copies with real image digests, then set
 `OCC_INPUT_DIRECTORY` to that generated directory and keep those files.
-For a registry-backed installation, retain the digest exports for your verified
-release or custom images, including images you
-[build and publish](#build-and-publish-production-images).
+For registry-backed installations, [check the selected image digests](../../testing/images.md#check-published-images)
+on native hosts for their target architectures and retain their exports.
 
 ```bash
 umask 077
@@ -200,6 +199,9 @@ Edit the protected YAML copies:
   [bundled Presets](../../reference/presets.md#installation-defaults).
 - `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
   namespace, size, and protected `storageClassName` for the cluster.
+
+For registry-backed installations, [compare the edited images](../../testing/images.md#verify-installation-image-selections)
+with the checked digests; skip this for local imports.
 
 Run every check below, including Helm rendering, before provisioning.
 API startup checks shared-cookie domain compatibility:
