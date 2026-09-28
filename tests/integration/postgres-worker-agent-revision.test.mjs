@@ -681,18 +681,21 @@ test(
     assert.equal(attempt.sessionId, status.sessionId);
     const stop = await fixture.requestStop(owner);
     await fixture.work(stop, "succeeded");
-    await waitFor("the concrete session's durable cleanup to settle", async () =>
-      (await repositoryAttempts(fixture, candidate))[0].phase === "disposed" ? true : undefined,
-    );
+    // Both the lost admission and the delivered session must settle even when
+    // their cleanup requests share one durable work item.
+    await waitFor("both concrete repository sessions to settle", async () => {
+      const settled = await repositoryAttempts(fixture, candidate);
+      return settled.length === 2 && settled.every(({ phase }) => phase === "disposed")
+        ? true
+        : undefined;
+    });
     await waitFor("the concrete session's cleanup work to complete", async () => {
       const cleanup = await fixture.observerPool.query(
         `SELECT state FROM occ.controller_work
          WHERE revision_id = $1 AND idempotency_key LIKE $2`,
         [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:%`],
       );
-      return cleanup.rowCount === 2 && cleanup.rows.every(({ state }) => state === "succeeded")
-        ? true
-        : undefined;
+      return cleanup.rowCount === 1 && cleanup.rows[0].state === "succeeded" ? true : undefined;
     });
     await fixture.requestDeletion(owner);
     await waitFor("disposed repository evidence to outlive its Agent", async () =>
