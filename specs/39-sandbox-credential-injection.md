@@ -12,8 +12,8 @@ paths below are relative to that tag.
 ## Problem and decision
 
 Agents need credentials for model providers, source control, cloud APIs, and
-package registries. OCE delivers them today as Kubernetes `secretKeyRef`
-environment entries, which puts the real value in the Harness process. The
+package registries. OCE has delivered model credentials as Kubernetes `secretKeyRef`
+environment entries, putting the real value in the Harness process. The
 [target design](../docs/design/safeguards.md#secret-access) calls this a temporary
 exception: the Harness should receive only scoped substitutes.
 
@@ -22,19 +22,21 @@ supports. Its gateway stores a _provider_, and the Sandbox's supervisor Pod
 applies it to outbound requests. The workload Pod has no direct egress and
 never receives a real value.
 
-Add a `credential_gateway` Driver capability. It manages credential sources and
+Add a `credential_gateway` Driver capability to manage credential sources and
 their attachment to Agent revisions. How a credential reaches a request
 (placeholder substitution, proxy-inserted headers, request signing, or
 gateway-minted tokens) belongs to the implementation. OCE's contract never names
-those mechanisms. The OpenShell module implements both `sandbox` and
-`credential_gateway` through one shared `openshell` Backend.
+those mechanisms. OpenShell implements the common interface with its paired
+Sandbox. The GitHub broker needs an adapter or attachment/consumer extension;
+neither is implemented. The first target pairs the broker with a static OpenShell
+model source in one dedicated revision. Its private Sandbox handoff remains unimplemented;
+retain current guards until the joined path is proven.
 
-This follows the separate-capability direction of
-[PR #386](https://github.com/openclaw/openclaw-enterprise/pull/386) and the
-deferred `CredentialGatewayDriver` in the
+This follows [PR #386](https://github.com/openclaw/openclaw-enterprise/pull/386)'s
+separate capability and the deferred `CredentialGatewayDriver` in the
 [archived Sandbox provisioning spec](.archive/13-sandbox-driver-provisioning.md).
-It omits #386's per-request `mediate` operation, because OCE is not on the
-request path when the Sandbox injects credentials.
+It omits #386's per-request `mediate`: OCE is not on the request path when the
+Sandbox injects credentials.
 
 ## Scope
 
@@ -44,9 +46,8 @@ In scope:
   composition with the OpenShell SandboxDriver.
 - A Namespace-scoped `CredentialSource` resource, Agent bindings to it, and
   Harness model authentication through a bound source.
-- A contract that accommodates every OpenShell source type, with first delivery
-  limited to the types that have a real integration proof (see
-  [the next section](#openshell-source-types)).
+- A contract for every OpenShell source type; first delivery requires real
+  integration proof (see [OpenShell source types](#openshell-source-types)).
 - Withdrawing one Agent's access without affecting other Agents.
 
 Out of scope:
@@ -66,16 +67,14 @@ Sources: `docs/how-it-works/providers/overview.mdx:204-302` and
 | Source type                                                          | How OpenShell applies it                                                             | Inputs OCE supplies                                                | First delivery                                                     |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
 | `static`                                                             | Placeholder in the workload environment; the proxy substitutes it at bound endpoints | Secret values                                                      | Yes: real OpenAI key                                               |
-| `external`                                                           | Same as `static`; an external owner pushes new values                                | Secret values, updated later                                       | Yes: real OpenAI key                                               |
-| Gateway refresh: `oauth2_refresh_token`, `oauth2_client_credentials` | Gateway mints access tokens; the placeholder stays stable across rotations           | Secret and non-secret refresh material                             | Yes: real in-cluster Keycloak                                      |
+| `external`                                                           | Same as `static`; an external owner pushes new values                                | Secret values, updated later                                       | Future: real OpenAI key                                            |
+| Gateway refresh: `oauth2_refresh_token`, `oauth2_client_credentials` | Gateway mints access tokens; the placeholder stays stable across rotations           | Secret and non-secret refresh material                             | Future: real in-cluster Keycloak                                   |
 | Gateway refresh: `google_service_account_jwt`                        | Same as above                                                                        | Service account email and private key                              | Deferred: needs an authorized Google service account               |
 | `aws_sts_assume_role`                                                | Gateway mints three credentials; the proxy re-signs requests with SigV4              | Role ARN, optional session settings and long-lived source keys     | Deferred: needs an authorized AWS role                             |
 | Token grant: `client_credentials`, `token_exchange`                  | Supervisor obtains a token with its SPIFFE JWT-SVID; the proxy inserts the header    | Profile configuration; a stored subject token for `token_exchange` | Deferred: needs SPIRE and an issuer that accepts SPIFFE assertions |
 
-The contract and catalog shape cover every row. The OpenShell driver's
-`listSourceTypes` omits deferred types, so registration rejects them. Each
-deferred type ships in its own change with a real-path integration test.
-None is claimed as delivered without one.
+The proposed catalog covers every row. OpenShell currently lists only `openai`;
+other types require real-path integration tests.
 
 Every type binds credentials to profile endpoints and returns 403
 (`credential_endpoint_mismatch`) elsewhere
@@ -100,11 +99,13 @@ backends:
     drivers: { sandbox: openshell-sandbox, credential_gateway: openshell-credentials }
 ```
 
-Startup rejects a selected `credential_gateway` whose Backend members are not
-both selected. The shared Backend replaces #386's `sandboxDriverId`
-configuration, and each role keeps its own selection.
+Startup rejects a selected `credential_gateway` unless both Backend members are selected.
+The shared Backend replaces #386's `sandboxDriverId`; each role keeps its own
+selection.
 
 ### Driver interface
+
+This proposed shape differs from the [current interface](../docs/reference/drivers/credential-gateway.md).
 
 ```ts
 interface CredentialGatewayDriver extends Driver {
@@ -156,12 +157,14 @@ Contract rules:
   withdrawn placeholders stop resolving, even in running processes, but
   requests already forwarded upstream are not undone
   (`docs/how-it-works/providers/profiles.mdx:1018-1080`). Otherwise `withdraw`
-  returns `pending`, and retries continue.
+  returns `pending`, and retries continue. Withdrawal and bounded active-flow
+  closure remain future work; a detach receipt does not prove closure.
 - `removeSource` fails while any active or candidate revision references the
   source. OpenShell also refuses to delete an attached provider. Withdrawal never
   deletes shared source material.
 - Static updates reach only newly started processes, so a running Harness keeps
   the previous value until it restarts. Gateway refresh keeps stable references.
+  OCC has no update or rotate caller yet.
 
 ### Resource and bindings
 
@@ -185,7 +188,7 @@ actor, and admission also requires it for `Agent.servicePrincipalId`.
 
 ### Lifecycle and authority
 
-OpenShell checks both the token scope and the caller's role on every RPC
+OpenShell checks token scope and caller role on every RPC
 (`proto/openshell.proto` authorization options). OCC uses two gateway principals:
 
 - **Worker principal:** global `platform_admin`, which the existing Sandbox
@@ -209,15 +212,13 @@ OpenShell checks both the token scope and the caller's role on every RPC
 | Delete a source           | API       | `DeleteProvider`, `DeleteProviderProfile` with the last source (`provider:write`; admin), then `GetProvider` (`provider:read`)                                                                              |
 | Delete a Namespace        | Worker    | `DeleteWorkspace` (`workspace:write`; `platform_admin`)                                                                                                                                                     |
 
-The API reads each OCC Secret through a new `SecretDriver` method that returns
-the value only for an authorized Credential Gateway registration. An Agent's
-model credential therefore no longer passes through the worker, unlike the
-current `deliverHarnessAuth` copy. An authorized withdrawal request is recorded
-by the API and carried out by the worker, because only the worker holds
-`sandbox:write`.
+The API uses `SecretDriver.withValue` for authorized registration, passing
+plaintext to the Gateway Driver and store. A narrower reference bridge is next
+to explore; an operation-mediated broker is a later target. Neither is delivered.
+The proposed withdrawal uses the worker's `sandbox:write`.
 
-Withdrawal is revocation, so it applies to a running revision. The revision
-keeps its frozen binding but cannot re-attach a withdrawn source; a later
+Proposed withdrawal applies to a running revision; OCC has no caller yet. The
+revision keeps its frozen binding but cannot re-attach a withdrawn source; a later
 deployment must omit the source or bind a replacement.
 
 ### Cleanup and retry
@@ -225,8 +226,8 @@ deployment must omit the source or bind a replacement.
 - **Sources.** Deleting a source marks it `deleting`, then the API calls
   `DeleteProvider` and confirms that `GetProvider` returns not found. If the
   gateway is unavailable or the outcome is uncertain, the record stays
-  `deleting`, the API returns 503, and the caller retries. A provider that is
-  already absent counts as deleted. `DeleteProvider` also removes the provider's
+  `deleting` for original-owner recovery. Confirmed absence after settlement
+  counts as deleted. `DeleteProvider` also removes the provider's
   refresh state (`crates/openshell-server/src/grpc/provider.rs`,
   `delete_provider_record_with_credentials`).
 - **Namespaces.** `CredentialSource` joins the resources that make a Namespace
@@ -240,8 +241,8 @@ deployment must omit the source or bind a replacement.
   idempotent, until the receipt reaches `revoked`. After
   `CONFIG_OPERATION_STORAGE_UNCERTAIN`, it reads the current status before
   retrying, as upstream requires.
-- **Revisions.** Existing retirement retries until the Sandbox is gone. Sources
-  it referenced become deletable only after that.
+- **Revisions.** Retirement retries until the Sandbox is gone; sources it
+  referenced become deletable only then.
 
 ### Harness runtime
 
@@ -249,17 +250,19 @@ The entrypoint receives only the literal login mode from the source type's
 `harnessAuth.loginMode`. For an `openai` static source, the supervisor sets the
 `OPENAI_API_KEY` placeholder, and `codex login --with-api-key` stores it. The
 upstream `codex` profile supplies `CODEX_AUTH_*` placeholders for a ChatGPT
-account. It declares no gateway refresh and only allows `auth.openai.com`, so
-the Codex CLI would refresh with placeholder values in the request body. The
-Codex startup model probe checks either path before readiness.
+account. It has no gateway refresh and allows only `auth.openai.com`, so Codex
+CLI refresh would send placeholders in the request body. The
+proposed Codex startup model probe checks either path before readiness. Current
+support is the `openai` API-key source only.
 
 ## Trust requirements
 
 - OCC's two principals must be the only members of its OpenShell workspaces,
   because workspace users can attach any provider. The worker checks this with
   `ListWorkspaceMembers` when preparing the Namespace and fails on any other
-  member. Platform Admins bypass membership, so the worker principal must be the
-  only Platform Admin; OCC cannot verify that through the API.
+  member in the proposed split. Platform Admins bypass membership, so the worker
+  must be the only Platform Admin; OCC cannot verify that through the API.
+  Current OCC uses one principal and checks neither.
 - Sources do not cross OCC Namespaces; each OCC Namespace maps to one workspace.
 - Credentialed endpoints require L7 inspection. Codex and other clients must
   trust the per-generation Sandbox CA.
@@ -278,13 +281,16 @@ Codex startup model probe checks either path before readiness.
 
 - Unknown source types, missing inputs, and unauthorized Secrets fail before any
   gateway call.
-- A failed registration leaves no source. An uncertain one stays pending, and
-  the record keeps the provider name so retries adopt it or delete it.
+- Before future registration enablement, resolve uncertain creation, cleanup and
+  COMMIT, or obtain a supported explicit human decision on availability; none is
+  recorded. Preserve original custody and attempts until settlement or fencing.
+  Never replay or compensate uncertain effects. Unknown COMMIT is not rollback:
+  discard the client without further query; observation is not a COMMIT receipt.
 - Missing attachment readiness keeps the candidate inactive.
-- An endpoint mismatch at the proxy fails the request, and the Harness startup
-  probe keeps the Pod unready.
-- A pending withdrawal stays visible in attachment status and is retried; it
-  never reports success early.
+- A proxy endpoint mismatch fails the request; the Harness startup probe keeps
+  the Pod unready.
+- A pending withdrawal remains visible in attachment status and is retried;
+  it never reports success early.
 
 ## Differences from PR #386
 
@@ -318,29 +324,25 @@ Extend `tests/integration/sandbox-driver-openshell-k3d-real.test.mjs` through th
 regular API and worker workflow:
 
 - Register a static OpenAI source, deploy a dedicated Codex Agent, and complete a
-  real model turn. Assert that the key is absent from the Harness Pod spec, every
-  Agent- or revision-owned Kubernetes Secret, the Harness process environment,
-  and workspace files. The source's own OCC Secret is excluded: it is the stored
-  source of record, which the Kubernetes Secret Driver keeps in the tenant's
-  control-plane namespace. Also assert that no Pod references that Secret.
+  real model turn. Verify the key is absent from the Harness Pod spec, Agent- and
+  revision-owned Kubernetes Secrets, Harness environment and workspace files.
+  Exclude the source OCC Secret, stored by the Kubernetes Secret Driver in the
+  tenant's control-plane namespace; verify no Pod references it.
 - Update an `external` source and prove that a restarted Harness uses the new
   value.
 - Withdraw the source from one Agent. That Agent's next model request fails,
   while a second Agent attached to the same source keeps working.
-- Register `oauth2_client_credentials` and `oauth2_refresh_token` sources against
-  a real in-cluster Keycloak, call a Keycloak-protected endpoint from the
-  Harness, and prove a rotation without a restart.
-- Prove the permission split and cleanup: denied RPCs for each principal, source
-  deletion refused while attached, and Namespace deletion refused while a source
-  exists.
+- Register `oauth2_client_credentials` and `oauth2_refresh_token` with real
+  in-cluster Keycloak. Call its protected endpoint from the Harness and prove
+  rotation without restart.
+- Prove principal RPC denials, source deletion refusal while attached, and
+  Namespace deletion refusal while a source exists.
 - Prove fail-closed cases: an unbound host returns 403, and a direct connection
   from the Harness Pod fails.
-- Add conformance cases for startup membership, catalog validation, rejection of
-  deferred types, and admission rejection of secret-backed `harnessAuth` with a
-  gateway selected.
+- Test startup membership, catalog validation, deferred-type rejection, and
+  admission refusal of secret-backed `harnessAuth` with a gateway selected.
 
-Deferred source types stay out of the catalog until their real-path tests exist.
-This avoids the need for a human override to omit tests.
+Deferred types stay out of the catalog until their real-path tests exist.
 
 ## Documentation
 
@@ -368,11 +370,16 @@ placeholder. The current contract is owned by
 [Credential Gateway](../docs/reference/drivers/credential-gateway.md) and
 [credential sources](../docs/reference/credential-sources.md).
 
+The gateway copy does not follow Secret changes or grant removal; refresh and
+bounded withdrawal remain future work. The 70-second delay below does not prove
+settlement of uncertain creation, late effects or credential handles.
+
 The implementation differs from this proposal:
 
-- Registration commits a `registering` record before the gateway call. After an
-  uncertain call, the record stays `deleting`, and deletion finalizes only
-  70 seconds after `createdAt`.
+- Registration commits a `registering` record before the gateway call. If the
+  call throws, OCC attempts removal, then marks uncertain attempts `deleting`.
+  If the state update does not settle, the last committed state can be
+  `registering` or `deleting`. DELETE finalizes only 70 seconds after `createdAt`.
 - Secret values come from the existing `SecretDriver.withValue`.
 - Compute's `resolveSandboxNamespace` supplies the gateway Workspace, and
   providers set `profile_workspace`.
