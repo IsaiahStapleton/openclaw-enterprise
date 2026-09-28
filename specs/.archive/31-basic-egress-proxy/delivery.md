@@ -119,11 +119,11 @@ not a composed acceptance record.
 
 The September 25 observation at `5b49801b6332dbd516df250c72a47820ff918208` records that
 [RepoDriver](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/packages/contracts/src/repo.ts) supports embedded OpenClaw and
-dedicated Codex. [Compute](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/index.ts)
-refuses repository credentials with a SandboxDriver (`validateRepositoryCredentialSupport`). Main's
-[model-egress builder](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/index.ts)
-(the `agentNetworkPolicies` model-egress rule) retains broad public IPv4 TCP/443, while the
-[embedded probe](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts)
+dedicated Codex. [Compute](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/index.ts#L1257-L1281)
+refuses repository credentials with a SandboxDriver. Main's
+[model-egress builder](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/index.ts#L6834-L6863)
+retains broad public IPv4 TCP/443, while the
+[embedded probe](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts#L1182-L1225)
 consumes the selected model credential. These facts do not establish the
 historical protected route or external custody.
 
@@ -132,9 +132,9 @@ control plane alongside the Kubernetes-only default. The separate gateway runs i
 `openshell-system` in Compose mode and `oce-system` in Kubernetes-only mode.
 Both prepare operator Workspaces. Their
 [qualification procedures](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/docs/testing/openshell.md) distinguish infrastructure
-readiness from Agent creation and model turns. Stock v0.1.0 (496ebba) production projections
-remain refused, and the [first-Agent helper](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/scripts/first-agent.mjs)
-(its OpenShell refusal) rejects OpenShell before external calls. Neither development profile is suitable
+readiness from Agent creation and model turns. Stock pre.7 production projections
+remain refused, and the [first-Agent helper](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/scripts/first-agent.mjs#L114-L147)
+rejects OpenShell before external calls. Neither development profile is suitable
 for a shared cluster or container network.
 
 Production [Helm networking](https://github.com/openclaw/openclaw-enterprise/blob/5b49801b6332dbd516df250c72a47820ff918208/deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml)
