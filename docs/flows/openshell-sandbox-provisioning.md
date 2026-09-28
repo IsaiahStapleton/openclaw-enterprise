@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: 2026-09-28
-last_updated_session: authoring-run/3d7564e8-24cd-4cb3-9584-efce1cc55bd6
+last_updated_session: oce-pr-440-sync
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -22,9 +22,8 @@ provider to the Sandbox, and the supervisor proxy injects the key. The regular
 Agent workflow with stock OpenShell still stops before Sandbox creation because
 `v0.1.0` cannot accept the Secret-backed app-server token or projected workload
 identity. The verification-only compatibility path stages those inputs without
-changing the production fail-closed contract and completes successive real
-model turns from two sessions inside one
-AgentRevision Sandbox.
+changing the production fail-closed contract and completes real model turns
+inside the Sandbox.
 
 The local Kubernetes development profile installs the pinned Gateway and
 renders the workspace chart into the Installation configuration, in either a
@@ -59,12 +58,12 @@ graph TD
   G -- "no" --> H["<b>Create Sandbox</b><br/>Providers and exposure"]
   H --> I{"<b>Native projections</b><br/>Supported?"}
   I -- "no: stock v0.1.0" --> R
-  I -. "verification bridge" .-> V{"<b>Harness</b><br/>Selected runtime"}
+  I -. "verification bridge" .-> V{"<b>Harness</b>"}
   V -- "Codex" --> J["<b>Sandbox ready</b><br/>App-server route"]
   J --> K["<b>Verify route</b><br/>Protected 401"]
   K --> L["<b>Run model turn</b><br/>Sandbox loopback"]
   V -- "OpenClaw" --> T["<b>Sandbox ready</b><br/>No inbound exposure"]
-  T --> U["<b>Run two sessions</b><br/>Successive retained workers"]
+  T --> U["<b>Run two sessions</b>"]
   J --> M["<b>Wait for Harness</b><br/>Compute readiness"]
   M --> S{"<b>Attachment status</b><br/>All ready?"}
   S -- "failed, withheld, revoked" --> R
@@ -207,13 +206,8 @@ limits the request to the Harness mounts approved by Kubernetes Compute. The
 stock fail-closed path never reaches this Gateway setting, and production does
 not use this compatibility configuration.
 
-OpenShell supplies the provider placeholder and its interception CA paths when
-it starts the Harness. The native OpenClaw authentication probe preserves
-`NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` in its restricted child environment,
-so the broker can terminate TLS and substitute the credential. After the probe,
-the native worker combines the OpenShell CA with the private Gateway enrollment
-CA before starting `connect --ephemeral`; replacing either CA would break model
-egress or the Gateway connection.
+Native OpenClaw trusts OpenShell's interception CA and the Gateway
+enrollment CA.
 
 ### 4. Call the versioned gateway contract
 
@@ -221,12 +215,9 @@ egress or the Gateway connection.
 
 The client sends the Sandbox identity, spec, Namespace Workspace scope, and
 revision UUID as `request_id`. Codex requests one unnamed exposure for
-`APP_SERVER_PORT`; OpenShell returns its `service_urls` entry. Native OpenClaw
-requests no exposure because its worker connects outbound, so only that request
-may omit the URL map and must reject an unexpected URL. A replay returns the
-same result. A Sandbox that predates replayable Codex creation fails instead of
-receiving a separate mutation. The verification configuration pins the native
-node to two session slots inside its one AgentRevision Sandbox.
+`APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
+outbound, so it requests no exposure and rejects any returned URL. A replay
+returns the same result; a Sandbox that predates replayable creation fails.
 
 Stock `v0.1.0` still lacks the exact projected identity and volume support
 required by the request, including the immutable plugin-runtime ConfigMap
@@ -302,14 +293,12 @@ Kubernetes Compute delete the Kubernetes namespace.
   prove native workload projection or an authenticated model turn through the
   exposed route. The tested runtime uses the OpenClaw source commit pinned by
   `deploy/runtime/Dockerfile`; that source provides the native worker's
-  environment-managed `connect --ephemeral` path and the Codex workspace-node's
+  `connect --ephemeral` path and the workspace-node
   `--pair-if-needed` and `--commands` options required by the test.
 - `OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
   identifies the current fail-closed boundary.
-- Set `OCC_TEST_OPENSHELL_HARNESS=openclaw` to replace the Codex route and
-  loopback checks with successive native worker model turns from two session
-  keys through one outbound Gateway connection and verification that no inbound
-  Harness service exists.
+- `OCC_TEST_OPENSHELL_HARNESS=openclaw` runs two native sessions over one
+  outbound connection with no inbound Harness service.
 
 ## Related docs
 
@@ -325,8 +314,26 @@ Kubernetes Compute delete the Kubernetes namespace.
 
 ## Changelog
 
-- 2026-09-25..28 (#440): full-facet native OpenClaw provisioning, outbound-only Harness without a service URL map, ephemeral enrollment, two-session capacity and OpenShell broker CA trust.
-- 2026-09-26..28 (#461, #512): shared `openshell` Backend, credential-source attachments before activation, and Compose defaults with Kubernetes-only startup.
-- 2026-09-24..25 (#398, #433, #435): OpenShell v0.1.0 pin, selectable Compose control plane and restricted development Gateway.
-- 2026-09-21..23 (#272, #301): pre.5/pre.7 workspace-scoped provisioning, operator Workspace mode and the fail-closed projection boundary.
-- Earlier per-change history is in `git log -- docs/flows/openshell-sandbox-provisioning.md`.
+- 2026-09-28 02:55: Added outbound-only native OpenClaw with broker CA trust. (oce-pr-440-sync - e2b739f51f89)
+
+- 2026-09-28 00:34: Restored Compose defaults and explicit Kubernetes-only startup. (01a0e441-02f9-70b2-ad45-0a1a5049954a - 201f31d511464133f06e0526bb5545ed1cb27e25)
+
+- 2026-09-26 14:29: Documented the shared `openshell` Backend, credential-source attachments in Sandbox creation, attachment readiness before activation, and the app-server token as the first remaining stock blocker. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 849b2b24111fe237b12da5be1d4b411d3146cefb)
+- 2026-09-25 12:23: Documented the selectable Compose control plane while preserving the operator Workspace lifecycle and Kubernetes-only default. (authoring-run/a81f3e71-1c8e-4692-8e2e-d462ddacc10b - 64ab72aed5c4926e4a2080ade91d785e531801a2)
+- 2026-09-25 09:50: Updated the verified source, images, wire fixture, and Helm value mapping for OpenShell v0.1.0, preserved stock Secret-projection rejection, and kept Envoy on the disposable cluster's one-node fixture selector. (authoring-run/acf300be-0710-4283-ae22-5f088cac0b54 - 64ab72aed5c4926e4a2080ade91d785e531801a2)
+- 2026-09-24 16:34: Restricted the unauthenticated development Gateway to the OCE worker and OpenShell supervisor callback path, with tenant egress limited to supervisor Pods. (authoring-run/285e1867-ba73-4a0f-ae7a-e6f6bf79d5d4 - 7019738b86395a211e5b999a433f0ffaef101cdd)
+- 2026-09-24 15:58: Aligned the development profile's verified charts and runtime images with OpenShell v0.1.0-pre.7 and documented its release pin. (authoring-run/12db753e-0ea9-497a-b9bf-e2fdbe9b7fad - 1364f08511f0771f9221f92bfc5a3cd28c57175f)
+- 2026-09-24 11:08: Updated the source-pinned Codex binary identity after the runtime dependency layout changed, preserving fail-closed model egress and the real startup probe. (authoring-run/6c779a54-4d36-4317-827c-84931cf01ace - d89c609e6712dbc6501fcaed5cfefec8d311c9be)
+- 2026-09-24 09:43: Rebased the development profile onto current Kubernetes lifecycle behavior, documented current source-pinned runtime packaging, and made default controller and runtime images rebuild from the checkout. (authoring-run/7e5d6b66-1359-4dfd-94be-9a156cc2bccc - d74e1dcf79d4763c9137a8f9d8087f4ca4da6c47)
+- 2026-09-24 07:02: Consolidated reusable OpenShell startup and cleanup under the common development scripts. (authoring-run/3903cc3f-3260-4dfa-9706-5d622cb9e151 - d972d1ac64847c428ba334a7c12b6ddf4fefb317)
+- 2026-09-24 06:37: Documented the verified pre.7 model-turn path, the OpenShell supervisor-to-Envoy policy boundary, and the required workspace-node CLI flags. (authoring-run/c524c9aa-b229-42cf-9bc8-b47f7a92075e - d972d1ac64847c428ba334a7c12b6ddf4fefb317)
+- 2026-09-23 10:48: Combined the operator Workspace lifecycle with pre.7 create-time service exposure and clarified the stock fail-closed versus CI compatibility paths. (authoring-run/9b10135a-a94c-4761-9e07-6c49b19f7c90 - 10d8805b0b3a52d87febc4ba9b923eb569d046ff)
+- 2026-09-22 17:19: Corrected the pre.7 service-routing boundary: the route reaches the protected app server, but OpenShell strips its bearer authorization, so the real model turn stays on the authenticated Sandbox loopback endpoint. (authoring-run/df798764-b1d9-4722-bccb-4ffe2bbb2980 - a9965e452145e2a5b9677338e75ef008fdf10e06)
+- 2026-09-22 16:45: Documented pre.7 create-time app-server exposure, stable Create replay, and the gateway-routed real model turn. (authoring-run/aa808c3e-483e-408b-8915-7017b839c09a - f2b14314188ab7aecdbcbfb465c92868cb4f73a1)
+- 2026-09-23 01:52: Documented explicit managed/operator selection and Driver-owned workspace-chart reconciliation before operator Workspace creation. (authoring-run/dc7a0b75-945c-4091-8600-eb919ad138dd - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
+- 2026-09-23 01:11: Documented operator workspace mode, deployment-paired Gateway ownership, and split Sandbox versus Namespace cleanup. (authoring-run/955359e5-5631-48e4-acc1-a5e32b9ade00 - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
+- 2026-09-22 18:36: Documented namespace readiness polling and the project-chart development profile that proves the supported fail-closed path. (authoring-run/e7b89de2-9e58-4849-b078-791560cc5d58 - fbaf3e2dfeccbcf2815327d7d5a9aa6643a26cf2)
+- 2026-09-21 15:56: Added the reusable local OpenShell verification launcher and clarified that the compatibility bridge is verification-only rather than CI-only. (authoring-run/b80fed05-5371-4bb4-90ec-601221ec9daf - 18c5be736414ec2a040b7fa17534299092e19166)
+- 2026-09-21 15:05: Documented binary-scoped pre.5 network policy and the CI-only bootstrap for Secret, plugin-runtime, and workload-identity files. (authoring-run/09cfddeb-9530-40a4-9247-b093d2270929 - 946f5b52587be2720e2a8d3aaf74712f89088d5f)
+- 2026-09-21 12:41: Documented own-key network enum validation, the rejected pre.5 `passthrough` alias, and explicit CI projection-mode selection. (authoring-run/180c9046-1da2-444d-ab1d-7d5cf04532e2 - b3a4c00462163edb81cb0588b59a6be8722ffe40)
+- 2026-09-21 08:56: Documented the `v0.1.0-pre.5` workspace-scoped provisioning, fail-closed projection boundary, and cleanup flow. (authoring-run/a16c607b-1ddd-4146-a4c7-05b900b65be7 - aa6dd7415d65ffba5fa40098b2142eb2a7d73df4)
