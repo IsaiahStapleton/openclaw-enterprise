@@ -76,19 +76,21 @@ cursors, or plugin IDs. Hosted discovery resolves bound `codex_pat` and rechecks
 binding and caller/Agent Secret `operate` inside
 [`SecretDriver.withValue`](../reference/drivers/secret.md). Curated discovery needs
 no Secret. Missing, denied, or unavailable Secrets fail before discovery.
-Nontransactional reads use current values but may precede rotation; discovery
-persists no state or credentials.
+Nontransactional reads may precede rotation; discovery persists neither state nor
+credentials.
 
 The [Codex Driver](../../apps/controller/src/drivers/plugin/index.ts) hydrates
-hosted identity, then searches `q` or lists GLOBAL entries with opaque cursors.
+hosted identity, searches `q`, and pages GLOBAL entries with opaque cursors.
 [Console discovery](../../apps/controller/src/console/agents/plugin-discovery.mjs)
-invalidates responses and aborts requests on input before the
-[search delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
-Enter/paging run immediately; closing, configured view, or credential changes cancel
-searches. Request signals retain view cancellation.
-Tools (`null`: unknown) load on demand; supported entries become selectable after
-details. Unsupported releases stay unavailable. Curated catalogs filter bundled
-entries; tools/account access remain unknown.
+preloads page one for Create Agent PATs and bound PATs in editable Agent Plugins
+tabs. The picker reuses prefetch; credential changes clear discovery, preserving
+selections. Search marks loading and invalidates old responses before the
+[delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
+Enter/paging bypass the delay. Closing, configured view, credential changes, and
+view cancellation abort requests.
+Tools (`null`: unknown) show loading on demand; supported entries become selectable
+afterward. Unsupported releases remain unavailable.
+Curated catalogs filter bundled entries without verifying tools/account access.
 
 Bounded hosted reads forbid redirects. OCC returns `no-store` metadata, rejects
 credential echoes, and suppresses upstream errors/artifacts. Selections exclude
@@ -163,33 +165,30 @@ remote plugins enabled only for nonempty selections. Both states set
 bridge with `codexPlugins.enabled:true`, `allow_all_plugins:false`, and one entry
 per selected plugin. Disabled entries remain selected but cannot execute.
 
-At startup, `plugin/list` discovers the curated marketplace; `plugin/read`
-resolves selected remote IDs. `codexRuntimeArtifact` uses concrete `detail.apps`,
+`plugin/list` discovers the curated marketplace; `plugin/read` resolves selections.
+`codexRuntimeArtifact` uses concrete `detail.apps`,
 excluding `appTemplates`; see the [bundled Driver limits](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
 `codexInstallPlan` validates policy and detail before `plugin/install`. Confirmed
 install rejections or missing app authentication warn. Explicit tool policies
 require `codex_apps` inventory from `mcpServerStatus/list`; `codexAppToolSettings`
 binds catalog action IDs to native names through `_meta._codex_apps.resource_uri`.
-Native IDs also work. Unknown, unowned, ambiguous, or duplicate IDs fail startup.
+Native IDs work; unknown, unowned, ambiguous, or duplicate IDs fail startup.
 
-`codexRuntimeArtifact` writes app defaults and explicit tools separately:
+`codexRuntimeArtifact` writes defaults and explicit tools:
 `provider_default`/`all_actions`/`write_actions`/`none` map to Codex
 `auto`/`prompt`/`writes`/`approve`. Defaults cover future actions; overrides
 require owned IDs. `driverPolicy.destructiveEnabled`
 maps to `destructive_enabled` independently. `toolDefaults.reviewer` maps
 `human`/`auto` to app `approvals_reviewer` values `user`/`auto_review`;
-omission inherits the Harness reviewer. Unsupported reviewer scopes fail before save.
-`writeCodexAppConfiguration` replaces managed app subtrees with
-`config/batchWrite`, removing stale tool/link settings. It
-then rereads successful installations to check identity, version, and app mapping.
-Failed-only bindings are disabled; successful bindings retain admitted policy.
-Disabled selections skip installation and startup results.
-Workspace-scoped `config/read` includes project layers. Before readiness,
-`verifyCodexAppConfiguration` checks effective app, tool, and account policy,
-rejecting unselected enabled apps. Disabled failed bindings may retain inherited
-fields. Category values resolve requested app → global → native `true`;
-equivalent values pass. Tool enablement remains strict because it
-bypasses category restrictions. Nulls and omitted reviewers inherit.
+omission inherits the Harness reviewer. Unsupported scopes fail at save.
+`config/batchWrite` replaces managed app subtrees, clearing stale tool/link
+settings; installation readback checks identity, version, and app mapping.
+Failed-only bindings disable apps; disabled selections skip installation/status.
+`config/read` loads workspace layers. Before readiness,
+`verifyCodexAppConfiguration` rejects app/tool/account conflicts and unselected
+enabled apps. Disabled failed apps may retain inherited fields. Category defaults
+resolve app → global → native `true`; equivalent values and nulls pass. Tool
+enablement stays strict because it bypasses categories; omitted reviewers inherit.
 
 `runtime-entrypoints.ts:verifyCodexReviewerConfiguration` checks explicit app/link
 reviewers and `configRequirements/read`, rejecting forbidden reviewers, incompatible
@@ -296,6 +295,8 @@ completed deployment attempt rather than ongoing runtime health.
 ## Changelog
 
 - 2026-09-28 00:02: Reconciled Codex startup policy verification with approval scopes. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - b96eadc1)
+
+- 2026-09-27 23:40: Catalog prefetch and loading feedback. (01a0e53a-f2be-7bd1-a9c1-36e827b2ee47 - b38554ac)
 
 - 2026-09-27 21:52: Debounced catalog searches and canceled obsolete requests. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - a599db7e)
 
