@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-28
-last_updated_session: 01a0b17c-68b6-7e11-bedc-f74de7d606ed
+last_updated_session: 01a0d4f7-8085-70e0-9d0c-69a465a81fe3
 ---
 
 # Agent Plugin Deployment Flow
@@ -145,13 +145,12 @@ the container's private temporary home.
 
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:installOpenClawPlugins`
 
-For embedded OpenClaw, the entrypoint checks selections against the bundled
-catalog and native policy. Generated grants enter nonempty `tools.allow`,
+Embedded OpenClaw validates selections against its bundled catalog and policy. Grants enter nonempty `tools.allow`,
 otherwise `tools.alsoAllow`, preserving denies and profiles. A tool's `enabled`
 override precedes `toolDefaults.enabled`; disabled tools emit native denies.
 Master disable and operator denies prevail; `provider_default` and `none` add no
-Diffs review step. The revision-private configuration uses `--pin --force --no-enable`
-to prevent installation from changing enablement or allow/deny lists. Preparation
+Diffs review step. Revision-private configuration uses `--pin --force --no-enable`,
+preserving enablement and allow/deny lists during installation. Preparation
 refreshes the registry and verifies admitted configuration. The runtime image
 must gain this flag; the pinned release lacks it.
 Native inspection verifies plugin ID, package name, runtime/install version,
@@ -159,20 +158,21 @@ recorded integrity, and the runtime source's containment in the install path.
 Verification failure prevents gateway readiness. Confirmed install rejection
 disables the optional selection and removes its managed tool allowance before startup.
 
-Dedicated Codex bootstraps its isolated `CODEX_HOME` with apps, plugins, and
-remote plugins enabled only for nonempty selections. Both states set
-`apps._default.enabled:false`. With selections, Compute renders the OpenClaw
-bridge with `codexPlugins.enabled:true`, `allow_all_plugins:false`, and one entry
-per selected plugin. Disabled entries remain selected but cannot execute.
+For nonempty selections, dedicated Codex enables apps, plugins, and remote plugins
+in isolated `CODEX_HOME`; Compute configures its OpenClaw bridge with
+`codexPlugins.enabled:true`, `allow_all_plugins:false`, and an entry per selection.
+`apps._default.enabled:false` always applies. Disabled selections cannot execute
+hosted app tools.
 
-`plugin/list` discovers the curated marketplace; `plugin/read` resolves selections.
-`codexRuntimeArtifact` uses concrete `detail.apps`,
-excluding `appTemplates`; see the [bundled Driver limits](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
-`codexInstallPlan` validates policy and detail before `plugin/install`. Confirmed
-install rejections or missing app authentication warn. Explicit tool policies
-require `codex_apps` inventory from `mcpServerStatus/list`; `codexAppToolSettings`
-binds catalog action IDs to native names through `_meta._codex_apps.resource_uri`.
-Native IDs work; unknown, unowned, ambiguous, or duplicate IDs fail startup.
+`plugin/list` discovers the marketplace; `plugin/read` resolves selections.
+`codexRuntimeArtifact` uses concrete `detail.apps`, excluding `appTemplates`.
+`codexInstallPlan` validates policy and [component support](../reference/drivers/plugin-bundled.md)
+before `plugin/install`. Codex loads bundled skills. Account-wide skill
+restrictions require native default enablement and OCE integration.
+Install rejections or missing app authentication warn. Explicit tool policies
+require `mcpServerStatus/list`'s `codex_apps` inventory; `codexAppToolSettings`
+binds catalog action IDs through `_meta._codex_apps.resource_uri`. Native IDs
+work. Unknown, unowned, ambiguous, or duplicate IDs fail startup.
 
 `codexRuntimeArtifact` writes defaults and explicit tools:
 `provider_default`/`all_actions`/`write_actions`/`none` map to Codex
@@ -297,6 +297,8 @@ completed deployment attempt rather than ongoing runtime health.
 - 2026-09-28 00:02: Reconciled Codex startup policy verification with approval scopes. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - b96eadc1)
 
 - 2026-09-27 23:40: Catalog prefetch and loading feedback. (01a0e53a-f2be-7bd1-a9c1-36e827b2ee47 - b38554ac)
+
+- 2026-09-27 22:17: Document native Codex bundled skill support and pending account-plugin activation restriction. (01a0d4f7-8085-70e0-9d0c-69a465a81fe3 - 19f72841c3aed621137bd438ae91fa016c39b292)
 
 - 2026-09-27 21:52: Debounced catalog searches and canceled obsolete requests. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - a599db7e)
 

@@ -781,7 +781,7 @@ test("Selected Secret discovery reaches the hosted provider with the current cre
       requires_local_executor: false,
       app_ids: ["fixture-app"],
       app_manifest: null,
-      skills: [],
+      skills: [{ name: "knowledge-workflow" }],
       mcp_servers: [],
     },
   };
@@ -842,13 +842,30 @@ test("Selected Secret discovery reaches the hosted provider with the current cre
   });
   assert.equal(list.status, 200);
   assert.equal(list.data.plugins[0].remoteId, "remote-fixture");
+  assert.equal(list.data.plugins[0].available, true);
   assert.deepEqual(catalogRequests, [{ path: "/backend-api/ps/plugins/search", q: "fixture" }]);
   const details = await fixture.request("POST", `${fixture.path}/details`, {
     body: { secretRef: secret.ref, pluginId: "remote-fixture" },
   });
   assert.equal(details.status, 200);
+  assert.equal(details.data.available, true);
   assert.equal(details.data.tools[0].id, "fixture-app/search");
   assert.ok(credentials.every((value) => value === accessToken));
+
+  // Skills must not prevent a discovered plugin from entering a real Agent revision.
+  const agent = await fixture.createAgent(
+    fixture.namespace.id,
+    "Knowledge agent",
+    createHarnessConfiguration("codex", "gpt-5.1"),
+    { executionMode: "dedicated" },
+  );
+  const plugins = { [details.data.id]: { enabled: true } };
+  await fixture.updateAgent(fixture.namespace.id, agent.id, {
+    configurationId: agent.configurationId,
+    plugins,
+  });
+  const revision = await fixture.deployAgent(fixture.namespace.id, agent.id);
+  assert.deepEqual(revision.plugins.plugins, plugins);
 
   // A discovered policy must reach the raw native tool despite its renamed prefix.
   const artifact = codexRuntimeArtifact(
@@ -867,7 +884,7 @@ test("Selected Secret discovery reaches the hosted provider with the current cre
             version: "1.0.0",
           },
           apps: [{ id: "fixture-app" }],
-          skills: [],
+          skills: [{ name: "knowledge-workflow" }],
           hooks: [],
           mcpServers: [],
         },
@@ -1065,7 +1082,7 @@ test("Selected Secret backend failures suppress sensitive error details", async 
   );
 });
 
-test("Curated discovery admits Linear without provider I/O and saves its selection in a revision", async (t) => {
+test("Curated discovery admits plugins with skills without provider I/O and saves selections in a revision", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Curated plugins", { ready: true });
@@ -1118,7 +1135,9 @@ test("Curated discovery admits Linear without provider I/O and saves its selecti
   const notion = page.data.plugins.find(
     (entry) => entry.id === "codex-plugin:notion@openai-curated-remote",
   );
-  assert.equal(notion?.available, false);
+  assert.ok(notion);
+  assert.notEqual(notion.available, false);
+  assert.equal(notion.selectableWithoutTools, true);
   assert.equal(
     (await fixture.request("POST", `${path}/details`, { body: { pluginId: "unknown" } })).status,
     503,
@@ -1135,6 +1154,7 @@ test("Curated discovery admits Linear without provider I/O and saves its selecti
   const plugins = {
     [linear.id]: { enabled: true, toolDefaults: { approval: "write_actions", reviewer: "human" } },
     [slack.id]: { enabled: true, toolDefaults: { reviewer: "auto" } },
+    [notion.id]: { enabled: true },
   };
   const updated = await fixture.updateAgent(namespace.id, agent.id, {
     configurationId: agent.configurationId,

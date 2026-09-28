@@ -603,6 +603,10 @@
                     "label": "Overview"
                   },
                   {
+                    "page": "contributing/rfcs",
+                    "label": "RFCs"
+                  },
+                  {
                     "page": "contributing/design-philosophy",
                     "label": "Design Philosophy"
                   },
@@ -779,6 +783,8 @@
               }
             ],
             "hidden": [
+              "contributing/rfc-template",
+              "guides/deploy/local-repository-credentials",
               "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
