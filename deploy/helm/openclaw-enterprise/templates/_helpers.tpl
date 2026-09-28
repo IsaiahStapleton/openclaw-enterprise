@@ -8,6 +8,58 @@
 {{- end -}}
 {{- if not .Values.auth.baseUrl -}}{{- fail "auth.baseUrl must identify the public Better Auth base URL" -}}{{- end -}}
 {{- if or (not .Values.auth.secretName) (not .Values.auth.secretKey) -}}{{- fail "auth must reference an operator-created Better Auth signing Secret" -}}{{- end -}}
+{{- $github := .Values.auth.github -}}
+{{- $recoveryUserId := toString (default "" .Values.auth.recoveryUserId) -}}
+{{- if hasKey (default dict $github) "recoveryUserId" -}}{{- fail "auth.github.recoveryUserId is not a chart value; set auth.recoveryUserId" -}}{{- end -}}
+{{- if and $recoveryUserId (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" $recoveryUserId)) -}}{{- fail "auth.recoveryUserId must be the existing local password administrator's user ID" -}}{{- end -}}
+{{- if and $recoveryUserId (not (and $github $github.enabled)) -}}{{- fail "auth.recoveryUserId requires auth.github.enabled: true" -}}{{- end -}}
+{{- if and $github $github.enabled -}}
+{{- if not $recoveryUserId -}}{{- fail "auth.github.enabled requires auth.recoveryUserId: install without GitHub first, then upgrade with the administrator's user ID" -}}{{- end -}}
+{{- if or (not $github.secretName) (not $github.clientIdKey) (not $github.clientSecretKey) -}}{{- fail "auth.github requires a dedicated operator-created Secret name, client ID key, and client secret key" -}}{{- end -}}
+{{- if eq $github.clientIdKey $github.clientSecretKey -}}{{- fail "auth.github client ID and client secret must use different Secret keys" -}}{{- end -}}
+{{- if or (eq $github.secretName .Values.installation.secretName) (eq $github.secretName .Values.database.secretName) (eq $github.secretName .Values.auth.secretName) (and .Values.backend.chatgpt.enabled (eq $github.secretName .Values.backend.chatgpt.secretName)) (and .Values.gatewayRouting.enabled (eq $github.secretName .Values.gatewayRouting.apiKeySecretName)) -}}
+{{- fail "auth.github credentials must use a dedicated Secret" -}}
+{{- end -}}
+{{- if .Values.repositoryCredentials.enabled -}}
+{{- range $name := list "serviceConfigSecretName" "appKeySecretName" "tlsSecretName" "publicCaSecretName" -}}
+{{- if eq $github.secretName (index $.Values.repositoryCredentials $name) -}}{{- fail (printf "auth.github credentials must use a Secret distinct from repositoryCredentials.%s" $name) -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not (hasPrefix "https://" .Values.auth.baseUrl) -}}{{- fail "auth.github requires an HTTPS auth.baseUrl" -}}{{- end -}}
+{{- if .Values.agentNativeAdmin.enabled -}}{{- fail "auth.github requires agentNativeAdmin.enabled: false; GitHub sign-in supports host-only cookies only" -}}{{- end -}}
+{{- if not (kindIs "slice" (default list $github.egressCidrs)) -}}{{- fail "auth.github.egressCidrs must be a list of IPv4 CIDRs; leave it empty for HTTPS egress to any address" -}}{{- end -}}
+{{- range $cidr := $github.egressCidrs -}}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$" (toString $cidr)) -}}{{- fail "auth.github.egressCidrs requires explicit IPv4 CIDRs with prefixes 1 through 32" -}}{{- end -}}
+{{- range $octet := splitList "." (first (splitList "/" (toString $cidr))) -}}
+{{- if gt (int $octet) 255 -}}{{- fail "auth.github.egressCidrs contains an invalid IPv4 address" -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $proxy := default dict .Values.api.trustedProxy -}}
+{{- $preset := toString (default "" $proxy.preset) -}}
+{{- if not (has $preset (list "" "ingress-nginx" "aws" "generic")) -}}{{- fail "api.trustedProxy.preset must be empty, ingress-nginx, aws, or generic" -}}{{- end -}}
+{{- if not $preset -}}
+{{- if or $proxy.cidrs $proxy.clientAddressHeader -}}{{- fail "api.trustedProxy.cidrs and clientAddressHeader require api.trustedProxy.preset" -}}{{- end -}}
+{{- else -}}
+{{- if or (not (kindIs "slice" $proxy.cidrs)) (not $proxy.cidrs) -}}{{- fail (printf "api.trustedProxy.preset %s requires api.trustedProxy.cidrs: the proxy addresses the API Pod sees as the connecting peer" $preset) -}}{{- end -}}
+{{- range $cidr := $proxy.cidrs -}}
+{{- $value := toString $cidr -}}
+{{- if regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$" $value -}}
+{{- range $octet := splitList "." (first (splitList "/" $value)) -}}
+{{- if gt (int $octet) 255 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv4 address" -}}{{- end -}}
+{{- end -}}
+{{- else if not (regexMatch "^[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8])$" $value) -}}
+{{- fail "api.trustedProxy.cidrs requires IPv4 or IPv6 CIDRs with a nonzero prefix" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq $preset "generic") (not $proxy.clientAddressHeader) -}}{{- fail "api.trustedProxy.preset generic requires api.trustedProxy.clientAddressHeader" -}}{{- end -}}
+{{- $header := lower (toString (default "" $proxy.clientAddressHeader)) -}}
+{{- if $header -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,63}$" $header) -}}{{- fail "api.trustedProxy.clientAddressHeader must be a single HTTP header name of at most 64 characters" -}}{{- end -}}
+{{- if has $header (list "x-occ-client-ip" "cookie" "forwarded" "authorization" "host" "origin" "x-api-key") -}}{{- fail (printf "api.trustedProxy.clientAddressHeader cannot be %s; use a header that carries plain client addresses, such as x-forwarded-for or x-real-ip" $header) -}}{{- end -}}
+{{- if and (ne $preset "generic") (ne $header "x-forwarded-for") -}}{{- fail (printf "api.trustedProxy.preset %s reads x-forwarded-for; use the generic preset for %s" $preset $header) -}}{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.agentNativeAdmin.enabled -}}
 {{- if not .Values.agentNativeAdmin.domain -}}{{- fail "agentNativeAdmin.domain must identify the public Agent native admin DNS suffix when agentNativeAdmin.enabled is true" -}}{{- end -}}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$" .Values.agentNativeAdmin.domain) -}}{{- fail "agentNativeAdmin.domain must be a DNS hostname without a wildcard, port, scheme, or path" -}}{{- end -}}
@@ -73,6 +125,20 @@
 {{- if eq .Values.database.secretName .Values.auth.secretName -}}
 {{- fail "Better Auth signing material must use a dedicated Secret" -}}
 {{- end -}}
+{{- if .Values.executionCluster.enabled -}}
+{{- $execution := .Values.executionCluster -}}
+{{- if or (not $execution.apiKubeconfigSecretName) (not $execution.workerKubeconfigSecretName) (eq $execution.apiKubeconfigSecretName $execution.workerKubeconfigSecretName) -}}
+{{- fail "executionCluster requires separate API and worker kubeconfig Secrets" -}}
+{{- end -}}
+{{- if or (not $execution.apiCidrs) (not $execution.kubeconfigKey) -}}
+{{- fail "executionCluster requires explicit API CIDRs and kubeconfig key" -}}
+{{- end -}}
+{{- range $name := list $execution.apiKubeconfigSecretName $execution.workerKubeconfigSecretName -}}
+{{- if has $name (list $.Values.installation.secretName $.Values.database.secretName $.Values.auth.secretName $.Values.gatewayRouting.apiKeySecretName) -}}
+{{- fail "executionCluster kubeconfigs require dedicated Secrets distinct from platform credentials" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.repositoryCredentials.enabled -}}
 {{- $credentials := .Values.repositoryCredentials -}}
 {{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-fA-F0-9]{64}$" $credentials.image) -}}
@@ -113,6 +179,10 @@
 {{- end -}}
 {{- $secrets := dict "installation" .Values.installation.secretName "database" .Values.database.secretName "auth" .Values.auth.secretName -}}
 {{- if .Values.backend.chatgpt.enabled -}}{{- $_ := set $secrets "chatgpt" .Values.backend.chatgpt.secretName -}}{{- end -}}
+{{- if .Values.executionCluster.enabled -}}
+{{- $_ := set $secrets "executionApi" .Values.executionCluster.apiKubeconfigSecretName -}}
+{{- $_ := set $secrets "executionWorker" .Values.executionCluster.workerKubeconfigSecretName -}}
+{{- end -}}
 {{- if .Values.gatewayRouting.enabled -}}
 {{- $_ := set $secrets "gatewayApiKey" .Values.gatewayRouting.apiKeySecretName -}}
 {{- $_ := set $secrets "gatewayTls" (include "openclaw.gatewayRouting.tlsSecretName" .) -}}
@@ -178,6 +248,11 @@
 {{- end -}}
 {{- if not $routing.envoyGatewayPodLabels -}}{{- fail "gatewayRouting.envoyGatewayPodLabels must select the Envoy Gateway control-plane Pods for xDS egress" -}}{{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "openclaw.trustedProxy.header" -}}
+{{- $proxy := default dict .Values.api.trustedProxy -}}
+{{- if eq (toString $proxy.preset) "generic" -}}{{- lower (toString $proxy.clientAddressHeader) -}}{{- else -}}x-forwarded-for{{- end -}}
 {{- end -}}
 
 {{- define "openclaw.labels" -}}

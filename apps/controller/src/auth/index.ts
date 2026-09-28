@@ -21,12 +21,19 @@ import {
   type HumanAuthenticationAccount,
   type PostgresPool,
   type PostgresPlatformState,
+  type PreparedPasswordAccount,
 } from "@openclaw-enterprise/occ";
 import type { IAMDriver } from "@openclaw-enterprise/contracts";
 import { createHumanLogin, type GitHubLoginConfiguration } from "./github.ts";
 import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
+import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
+export {
+  clientAddressConfiguration,
+  resolveClientAddress,
+  type ClientAddressConfiguration,
+} from "./client-address.ts";
 import type {
   AdmissionHeaders,
   AdmissionRequest,
@@ -66,6 +73,8 @@ export interface ControllerAuthOptions {
   readonly secureCookies?: boolean;
   readonly sharedCookieDomain?: string;
   readonly humanLogin?: ReturnType<typeof createHumanLogin>;
+  /** Trusted proxies whose client-address header keys sign-in admission. */
+  readonly clientAddress?: ClientAddressConfiguration;
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
@@ -86,6 +95,9 @@ export interface AuthenticatedAccount {
 
 export type AuthenticatedSession = AdmittedSession;
 
+/** A validated, hashed account that has not been written yet. */
+export type PreparedAuthAccount = PreparedPasswordAccount;
+
 export interface ProvisionAuthAccountInput {
   readonly email: string;
   readonly password: string;
@@ -105,6 +117,8 @@ export interface ControllerAuth {
   readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
   readonly githubEnabled: boolean;
+  /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
+  readonly activationSkipped?: readonly string[];
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
@@ -120,10 +134,20 @@ export interface ControllerAuth {
   ): Promise<unknown>;
   changeAccount?(
     userId: string,
-    operation: "disable" | "revoke",
+    operation: "disable" | "enable" | "revoke",
     actor: HumanAuthenticationActor,
     expectedVersion: number,
   ): Promise<void>;
+  detachMethod?(
+    userId: string,
+    methodId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<{ methodId: string; providerId: string }>;
+  /** "guarded" once State-owned human sign-in admission is active. */
+  readonly humanProfile: "password" | "guarded";
+  prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount>;
+  writePreparedAccount(prepared: PreparedAuthAccount): Promise<AuthenticatedAccount>;
   createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount>;
   deleteAccount(account: Pick<AuthenticatedAccount, "id">): Promise<void>;
   principalSeed(
@@ -360,6 +384,24 @@ function responseSessionId(response: unknown): string | undefined {
   return isNonEmptyString(id) ? id : undefined;
 }
 
+function requireSessionMutationOrigin(headers: Headers, expectedOrigin: string): void {
+  const fetchSite = headers.get("sec-fetch-site");
+  if (
+    headers.get("origin") !== expectedOrigin ||
+    (fetchSite !== null && fetchSite !== "same-origin")
+  ) {
+    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+  }
+}
+
+function preparedId(
+  context: { generateId(options: { model: "user" | "account" }): string | false },
+  model: "user" | "account",
+): string {
+  const generated = context.generateId({ model });
+  return typeof generated === "string" && generated.length > 0 ? generated : randomUUID();
+}
+
 function accountName(input: ProvisionAuthAccountInput): string {
   return input.name?.trim() || input.email.trim();
 }
@@ -497,18 +539,34 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
   readonly #issuer: string;
   readonly #sessionCookieName: string;
   readonly #secret: string;
+  readonly #browserOrigin: string;
 
   constructor(
     auth: ControllerBetterAuth,
     installationId: string,
     cookieName: string,
     secret: string,
+    browserOrigin: string,
   ) {
     this.#auth = auth;
     this.#secret = secret;
     this.#sessionCookieName = cookieName;
+    this.#browserOrigin = browserOrigin;
     this.#installationId = installationId;
     this.#issuer = betterAuthIssuer(installationId);
+  }
+
+  async verifyControllerRequest(request: AdmissionRequest): Promise<AdmittedCaller> {
+    const headers = authHeaders(request.headers);
+    if (
+      request.authorizationHeader === undefined &&
+      !headers.has(OCC_SERVICE_KEY_HEADER) &&
+      headers.has("cookie") &&
+      !["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())
+    ) {
+      requireSessionMutationOrigin(headers, this.#browserOrigin);
+    }
+    return this.verify(request);
   }
 
   async verify(request: AdmissionRequest): Promise<AdmittedCaller> {
@@ -730,13 +788,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   });
   const api = auth.api;
 
-  async function createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount> {
-    // TODO(human-account-provisioning): join acknowledged provisioning to currentness before enabling creation after activation.
-    if (humanLogin) {
-      throw APIError.fromStatus("CONFLICT", {
-        message: "Provision accounts before activating GitHub sign-in.",
-      });
-    }
+  /** Validates and hashes a new password account without writing it. */
+  async function prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount> {
     const email = input.email.trim().toLowerCase();
     const password = input.password;
     if (!isNonEmptyString(email) || !isNonEmptyString(password)) {
@@ -769,13 +822,61 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         message: "The requested account already exists.",
       });
     }
-    const hash = await context.password.hash(password);
-    const created = await context.internalAdapter.createUser(
-      {
-        email,
-        name: accountName({ ...input, email }),
+    return Object.freeze({
+      id: preparedId(context, "user"),
+      email,
+      name: accountName({ ...input, email }),
+      passwordHash: await context.password.hash(password),
+      credentialId: preparedId(context, "account"),
+    });
+  }
+
+  /** Writes a prepared account through Better Auth, for compositions without original State. */
+  async function writePreparedAccount(
+    prepared: PreparedAuthAccount,
+  ): Promise<AuthenticatedAccount> {
+    const context = await auth.$context;
+    const created = await context.adapter.create<
+      Record<string, unknown>,
+      { id: string; email: string; name: string }
+    >({
+      model: "user",
+      data: {
+        id: prepared.id,
+        email: prepared.email,
+        name: prepared.name,
         emailVerified: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
+      forceAllowId: true,
+    });
+    try {
+      await context.adapter.create({
+        model: "account",
+        data: {
+          id: prepared.credentialId,
+          userId: prepared.id,
+          providerId: "credential",
+          accountId: prepared.id,
+          password: prepared.passwordHash,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        forceAllowId: true,
+      });
+    } catch (error) {
+      await context.internalAdapter.deleteUser(prepared.id).catch(() => {});
+      throw error;
+    }
+    return Object.freeze({ id: created.id, email: created.email, name: created.name });
+  }
+
+  async function createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount> {
+    const prepared = await prepareAccount(input);
+    const context = await auth.$context;
+    const created = await context.internalAdapter.createUser(
+      { email: prepared.email, name: prepared.name, emailVerified: true },
       { method: "admin" },
     );
     try {
@@ -783,7 +884,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         userId: created.id,
         providerId: "credential",
         accountId: created.id,
-        password: hash,
+        password: prepared.passwordHash,
       });
     } catch (error) {
       await context.internalAdapter.deleteUser(created.id).catch(() => {});
@@ -812,9 +913,20 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     }
     const headers = authHeaders(request.headers);
     headers.set("host", new URL(options.baseURL).host);
-    headers.set("x-occ-client-ip", request.ip);
-    // The public wrapper already applies the established browser/CLI origin contract.
-    if (!headers.has("origin") && (path === "/oce/password" || path === "/oce/sign-out")) {
+    // Sign-in admission keys on this value; Better Auth reads only this address header.
+    headers.set(
+      "x-occ-client-ip",
+      resolveClientAddress(
+        options.clientAddress,
+        request.ip,
+        options.clientAddress === undefined
+          ? undefined
+          : request.headers[options.clientAddress.header],
+      ),
+    );
+    // Password sign-in keeps the established browser/CLI origin contract; sign-out already
+    // required the exact browser Origin before reaching this point.
+    if (!headers.has("origin") && path === "/oce/password") {
       headers.set("origin", expectedBrowserOrigin);
     }
     if (body !== undefined) {
@@ -883,9 +995,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         if (!humanLogin) {
           throw new AdmissionFailure(403, "FORBIDDEN", "GitHub sign-in is unavailable.");
         }
-        if (request.headers.origin !== expectedBrowserOrigin) {
-          throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
-        }
+        // Reads the session cookie, so it takes the same exact-Origin guard as sign-out.
+        requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
         return runPrivateEndpoint(request, "/oce/providers/github/result", authBody(request));
       },
       (value) => {
@@ -932,7 +1043,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       reply,
       async () => {
         // Better Auth server API calls skip origin middleware without a Request context.
-        requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
+        requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
         const headers = sessionHeaders(request.headers, sessionCookieName);
         if (sessionKeyHeader(headers) !== undefined) {
           // A pinned tab ends only its own session; a cookie replaced by another
@@ -1019,7 +1130,10 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       options.installationId,
       sessionCookieName,
       options.secret,
+      expectedBrowserOrigin,
     ),
+    prepareAccount,
+    writePreparedAccount,
     createAccount,
     deleteAccount,
     principalSeed: (
@@ -1033,6 +1147,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         seedOptions,
       ),
     githubEnabled: humanLogin !== undefined,
+    humanProfile: humanLogin === undefined ? "password" : "guarded",
     githubStart,
     githubCallback,
     githubResult,
@@ -1121,6 +1236,7 @@ export async function createPostgresControllerAuth(
   });
   // Finish static auth initialization before the one-way activation transaction.
   await auth.auth.$context;
+  let activationSkipped: readonly string[] = [];
   if (github !== undefined) {
     const principal = await iamDriver!.lookupIdentity({
       issuer: betterAuthIssuer(options.installationId),
@@ -1137,10 +1253,18 @@ export async function createPostgresControllerAuth(
     if (!decision.allowed || decision.driverId !== iamDriver!.id) {
       throw new Error("Recovery account must administer the Installation.");
     }
-    await persistence!.activateRecovery(github.recoveryUserId, principal.id);
+    activationSkipped = (await persistence!.activateRecovery(github.recoveryUserId, principal.id))
+      .skipped;
+    const designation = await persistence!.recoveryDesignation();
+    if (!designation) {
+      throw new Error("Recovery designation is unavailable.");
+    }
+    // The recovery account's password lane stays admitted under sign-in floods.
+    humanLogin!.designateRecovery(designation.email);
   }
   return {
     ...auth,
+    ...(activationSkipped.length === 0 ? {} : { activationSkipped }),
     ...(humanLogin === undefined
       ? {}
       : {
@@ -1161,10 +1285,16 @@ export async function createPostgresControllerAuth(
             ),
           changeAccount: (
             userId: string,
-            operation: "disable" | "revoke",
+            operation: "disable" | "enable" | "revoke",
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
+          detachMethod: (
+            userId: string,
+            methodId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => persistence!.detachExternal(userId, methodId, actor, expectedVersion),
         }),
   };
 }

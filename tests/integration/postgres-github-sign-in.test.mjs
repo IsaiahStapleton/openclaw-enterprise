@@ -204,7 +204,11 @@ test(
     }
     const beforeInvalidConfiguration = await activationState();
     assert.ok(beforeInvalidConfiguration.session.length > 0);
-    assert.deepEqual(beforeInvalidConfiguration.human_authentication_accounts, []);
+    // Only the account created through the provisioning route is enrolled before activation.
+    assert.deepEqual(
+      (await pool.query("SELECT user_id FROM occ.human_authentication_accounts")).rows,
+      [{ user_id: limited.id }],
+    );
     assert.deepEqual(beforeInvalidConfiguration.human_authentication_recovery, []);
     const productionRuntime = await loadInstallationConfiguration({
       mode: "production",
@@ -526,6 +530,12 @@ test(
     // A cross-origin or Origin-less request cannot read the key, even with valid cookies.
     const withoutOrigin = await result(attempt.attemptId, githubCookie, {});
     assert.equal(withoutOrigin.statusCode, 403, withoutOrigin.body);
+    // Like sign-out, a supplied Sec-Fetch-Site must be same-origin.
+    const sameSite = await result(attempt.attemptId, githubCookie, {
+      origin,
+      "sec-fetch-site": "same-site",
+    });
+    assert.equal(sameSite.statusCode, 403, sameSite.body);
     // A different live attempt, such as another tab's, cannot claim this session.
     const otherTab = await start();
     const wrongAttempt = await result(otherTab.attemptId, githubCookie);
@@ -760,18 +770,70 @@ test(
       .map(({ name, value }) => `${name}=${value}`)
       .join("; ");
     const adminHeaders = { cookie: browserCookies, origin };
-    const refused = await app.inject({
+    // A failed provisioning (unknown Role) leaves no user, method or Principal behind.
+    const badRole = await app.inject({
       method: "POST",
       url: "/api/auth/accounts",
       headers: adminHeaders,
-      payload: { email: "after-activation@example.test", password, roleId: role.id },
+      payload: { email: "bad-role@example.test", password, roleId: "role-does-not-exist" },
     });
-    assert.equal(refused.statusCode, 409, refused.body);
+    assert.equal(badRole.statusCode, 400, badRole.body);
     assert.equal(
       (await pool.query('SELECT count(*)::int AS count FROM occ."user"')).rows[0].count,
       2,
     );
     assert.deepEqual(await state.loadNativeIAMState(installation.id), before);
+    // Account creation stays available with GitHub sign-in activated.
+    const opened = await app.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: adminHeaders,
+      payload: { email: "after-activation@example.test", password, roleId: role.id },
+    });
+    assert.equal(opened.statusCode, 201, opened.body);
+    const createdId = opened.json().data.id;
+    assert.equal(
+      (await pool.query('SELECT count(*)::int AS count FROM occ."user"')).rows[0].count,
+      3,
+    );
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: adminHeaders,
+      payload: { email: "after-activation@example.test", password, roleId: role.id },
+    });
+    assert.equal(duplicate.statusCode, 409, duplicate.body);
+    const createdLogin = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      headers: { origin },
+      payload: { email: "after-activation@example.test", password },
+    });
+    assert.equal(createdLogin.statusCode, 200, createdLogin.body);
+    const createdSession = await app.inject({
+      url: "/api/auth/session",
+      headers: { cookie: cookieHeaderFromSetCookie(createdLogin.headers["set-cookie"]) },
+    });
+    assert.equal(createdSession.json().data.user.id, createdId);
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/auth/accounts/${createdId}/providers/github`,
+          headers: adminHeaders,
+          payload: {
+            subject: "33333333",
+            expectedVersion: (await readAccount(createdId, adminHeaders)).version,
+          },
+        })
+      ).statusCode,
+      200,
+    );
+    assert.ok(
+      (await readAccount(createdId, adminHeaders)).methods.some(
+        (method) => method.subject === "33333333",
+      ),
+    );
     assert.equal(
       (
         await app.inject({
@@ -880,6 +942,95 @@ test(
     });
     assert.equal(disabledPassword.statusCode, 401);
     assert.equal(disabledPassword.headers["set-cookie"], undefined);
+    async function accountAction(path, expectedVersion) {
+      return app.inject({
+        method: "POST",
+        url: path,
+        headers: adminHeaders,
+        payload: { expectedVersion },
+      });
+    }
+    // Re-enable restores password sign-in under a new version.
+    const disabledAccount = await readAccount(limited.id, adminHeaders);
+    assert.equal(disabledAccount.disabled, true);
+    assert.equal(
+      (await accountAction(`/api/auth/accounts/${limited.id}/enable`, disabledAccount.version - 1))
+        .statusCode,
+      409,
+    );
+    const enabled = await accountAction(
+      `/api/auth/accounts/${limited.id}/enable`,
+      disabledAccount.version,
+    );
+    assert.equal(enabled.statusCode, 200, enabled.body);
+    const enabledAccount = await readAccount(limited.id, adminHeaders);
+    assert.equal(enabledAccount.disabled, false);
+    assert.equal(enabledAccount.version, disabledAccount.version + 1);
+    assert.equal(
+      (await accountAction(`/api/auth/accounts/${limited.id}/enable`, enabledAccount.version))
+        .statusCode,
+      409,
+      "enabling an enabled account is a conflict",
+    );
+    const reenabledPassword = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      headers: { origin },
+      payload: { email: "github-limited@example.test", password },
+    });
+    assert.equal(reenabledPassword.statusCode, 200, reenabledPassword.body);
+    // Detach by methodId removes the GitHub identity and its sessions only.
+    const withGitHub = await readAccount(createdId, adminHeaders);
+    const credentialMethod = withGitHub.methods.find(
+      (method) => method.providerId === "credential",
+    );
+    const githubMethod = withGitHub.methods.find((method) => method.providerId !== "credential");
+    assert.ok(credentialMethod && githubMethod);
+    const createdCookie = cookieHeaderFromSetCookie(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/auth/sign-in/email",
+          headers: { origin },
+          payload: { email: "after-activation@example.test", password },
+        })
+      ).headers["set-cookie"],
+    );
+    assert.equal(
+      (
+        await accountAction(
+          `/api/auth/accounts/${createdId}/methods/${credentialMethod.methodId}/detach`,
+          withGitHub.version,
+        )
+      ).statusCode,
+      409,
+      "the password method cannot be detached",
+    );
+    assert.equal(
+      (
+        await accountAction(
+          `/api/auth/accounts/${createdId}/methods/${githubMethod.methodId}/detach`,
+          withGitHub.version - 1,
+        )
+      ).statusCode,
+      409,
+    );
+    const detached = await accountAction(
+      `/api/auth/accounts/${createdId}/methods/${githubMethod.methodId}/detach`,
+      withGitHub.version,
+    );
+    assert.equal(detached.statusCode, 200, detached.body);
+    const afterDetach = await readAccount(createdId, adminHeaders);
+    assert.equal(afterDetach.version, withGitHub.version + 1);
+    assert.deepEqual(
+      afterDetach.methods.map((method) => method.methodId),
+      [credentialMethod.methodId],
+    );
+    assert.equal(
+      (await app.inject({ url: "/api/auth/session", headers: { cookie: createdCookie } })).json()
+        .data,
+      null,
+    );
     await browser.close();
     browser = undefined;
     await app.close();

@@ -15,31 +15,32 @@ Run from the repository root; retain protected files for
 
 ## Use published images
 
-These private `linux/amd64` and `linux/arm64` image indexes were built from `e3b28515f30523eede3cd905e589c1ab9063dbda`.
-Startup checks passed on both architectures (ARM64 under QEMU); remote digests
-were verified in [publication run 35680912119](https://github.com/openclaw/openclaw-enterprise/actions/runs/35680912119).
-These checks do not qualify production deployments.
-[Build your own images](#build-and-publish-production-images) to change their contents.
+Install with a verified release or custom controller image supporting
+`catalogSource: openai-curated` and the
+[origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
+plus a compatible runtime. Export their digests as `CONTROLLER_IMAGE` and
+`RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images).
 
-Obtain read access to both GHCR packages. Authenticate with a GitHub personal
-access token **(classic)** with
-`read:packages`; authorize organization SSO if required. Replace the username
-below and enter the token at Docker's password prompt, never in the command. See
-[GitHub's registry authentication instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry).
+The published pair from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
+startup checks and remote digest verification in
+[publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910)
+but predates the origin check. Use it only for image tests or workflows targeting
+that source; no release meeting current production requirements is verified here.
+
+For historical [image tests](../../testing/images.md#check-published-images), obtain
+GHCR read access, log in with a classic personal access token with `read:packages`
+(SSO-authorized if required) at Docker's password prompt, never in the command
+([GitHub instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry)),
+and export the pair:
 
 ```bash
 docker login ghcr.io --username '<your-github-username>'
-
-export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:9aa430eb19553a35ccafd5dafff58984ec1264e7c77b1440f56a893cf8e993e1'
-export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:792f0ffe88ec9f935b55c36f41ee646a828e3d83df21427cf7955a5beef52460'
+export HISTORICAL_CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
+export HISTORICAL_RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
 ```
 
-Use the controller for API, worker, migration, and bootstrap; gateways and Agents
-share the runtime image. Retain these digests; never substitute `latest` or bootstrap tags.
-
-Configure approved cluster/node pull credentials for **both control-plane and
-tenant Pods**; local `docker login` does not authenticate cluster nodes. Continue
-at [Configure the Installation](#configure-the-installation) with these exports.
+Configure approved pull credentials for **control-plane and tenant Pods**;
+`docker login` does not authenticate cluster nodes.
 
 ## Build and publish production images
 
@@ -93,15 +94,16 @@ export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
 export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
 ```
 
-Continue only after both builds and digest lookups succeed. Retain their exports.
-Private registries need cluster/node pull credentials for control-plane and tenant Pods;
-`docker login` authenticates only the builder.
+Continue only after both builds and digest lookups succeed; retain their exports.
+Private registries need the same cluster/node pull credentials.
 
 ## Configure the Installation
 
 For a local trial, [build and import the images](local-operations.md#build-images-for-local-kubernetes)
-and set `OCC_INPUT_DIRECTORY` to the generated YAML directory. Registry-backed
-installs use the digest exports above. Set shell inputs before Kubernetes commands:
+and set `OCC_INPUT_DIRECTORY` to the generated YAML directory. For registry-backed
+installs, [check the selected image digests](../../testing/images.md#check-published-images)
+on native hosts for their target architectures and retain their exports. Set shell
+inputs before Kubernetes commands:
 
 ```bash
 umask 077
@@ -134,7 +136,8 @@ configures Drivers, runtime images, identity, networking, storage, and logging.
 For logging changes and required restarts, see
 [Choose the log level](../observability.md#1-choose-the-log-level).
 
-For registry-backed installations, write image digests into the protected copies:
+For registry-backed installations, write image digests into the protected copies
+(skip this for local imports):
 
 ```bash
 : "${CONTROLLER_IMAGE:?Set the controller digest reference}"
@@ -165,9 +168,11 @@ Edit the protected YAML copies:
   to disjoint Ready pools; Helm does not place runtimes.
   Do not set `network.gatewayClients` with routing enabled; Compute derives the
   Envoy peer from `gatewayRouting`.
-  If enabling Agent plugins, set one compatible bundled `drivers.plugin` selector
-  and any required Codex catalog-reader configuration. See the
+  The example selects the curated Codex PluginDriver catalog. To use a different
+  catalog or Driver, follow the
   [PluginDriver reference](../../reference/drivers/plugin.md#selection-and-catalogs).
+  For Slack Agents, configure the separate gateway and API proxy inputs in the
+  [Slack guide](../integrations/slack.md#configure-both-slack-proxies).
   If the default syscall policy blocks Codex user namespaces, follow
   [Codex sandbox setup](codex-sandbox.md): install a reviewed profile on every
   eligible node, set `runtime.codexSeccompProfile` to its relative kubelet path,
@@ -176,6 +181,9 @@ Edit the protected YAML copies:
   [bundled Presets](../../reference/presets.md#installation-defaults).
 - `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
   namespace, size, and protected `storageClassName` for the cluster.
+
+For registry-backed installations, [compare the edited images](../../testing/images.md#verify-installation-image-selections)
+with the checked digests; skip this for local imports.
 
 Run every check below, including Helm rendering, before provisioning
 the password profile. API startup checks shared-cookie domain compatibility:
@@ -212,12 +220,12 @@ test "$BOOTSTRAP_CLAIM" = "$(yq e -r '.metadata.name' "$OCC_INPUT_DIRECTORY/boot
 Prepare these Secret inputs under `/secure/occ`, each containing one raw value
 without quotes or a variable assignment.
 
-| File                  | Contents and source                                                                                                                                                                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Obtain it from your database administrator or provider. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`.                   |
-| `occ-migration-url`   | Connection URL for a separate role allowed to apply schema migrations. It targets the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker. |
-| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set; the example mount path is `/etc/openclaw/database-ca/ca.pem`.                                                                |
-| `occ-auth-secret`     | A random secret used to sign and verify user sessions. Generate it once for this Installation with the command below, then retain it across redeployments. It is separate from the administrator password, service API key, and model-provider key.                             |
+| File                  | Contents and source                                                                                                                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Obtain it from your database administrator or provider. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`. |
+| `occ-migration-url`   | URL for a separate schema-migration role on the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker.                     |
+| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set; the example mount path is `/etc/openclaw/database-ca/ca.pem`.                                              |
+| `occ-auth-secret`     | Random session-signing secret. Generate it once with the command below and retain it across redeployments; it is separate from other credentials.                                                                                                             |
 
 Save both database URLs in protected files, replacing placeholders and preserving
 required TLS options. For managed PostgreSQL roots supplied through `database.caSecretName`,
@@ -435,29 +443,35 @@ For later releases, follow the
 
 The published controller lacks GitHub sign-in; [build a compatible image](#build-and-publish-production-images).
 Follow the [single-controller profile](../../reference/authentication.md#github-sign-in-for-existing-accounts)
-during stopped maintenance.
+during stopped maintenance. Install without GitHub as above, then enable it with
+`helm upgrade`.
 
-Activation is one-way. Account creation stays frozen afterwards
-(`409 RESOURCE_CONFLICT`), and there is no rollback other than keeping the
-`OCC_AUTH_GITHUB_*` environment set. The Helm chart cannot yet carry those
-variables: out-of-band values vanish on the next `helm upgrade`, and the
-controller then fails startup.
+Activation is one-way. The database refuses sessions from older images, the
+`auth.github` values must stay set, and `helm rollback` past activation is
+unsupported; see [rollback](production-upgrade.md#roll-back-across-human-sign-in).
 
-Before activation, set `agentNativeAdmin.enabled: false` in protected Helm values
-and rerender. The API environment must set `OCC_AGENT_NATIVE_ADMIN_ENABLED=false`
-and omit `OCC_AUTH_COOKIE_DOMAIN`; keep workspace routing enabled.
-
-1. Provision password accounts and grants; verify password recovery. Register
+1. Verify password recovery. Register
    the GitHub App callback and protect its **client ID** (not App ID) and secret
    as the [reference](../../reference/authentication.md#github-sign-in-for-existing-accounts) describes.
-2. Close ingress. Disable automatic restarts, rollouts, and policy/provisioning
-   writers. Drain admitted requests and stop **every** old controller. For this
-   chart, scale `deployment/openclaw-enterprise-api` to zero and wait for its
-   Pods to disappear. If exclusion cannot be established, stop here.
-3. Start only the compatible binary with complete protected configuration.
-   Startup enrolls existing accounts and invalidates unbound sessions before
-   serving. After a failure, keep ingress closed.
-4. Through restricted access, verify password recovery, new session admission,
+   Signed in as the recovery administrator, read `data.user.id` from
+   `GET /api/auth/session`.
+2. Create the Secret, then set `auth.github.enabled: true`, that ID as
+   `auth.recoveryUserId`, and `agentNativeAdmin.enabled: false` in protected
+   values, keeping workspace routing. Optionally narrow `auth.github.egressCidrs` or set `api.trustedProxy`
+   ([settings](../../reference/settings/production.md#github-sign-in-and-trusted-proxies)). Rerender.
+
+   ```bash
+   kubectl -n openclaw-system create secret generic occ-github-login \
+     --from-file=client-id=/secure/occ/github-client-id \
+     --from-file=client-secret=/secure/occ/github-client-secret
+   ```
+
+3. Close ingress. Disable automatic restarts and policy/provisioning writers,
+   and drain admitted requests.
+4. Run `helm upgrade` with the compatible image. The api Deployment uses
+   `Recreate`, so the old Pod stops first; startup enrolls qualifying accounts, logs any it skips,
+   and invalidates unbound sessions before serving. After a failure, keep ingress closed.
+5. Through restricted access, verify password recovery, new session admission,
    the expected Namespaces and existing Agent detail, and rejected stale sessions.
    Reopen ingress only after these checks, retaining one serving controller.
 

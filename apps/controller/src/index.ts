@@ -68,8 +68,10 @@ import {
   NamespaceNotReadyError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  UserAlreadyExistsError,
   type DeploymentStatusResult,
   type AgentProvisioningProgress,
+  type DeployAgentAuthorization,
   type ProvisionAgentInput,
   type HarnessResolver,
   type OpenClawController,
@@ -79,7 +81,9 @@ import {
   hostnameMatchesSharedCookieDomain,
   normalizeSharedCookieDomain,
   OCC_SERVICE_KEY_HEADER,
+  type ClientAddressConfiguration,
   type ControllerAuth,
+  type PreparedAuthAccount,
 } from "./auth/index.ts";
 import { CONSOLE_CONTENT_SECURITY_POLICY, readConsoleAsset } from "./console-assets.ts";
 import {
@@ -151,12 +155,16 @@ export interface ControllerAppOptions {
   readonly nativeAdmin?: NativeAdminAccessConfig;
   readonly nativeAdminGatewayApiKey?: () => Promise<string>;
   readonly publicOrigin?: string;
+  /** Writes the prepared account with its Principal, bindings and enrolment atomically. */
   readonly provisionAuthAccount?: (
     seed: AuthPrincipalSeed,
     auditEvent: AuditEvent,
+    prepared: PreparedAuthAccount,
   ) => Promise<void>;
   readonly auditEventFactory?: AuditEventFactory;
   readonly logger?: FastifyBaseLogger;
+  /** Production proxies allowed to send forwarded headers; admission ignores those headers. */
+  readonly trustedProxies?: Pick<ClientAddressConfiguration, "trusts">;
 }
 
 export interface ControllerApp {
@@ -962,6 +970,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
   }
   validateTrustedDevelopmentCidrs(development);
+  if (development.enabled && options.trustedProxies !== undefined) {
+    throw new Error("Trusted proxies are a production setting.");
+  }
 
   const app = Fastify({
     bodyLimit,
@@ -1143,7 +1154,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     evidence?: AuthorizationEvidence,
     result?: { readonly outcome: "success" | "denied" | "failure"; readonly reasonCode?: string },
     authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
+    validatedAuthorization?: Readonly<DeployAgentAuthorization>,
   ): AuditEvent {
+    const authorizationEvidence = validatedAuthorization?.decision.evidence ?? evidence;
+    const outcome =
+      result?.outcome ?? (kind === "bootstrap" || kind === "mutation" ? "success" : "denied");
     return factory.create({
       installationId,
       ...(resource.namespaceId === undefined ? {} : { namespaceId: resource.namespaceId }),
@@ -1159,8 +1174,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               subject: context.subject,
             },
             admissionDecisionId: context.admissionDecisionId,
-            iamDriverId: selectedIAMDriver().id,
-            authorization: {
+            iamDriverId: validatedAuthorization?.decision.driverId ?? selectedIAMDriver().id,
+            authorization: validatedAuthorization?.request ?? {
               principalId: context.actorId,
               action: authorization?.action ?? operation.iamAction,
               resource:
@@ -1171,29 +1186,28 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                   request.params as Record<string, unknown>,
                 ),
             },
-            ...(evidence === undefined
+            ...(authorizationEvidence === undefined
               ? {}
               : {
-                  ...(evidence.restrictionIds.length > 0
+                  ...(outcome === "denied" && authorizationEvidence.restrictionIds.length > 0
                     ? { decisionReason: "A matching Restriction denied the operation." }
                     : {}),
                   details: {
                     iamEvidence: {
-                      ...(evidence.identityId === undefined
+                      ...(authorizationEvidence.identityId === undefined
                         ? {}
-                        : { identityId: evidence.identityId }),
-                      groupIds: evidence.groupIds,
-                      bindingIds: evidence.bindingIds,
-                      roleIds: evidence.roleIds,
-                      restrictionIds: evidence.restrictionIds,
+                        : { identityId: authorizationEvidence.identityId }),
+                      groupIds: authorizationEvidence.groupIds,
+                      bindingIds: authorizationEvidence.bindingIds,
+                      roleIds: authorizationEvidence.roleIds,
+                      restrictionIds: authorizationEvidence.restrictionIds,
                     },
                   },
                 }),
           }),
       action: operation.action,
       resource,
-      outcome:
-        result?.outcome ?? (kind === "bootstrap" || kind === "mutation" ? "success" : "denied"),
+      outcome,
       ...(result?.reasonCode === undefined
         ? kind === "authorization_denial"
           ? { reasonCode: "AUTHORIZATION_DENIED" }
@@ -1774,9 +1788,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     } else if (Array.isArray(origin)) {
       originAllowed = false;
     }
-    const forwarded = Object.keys(request.headers).some(
-      (name) => name === "forwarded" || name === "x-real-ip" || name.startsWith("x-forwarded-"),
-    );
+    // Forwarded headers are never used for admission. They are tolerated only from a
+    // configured trusted proxy, which adds them to every request it relays.
+    const forwarded =
+      options.trustedProxies?.trusts(remoteAddress) !== true &&
+      Object.keys(request.headers).some(
+        (name) => name === "forwarded" || name === "x-real-ip" || name.startsWith("x-forwarded-"),
+      );
     if (
       forwarded ||
       (development.enabled &&
@@ -1795,7 +1813,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     let admitted: AdmittedCaller;
     try {
-      admitted = await options.auth.admissionVerifier.verify({
+      admitted = await options.auth.admissionVerifier.verifyControllerRequest({
         requestId: request.id,
         method: request.method,
         routeId: operation.operationId,
@@ -2534,7 +2552,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     if (operation.operationId === "deployAgent") {
       try {
         const revision = await controller.transact(async (unit) => {
-          const admitted = await controller!.deployAgent(
+          const admitted = await controller!.deployAgentWithAuthorization(
             context.actorId,
             { namespaceId, agentId },
             options.resolveHarness,
@@ -2543,12 +2561,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             event(
               operation,
               request,
-              { kind: "agent_revision", id: admitted.id, namespaceId },
+              { kind: "agent_revision", id: admitted.revision.id, namespaceId },
               "mutation",
               context,
+              undefined,
+              undefined,
+              undefined,
+              admitted.authorization,
             ),
           );
-          return clientRevision(admitted);
+          return clientRevision(admitted.revision);
         });
         reply.status(202).send({ data: revision, meta: { requestId: request.id } });
         return;
@@ -3413,12 +3435,33 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         summary: "Disable a human account",
       },
       {
+        operationName: "enable",
+        path: "/api/auth/accounts/:userId/enable",
+        operationId: "enableAuthAccount",
+        summary: "Re-enable a disabled human account",
+      },
+      {
         operationName: "revoke",
         path: "/api/auth/accounts/:userId/revoke",
         operationId: "revokeAuthAccountSessions",
         summary: "Revoke all sessions for a human account",
       },
+      {
+        operationName: "detach",
+        path: "/api/auth/accounts/:userId/methods/:methodId/detach",
+        operationId: "detachAuthMethod",
+        summary: "Detach an external sign-in identity from an account",
+      },
     ] as const;
+    const methodParams = {
+      type: "object",
+      additionalProperties: false,
+      required: ["userId", "methodId"],
+      properties: {
+        userId: { type: "string", minLength: 1, maxLength: 200 },
+        methodId: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    };
     for (const { operationName, path, operationId, summary } of accountOperations) {
       const operation = {
         operationId,
@@ -3445,7 +3488,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             "x-openclaw-permissions": [
               { action: "administer", resourceKind: "installation", scope: "requested" },
             ],
-            params: accountParams,
+            params: operationName === "detach" ? methodParams : accountParams,
             body: {
               type: "object",
               additionalProperties: false,
@@ -3474,15 +3517,24 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         },
         async (request, reply) => {
           const context = contexts.get(request);
-          if (!context || !options.auth.attachGitHub || !options.auth.changeAccount) {
+          if (!context || !options.auth.readAccount || !options.auth.changeAccount) {
             throw dependencyUnavailable();
           }
           const actor = await humanAccountActor(request, operation, context);
           const { expectedVersion } = request.body as { expectedVersion: number };
           const { userId } = request.params as { userId: string };
           if (operationName === "github") {
+            if (!options.auth.attachGitHub || !options.auth.githubEnabled) {
+              throw failure(409, "RESOURCE_CONFLICT", "GitHub sign-in is not configured.");
+            }
             const { subject } = request.body as { subject: string };
             await options.auth.attachGitHub(userId, subject, actor, expectedVersion);
+          } else if (operationName === "detach") {
+            if (!options.auth.detachMethod) {
+              throw dependencyUnavailable();
+            }
+            const { methodId } = request.params as { methodId: string };
+            await options.auth.detachMethod(userId, methodId, actor, expectedVersion);
           } else {
             await options.auth.changeAccount(userId, operationName, actor, expectedVersion);
           }
@@ -3645,21 +3697,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           context,
         );
 
-        // TODO(human-account-provisioning): restore creation with acknowledged currentness enrollment.
-        if (options.auth.githubEnabled) {
-          throw failure(
-            409,
-            "RESOURCE_CONFLICT",
-            "Provision accounts before activating GitHub sign-in.",
-          );
-        }
-
-        const account = await options.auth.createAccount({
+        const prepared = await options.auth.prepareAccount({
           email,
           password,
           ...(name === undefined ? {} : { name }),
         });
-        const seed = options.auth.principalSeed(account, { roleId });
+        const seed = options.auth.principalSeed(prepared, { roleId });
         const auditEvent = event(
           createAuthAccountOperation,
           request,
@@ -3669,25 +3712,23 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           decision.evidence,
         );
         try {
-          await options.provisionAuthAccount(seed, auditEvent);
+          await options.provisionAuthAccount(seed, auditEvent, prepared);
         } catch (error) {
-          try {
-            await options.auth.deleteAccount(account);
-          } catch {
-            // The failed provisioning path still returns the original dependency error.
-          }
           throw error instanceof RequestFailure
             ? error
-            : error instanceof AuthAccountRoleNotFoundError
-              ? failure(
-                  400,
-                  "INVALID_REQUEST",
-                  "The request does not match the operation contract.",
-                )
-              : new DependencyUnavailableError(
-                  error instanceof Error ? error.message : "Auth account provisioning failed.",
-                );
+            : error instanceof UserAlreadyExistsError
+              ? failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.")
+              : error instanceof AuthAccountRoleNotFoundError
+                ? failure(
+                    400,
+                    "INVALID_REQUEST",
+                    "The request does not match the operation contract.",
+                  )
+                : new DependencyUnavailableError(
+                    error instanceof Error ? error.message : "Auth account provisioning failed.",
+                  );
         }
+        const account = prepared;
         reply.status(201).send({
           data: {
             id: account.id,
