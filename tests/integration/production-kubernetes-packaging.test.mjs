@@ -1653,7 +1653,8 @@ test(
     });
     assert.deepEqual(apiEnv.OCC_AUTH_GITHUB_RECOVERY_USER_ID, { value: "Xk3u9pQ2rT7vW1yZ" });
     assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, { value: "10.42.0.0/16" });
-    assert.deepEqual(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, { value: "x-forwarded-for" });
+    assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, { value: "ingress-nginx" });
+    assert.equal(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, undefined);
     // Bootstrap never activates the profile and the worker never signs anyone in.
     const jobs = objects.filter(({ kind }) => kind === "Job");
     assert.ok(jobs.length > 0);
@@ -1684,6 +1685,7 @@ test(
 test("GitHub sign-in egress defaults to HTTPS to any IPv4 address", tooling, async () => {
   const { apiEnv, egress } = await signInObjects(githubLoginValues);
   assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, undefined);
+  assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, undefined);
   assert.equal(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, undefined);
   assert.deepEqual(egress.spec.egress, [
     { to: [{ ipBlock: { cidr: "0.0.0.0/0" } }], ports: [{ protocol: "TCP", port: 443 }] },
@@ -1694,12 +1696,14 @@ test(
   "trusted proxy presets render the client-address header for the API only",
   tooling,
   async () => {
-    for (const [overrides, cidrs, header] of [
-      [trustedProxyValues, "10.42.0.0/16", "x-forwarded-for"],
+    // Named presets fix x-forwarded-for in the controller; only generic renders a header.
+    for (const [overrides, preset, cidrs, header] of [
+      [trustedProxyValues, "ingress-nginx", "10.42.0.0/16", undefined],
       [
-        { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "X-Real-IP" },
+        { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "X-Forwarded-For" },
+        "ingress-nginx",
         "10.42.0.0/16",
-        "x-real-ip",
+        undefined,
       ],
       [
         {
@@ -1707,8 +1711,9 @@ test(
           "api.trustedProxy.cidrs[0]": "10.0.0.0/20",
           "api.trustedProxy.cidrs[1]": "10.0.16.0/20",
         },
+        "aws",
         "10.0.0.0/20,10.0.16.0/20",
-        "x-forwarded-for",
+        undefined,
       ],
       [
         {
@@ -1716,13 +1721,15 @@ test(
           "api.trustedProxy.cidrs[0]": "fd00:10::/64",
           "api.trustedProxy.clientAddressHeader": "X-Client-Address",
         },
+        "generic",
         "fd00:10::/64",
-        "x-client-address",
+        { value: "x-client-address" },
       ],
     ]) {
       const { selected, apiEnv, egress } = await signInObjects(overrides);
       assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, { value: cidrs });
-      assert.deepEqual(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, { value: header });
+      assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, { value: preset });
+      assert.deepEqual(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, header);
       assert.ok(!Object.keys(apiEnv).some((name) => name.startsWith("OCC_AUTH_GITHUB_")));
       assert.equal(egress, undefined);
       const worker = selected("Deployment", "worker").spec.template.spec.containers[0];
@@ -1873,6 +1880,20 @@ test(
           "api.trustedProxy.clientAddressHeader": "x-real-ip x-forwarded-for",
         },
         /single HTTP header name/,
+      ],
+      [
+        "an API key header as a client address",
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "10.42.0.0/16",
+          "api.trustedProxy.clientAddressHeader": "X-API-Key",
+        },
+        /cannot be x-api-key/,
+      ],
+      [
+        "a named preset with another client-address header",
+        { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "X-Real-IP" },
+        /ingress-nginx reads x-forwarded-for; use the generic preset for x-real-ip/,
       ],
     ]) {
       await assert.rejects(

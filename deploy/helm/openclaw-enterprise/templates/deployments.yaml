@@ -219,8 +219,12 @@ spec:
             {{- if $.Values.api.trustedProxy.preset }}
             - name: OCC_AUTH_TRUSTED_PROXY_CIDRS
               value: {{ join "," $.Values.api.trustedProxy.cidrs | quote }}
+            - name: OCC_AUTH_TRUSTED_PROXY_PRESET
+              value: {{ $.Values.api.trustedProxy.preset | quote }}
+            {{- if eq $.Values.api.trustedProxy.preset "generic" }}
             - name: OCC_AUTH_CLIENT_IP_HEADER
               value: {{ include "openclaw.trustedProxy.header" $ | quote }}
+            {{- end }}
             {{- end }}
             {{- if $.Values.api.channelDirectoryProxyUrl }}
             - name: OCC_CHANNEL_DIRECTORY_PROXY_URL

@@ -168,7 +168,7 @@ api:
   trustedProxy:
     preset: ""
     cidrs: []
-    # Empty selects x-forwarded-for for ingress-nginx and aws.
+    # generic only; ingress-nginx and aws always read x-forwarded-for.
     clientAddressHeader: ""
 
 cluster:

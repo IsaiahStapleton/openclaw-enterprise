@@ -53,9 +53,12 @@
 {{- end -}}
 {{- end -}}
 {{- if and (eq $preset "generic") (not $proxy.clientAddressHeader) -}}{{- fail "api.trustedProxy.preset generic requires api.trustedProxy.clientAddressHeader" -}}{{- end -}}
-{{- $header := include "openclaw.trustedProxy.header" . -}}
+{{- $header := lower (toString (default "" $proxy.clientAddressHeader)) -}}
+{{- if $header -}}
 {{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" $header) -}}{{- fail "api.trustedProxy.clientAddressHeader must be a single HTTP header name" -}}{{- end -}}
-{{- if has $header (list "x-occ-client-ip" "cookie" "forwarded" "authorization" "host") -}}{{- fail (printf "api.trustedProxy.clientAddressHeader cannot be %s; use a header that carries plain client addresses, such as x-forwarded-for or x-real-ip" $header) -}}{{- end -}}
+{{- if has $header (list "x-occ-client-ip" "cookie" "forwarded" "authorization" "host" "origin" "x-api-key") -}}{{- fail (printf "api.trustedProxy.clientAddressHeader cannot be %s; use a header that carries plain client addresses, such as x-forwarded-for or x-real-ip" $header) -}}{{- end -}}
+{{- if and (ne $preset "generic") (ne $header "x-forwarded-for") -}}{{- fail (printf "api.trustedProxy.preset %s reads x-forwarded-for; use the generic preset for %s" $preset $header) -}}{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if .Values.agentNativeAdmin.enabled -}}
 {{- if not .Values.agentNativeAdmin.domain -}}{{- fail "agentNativeAdmin.domain must identify the public Agent native admin DNS suffix when agentNativeAdmin.enabled is true" -}}{{- end -}}
@@ -231,7 +234,7 @@
 
 {{- define "openclaw.trustedProxy.header" -}}
 {{- $proxy := default dict .Values.api.trustedProxy -}}
-{{- lower (toString (default (ternary "" "x-forwarded-for" (eq (toString $proxy.preset) "generic")) $proxy.clientAddressHeader)) -}}
+{{- if eq (toString $proxy.preset) "generic" -}}{{- lower (toString $proxy.clientAddressHeader) -}}{{- else -}}x-forwarded-for{{- end -}}
 {{- end -}}
 
 {{- define "openclaw.labels" -}}
