@@ -54,7 +54,7 @@ async function createFixture(options = {}) {
     password: readerPassword,
     name: "Tenant A Reader",
   });
-  const readerSeed = adminAuth.auth.principalSeed(readerAccount);
+  const readerSeed = adminAuth.auth.principalSeed(readerAccount, { grant: "none" });
   const tenantAReader = readerSeed.principal;
   const identities = options.identities ?? [administrator, tenantAReader];
   const identityIds = new Set(identities.map(({ id }) => id));

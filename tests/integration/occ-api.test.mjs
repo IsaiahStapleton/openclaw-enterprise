@@ -599,7 +599,7 @@ async function createInjectedFixture(options = {}) {
         password,
         name,
       });
-      const seed = authFixture.auth.principalSeed(account);
+      const seed = authFixture.auth.principalSeed(account, { grant: "none" });
       sessionsByPrincipalId.set(
         seed.principal.id,
         await signInToControllerApp(app, { email, password }),
@@ -3082,6 +3082,26 @@ test("administrator-created auth accounts sign in and receive only provisioned I
     },
   });
   assert.equal(unknownRole.status, 400);
+
+  // An explicit but blank or null roleId is a malformed request, never the zero-grant path.
+  for (const roleId of ["", null]) {
+    const before = {
+      identities: fixture.state.identities.length,
+      auditEvents: fixture.auditSink.events.length,
+    };
+    const blankRole = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
+      body: {
+        email: `blank-role-${randomUUID()}@example.com`,
+        password: `generated-password-${randomUUID()}`,
+        name: "Blank Role Operator",
+        roleId,
+      },
+    });
+    assert.equal(blankRole.status, 400, `roleId ${JSON.stringify(roleId)}`);
+    assert.equal(blankRole.body.error.code, "INVALID_REQUEST");
+    assert.equal(fixture.state.identities.length, before.identities);
+    assert.equal(fixture.auditSink.events.length, before.auditEvents);
+  }
 
   const invalidEmail = "invalid-auth-account-email";
   const invalidEmailPassword = `generated-password-${randomUUID()}`;

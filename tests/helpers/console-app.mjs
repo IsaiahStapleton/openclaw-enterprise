@@ -109,7 +109,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     name: "Console Administrator",
   };
   const account = await auth.createAccount(credentials);
-  const seed = auth.principalSeed(account);
+  const seed = auth.principalSeed(account, { grant: "administrator" });
   const policy = {
     identities: [seed.principal],
     groups: [],
