@@ -41,6 +41,7 @@ const {
 } = require("node:fs");
 const {
   createHmac,
+  timingSafeEqual: pluginTimingSafeEqual,
   randomUUID: pluginRandomUUID,
 } = require("node:crypto");
 const { spawn: pluginSpawn, spawnSync: pluginSpawnSync } = require("node:child_process");
@@ -50,6 +51,7 @@ const { isDeepStrictEqual: pluginDeepEqual } = require("node:util");
 const CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS ?? "10000");
 const CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS ?? "60000");
 const PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/status";
+const REMOTE_PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/remote-status";
 const RUNTIME_STATUS_PATH = "/openclaw/runtime/status";
 const RUNTIME_DIAGNOSTICS_PATH = "/openclaw/runtime/diagnostics";
 const RUNTIME_IMAGE_PATH = "/openclaw/runtime/image";
@@ -251,6 +253,12 @@ function runtimeStatusReport() {
     podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
     ...(runtimeStartupFailure === undefined ? {} : { runtimeFailure: runtimeStartupFailure }),
   };
+}
+
+function remotePluginStatusAuthorization() {
+  const token = requireNonEmptyString(pluginBaseAppServerToken, "Plugin status base token");
+  return "Bearer " + createHmac("sha256", token)
+    .update("openclaw-plugin-status/v1\\0" + pluginRuntimeRevisionId()).digest("hex");
 }
 
 function statusCheckFromBoolean(check, value, checkedAt, failureCode) {
@@ -480,9 +488,19 @@ function startPluginRuntimeStatusServer() {
   if (port === undefined) return;
   const server = pluginCreateServer(async (request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const remote = pathname === REMOTE_PLUGIN_STATUS_PATH && process.env.OPENCLAW_REMOTE_PLUGIN_STATUS === "true";
+    if (remote) {
+      const expected = Buffer.from(remotePluginStatusAuthorization());
+      const supplied = Buffer.from(typeof request.headers.authorization === "string" ? request.headers.authorization : "");
+      if (expected.length !== supplied.length || !pluginTimingSafeEqual(expected, supplied)) {
+        response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
+        response.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+    }
     if (
       request.method !== "GET" ||
-      ![
+      !remote && ![
         RUNTIME_STATUS_PATH,
         RUNTIME_DIAGNOSTICS_PATH,
         PLUGIN_STATUS_PATH,
@@ -773,13 +791,24 @@ function readPluginFailuresFromEnvironment() {
 }
 
 async function readPeerPluginRuntimeStatus() {
-  if (typeof process.env.APP_SERVER_URL !== "string" || !process.env.APP_SERVER_URL.startsWith("ws://")) {
-    return undefined;
+  let url;
+  const remote = process.env.OPENCLAW_PEER_PLUGIN_STATUS_URL;
+  if (remote !== undefined) {
+    url = new URL(remote);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+      throw new Error("Peer plugin status requires a verified HTTPS endpoint.");
+    }
+  } else {
+    if (typeof process.env.APP_SERVER_URL !== "string" || !process.env.APP_SERVER_URL.startsWith("ws://")) return undefined;
+    url = new URL(process.env.APP_SERVER_URL.replace(/^ws:/, "http:"));
+    url.port = String(pluginRuntimeStatusPort() ?? "");
+    url.pathname = PLUGIN_STATUS_PATH;
   }
-  const url = new URL(process.env.APP_SERVER_URL.replace(/^ws:/, "http:"));
-  url.port = String(pluginRuntimeStatusPort() ?? "");
-  url.pathname = PLUGIN_STATUS_PATH;
-  const response = await fetch(url, { signal: AbortSignal.timeout(CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS) });
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS),
+    redirect: "error",
+    ...(remote === undefined ? {} : { headers: { authorization: remotePluginStatusAuthorization() } }),
+  });
   if (response.status !== 200) throw new Error("Peer plugin runtime status is unavailable.");
   const status = await response.json();
   if (
@@ -1507,7 +1536,7 @@ async function installCodexPlugins(runtime, failures = []) {
   assertCodexPluginRuntime(runtime);
   const selections = runtime.manifest.selections ?? {};
   const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
-  let lastError;
+  let lastError = new Error("Codex plugin installation deadline expired before the first attempt.");
   let result = { successfulPluginIds: [], failures };
   while (Date.now() < deadline) {
     try {
@@ -1718,13 +1747,11 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
       const appServer = (entries.codex.config ??= {}).appServer ??= {};
       appServer.remoteWorkspaceRoot ??= remoteRoot;
     }
-    // OCC edits four owner documents; bootstrap additionally reads these two.
+    // OCC edits four owner documents; native previews read the Agent workspace.
     const editable = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
-    const readable = [...editable, "BOOTSTRAP.md", "MEMORY.md"];
     const memoryPaths = ["MEMORY.md", "memory.md", "DREAMS.md", "dreams.md", "memory", "memory/**"]
       .map((name) => remoteRoot + "/" + name);
     const skillRoots = [
-      remoteRoot + "/skills", remoteRoot + "/.agents/skills",
       "/home/node/.openclaw/skills", "/home/node/.openclaw/plugin-skills",
       "/home/node/.agents/skills", "/home/node/openclaw-runtime-assets/bundled-skills",
       "/home/node/openclaw-runtime-assets/plugin-skills",
@@ -1735,13 +1762,9 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
         ask: "off",
         allowReadPaths: [
           remoteRoot,
-          ...readable.map((name) => remoteRoot + "/" + name),
-          ...memoryPaths,
+          remoteRoot + "/**",
           "/home/node/.openclaw",
           ...skillRoots.flatMap((root) => [root, root + "/**"]),
-          remoteRoot + "/media/inbound/openclaw-staged-*",
-          remoteRoot + "/media/inbound/openclaw-staged-*/**",
-          remoteRoot + "/media/outbound/**",
         ],
         allowWritePaths: [
           ...editable.map((name) => remoteRoot + "/" + name),
@@ -1751,30 +1774,7 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
         ],
         followSymlinks: false,
       };
-      const hook = config.hooks?.internal?.entries?.["bootstrap-extra-files"];
-      if (config.hooks?.internal?.enabled !== false && hook && hook.enabled !== false) {
-        const declared = [hook.paths, hook.patterns, hook.files]
-          .map((value) => Array.isArray(value)
-            ? value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean)
-            : [])
-          .find((value) => value.length > 0) ?? [];
-        const paths = new Set(declared.filter((value) => !/[?*{}]/u.test(value))
-          .map((value) => pluginResolve(remoteRoot, value))
-          .filter((value) => value.startsWith(remoteRoot + "/")
-            && readable.includes(value.slice(value.lastIndexOf("/") + 1))));
-        // Native bootstrap accepts literal bracketed paths. Reuse command-bound
-        // exact grants instead of interpreting those paths as policy globs.
-        for (const requestedPath of paths) {
-          for (const command of ["file.fetch", "file.stat"]) {
-            (fileConfig.literalGrants ??= []).push({
-              nodeId: workspaceNodeId, command, requestedPath, canonicalPath: requestedPath,
-            });
-          }
-        }
-      }
     }
-    // TODO(workspace-storage-split): support bootstrap glob traversal and contained
-    // symlinks through the node file policy.
     fileConfig.policyVersion ??= 2;
     (fileConfig.workspaces ??= {}).main = { nodeId: workspaceNodeId, remoteRoot };
   }
@@ -1874,12 +1874,18 @@ const loginArguments = loginMode === "api_key"
       "login",
       "--with-access-token",
     ];
-const login = spawnSync("codex", loginArguments, {
-  input: loginMode === "api_key" ? apiKey : accessToken,
-  encoding: "utf8",
-  stdio: ["pipe", "ignore", "pipe"],
-  timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
-});
+let login;
+for (let attempt = 0; attempt < 3; attempt++) {
+  login = spawnSync("codex", loginArguments, {
+    input: loginMode === "api_key" ? apiKey : accessToken,
+    encoding: "utf8",
+    stdio: ["pipe", "ignore", "pipe"],
+    timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+  });
+  // Access-token login validates the same credential remotely before saving it.
+  // A cold-node network timeout may recover; refusals and model calls are not retried.
+  if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") break;
+}
 if (login.status !== 0 || login.error) {
   holdFailedAuthentication("login", "LOGIN_FAILED");
 } else {

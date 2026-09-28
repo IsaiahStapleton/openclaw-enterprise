@@ -355,6 +355,16 @@ function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: st
   }
 }
 
+function requireSessionMutationOrigin(headers: Headers, expectedOrigin: string): void {
+  const fetchSite = headers.get("sec-fetch-site");
+  if (
+    headers.get("origin") !== expectedOrigin ||
+    (fetchSite !== null && fetchSite !== "same-origin")
+  ) {
+    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+  }
+}
+
 function preparedId(
   context: { generateId(options: { model: "user" | "account" }): string | false },
   model: "user" | "account",
@@ -496,12 +506,32 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
   readonly #installationId: string;
   readonly #issuer: string;
   readonly #sessionCookieName: string;
+  readonly #browserOrigin: string;
 
-  constructor(auth: ControllerBetterAuth, installationId: string, cookieName: string) {
+  constructor(
+    auth: ControllerBetterAuth,
+    installationId: string,
+    cookieName: string,
+    browserOrigin: string,
+  ) {
     this.#auth = auth;
     this.#sessionCookieName = cookieName;
+    this.#browserOrigin = browserOrigin;
     this.#installationId = installationId;
     this.#issuer = betterAuthIssuer(installationId);
+  }
+
+  async verifyControllerRequest(request: AdmissionRequest): Promise<AdmittedCaller> {
+    const headers = authHeaders(request.headers);
+    if (
+      request.authorizationHeader === undefined &&
+      !headers.has(OCC_SERVICE_KEY_HEADER) &&
+      headers.has("cookie") &&
+      !["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())
+    ) {
+      requireSessionMutationOrigin(headers, this.#browserOrigin);
+    }
+    return this.verify(request);
   }
 
   async verify(request: AdmissionRequest): Promise<AdmittedCaller> {
@@ -858,8 +888,9 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           : request.headers[options.clientAddress.header],
       ),
     );
-    // The public wrapper already applies the established browser/CLI origin contract.
-    if (!headers.has("origin") && (path === "/oce/password" || path === "/oce/sign-out")) {
+    // Password sign-in keeps the established browser/CLI origin contract; sign-out already
+    // required the exact browser Origin before reaching this point.
+    if (!headers.has("origin") && path === "/oce/password") {
       headers.set("origin", expectedBrowserOrigin);
     }
     if (body !== undefined) {
@@ -950,7 +981,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       reply,
       () => {
         // Better Auth server API calls skip origin middleware without a Request context.
-        requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
+        requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
         const headers = sessionHeaders(request.headers, sessionCookieName);
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/sign-out");
@@ -1007,6 +1038,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       auth,
       options.installationId,
       sessionCookieName,
+      expectedBrowserOrigin,
     ),
     prepareAccount,
     writePreparedAccount,

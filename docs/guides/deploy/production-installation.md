@@ -15,11 +15,20 @@ Run from the repository root; retain protected files for
 
 ## Use published images
 
-These private `linux/amd64` and `linux/arm64` image indexes were built from `e3b28515f30523eede3cd905e589c1ab9063dbda`.
-Startup checks passed on both architectures (ARM64 under QEMU); remote digests
-were verified in [publication run 35680912119](https://github.com/openclaw/openclaw-enterprise/actions/runs/35680912119).
-These checks do not qualify production deployments.
-[Build your own images](#build-and-publish-production-images) to change their contents.
+To install, select a verified release or custom controller image supporting
+`catalogSource: openai-curated` and the
+[origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
+plus a compatible runtime. Export their immutable digests as `CONTROLLER_IMAGE`
+and `RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images).
+
+The published controller supports the curated catalog but predates the origin
+check; no release meeting current production requirements has been verified for
+this guide. Use it only for image tests or workflows targeting its recorded source.
+Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
+matching-architecture startup checks and remote digest verification in
+[publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
+Their multi-platform indexes select the node variant. Publication does not
+establish production deployment readiness.
 
 Obtain read access to both GHCR packages. Authenticate with a GitHub personal
 access token **(classic)** with
@@ -29,17 +38,18 @@ below and enter the token at Docker's password prompt, never in the command. See
 
 ```bash
 docker login ghcr.io --username '<your-github-username>'
-
-export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:9aa430eb19553a35ccafd5dafff58984ec1264e7c77b1440f56a893cf8e993e1'
-export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:792f0ffe88ec9f935b55c36f41ee646a828e3d83df21427cf7955a5beef52460'
 ```
 
-Use the controller for API, worker, migration, and bootstrap; gateways and Agents
-share the runtime image. Retain these digests; never substitute `latest` or bootstrap tags.
+For historical [image tests](../../testing/images.md#check-published-images), export:
 
-Configure approved cluster/node pull credentials for **both control-plane and
-tenant Pods**; local `docker login` does not authenticate cluster nodes. Continue
-at [Configure the Installation](#configure-the-installation) with these exports.
+```bash
+export HISTORICAL_CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
+export HISTORICAL_RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
+```
+
+Configure approved pull credentials for **control-plane and tenant Pods**;
+`docker login` does not authenticate cluster nodes. To install, continue with the
+verified current pair.
 
 ## Build and publish production images
 
@@ -100,8 +110,10 @@ Private registries need cluster/node pull credentials for control-plane and tena
 ## Configure the Installation
 
 For a local trial, [build and import the images](local-operations.md#build-images-for-local-kubernetes)
-and set `OCC_INPUT_DIRECTORY` to the generated YAML directory. Registry-backed
-installs use the digest exports above. Set shell inputs before Kubernetes commands:
+and set `OCC_INPUT_DIRECTORY` to the generated YAML directory. For registry-backed
+installs, [check the selected image digests](../../testing/images.md#check-published-images)
+on native hosts for their target architectures and retain their exports. Set shell
+inputs before Kubernetes commands:
 
 ```bash
 umask 077
@@ -134,7 +146,8 @@ configures Drivers, runtime images, identity, networking, storage, and logging.
 For logging changes and required restarts, see
 [Choose the log level](../observability.md#1-choose-the-log-level).
 
-For registry-backed installations, write image digests into the protected copies:
+For registry-backed installations, write image digests into the protected copies
+(skip this for local imports):
 
 ```bash
 : "${CONTROLLER_IMAGE:?Set the controller digest reference}"
@@ -165,9 +178,11 @@ Edit the protected YAML copies:
   to disjoint Ready pools; Helm does not place runtimes.
   Do not set `network.gatewayClients` with routing enabled; Compute derives the
   Envoy peer from `gatewayRouting`.
-  If enabling Agent plugins, set one compatible bundled `drivers.plugin` selector
-  and any required Codex catalog-reader configuration. See the
+  The example selects the curated Codex PluginDriver catalog. To use a different
+  catalog or Driver, follow the
   [PluginDriver reference](../../reference/drivers/plugin.md#selection-and-catalogs).
+  For Slack Agents, configure the separate gateway and API proxy inputs in the
+  [Slack guide](../integrations/slack.md#configure-both-slack-proxies).
   If the default syscall policy blocks Codex user namespaces, follow
   [Codex sandbox setup](codex-sandbox.md): install a reviewed profile on every
   eligible node, set `runtime.codexSeccompProfile` to its relative kubelet path,
@@ -176,6 +191,9 @@ Edit the protected YAML copies:
   [bundled Presets](../../reference/presets.md#installation-defaults).
 - `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
   namespace, size, and protected `storageClassName` for the cluster.
+
+For registry-backed installations, [compare the edited images](../../testing/images.md#verify-installation-image-selections)
+with the checked digests; skip this for local imports.
 
 Run every check below, including Helm rendering, before provisioning
 the password profile. API startup checks shared-cookie domain compatibility:
