@@ -79,4 +79,6 @@ GRANT SELECT, INSERT ON occ.human_authentication_accounts, occ.human_authenticat
 --> statement-breakpoint
 GRANT UPDATE (version, disabled, changed_at) ON occ.human_authentication_accounts TO occ_app;
 --> statement-breakpoint
+GRANT UPDATE (user_id, principal_id, method_id) ON occ.human_authentication_recovery TO occ_app;
+--> statement-breakpoint
 GRANT DELETE ON occ.human_authentication_attempts TO occ_app;
