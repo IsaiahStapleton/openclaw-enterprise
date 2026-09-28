@@ -24,6 +24,7 @@ import {
 } from "@openclaw-enterprise/occ";
 import type { IAMDriver } from "@openclaw-enterprise/contracts";
 import { createHumanLogin, type GitHubLoginConfiguration } from "./github.ts";
+import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
 import type {
@@ -106,6 +107,7 @@ export interface ControllerAuth {
   readonly githubEnabled: boolean;
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   readAccount?(
     userId: string,
     actor: HumanAuthenticationActor,
@@ -331,11 +333,41 @@ function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: st
   }
 }
 
+/**
+ * Applies the optional x-occ-session-key header to a resolved cookie session.
+ * Absent keeps the cookie-only contract; a malformed, duplicated or foreign key
+ * rejects instead of acting on whichever session the shared cookie now carries.
+ */
+function requireSessionKey(headers: Headers, secret: string, sessionId: string | undefined): void {
+  const key = sessionKeyHeader(headers);
+  if (key === undefined) {
+    return;
+  }
+  if (key === null || (sessionId !== undefined && !sessionKeyMatches(secret, sessionId, key))) {
+    throw new AdmissionFailure(401, "UNAUTHENTICATED", "The session key does not match.");
+  }
+}
+
+function responseSessionId(response: unknown): string | undefined {
+  const session =
+    typeof response === "object" && response !== null
+      ? (response as { readonly session?: unknown }).session
+      : undefined;
+  const id =
+    typeof session === "object" && session !== null
+      ? (session as Record<string, unknown>).id
+      : undefined;
+  return isNonEmptyString(id) ? id : undefined;
+}
+
 function accountName(input: ProvisionAuthAccountInput): string {
   return input.name?.trim() || input.email.trim();
 }
 
-function safeSessionResponse(response: unknown): {
+function safeSessionResponse(
+  response: unknown,
+  secret: string,
+): {
   readonly authenticated: true;
   readonly sessionKey: string;
   readonly user: { readonly id: string; readonly email: string; readonly name: string };
@@ -364,7 +396,7 @@ function safeSessionResponse(response: unknown): {
   }
   return {
     authenticated: true,
-    sessionKey,
+    sessionKey: sessionBindingKey(secret, sessionKey),
     user: { id, email, name },
   };
 }
@@ -464,9 +496,16 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
   readonly #installationId: string;
   readonly #issuer: string;
   readonly #sessionCookieName: string;
+  readonly #secret: string;
 
-  constructor(auth: ControllerBetterAuth, installationId: string, cookieName: string) {
+  constructor(
+    auth: ControllerBetterAuth,
+    installationId: string,
+    cookieName: string,
+    secret: string,
+  ) {
     this.#auth = auth;
+    this.#secret = secret;
     this.#sessionCookieName = cookieName;
     this.#installationId = installationId;
     this.#issuer = betterAuthIssuer(installationId);
@@ -522,6 +561,7 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
     if (authenticatedSession === undefined) {
       throw new AdmissionFailure(401, "UNAUTHENTICATED", "A valid controller session is required.");
     }
+    requireSessionKey(headers, this.#secret, authenticatedSession.id);
 
     return {
       externalIdentity: { issuer: this.#issuer, subject: authenticatedSession.userId },
@@ -834,6 +874,28 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     }
   }
 
+  async function githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    reply.header("cache-control", "no-store");
+    await sendAuthEndpoint(
+      request,
+      reply,
+      () => {
+        if (!humanLogin) {
+          throw new AdmissionFailure(403, "FORBIDDEN", "GitHub sign-in is unavailable.");
+        }
+        if (request.headers.origin !== expectedBrowserOrigin) {
+          throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+        }
+        return runPrivateEndpoint(request, "/oce/providers/github/result", authBody(request));
+      },
+      (value) => {
+        const sessionKey = (value as { readonly sessionKey?: unknown } | null)?.sessionKey;
+        return { sessionKey: isNonEmptyString(sessionKey) ? sessionKey : null };
+      },
+      "GitHub sign-in could not be confirmed.",
+    );
+  }
+
   async function signInEmail(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     await sendAuthEndpoint(
       request,
@@ -853,7 +915,12 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           returnStatus: true,
         });
       },
-      () => ({ authenticated: true }),
+      (response) => {
+        const sessionKey = (response as { readonly sessionKey?: unknown } | null)?.sessionKey;
+        return isNonEmptyString(sessionKey)
+          ? { authenticated: true, sessionKey }
+          : { authenticated: true };
+      },
       "The caller did not provide valid authentication credentials.",
       hostOnlySessionCookieCleanup,
     );
@@ -863,10 +930,27 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await sendAuthEndpoint(
       request,
       reply,
-      () => {
+      async () => {
         // Better Auth server API calls skip origin middleware without a Request context.
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
         const headers = sessionHeaders(request.headers, sessionCookieName);
+        if (sessionKeyHeader(headers) !== undefined) {
+          // A pinned tab ends only its own session; a cookie replaced by another
+          // sign-in is neither revoked nor cleared.
+          const current = responseSessionId(
+            await api.getSession({
+              headers,
+              query: { disableCookieCache: true, disableRefresh: true },
+              asResponse: false,
+              returnHeaders: false,
+              returnStatus: false,
+            }),
+          );
+          if (current === undefined) {
+            throw new AdmissionFailure(401, "UNAUTHENTICATED", "The session key does not match.");
+          }
+          requireSessionKey(headers, options.secret, current);
+        }
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/sign-out");
         }
@@ -887,15 +971,20 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await sendAuthEndpoint(
       request,
       reply,
-      () =>
-        api.getSession({
-          headers: sessionHeaders(request.headers, sessionCookieName),
+      async () => {
+        const headers = sessionHeaders(request.headers, sessionCookieName);
+        requireSessionKey(headers, options.secret, undefined);
+        const result = await api.getSession({
+          headers,
           query: { disableCookieCache: true, disableRefresh: true },
           asResponse: false,
           returnHeaders: true,
           returnStatus: true,
-        }),
-      safeSessionResponse,
+        });
+        requireSessionKey(headers, options.secret, responseSessionId(result?.response));
+        return result;
+      },
+      (response) => safeSessionResponse(response, options.secret),
       "The controller session could not be resolved.",
     );
   }
@@ -903,14 +992,21 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   async function resolveSession(
     request: FastifyRequest,
   ): Promise<AuthenticatedSession | undefined> {
-    const result = await api.getSession({
-      headers: sessionHeaders(request.headers, sessionCookieName),
-      query: { disableCookieCache: true, disableRefresh: true },
-      asResponse: false,
-      returnHeaders: false,
-      returnStatus: false,
-    });
-    return safeAuthenticatedSession(result);
+    const headers = sessionHeaders(request.headers, sessionCookieName);
+    requireSessionKey(headers, options.secret, undefined);
+    const session = safeAuthenticatedSession(
+      await api.getSession({
+        headers,
+        query: { disableCookieCache: true, disableRefresh: true },
+        asResponse: false,
+        returnHeaders: false,
+        returnStatus: false,
+      }),
+    );
+    if (session !== undefined) {
+      requireSessionKey(headers, options.secret, session.id);
+    }
+    return session;
   }
 
   return {
@@ -922,6 +1018,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       auth,
       options.installationId,
       sessionCookieName,
+      options.secret,
     ),
     createAccount,
     deleteAccount,
@@ -938,6 +1035,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     githubEnabled: humanLogin !== undefined,
     githubStart,
     githubCallback,
+    githubResult,
     signInEmail,
     signOut,
     session,

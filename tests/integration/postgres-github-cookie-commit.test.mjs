@@ -181,6 +181,40 @@ test(
       recoveryUserId,
       "rejected ambiguous logout leaves the original session current",
     );
+    // A tab pinned to another session cannot end the one this cookie now carries.
+    const otherTab = await ordinary.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      payload: { email, password },
+    });
+    const otherTabKey = otherTab.json().data.sessionKey;
+    const mismatchedLogout = await ordinary.inject({
+      method: "POST",
+      url: "/api/auth/sign-out",
+      headers: { cookie, origin, "x-occ-session-key": otherTabKey },
+    });
+    assert.equal(mismatchedLogout.statusCode, 401, mismatchedLogout.body);
+    assert.equal(mismatchedLogout.headers["set-cookie"], undefined);
+    assert.equal(
+      (await ordinary.inject({ url: "/api/auth/session", headers: { cookie } })).json().data.user
+        .id,
+      recoveryUserId,
+      "a mismatched session key neither revokes nor clears the current session",
+    );
+    // The pinned tab can still end its own session.
+    const otherTabCookie = cookieHeaderFromSetCookie(otherTab.headers["set-cookie"]);
+    const ownLogout = await ordinary.inject({
+      method: "POST",
+      url: "/api/auth/sign-out",
+      headers: { cookie: otherTabCookie, origin, "x-occ-session-key": otherTabKey },
+    });
+    assert.equal(ownLogout.statusCode, 200, ownLogout.body);
+    assert.equal(
+      (
+        await ordinary.inject({ url: "/api/auth/session", headers: { cookie: otherTabCookie } })
+      ).json().data,
+      null,
+    );
     const logoutProxy = await commitAckProxy(databaseUrl);
     proxies.push(logoutProxy);
     const logout = await composePostgresDevelopment(
@@ -212,7 +246,8 @@ test(
           "SELECT count(*)::int AS count FROM occ.audit_events WHERE action='authentication.logout'",
         )
       ).rows[0].count,
-      1,
+      // The pinned tab's own logout above, then this committed-but-unacknowledged one.
+      2,
     );
 
     const adminLogin = await ordinary.inject({

@@ -42,7 +42,7 @@ Each operation lists its supported status codes.
 
 | Resource | Operations |
 | --- | --- |
-| [Authentication](#authentication) | 13 operations |
+| [Authentication](#authentication) | 14 operations |
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 3 operations |
 | [Namespaces](#namespaces) | 4 operations |
@@ -71,6 +71,7 @@ Each operation lists its supported status codes.
 | [`POST /api/auth/accounts/{userId}/revoke`](#post-apiauthaccountsuseridrevoke) | Revoke all sessions for a human account |
 | [`GET /api/auth/providers`](#get-apiauthproviders) | List configured browser sign-in methods |
 | [`GET /api/auth/providers/github/callback`](#get-apiauthprovidersgithubcallback) | Complete an enrolled GitHub sign-in |
+| [`POST /api/auth/providers/github/result`](#post-apiauthprovidersgithubresult) | Confirm which session a GitHub sign-in created |
 | [`POST /api/auth/providers/github/start`](#post-apiauthprovidersgithubstart) | Start GitHub sign-in for an enrolled account |
 | [`POST /api/auth/service-keys`](#post-apiauthservicekeys) | Issue a service API key |
 | [`DELETE /api/auth/service-keys/{keyId}`](#delete-apiauthservicekeyskeyid) | Revoke a service API key |
@@ -345,6 +346,7 @@ List configured browser sign-in methods
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
 | `data.github` | `boolean` | Yes | — |
+| `data.sessionBinding` | `boolean` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
@@ -364,15 +366,25 @@ Complete an enrolled GitHub sign-in
 | --- | --- |
 | `302` | Redirect to Console |
 
-#### `POST /api/auth/providers/github/start`
+#### `POST /api/auth/providers/github/result`
 
-<span id="post-apiauthprovidersgithubstart"></span>
+<span id="post-apiauthprovidersgithubresult"></span>
 
-Start GitHub sign-in for an enrolled account
+Confirm which session a GitHub sign-in created
 
-**Operation ID:** `startGitHubSignIn`
+**Operation ID:** `confirmGitHubSignIn`
 
-**Permissions:** Requires the configured browser Origin. Creates a one-use browser-bound login attempt; does not create an account or grant access.
+**Permissions:** Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `attemptId` | `string` | Yes | pattern: `^[A-Za-z0-9_-]{43}$` |
 
 ##### Responses
 
@@ -387,6 +399,34 @@ Start GitHub sign-in for an enrolled account
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
+| `data.sessionKey` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/providers/github/start`
+
+<span id="post-apiauthprovidersgithubstart"></span>
+
+Start GitHub sign-in for an enrolled account
+
+**Operation ID:** `startGitHubSignIn`
+
+**Permissions:** Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.attemptId` | `string` | Yes | pattern: `^[A-Za-z0-9_-]{43}$` |
 | `data.url` | `string (uri)` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
@@ -546,6 +586,7 @@ Sign in with email and password
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
 | `data.authenticated` | `true` | Yes | — |
+| `data.sessionKey` | `string` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 

@@ -411,9 +411,12 @@ test(
         url.searchParams.get("redirect_uri"),
         `${origin}/api/auth/providers/github/callback`,
       );
+      const { attemptId } = response.json().data;
+      assert.match(attemptId, /^[A-Za-z0-9_-]{43}$/);
       return {
         cookie: cookieHeaderFromSetCookie(response.headers["set-cookie"]),
         state: url.searchParams.get("state"),
+        attemptId,
       };
     }
     const attempt = await start();
@@ -493,6 +496,95 @@ test(
     });
     assert.equal(consumed.headers.location, "/console/?authError=github");
     assert.equal(exchangeCount, 1, "a consumed callback cannot exchange again");
+
+    // The redirect stays exactly /console/; only the HttpOnly receipt cookie tells
+    // the starting tab which session its attempt created.
+    const receipt = [callback.headers["set-cookie"]]
+      .flat()
+      .find((value) => value.startsWith("occ_login_receipt="));
+    assert.ok(receipt);
+    assert.match(receipt, /HttpOnly/i);
+    assert.match(receipt, /SameSite=Strict/i);
+    assert.match(receipt, /Max-Age=120/);
+    const receiptCookie = receipt.split(";", 1)[0];
+    const githubSessionCookie = githubCookie
+      .split("; ")
+      .filter((cookie) => !cookie.startsWith("occ_login_receipt="))
+      .join("; ");
+    async function result(attemptId, cookie, requestHeaders = { origin }) {
+      return app.inject({
+        method: "POST",
+        url: "/api/auth/providers/github/result",
+        headers: { ...requestHeaders, cookie },
+        payload: { attemptId },
+      });
+    }
+    async function sessionRows() {
+      return (await pool.query("SELECT id, expires_at FROM occ.session ORDER BY id")).rows;
+    }
+    const sessionsBeforeResult = await sessionRows();
+    // A cross-origin or Origin-less request cannot read the key, even with valid cookies.
+    const withoutOrigin = await result(attempt.attemptId, githubCookie, {});
+    assert.equal(withoutOrigin.statusCode, 403, withoutOrigin.body);
+    // A different live attempt, such as another tab's, cannot claim this session.
+    const otherTab = await start();
+    const wrongAttempt = await result(otherTab.attemptId, githubCookie);
+    assert.equal(wrongAttempt.statusCode, 401, wrongAttempt.body);
+    // A later sign-in replaced the cookie: the receipt must not bind the new session.
+    const replacedCookie = `${(await passwordLogin()).cookie}; ${receiptCookie}`;
+    const replaced = await result(attempt.attemptId, replacedCookie);
+    assert.equal(replaced.statusCode, 401, replaced.body);
+    // An expired receipt is refused even while its browser cookie is still sent.
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 121_000 });
+    let expired;
+    try {
+      expired = await result(attempt.attemptId, githubCookie);
+    } finally {
+      t.mock.timers.reset();
+    }
+    assert.equal(expired.statusCode, 401, expired.body);
+    const confirmed = await result(attempt.attemptId, githubCookie);
+    assert.equal(confirmed.statusCode, 200, confirmed.body);
+    assert.equal(confirmed.headers["cache-control"], "no-store");
+    const { sessionKey } = confirmed.json().data;
+    assert.equal(
+      (await app.inject({ url: "/api/auth/session", headers: { cookie: githubCookie } })).json()
+        .data.sessionKey,
+      sessionKey,
+      "the result key names the session the callback issued",
+    );
+    const confirmedCookies = [confirmed.headers["set-cookie"]].flat().join("\n");
+    assert.doesNotMatch(confirmedCookies, /session_token/, "the exchange issues no session");
+    assert.match(confirmedCookies, /occ_login_receipt=;.*Max-Age=0/);
+    // The password login above added a row; the exchange itself added or extended none.
+    const sessionsAfterResult = await sessionRows();
+    for (const row of sessionsBeforeResult) {
+      assert.deepEqual(
+        sessionsAfterResult.find((candidate) => candidate.id === row.id),
+        row,
+      );
+    }
+    assert.equal(sessionsAfterResult.length, sessionsBeforeResult.length + 1);
+    // Replaying a copied receipt after the browser cleared it is refused.
+    const replay = await result(attempt.attemptId, githubCookie);
+    assert.equal(replay.statusCode, 401, replay.body);
+    // The key narrows protected API admission: absent keeps the cookie contract,
+    // a matching key admits, and a foreign, malformed or duplicated key rejects.
+    // A key without the cookie never selects a session.
+    const foreignKey = (
+      await app.inject({ url: "/api/auth/session", headers: { cookie: headers.cookie } })
+    ).json().data.sessionKey;
+    for (const [requestHeaders, status] of [
+      [{ cookie: githubSessionCookie }, 200],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": sessionKey }, 200],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": foreignKey }, 401],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": "malformed" }, 401],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": [sessionKey, sessionKey] }, 401],
+      [{ "x-occ-session-key": sessionKey }, 401],
+    ]) {
+      const narrowed = await app.inject({ url: "/namespaces", headers: requestHeaders });
+      assert.equal(narrowed.statusCode, status, narrowed.body);
+    }
 
     // Unknown provider identities cannot create accounts, even when local account data exists.
     providerSubject = 87654321;
