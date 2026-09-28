@@ -2,7 +2,9 @@
 
 **Date:** 2026-09-18
 
-**Status:** Proposed; release scope disputed. Implementation and qualification remain open.
+**Status:** Direction; deferred past 0.x — not an MVP requirement.
+
+The 0.x scope is [Agent access](36-agent-access.md#delivery-checkpoints) checkpoints 1-2 (share with existing people; enroll without grants); everything in this package is later direction.
 
 **Owner:** OCC authorization and Agent invocation.
 
@@ -16,8 +18,8 @@ commitment. The [outstanding scope review](https://github.com/openclaw/openclaw-
 objects to another authorization layer between Agents and channels for 0.x and
 calls for using OpenClaw Gateway's existing permission model. The invocation,
 audience mediation and protected-turn program here remains disputed and must not
-be treated as an approved 0.x requirement. Resolve that scope decision before
-adopting the delivery plan; this amendment does not decide it.
+be treated as an approved 0.x requirement. Maintainers resolved that scope
+decision: this package lands as direction, deferred past 0.x.
 
 [Authorization at the refreshed base](https://github.com/openclaw/openclaw-enterprise/blob/5ebd7305b0876db33276a249934bc82073b63424/docs/reference/authorization.md#manage-namespace-policy)
 already supports immutable Namespace Roles with administrator-selected permissions

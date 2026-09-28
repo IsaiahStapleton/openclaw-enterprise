@@ -22,7 +22,7 @@ handle. The selected Compute and Harness owners connect OCC to the private Agent
 Gateway and actual runtime. Compute owns observed execution facts. State owns
 authoritative current-serving selection, serialized with Compute and predecessor
 withdrawal. Identity owns verification and currentness interpretation through its
-[execution lifecycle](https://github.com/openclaw/openclaw-enterprise/blob/362d63e0e7be06ac7da7c75755d2a483e2cd86a6/specs/basic-agent-identity-mvp.md#authority-and-execution).
+execution lifecycle, proposed in the unmerged basic Agent identity MVP spec.
 Egress owns the accepting transport and mandatory protected routes.
 Repository and model credential owners own acquisition, delivery and settlement.
 Audit records safe facts through its existing State owner.

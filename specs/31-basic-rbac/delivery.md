@@ -1,15 +1,19 @@
 # RBAC delivery and qualification
 
 Read the [current-source and release-scope amendment](../31-basic-rbac.md#current-source-amendment--2026-09-24)
-before applying this original proposal. Its broader invocation scope remains
-disputed for 0.x; the requirements below are not implementation acceptance.
+before applying this original proposal. This plan is deferred past 0.x; the
+requirements below are not implementation acceptance. The 0.x scope is
+[Agent access](../36-agent-access.md#delivery-checkpoints) checkpoints 1-2.
 
-The [selected proposal](../31-basic-rbac.md) is complete only when ordinary people
-can use personal and team Agents through both channels with the required content,
-repository and withdrawal controls. An earlier checkpoint may be useful without
-completing that scope.
+**Post-0.x.** The [selected proposal](../31-basic-rbac.md) is complete only when
+ordinary people can use personal and team Agents through both channels with the
+required content, repository and withdrawal controls. These completion criteria are
+not 0.x requirements. An earlier checkpoint may be useful without completing that
+scope.
 
 ## Increments and qualification
+
+Increments 2-4 are post-0.x. Increment 1 overlaps the 0.x [Agent access](../36-agent-access.md#delivery-checkpoints) checkpoints, which govern where they differ.
 
 1. **Account/policy foundation.** Through the real controller and limited-role
    PostgreSQL path, an administrator enrolls a human without grants, applies exact
@@ -18,12 +22,12 @@ completing that scope.
    Prove concurrent policy changes and one batch digest/revision outcome through
    replay, changed-content conflict, rollback, audit/commit failure and original
    receipt recovery after uncertain COMMIT.
-2. **Authentic turn/content.** Deployer A and distinct requester B use real Slack
+2. **Authentic turn/content (post-0.x).** Deployer A and distinct requester B use real Slack
    with a dedicated Codex runtime. Prove current narrow roles, cross-Namespace and
    content/audit denial, failed-hook zero dispatch, duplicate/restart behavior,
    unknown runtime start/send and complete-audience changes. This increment makes
    no protected repository claim yet.
-3. **Same-artifact protected read.** The same managed Agent performs a genuine Git
+3. **Same-artifact protected read (post-0.x).** The same managed Agent performs a genuine Git
    HEAD read under explicit `git-read`, with a protected model and actual receiving
    proof. Prove allowed and denied repository use without unauthorized profile
    widening or an alternate path. Deny results after revoke and cancel protectively
@@ -31,7 +35,7 @@ completing that scope.
    Measure both withdrawal endpoints, renewal loss, delayed positive observations
    and blocked consumers. This Slack/Codex/git-read checkpoint remains narrower
    than the complete selected goal.
-4. **Complete breadth.** Qualify installed local-account personal and team journeys
+4. **Complete breadth (post-0.x).** Qualify installed local-account personal and team journeys
    through live Slack and Teams. Codex and Claude Code each need supported runtime
    and authentication profiles with separate installed acceptance. Record the
    finite offered combinations, exact source, images, runtime/CNI and provider
