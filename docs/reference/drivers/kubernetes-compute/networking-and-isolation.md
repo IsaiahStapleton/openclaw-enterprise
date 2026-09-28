@@ -138,14 +138,17 @@ passes the profile in provider-owned Harness requirements. Deployment readiness
 requires the expected template profile; provider Harness readiness and activation
 reject an otherwise matching Pod that omits or changes a required profile.
 
-Existing owned policy names remain stable. On the next revision preparation,
-Compute re-applies the tenant namespace policies, and the separate Gateway
-namespace policies for dedicated revisions, through the normal non-forced apply
-path; the same preparation rolls existing Deployments onto profiled templates.
-Until then, Pods from older templates keep their old grants; once policies are
-narrowed, an older Pod without the profile loses ordinary access until
-replaced. Existing OpenShell Sandboxes are not relabeled because Sandbox names
-are per revision: redeploy the Agent revision. For development, follow the
+Existing owned policy names remain stable. Namespaces provisioned after the
+upgrade receive the narrowed `allow-dns`, `allow-gateway-ingress` and
+`allow-node-gateway` policies. Namespaces provisioned earlier keep their previous
+namespace-wide versions, which select Pods with or without the profile, until
+the namespace is recreated; Compute does not narrow them in place. Per-Agent
+grants are re-rendered with the profile when that Agent's revision is prepared,
+and its new templates carry the label. Other Agents keep their grants until
+their own revisions are prepared. A serving embedded Gateway from an unprofiled
+template keeps model egress until activation replaces it. Existing OpenShell
+Sandboxes are not relabeled because Sandbox names are per revision: redeploy the
+Agent revision. For development, follow the
 [development recovery procedure](../../../guides/deploy/local-operations.md#build-images-for-local-kubernetes).
 
 The separately installed OpenShell gateway needs its own scoped DNS/API and

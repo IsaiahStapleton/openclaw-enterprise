@@ -84,11 +84,14 @@ The disposable cluster cleanup above is not an upgrade procedure.
 For missing DNS, denied connections, or unready Kubernetes Agents after a
 checkout update, inspect the [ordinary network profile](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
 on the affected Pod and its workload template, plus all matching NetworkPolicies.
-Rebuild the controller and deploy a new revision: preparation re-narrows the
-namespace policies and rolls Deployments onto profiled templates. OpenShell
-Sandboxes need a redeployed revision. Restarting a Pod from an old template
-retains the missing label; assigning the profile to arbitrary Pods grants
-access and is not a repair.
+Rebuild the controller and deploy a new revision of each affected Agent:
+preparing a revision re-renders that Agent's grants with the profile, and its
+new templates carry the label. Namespace-wide `allow-dns`,
+`allow-gateway-ingress` and `allow-node-gateway` are narrowed only in namespaces
+provisioned after the upgrade; an earlier namespace keeps its previous policies
+until it is recreated. OpenShell Sandboxes need a redeployed revision.
+Restarting a Pod from an old template retains the missing label; assigning the
+profile to arbitrary Pods grants access and is not a repair.
 
 ## Stop development safely
 
