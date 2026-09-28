@@ -80,7 +80,7 @@ create-only Console and API input, applied once before first runtime execution.
 templates with variables, CRUD APIs, and console selection.
 
 [GitHub sign-in for existing accounts](31-human-federated-sign-in.md) — Proposed;
-administrator-provisioned password accounts with an optional GitHub identity; M1 in PR #305.
+administrator-provisioned password accounts with an optional GitHub identity; implemented by PR #305 and its M1 follow-ups.
 
 [Harness authentication bindings](30-harness-auth-binding.md) — Accepted for implementation;
 one Agent auth binding for supplied OpenAI keys and issued ChatGPT account credentials.
