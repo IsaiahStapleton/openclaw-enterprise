@@ -55,6 +55,11 @@ spec:
                   number: 8080
 ```
 
+The API refuses protected requests carrying `X-Forwarded-*` or `X-Real-IP`
+headers, which ingress-nginx adds, unless the sender is a trusted proxy: set
+[`OCC_AUTH_TRUSTED_PROXY_CIDRS`](../../reference/cheatsheets/environment-variables.md#controller-and-authentication)
+to the ingress-nginx Pod CIDR, or strip those headers at the ingress.
+
 Allow ingress only to the API Pods selected for public browser traffic. Keep the Envoy Service private:
 
 ```yaml

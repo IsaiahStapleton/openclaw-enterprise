@@ -225,6 +225,20 @@ candidate runtime data. Restore the previous runtime selection, recompute the
 Installation checksum, run Helm, and deploy the affected running Agents again.
 Never delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
 
+### Roll back across human sign-in
+
+Migration `0034` adds the human sign-in state. `helm rollback` skips the
+pre-upgrade migration Job, so it never reverses that migration.
+
+Before GitHub sign-in is activated, scale `deployment/openclaw-enterprise-api` to
+zero and wait for its Pods to disappear, run `helm rollback`, then verify password
+sign-in before reopening ingress.
+
+After activation, do not roll back; fix forward. The database refuses sessions
+that the previous controller issues without a human sign-in binding, so it
+cannot sign anyone in, and existing sessions expire within 8 hours. Never run
+the previous and current controllers together.
+
 ## Current limits
 
 - No canary, batching, automatic compatibility check, automatic rollback, or

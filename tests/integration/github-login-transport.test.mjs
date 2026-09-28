@@ -43,6 +43,7 @@ function loginFixture(overrides = {}) {
     },
     origin,
   );
+  login.designateRecovery("Recovery@example.test");
   const auth = betterAuth({
     baseURL: origin,
     secret: "test-only-authentication-secret-with-at-least-32-characters",
@@ -76,25 +77,26 @@ function loginFixture(overrides = {}) {
     get denied() {
       return denialReasons.length;
     },
-    callback: (query = `state=${callbackState}&code=fixture-code`) =>
+    // The controller wrapper sets x-occ-client-ip from the socket peer or a trusted ingress.
+    callback: (query = `state=${callbackState}&code=fixture-code`, ip = "10.0.0.1") =>
       auth.handler(
         new Request(`${origin}/api/auth/oce/providers/github/callback?${query}`, {
-          headers: { cookie: `__Host-occ_login_attempt=${binding}` },
+          headers: { cookie: `__Host-occ_login_attempt=${binding}`, "x-occ-client-ip": ip },
         }),
       ),
-    start: () =>
+    start: (ip = "10.0.0.1") =>
       auth.handler(
         new Request(`${origin}/api/auth/oce/providers/github/start`, {
           method: "POST",
-          headers: { origin },
+          headers: { origin, "x-occ-client-ip": ip },
         }),
       ),
-    password: (password = "too-short") =>
+    password: (password = "too-short", { ip = "10.0.0.1", email = "missing@example.test" } = {}) =>
       auth.handler(
         new Request(`${origin}/api/auth/oce/password`, {
           method: "POST",
-          headers: { origin, "content-type": "application/json" },
-          body: JSON.stringify({ email: "missing@example.test", password }),
+          headers: { origin, "content-type": "application/json", "x-occ-client-ip": ip },
+          body: JSON.stringify({ email, password }),
         }),
       ),
   };
@@ -331,24 +333,104 @@ test(
     }
 
     await t.test(
-      "invalid callbacks consume finite admission before any remote work, with separate password capacity",
+      "a GitHub callback flood from one client address leaves other clients admitted",
       async () => {
         const login = loginFixture();
         const before = requests.length;
-        for (let i = 0; i < 60; i += 1) {
-          await expectDenied(await login.callback("state=invalid"));
+        for (let i = 0; i < 30; i += 1) {
+          await expectDenied(await login.callback("state=invalid", "10.0.0.1"));
         }
-        assert.equal((await login.callback()).status, 429);
-        assert.equal((await login.start()).status, 429);
+        assert.equal((await login.callback(undefined, "10.0.0.1")).status, 429);
+        assert.equal((await login.start("10.0.0.1")).status, 429);
+        assert.equal((await login.start("10.0.0.2")).status, 200);
+        await expectDenied(await login.callback("state=invalid", "10.0.0.2"));
         assert.equal(requests.length, before);
-        // Invalid password reaches its own validation, instead of exhausted GitHub admission.
-        await expectDenied(await login.password());
-        for (let i = 1; i < 30; i += 1) {
-          await expectDenied(await login.password());
-        }
-        assert.equal((await login.password()).status, 429);
+        // Password admission is a separate lane.
+        await expectDenied(await login.password(undefined, { ip: "10.0.0.1" }));
       },
     );
+
+    await t.test("password budgets are kept per email and per client address", async () => {
+      const login = loginFixture();
+      const email = "a@example.test";
+      for (let i = 0; i < 10; i += 1) {
+        await expectDenied(await login.password(undefined, { ip: `10.0.1.${i}`, email }));
+      }
+      assert.equal((await login.password(undefined, { ip: "10.0.1.99", email })).status, 429);
+      await expectDenied(
+        await login.password(undefined, { ip: "10.0.1.0", email: "b@example.test" }),
+      );
+      for (let i = 0; i < 9; i += 1) {
+        await expectDenied(
+          await login.password(undefined, { ip: "10.0.2.1", email: `ip-${i}@example.test` }),
+        );
+      }
+      // Case and surrounding space do not create a fresh email budget.
+      await expectDenied(
+        await login.password(undefined, { ip: "10.0.2.1", email: " B@example.test " }),
+      );
+      assert.equal(
+        (await login.password(undefined, { ip: "10.0.2.1", email: "c@example.test" })).status,
+        429,
+      );
+      await expectDenied(
+        await login.password(undefined, { ip: "10.0.2.2", email: "b@example.test" }),
+      );
+      assert.deepEqual(login.denialReasons, []);
+    });
+
+    await t.test(
+      "the recovery email keeps a reserved password lane with its own budget",
+      async () => {
+        const held = [];
+        const login = loginFixture({
+          snapshotPassword: () => new Promise((resolve) => held.push(resolve)),
+        });
+        const valid = "valid-length-fixture-password";
+        const pending = Array.from({ length: 4 }, (_, i) =>
+          login.password(valid, { ip: `10.0.3.${i}`, email: `held-${i}@example.test` }),
+        );
+        await until(() => held.length === 4);
+        assert.equal(
+          (await login.password(valid, { ip: "10.0.3.9", email: "fresh@example.test" })).status,
+          429,
+        );
+        pending.push(login.password(valid, { email: "recovery@example.test" }));
+        await until(() => held.length === 5);
+        // The one reserved slot is taken; recovery cannot exceed the global lane plus reserve.
+        assert.equal((await login.password(valid, { email: "recovery@example.test" })).status, 429);
+        for (const resolve of held) {
+          resolve(undefined);
+        }
+        await Promise.all((await Promise.all(pending)).map(expectDenied));
+        for (let i = 1; i < 20; i += 1) {
+          await expectDenied(await login.password(undefined, { email: "recovery@example.test" }));
+        }
+        assert.equal(
+          (await login.password(undefined, { email: "RECOVERY@example.test" })).status,
+          429,
+        );
+        // Recovery attempts spent neither the address budget nor the global lane.
+        await expectDenied(await login.password(undefined, { email: "other@example.test" }));
+      },
+    );
+
+    await t.test("the admission table stays bounded and evicts idle keys", async () => {
+      const login = loginFixture();
+      const email = "c@example.test";
+      for (let i = 0; i < 10; i += 1) {
+        await expectDenied(await login.password(undefined, { ip: `10.0.4.${i}`, email }));
+      }
+      assert.equal((await login.password(undefined, { ip: "10.0.4.99", email })).status, 429);
+      for (let i = 0; i < 4096; i += 1) {
+        const response = await login.password(undefined, {
+          ip: `10.1.${i >> 8}.${i & 255}`,
+          email: `cycle-${i}@example.test`,
+        });
+        assert.equal(response.status, 401);
+      }
+      await expectDenied(await login.password(undefined, { ip: "10.0.4.99", email }));
+    });
 
     await t.test(
       "eight active GitHub callbacks cap remote work and release capacity on failure",
@@ -358,16 +440,18 @@ test(
         serve = (_request, response) => {
           held.push(response);
         };
-        const pending = Array.from({ length: 8 }, () => login.callback());
+        const pending = Array.from({ length: 8 }, (_, i) =>
+          login.callback(undefined, `10.0.5.${i}`),
+        );
         await until(() => held.length === 8);
-        assert.equal((await login.callback()).status, 429);
+        assert.equal((await login.callback(undefined, "10.0.5.99")).status, 429);
         assert.equal(held.length, 8);
         for (const response of held) {
           response.writeHead(503).end();
         }
         await Promise.all((await Promise.all(pending)).map(expectDenied));
         serve = (_request, response) => response.writeHead(503).end();
-        await expectDenied(await login.callback());
+        await expectDenied(await login.callback(undefined, "10.0.5.99"));
       },
     );
 
@@ -376,11 +460,15 @@ test(
       const login = loginFixture({
         snapshotPassword: () => new Promise((resolve) => held.push(resolve)),
       });
-      const pending = Array.from({ length: 4 }, () =>
-        login.password("valid-length-fixture-password"),
+      const valid = "valid-length-fixture-password";
+      const pending = Array.from({ length: 4 }, (_, i) =>
+        login.password(valid, { ip: `10.0.6.${i}`, email: `active-${i}@example.test` }),
       );
       await until(() => held.length === 4);
-      assert.equal((await login.password("valid-length-fixture-password")).status, 429);
+      assert.equal(
+        (await login.password(valid, { ip: "10.0.6.99", email: "late@example.test" })).status,
+        429,
+      );
       assert.equal(held.length, 4);
       for (const resolve of held) {
         resolve(undefined);

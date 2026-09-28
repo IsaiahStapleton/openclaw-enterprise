@@ -79,4 +79,22 @@ GRANT SELECT, INSERT ON occ.human_authentication_accounts, occ.human_authenticat
 --> statement-breakpoint
 GRANT UPDATE (version, disabled, changed_at) ON occ.human_authentication_accounts TO occ_app;
 --> statement-breakpoint
+GRANT UPDATE (user_id, principal_id, method_id) ON occ.human_authentication_recovery TO occ_app;
+--> statement-breakpoint
 GRANT DELETE ON occ.human_authentication_attempts TO occ_app;
+--> statement-breakpoint
+CREATE FUNCTION occ.require_bound_session() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, occ, pg_temp AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM occ.human_authentication_recovery)
+     AND EXISTS (SELECT 1 FROM occ.session s WHERE s.id = NEW.id)
+     AND NOT EXISTS (SELECT 1 FROM occ.human_authentication_sessions b
+       WHERE b.session_id = NEW.id AND b.user_id = NEW.user_id) THEN
+    RAISE EXCEPTION 'Human sign-in is activated; sessions require a controller that enforces authentication bindings';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+--> statement-breakpoint
+CREATE CONSTRAINT TRIGGER require_bound_session AFTER INSERT ON occ.session
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION occ.require_bound_session();

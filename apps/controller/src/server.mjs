@@ -1,4 +1,4 @@
-import { githubLoginConfiguration } from "./auth/index.ts";
+import { clientAddressConfiguration, githubLoginConfiguration } from "./auth/index.ts";
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
@@ -201,18 +201,23 @@ function configuration() {
   }
 
   const github = githubLoginConfiguration(process.env);
+  const clientAddress = clientAddressConfiguration(process.env);
   if (mode === "production") {
     return Object.freeze({
       ...settings,
       authSecret: requiredEnvironment("OCC_AUTH_SECRET"),
       authBaseURL,
       ...(github === undefined ? {} : { github }),
+      ...(clientAddress === undefined ? {} : { clientAddress }),
       ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
       ...(channelDirectoryProxyUrl === undefined ? {} : { channelDirectoryProxyUrl }),
       ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
     });
   }
 
+  if (clientAddress !== undefined) {
+    throw new Error("OCC_AUTH_TRUSTED_PROXY_* settings are production-only.");
+  }
   const authSecret = optionalEnvironment(
     "OCC_AUTH_SECRET",
     "openclaw-development-auth-secret-minimum-32-bytes",

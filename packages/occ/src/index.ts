@@ -210,8 +210,14 @@ export {
   type TransactionalAuditWriter,
 } from "./state/platform-state.ts";
 export { PostgresCommitOutcomeUnknownError };
-export { PostgresHumanAuthentication } from "./state/human-authentication.ts";
+export {
+  PostgresHumanAuthentication,
+  UserAlreadyExistsError,
+} from "./state/human-authentication.ts";
 export type {
+  HumanAuthenticationActivation,
+  HumanAuthenticationEnrolment,
+  PreparedPasswordAccount,
   HumanAuthenticationActor,
   HumanAuthenticationAccount,
   HumanAuthenticationUser,

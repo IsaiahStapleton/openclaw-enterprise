@@ -166,29 +166,126 @@ function cookieLifetime(createdAt: Date, expiresAt: Date, startedAt: number): nu
   return remaining;
 }
 
-function admission(maxPerMinute: number, maxConcurrent: number) {
-  let windowStart = performance.now();
-  let admitted = 0;
+interface AdmissionBudget {
+  readonly perMinute: number;
+  readonly concurrent: number;
+}
+
+interface AdmissionEntry {
+  windowStart: number;
+  admitted: number;
+  active: number;
+}
+
+const admissionTableCapacity = 4096;
+const admissionWindow = 60_000;
+
+function tooManyRequests(): APIError {
+  return APIError.fromStatus("TOO_MANY_REQUESTS", { message: "Try again later." });
+}
+
+function admissionEntry(now: number): AdmissionEntry {
+  return { windowStart: now, admitted: 0, active: 0 };
+}
+
+function rollWindow(entry: AdmissionEntry, now: number): void {
+  if (now - entry.windowStart >= admissionWindow) {
+    entry.windowStart = now;
+    entry.admitted = 0;
+  }
+}
+
+// Caller keys are hashed; the address header value is capped before hashing.
+function admissionKey(kind: "ip" | "email", value: string | null | undefined): string {
+  const trimmed = (value ?? "").trim();
+  const raw = kind === "ip" ? trimmed.slice(0, 64) : trimmed;
+  return `${kind}:${digest(raw.length === 0 ? "unknown" : raw)}`;
+}
+
+function keyedAdmission(
+  perKey: AdmissionBudget,
+  global: { readonly concurrent: number; readonly reserved: number },
+  recovery?: AdmissionBudget,
+) {
+  // Map order is recency order: touching an entry deletes and re-inserts it.
+  const table = new Map<string, AdmissionEntry>();
+  // The recovery entry lives outside the table, so key churn can never evict it.
+  const recoveryEntry = admissionEntry(performance.now());
   let active = 0;
-  return async <T>(work: () => Promise<T>): Promise<T> => {
-    const now = performance.now();
-    if (now - windowStart >= 60_000) {
-      windowStart = now;
-      admitted = 0;
+
+  function evict(pinned: readonly AdmissionEntry[]): boolean {
+    for (const [key, entry] of table) {
+      if (entry.active === 0 && !pinned.includes(entry)) {
+        table.delete(key);
+        return true;
+      }
     }
-    if (admitted >= maxPerMinute) {
-      throw APIError.fromStatus("TOO_MANY_REQUESTS", { message: "Try again later." });
+    return false;
+  }
+
+  function touch(key: string, now: number, pinned: readonly AdmissionEntry[]): AdmissionEntry {
+    let entry = table.get(key);
+    if (entry === undefined) {
+      if (table.size >= admissionTableCapacity && !evict(pinned)) {
+        throw tooManyRequests();
+      }
+      entry = admissionEntry(now);
+    } else {
+      table.delete(key);
+      rollWindow(entry, now);
     }
-    admitted += 1;
-    if (active >= maxConcurrent) {
-      throw APIError.fromStatus("TOO_MANY_REQUESTS", { message: "Try again later." });
+    table.set(key, entry);
+    return entry;
+  }
+
+  async function run<T>(entries: readonly AdmissionEntry[], work: () => Promise<T>): Promise<T> {
+    for (const entry of entries) {
+      entry.admitted += 1;
+      entry.active += 1;
     }
     active += 1;
     try {
       return await work();
     } finally {
       active -= 1;
+      for (const entry of entries) {
+        entry.active -= 1;
+      }
     }
+  }
+
+  return {
+    async admit<T>(keys: readonly string[], work: () => Promise<T>): Promise<T> {
+      const now = performance.now();
+      const entries: AdmissionEntry[] = [];
+      for (const key of keys) {
+        entries.push(touch(key, now, entries));
+      }
+      // Check every limit before counting anything, so one exhausted key spends no other budget.
+      if (
+        active >= global.concurrent ||
+        entries.some(
+          (entry) => entry.admitted >= perKey.perMinute || entry.active >= perKey.concurrent,
+        )
+      ) {
+        throw tooManyRequests();
+      }
+      return run(entries, work);
+    },
+    async admitRecovery<T>(work: () => Promise<T>): Promise<T> {
+      if (recovery === undefined) {
+        throw tooManyRequests();
+      }
+      rollWindow(recoveryEntry, performance.now());
+      if (
+        active >= global.concurrent + global.reserved ||
+        recoveryEntry.admitted >= recovery.perMinute ||
+        recoveryEntry.active >= recovery.concurrent
+      ) {
+        throw tooManyRequests();
+      }
+      return run([recoveryEntry], work);
+    },
   };
 }
 
@@ -301,33 +398,49 @@ export function createHumanLogin(
     };
   }
 
-  // Single-controller admission uses fixed storage, without caller-controlled key maps.
-  // Password recovery retains its own capacity during provider outage or callback floods.
-  const admitPassword = admission(30, 4);
-  const admitGithub = admission(60, 8);
+  // Single-controller admission keeps a bounded table of hashed client-address and email keys,
+  // each with a one-minute budget and an active-request cap, under concurrency-only global lanes.
+  // The recovery account keeps a reserved password lane during provider outage or login floods.
+  const admitPassword = keyedAdmission(
+    { perMinute: 10, concurrent: 2 },
+    { concurrent: 4, reserved: 1 },
+    { perMinute: 20, concurrent: 2 },
+  );
+  const admitGithub = keyedAdmission(
+    { perMinute: 30, concurrent: 4 },
+    { concurrent: 8, reserved: 0 },
+  );
+  let recoveryEmail: string | undefined;
+  function designateRecovery(email: string): void {
+    recoveryEmail = email.trim().toLowerCase();
+  }
   const plugin = {
     id: "oce-human-login",
     endpoints: {
-      ocePassword: createAuthEndpoint("/oce/password", { method: "POST" }, async (ctx) =>
-        admitPassword(async () => {
-          const body = ctx.body as { email?: unknown; password?: unknown } | undefined;
-          if (
-            typeof body?.email !== "string" ||
-            typeof body.password !== "string" ||
-            body.password.length < 12 ||
-            body.password.length > 128
-          ) {
+      ocePassword: createAuthEndpoint("/oce/password", { method: "POST" }, async (ctx) => {
+        const body = ctx.body as { email?: unknown; password?: unknown } | undefined;
+        if (
+          typeof body?.email !== "string" ||
+          body.email.length > 254 ||
+          typeof body.password !== "string"
+        ) {
+          throw rejected();
+        }
+        const email = body.email.trim().toLowerCase();
+        const password = body.password;
+        const work = async () => {
+          if (password.length < 12 || password.length > 128) {
             throw rejected();
           }
-          const snapshot = await state.snapshotPassword(body.email.trim().toLowerCase());
+          const snapshot = await state.snapshotPassword(email);
           if (!snapshot?.proof.passwordHash) {
-            await ctx.context.password.hash(body.password);
+            await ctx.context.password.hash(password);
             await state.recordDenied("INVALID_CREDENTIALS");
             throw rejected();
           }
           if (
             !(await ctx.context.password.verify({
-              password: body.password,
+              password,
               hash: snapshot.proof.passwordHash,
             }))
           ) {
@@ -346,8 +459,17 @@ export function createHumanLogin(
             maxAge,
           });
           return ctx.json({ authenticated: true });
-        }),
-      ),
+        };
+        return recoveryEmail !== undefined && email === recoveryEmail
+          ? admitPassword.admitRecovery(work)
+          : admitPassword.admit(
+              [
+                admissionKey("ip", ctx.headers?.get("x-occ-client-ip")),
+                admissionKey("email", email),
+              ],
+              work,
+            );
+      }),
       oceSignOut: createAuthEndpoint(
         "/oce/sign-out",
         { method: "POST", requireHeaders: true },
@@ -367,7 +489,7 @@ export function createHumanLogin(
         "/oce/providers/github/start",
         { method: "POST" },
         async (ctx) =>
-          admitGithub(async () => {
+          admitGithub.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
             const attemptState = secret();
             const browser = secret();
             const codeVerifier = secret();
@@ -396,7 +518,7 @@ export function createHumanLogin(
         "/oce/providers/github/callback",
         { method: "GET", requireRequest: true },
         async (ctx) =>
-          admitGithub(async () => {
+          admitGithub.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
             const parameters = new URL(ctx.request!.url).searchParams;
             const stateValue = parameters.get("state");
             const code = parameters.get("code");
@@ -454,5 +576,5 @@ export function createHumanLogin(
       ),
     },
   } satisfies BetterAuthPlugin;
-  return { plugin, database, providerId };
+  return { plugin, database, providerId, designateRecovery };
 }
