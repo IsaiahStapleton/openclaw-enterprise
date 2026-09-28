@@ -1,10 +1,12 @@
 # Egress interfaces
 
+**Status:** Superseded
+
 > **Historical custom-proxy proposal:** deferred for 0.x by the
-> [current disposition](../31-basic-egress-proxy.md#current-disposition).
+> [current disposition](../../40-agent-egress-0x.md#current-disposition).
 > The original contracts below are retained for reference.
 
-[Overview](../31-basic-egress-proxy.md) · [Admission order](architecture.md#admission-and-preparation)
+[Overview](../../40-agent-egress-0x.md) · [Admission order](architecture.md#admission-and-preparation)
 
 This reference owns the historical policy, immutable snapshot, internal Compute
 resolution and Go startup contracts. Read selection before startup: the operator

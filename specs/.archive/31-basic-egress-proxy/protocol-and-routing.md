@@ -1,10 +1,12 @@
 # Egress protocol and routing
 
+**Status:** Superseded
+
 > **Historical custom-proxy proposal:** deferred for 0.x by the
-> [current disposition](../31-basic-egress-proxy.md#current-disposition).
+> [current disposition](../../40-agent-egress-0x.md#current-disposition).
 > The original contracts below are retained for reference.
 
-[Overview](../31-basic-egress-proxy.md) · [Interfaces](interfaces.md)
+[Overview](../../40-agent-egress-0x.md) · [Interfaces](interfaces.md)
 
 The historical proxy authorizes a name, commits vetted numeric peers, verifies
 TLS and checks every HTTP request. These decisions have separate lifetimes. The

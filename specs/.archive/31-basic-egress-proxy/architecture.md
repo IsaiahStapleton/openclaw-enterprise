@@ -1,10 +1,12 @@
 # Egress architecture
 
+**Status:** Superseded
+
 > **Historical custom-proxy proposal:** deferred for 0.x by the
-> [current disposition](../31-basic-egress-proxy.md#current-disposition).
+> [current disposition](../../40-agent-egress-0x.md#current-disposition).
 > The original contracts below are retained for reference.
 
-[Overview](../31-basic-egress-proxy.md) · [Interfaces](interfaces.md)
+[Overview](../../40-agent-egress-0x.md) · [Interfaces](interfaces.md)
 
 The historical design puts policy admission in OCC and State, resource lifecycle
 in Compute, and traffic mediation in a separate Go proxy Pod. Existing identity,

@@ -1,10 +1,12 @@
 # Egress delivery and qualification
 
+**Status:** Superseded
+
 > **Historical custom-proxy proposal:** deferred for 0.x by the
-> [current disposition](../31-basic-egress-proxy.md#current-disposition).
+> [current disposition](../../40-agent-egress-0x.md#current-disposition).
 > The original contracts below are retained for reference.
 
-[Overview](../31-basic-egress-proxy.md) · [Architecture](architecture.md)
+[Overview](../../40-agent-egress-0x.md) · [Architecture](architecture.md)
 
 C0–C3 remain selected within the historical custom-proxy proposal, now deferred
 for 0.x. Each retains its connected consumer and acceptance requirements. Earlier

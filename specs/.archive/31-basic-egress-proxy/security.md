@@ -1,10 +1,12 @@
 # Egress security
 
+**Status:** Superseded
+
 > **Historical custom-proxy proposal:** deferred for 0.x by the
-> [current disposition](../31-basic-egress-proxy.md#current-disposition).
+> [current disposition](../../40-agent-egress-0x.md#current-disposition).
 > The original contracts below are retained for reference.
 
-[Overview](../31-basic-egress-proxy.md) · [Architecture](architecture.md)
+[Overview](../../40-agent-egress-0x.md) · [Architecture](architecture.md)
 
 The historical design separates network confinement from permission to perform
 an operation. C1 constrains workload traffic. C3 adds external credential custody

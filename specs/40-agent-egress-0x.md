@@ -63,6 +63,7 @@ flowchart TB
 ```
 
 Dashed arrows show intended integration, not installed behavior.
+[Editable Mermaid source](40-agent-egress-0x/current-boundaries.mmd).
 
 <a id="scope"></a><a id="contract"></a><a id="three-execution-boundaries"></a>
 
@@ -123,8 +124,8 @@ Documentation is not installed-runtime or release evidence.
 
 The custom proxy was **accepted for implementation** against
 [`046e12b`](https://github.com/openclaw/openclaw-enterprise/commit/046e12b007bb1b4928bd3f7497a2353714be11a8),
-then deferred for 0.x. Its [architecture](31-basic-egress-proxy/architecture.md),
-[interfaces](31-basic-egress-proxy/interfaces.md),
-[protocol](31-basic-egress-proxy/protocol-and-routing.md),
-[security](31-basic-egress-proxy/security.md), and
-[delivery](31-basic-egress-proxy/delivery.md) retain C0–C3 contracts for reference, not release approval.
+then deferred for 0.x. Its [architecture](.archive/31-basic-egress-proxy/architecture.md),
+[interfaces](.archive/31-basic-egress-proxy/interfaces.md),
+[protocol](.archive/31-basic-egress-proxy/protocol-and-routing.md),
+[security](.archive/31-basic-egress-proxy/security.md), and
+[delivery](.archive/31-basic-egress-proxy/delivery.md) retain C0–C3 contracts for reference, not release approval.
