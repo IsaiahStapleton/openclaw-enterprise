@@ -146,6 +146,48 @@ test(
       },
     );
 
+    const fenceMessage =
+      /Human sign-in is activated; sessions require a controller that enforces authentication bindings/;
+    async function insertUnboundSession(userId) {
+      const record = sessionRecord(userId);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // The deferred fence admits the statement and decides at COMMIT.
+        await client.query(
+          `INSERT INTO occ.session (id, token, user_id, created_at, updated_at, expires_at)
+           VALUES ($1,$2,$3,$4,$4,$5)`,
+          [record.id, record.token, userId, record.createdAt, record.expiresAt],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+      return record;
+    }
+    async function sessionCount(userId) {
+      return (
+        await pool.query("SELECT count(*)::int AS count FROM occ.session WHERE user_id=$1", [
+          userId,
+        ])
+      ).rows[0].count;
+    }
+
+    await context.test("unbound application sessions commit before activation", async () => {
+      const unbound = await insertUnboundSession(person.id);
+      assert.equal(
+        (await pool.query("SELECT id FROM occ.session WHERE id=$1", [unbound.id])).rowCount,
+        1,
+      );
+      // The same unguarded composition used after activation below signs in here.
+      const before = await sessionCount(person.id);
+      await auth.auth.api.signInEmail({ body: { email: person.email, password } });
+      assert.equal(await sessionCount(person.id), before + 1);
+    });
+
     await context.test(
       "activation is fixed and removes legacy sessions; recovery remains usable",
       async () => {
@@ -193,6 +235,37 @@ test(
         assert.equal(await persistence.currentSession(session.token), undefined);
       },
     );
+
+    await context.test(
+      "after activation unbound sessions fail at COMMIT and bound issuance still commits",
+      async () => {
+        const before = await sessionCount(person.id);
+        await assert.rejects(insertUnboundSession(person.id), fenceMessage);
+        assert.equal(await sessionCount(person.id), before);
+        const snapshot = await persistence.snapshotPassword(person.email);
+        const issued = await persistence.issueSession(snapshot.proof, sessionRecord(person.id));
+        assert.equal(await sessionCount(person.id), before + 1);
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT 1 FROM occ.human_authentication_sessions WHERE session_id=$1 AND user_id=$2",
+              [issued.id, person.id],
+            )
+          ).rowCount,
+          1,
+        );
+        assert.equal((await peer.currentSession(issued.token)).user.id, person.id);
+        await peer.revokeSession(issued.token);
+      },
+    );
+
+    await context.test("an older controller image cannot sign in after activation", async () => {
+      // The unguarded composition is what a pre-activation image runs: plain
+      // Better Auth sessions over the same database, with no binding rows.
+      const before = await sessionCount(person.id);
+      await assert.rejects(auth.auth.api.signInEmail({ body: { email: person.email, password } }));
+      assert.equal(await sessionCount(person.id), before);
+    });
 
     await context.test(
       "attachment uses the existing Principal and retains no provider credential",
