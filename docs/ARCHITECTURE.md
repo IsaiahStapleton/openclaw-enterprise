@@ -23,6 +23,10 @@ flowchart LR
     Worker["Controller worker"] --> DB
     Worker --> IAM
     Worker --> Compute["ComputeDriver"]
+    Compute -. "optional delegation" .-> Sandbox["SandboxDriver"]
+    API -. "optional registration" .-> CredGW["CredentialGatewayDriver"]
+    Compute -. "attachments" .-> CredGW
+    CredGW -. "paired Backend" .-> Sandbox
     Config --> ConfigStore["Configuration storage"]
     Secret --> SecretStore["Secret storage"]
     Compute --> Gateway["Dedicated Agent Gateway: control-plane target"]
@@ -30,6 +34,7 @@ flowchart LR
     Namespace --> Harness["Dedicated Harness"]
     Namespace --> Embedded["Embedded Gateway and Harness"]
     Gateway --> Harness
+    Sandbox --> Harness
 ```
 
 OCC owns platform resources and desired state. Drivers operate the backing
@@ -38,7 +43,8 @@ infrastructure; they do not bypass OCC authorization or become resource owners.
 ## Platform resources
 
 Each deployment has one Installation. Its Namespaces contain Configurations,
-ServiceAccounts, Secrets, [Presets](reference/presets.md), and Agents. Each Agent owns immutable AgentRevisions.
+ServiceAccounts, Secrets, [credential sources](reference/credential-sources.md),
+[Presets](reference/presets.md), and Agents. Each Agent owns immutable AgentRevisions.
 References must stay within their admitted scope.
 
 [Concepts](guides/concepts.md) defines these resources and distinguishes platform
@@ -81,9 +87,17 @@ Agent plugin translation.
 and contracts; [selection](reference/drivers/selection.md) explains trusted package loading.
 
 Compute owns workload provisioning, readiness, activation, and retirement.
+An optional SandboxDriver participates through Compute's Namespace and revision
+lifecycle. It can prepare provider Namespace state and own a dedicated Harness;
+its revision cleanup runs before retirement completes, and its Namespace cleanup
+runs before Compute releases tenant infrastructure. An optional
+[CredentialGatewayDriver](reference/drivers/credential-gateway.md), paired with
+the Sandbox through one Backend, holds registered model credentials. Compute
+passes its per-revision attachments to the Sandbox and activates the revision
+only after the gateway reports them applied.
 Other Drivers may participate through bounded
 [Compute lifecycle hooks](flows/compute-driver-lifecycle-hooks.md).
-[Providers](reference/providers.md) supply authenticated clients to related Drivers.
+[Experimental Backends](reference/backends.md) supply authenticated clients to related Drivers.
 [PluginDriver](reference/drivers/plugin.md) resolves curated Agent plugin
 selections and renders native runtime policy during revision startup.
 

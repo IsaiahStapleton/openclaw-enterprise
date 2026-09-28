@@ -1,7 +1,7 @@
 ---
 created: "2026-09-20"
-updated: "2026-09-23"
-last_updated_session: "codex/01a0d075-a358-7620-8c16-fd4290acddf1"
+updated: "2026-09-27"
+last_updated_session: "codex/01a0b3bf-83a8-7392-ae2d-1a369b54ab3f"
 ---
 
 # Namespace IAM Policy Flow
@@ -88,13 +88,19 @@ identity. ServicePrincipal subjects must belong to that exact Namespace.
 
 The PostgreSQL state implementation writes Roles and AccessBindings through the
 same unit of work used by the API audit append. If commit outcome is unknown,
-OCC reports dependency failure rather than assuming policy state. Later
-authorization requests read the current policy through the IAM Driver.
-Namespace locking serializes grant creation with Namespace deletion; exact
-resource targets retain their existing deletion locks. Identity foreign keys
-protect persisted bindings without expanding application-role privileges.
+State discards the connection without another query. OCC reports dependency
+failure; a caller must not infer rollback or replay the mutation from that
+result. Later authorization requests read the current policy through the IAM
+Driver. Namespace locking serializes grant creation with Namespace deletion;
+exact resource targets retain their existing deletion locks. Identity foreign
+keys protect persisted bindings without expanding application-role privileges.
 The in-memory adapter accepts explicitly provisioned identities at construction
 and validates Agent-owned ServicePrincipals against its current Agent state.
+
+State also provides an opt-in Installation authority and native-IAM barrier
+for an original transaction. Its SQL supplier is unregistered, and the
+Namespace routes above do not use it. It does not protect these routes until the
+selected account, session, and policy writers join the same protocol.
 
 ## Debugging and Verification
 
@@ -104,6 +110,8 @@ and validates Agent-owned ServicePrincipals against its current Agent state.
   responses expose `servicePrincipalId` without accepting caller-supplied values.
 - `node --test tests/integration/postgres-namespace-iam-policy.test.mjs` checks
   PostgreSQL persistence, audit atomicity, and deletion behavior with real state.
+- `node --test tests/conformance/postgres-transaction-unknown-commit.test.mjs`
+  checks that an unknown commit does not wait for a later rollback query.
 - A `403` means the caller lacks Installation administration, exact Namespace
   read, or target read for binding creation. A `409` on Role deletion means a
   binding still references the Role.
@@ -120,6 +128,7 @@ and validates Agent-owned ServicePrincipals against its current Agent state.
 
 ## Changelog
 
+- 2026-09-27 19:15: Clarify unknown commit handling and the unregistered authority barrier. (codex/01a0b3bf-83a8-7392-ae2d-1a369b54ab3f - 181b0472f9a5a9d422035edf5121d3a15c200cb5)
 - 2026-09-23 22:56: Update source ownership for extracted IAM HTTP handlers; preserve admission and transaction boundaries. (codex/01a0d075-a358-7620-8c16-fd4290acddf1 - 4df9f9800836dc1c2b57afd5f8af4d91f55088d5)
 
 - 2026-09-23 08:44: Extend the managed grant path to existing humans and exact Namespace targets. (authoring-run/1d5da2d1-e61e-4277-bd91-037d64c10744 - 370570d788725a178a7441f8388a333c47c29798)
