@@ -2730,7 +2730,7 @@ test("administrator-created auth accounts sign in and receive only provisioned I
       return decision;
     }
     const groupIds = ["original-admin-evidence"];
-    groupIds[Symbol.iterator] = function* () {
+    groupIds[Symbol.iterator] = () => {
       throw new Error("the audit event must not use the supplied iterator");
     };
     return { ...decision, evidence: { ...decision.evidence, groupIds } };
