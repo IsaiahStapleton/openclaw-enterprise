@@ -1144,6 +1144,7 @@ summary:focus-visible {
   margin: 0;
 }
 .slack-directory-field {
+  position: relative;
   display: grid;
   gap: 0.5rem;
   margin-block: 1rem;
@@ -1200,6 +1201,10 @@ summary:focus-visible {
   line-height: 1.2;
 }
 .slack-directory-panel {
+  position: absolute;
+  z-index: 20;
+  inset: calc(100% + 4px) 0 auto;
+  background: var(--surface);
   display: grid;
   gap: 0.6rem;
   border: 1px solid var(--line);
@@ -1316,6 +1321,31 @@ summary:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+.plugin-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.plugin-loading::before {
+  content: "";
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: plugin-loading-spin 0.8s linear infinite;
+}
+@keyframes plugin-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-loading::before {
+    animation: none;
+  }
 }
 .plugin-browser-status button {
   flex-shrink: 0;
@@ -1703,9 +1733,55 @@ summary:focus-visible {
 .plugin-access-help {
   flex-shrink: 0;
 }
-.plugin-list-row .plugin-unavailable {
-  margin: 8px 4px 0;
-  font-size: 0.8125rem;
+.plugin-list-row {
+  position: relative;
+}
+.plugin-list-item:has(+ .plugin-unavailable-trigger) {
+  padding-right: 48px;
+}
+.plugin-unavailable-trigger {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.plugin-unavailable-trigger span {
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 13px;
+}
+.plugin-unavailable-popover {
+  inset: auto;
+  position-area: bottom span-right;
+  position-try-order: most-height;
+  position-try-fallbacks:
+    flip-inline,
+    flip-block,
+    flip-inline flip-block;
+  width: 20rem;
+  max-width: calc(100vw - 32px);
+  margin: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.plugin-unavailable-popover .plugin-unavailable {
+  margin: 0;
+  font-size: 0.875rem;
   overflow-wrap: anywhere;
 }
 .plugin-setup-reminder {

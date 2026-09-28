@@ -3710,14 +3710,19 @@ test("Agent detail saves plugin changes for the next revision without changing a
 
   // The draft edits Agent-owned selections. The admitted revision remains immutable.
   assert.equal(await page.getByLabel("Service account token for plugin discovery").count(), 0);
-  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
-  await dialog.getByRole("button", { name: "Configured plugins", exact: true }).waitFor();
-  assert.equal(
-    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/${agent.id}/plugins`).length,
-    0,
+  const pluginListPath = `/namespaces/${namespace.id}/agents/${agent.id}/plugins`;
+  assert.equal(pathRequests(requests, "POST", pluginListPath).length, 0);
+  const prefetched = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}${pluginListPath}` &&
+      response.request().method() === "POST",
   );
   capabilitiesRead.resolve();
+  assert.equal((await prefetched).status(), 200);
+  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  assert.equal(await dialog.isVisible(), false);
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  await dialog.getByRole("button", { name: "Configured plugins", exact: true }).waitFor();
   await dialog.getByRole("button", { name: "Calendar", exact: true }).click();
   await dialog.locator('details.plugin-tool-row[data-tool="app_calendar/events%2Flist"]').waitFor();
   assert.equal(
@@ -3726,7 +3731,7 @@ test("Agent detail saves plugin changes for the next revision without changing a
       .textContent(),
     "app_calendar/events%2Flist",
   );
-  const pluginListPath = `/namespaces/${namespace.id}/agents/${agent.id}/plugins`;
+  // Opening the picker reuses the first page already fetched with the saved Agent credential.
   assert.deepEqual(
     pathRequests(requests, "POST", pluginListPath).map(({ body }) => body),
     [{}],
@@ -3954,7 +3959,7 @@ test("Agent draft browses the curated catalog without a saved Secret", async (t)
   );
   await dialog.getByLabel("Search plugins", { exact: true }).fill("linear");
   assert.equal((await searched).status(), 200);
-  await dialog.locator('.plugin-browser[aria-busy="false"]').waitFor();
+  await dialog.locator('.plugin-list[aria-busy="false"]').waitFor();
   assert.deepEqual(
     await dialog
       .locator(".plugin-list-item")
@@ -5271,6 +5276,8 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   let releaseList;
   let listStarted;
   let holdList = false;
+  let holdPrefetch = true;
+  const prefetchRelease = Promise.withResolvers();
   const listPending = new Promise((resolve) => {
     listStarted = resolve;
   });
@@ -5344,6 +5351,10 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     }
     if (url.pathname.endsWith("/plugins/list")) {
       assert.equal(url.searchParams.get("scope"), "GLOBAL");
+      if (holdPrefetch) {
+        holdPrefetch = false;
+        await prefetchRelease.promise;
+      }
       if (holdList && options.headers.Authorization === "Bearer at-browser-plugin-one") {
         listStarted();
         await new Promise((resolve) => {
@@ -5411,6 +5422,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
       })),
     });
   });
+  t.after(() => prefetchRelease.resolve());
   t.after(() => releaseList?.());
   t.after(() => detailRelease.resolve());
   t.after(() => searchRelease.resolve());
@@ -5420,10 +5432,19 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
   await page.locator("#plugin-discovery-token > summary").click();
   const token = page.getByLabel("Token for plugin discovery", { exact: true });
+  const prefetched = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/agents/plugins") &&
+      request.postDataJSON()?.accessToken === "at-browser-plugin-one",
+  );
   await token.fill("at-browser-plugin-one");
+  await prefetched;
+  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  assert.equal(await dialog.isVisible(), false);
   const brokenImageRequest = page.waitForRequest(brokenLogoUrl);
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  await dialog.getByRole("status").filter({ hasText: "Loading available plugins…" }).waitFor();
+  prefetchRelease.resolve();
   async function closePluginDialog() {
     // The close handler restores focus; wait for it before using another credential control.
     const closed = dialog.evaluate(
@@ -5434,6 +5455,13 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   }
   const calendar = dialog.getByRole("button", { name: "Calendar", exact: true });
   await calendar.waitFor();
+  // Opening during prefetch shares its request instead of starting another first-page read.
+  assert.deepEqual(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/plugins`).map(
+      ({ body }) => body,
+    ),
+    [{ accessToken: "at-browser-plugin-one" }],
+  );
   const setup = dialog.locator(".plugin-access-help");
   await setup.getByText(/Service accounts/).waitFor();
   assert.match(await setup.textContent(), /App connection status is not verified/);
@@ -5450,14 +5478,26 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     assert.equal(await link.getAttribute("target"), "_blank");
     assert.equal(await link.getAttribute("rel"), "noopener noreferrer");
   }
-  // Access guidance is visible before opening details, with a separate actionable link.
+  // Unavailable guidance stays out of the row layout and is reachable without opening details.
   const unavailableRow = dialog.locator(".plugin-list-row").filter({
     has: page.getByRole("button", { name: "Admin-disabled", exact: true }),
   });
-  assert.match(
-    await unavailableRow.locator(".plugin-unavailable").textContent(),
-    /Disabled by a ChatGPT workspace administrator/,
+  const rowReason = unavailableRow.locator(".plugin-unavailable");
+  assert.equal(await rowReason.isVisible(), false);
+  const rowPopover = unavailableRow.locator(".plugin-unavailable-popover");
+  const unavailableHelp = unavailableRow.getByRole("button", {
+    name: "Why Admin-disabled is unavailable",
+    exact: true,
+  });
+  const rowHeight = await unavailableRow.evaluate((node) => node.getBoundingClientRect().height);
+  await unavailableHelp.focus();
+  await unavailableHelp.press("Enter");
+  await rowPopover.waitFor({ state: "visible" });
+  assert.equal(
+    await unavailableRow.evaluate((node) => node.getBoundingClientRect().height),
+    rowHeight,
   );
+  assert.match(await rowReason.textContent(), /Disabled by a ChatGPT workspace administrator/);
   const rowHelp = unavailableRow.getByRole("link", {
     name: "Manage workspace plugins",
     exact: true,
@@ -5466,7 +5506,23 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
     await rowHelp.getAttribute("href"),
     "https://chatgpt.com/admin/plugins?catalog=GLOBAL",
   );
+  assert.equal(await rowHelp.getAttribute("target"), "_blank");
+  assert.equal(await rowHelp.getAttribute("rel"), "noopener noreferrer");
   assert.equal(await rowHelp.evaluate((node) => node.closest("button") === null), true);
+  await page.keyboard.press("Tab");
+  assert.equal(await rowHelp.evaluate((node) => node === node.ownerDocument.activeElement), true);
+  await page.keyboard.press("Escape");
+  await rowPopover.waitFor({ state: "hidden" });
+  assert.equal(await dialog.isVisible(), true);
+  assert.equal(
+    await unavailableHelp.evaluate((node) => node === node.ownerDocument.activeElement),
+    true,
+  );
+  await unavailableHelp.click();
+  await rowPopover.waitFor({ state: "visible" });
+  await dialog.getByRole("heading", { name: "Configure plugins", exact: true }).click();
+  await rowPopover.waitFor({ state: "hidden" });
+  assert.equal(await dialog.isVisible(), true);
   const listLogo = calendar.locator(".plugin-logo img");
   await listLogo.evaluate((image) => image.decode());
   assert.ok(await listLogo.evaluate((image) => image.naturalWidth > 0));
@@ -5525,6 +5581,13 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   const beforeTyping = catalogRequests().length;
   // Typing coalesces into one catalog search 300 ms after the last edit, without the old cursor.
   await search.fill("lin");
+  await dialog.getByRole("status").filter({ hasText: "Searching plugins…" }).waitFor();
+  assert.equal(
+    await dialog
+      .getByText(/^(No plugins were returned\.|Load plugins to browse available choices\.)$/)
+      .count(),
+    0,
+  );
   await page.clock.runFor(200);
   await search.fill("linear");
   await page.clock.runFor(299);
@@ -5554,6 +5617,13 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await search.fill("slow");
   await page.clock.runFor(300);
   await searchStarted.promise;
+  await dialog.getByRole("status").filter({ hasText: "Searching plugins…" }).waitFor();
+  assert.equal(
+    await dialog
+      .getByText(/^(No plugins were returned\.|Load plugins to browse available choices\.)$/)
+      .count(),
+    0,
+  );
   await search.fill("linear");
   await staleSearchCanceled;
   searchRelease.resolve();
@@ -5578,6 +5648,12 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   // Selecting a plugin loads its tools; a rejected upstream body stays private and is retryable.
   await calendar.click();
   await detailStarted.promise;
+  await dialog.getByRole("status").filter({ hasText: "Loading tools…" }).waitFor();
+  assert.equal(await dialog.getByText(/^Tool list unavailable\./).count(), 0);
+  assert.equal(
+    await dialog.getByText("Load tools to check this plugin before selecting it.").count(),
+    0,
+  );
   const heading = dialog.getByRole("heading", { name: "Calendar", exact: true });
   // Loading and completion replace the detail pane without losing the keyboard entry point.
   try {
@@ -5649,16 +5725,8 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   await search.press("Enter");
   await calendar.waitFor();
 
-  // Closing cancels an older page request before changing credentials; explicit selections survive.
-  holdList = true;
-  const stalePageCanceled = page.waitForEvent("requestfailed", {
-    predicate: (request) =>
-      request.url().endsWith("/agents/plugins") && request.postDataJSON()?.cursor === "page-two",
-  });
-  await dialog.getByRole("button", { name: "Next page", exact: true }).click();
-  await listPending;
+  // A credential edit cancels background discovery; explicit plugin selections survive.
   await closePluginDialog();
-  await stalePageCanceled;
   await token.fill("");
   const clearedSetup = page.locator(".plugin-access-help");
   assert.equal(await clearedSetup.locator("a").count(), 0);
@@ -5666,19 +5734,39 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   assert.equal(await reminder.isVisible(), false);
   assert.equal(await reminder.locator("a").count(), 0);
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
+  holdList = true;
+  const stalePrefetchCanceled = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      request.url().endsWith("/agents/plugins") &&
+      request.postDataJSON()?.accessToken === "at-browser-plugin-one",
+  });
+  await token.fill("at-browser-plugin-one");
+  await page.clock.runFor(300);
+  await listPending;
+  assert.equal(await dialog.isVisible(), false);
   await token.fill("at-browser-plugin-two");
+  await stalePrefetchCanceled;
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  await page.clock.runFor(300);
   await dialog.getByRole("button", { name: "New-account-plugin", exact: true }).waitFor();
   releaseList();
   await dialog.getByRole("button", { name: "New-account-plugin", exact: true }).waitFor();
-  assert.equal(await dialog.getByRole("button", { name: "Documents", exact: true }).count(), 0);
+  assert.equal(await calendar.count(), 0);
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), selected);
   await closePluginDialog();
   assert.equal(await dialog.isVisible(), false);
   // Selecting a saved PAT sends only its reference to OCC for both list and detail reads.
   holdList = false;
   await token.fill("");
+  const selectedPrefetch = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/agents/plugins") &&
+      response.request().postDataJSON()?.secretRef?.id === firstSecret.ref.id,
+  );
   await selectSecret(page, "Service account token Secret", firstSecret);
+  await page.clock.runFor(300);
+  assert.equal((await selectedPrefetch).status(), 200);
+  assert.equal(await dialog.isVisible(), false);
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
   await calendar.waitFor();
   await calendar.click();
@@ -5698,6 +5786,7 @@ test("Create Agent discovers hosted plugins with a transient PAT through the sel
   // Switching the saved Secret discards the previous account's catalog and reloads with the new one.
   await selectSecret(page, "Service account token Secret", secondSecret);
   await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  await page.clock.runFor(300);
   await dialog.getByRole("button", { name: "New-account-plugin", exact: true }).waitFor();
   assert.equal(await calendar.count(), 0);
   assert.deepEqual(
@@ -7170,22 +7259,27 @@ test("method-only codex_pat Preset requires credential entry in the create form"
   assert.deepEqual(created.harnessAuth, { method: "codex_pat", source: modelSecret.ref });
 });
 
-test("Create Agent model credential picker creates one Secret and reuses it after an Agent conflict", async (t) => {
+test("Create Agent reuses its PAT Secret and resumes plugin prefetch after an Agent conflict", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
+  const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("plugin", driver.id);
   const namespace = await fixture.createNamespace("Create credential picker", { ready: true });
   await fixture.createAgent(namespace.id, "Existing picker Agent");
   const { page } = await newPage(t, fixture);
-  await routeInstallationWithoutProvisioning(page, fixture);
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByLabel("Agent name", { exact: true }).fill("Existing picker Agent");
+  await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
+  await page.clock.install({ time: new Date("2026-09-27T12:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-09-27T12:00:01Z"));
   const secretValue = "picker-created-model-token";
   const modelSecret = await createModelCredentialSecret(page, secretValue);
   assert.ok(modelSecret);
   assert.equal(
-    await page.getByLabel("API key Secret", { exact: true }).inputValue(),
+    await page.getByLabel("Service account token Secret", { exact: true }).inputValue(),
     secretOptionLabel(modelSecret),
   );
   assert.equal(
@@ -7201,6 +7295,16 @@ test("Create Agent model credential picker creates one Secret and reuses it afte
   await model.fill("gpt-5.1");
   await model.press("Tab");
 
+  const submitStarted = Promise.withResolvers();
+  const submitRelease = Promise.withResolvers();
+  t.after(() => submitRelease.resolve());
+  await page.route(`${fixture.origin}/namespaces/${namespace.id}/agents`, async (route) => {
+    if (route.request().method() === "POST") {
+      submitStarted.resolve();
+      await submitRelease.promise;
+    }
+    await route.continue();
+  });
   const save = page.getByRole("button", { name: "Create Agent", exact: true });
   const conflict = page.waitForResponse(
     (response) =>
@@ -7208,9 +7312,27 @@ test("Create Agent model credential picker creates one Secret and reuses it afte
       response.request().method() === "POST",
   );
   await save.click();
+  await submitStarted.promise;
+  // A prefetch due during submission must resume after the real duplicate-name rejection.
+  await page.clock.runFor(300);
+  const catalogPath = `/namespaces/${namespace.id}/agents/plugins`;
+  assert.equal(pathRequests(requests, "POST", catalogPath).length, 0);
+  submitRelease.resolve();
   assert.equal((await conflict).status(), 409);
   await page.getByText(/conflicts with the saved state/).waitFor();
   assert.equal(secretPostRequests(requests, namespace.id).length, 1);
+  const prefetched = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}${catalogPath}` &&
+      response.request().method() === "POST",
+  );
+  await page.clock.runFor(300);
+  assert.equal((await prefetched).status(), 200);
+  const plugins = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  assert.equal(await plugins.isVisible(), false);
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  await plugins.getByRole("button", { name: "Linear", exact: true }).waitFor();
+  await plugins.getByRole("button", { name: "Done", exact: true }).click();
 
   await page.getByLabel("Agent name", { exact: true }).fill("Picker credential Agent");
   const createdResponse = page.waitForResponse(
@@ -7226,7 +7348,7 @@ test("Create Agent model credential picker creates one Secret and reuses it afte
     name: "Existing picker Agent model credential",
     value: secretValue,
   });
-  assert.deepEqual(created.harnessAuth, { method: "api_key", source: modelSecret.ref });
+  assert.deepEqual(created.harnessAuth, { method: "codex_pat", source: modelSecret.ref });
   assert.equal(agentPostRequests(requests, namespace.id).length, 2);
 });
 
