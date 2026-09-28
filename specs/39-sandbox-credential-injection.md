@@ -204,8 +204,8 @@ credentialGatewayId, sourceType, loginMode }` in the revision. The source type's
 gateway selected, secret-backed `harnessAuth` methods return 409; there is no
 fallback to environment delivery. Proposed: a list of non-model sources per Agent.
 
-IAM follows existing Secret patterns. Source create, read, update, and delete are
-exact-resource actions. Registration also requires `operate` on each referenced
+IAM follows existing Secret patterns. Source read and delete are exact-resource
+actions; create is checked on the Namespace. Registration also requires `operate` on each referenced
 OCC Secret. Binding a source to an Agent requires `operate` on the source for the
 actor, and admission also requires it for `Agent.servicePrincipalId`.
 
@@ -306,8 +306,8 @@ startup model probe checks the path before readiness
 - Missing attachment readiness keeps the candidate inactive.
 - A proxy endpoint mismatch fails the request; the Harness startup probe keeps
   the Pod unready.
-- A pending withdrawal remains visible in attachment status and is retried;
-  it never reports success early.
+- Proposed: a pending withdrawal remains visible in attachment status and is
+  retried; it never reports success early.
 
 ## Differences from PR #386
 

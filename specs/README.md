@@ -50,7 +50,7 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 [Credential Gateway Driver](39-sandbox-credential-injection.md) — Implementing; first slice in #461;
 Namespace credential sources attached to Agent revisions, with OpenShell
-injecting credentials outside the workload; static and OAuth2 refresh first.
+injecting credentials outside the workload; only the `openai` static type ships.
 
 [Agent access](36-agent-access.md) — Proposed; existing-person sharing for trusted
 full native administration, followed by atomic enrollment and granular permissions.
