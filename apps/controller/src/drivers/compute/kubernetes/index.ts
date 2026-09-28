@@ -119,6 +119,7 @@ import {
   NETWORK_PROFILE_LABEL,
   ORDINARY_NETWORK_PROFILE,
   ordinaryNetworkPolicySelector,
+  withoutNetworkProfile,
 } from "./resources/network.ts";
 import {
   REPOSITORY_CLIENT_BIN,
@@ -180,6 +181,11 @@ interface KubernetesApiClients {
 
 export const MINIMUM_KUBERNETES_VERSION = "1.35.0";
 const MINIMUM_KUBERNETES_VERSION_PARTS = [1, 35, 0] as const;
+/** The profile-free workspace-node selector written before explicit network
+ * profiles. Namespaces provisioned before the upgrade keep it. */
+const LEGACY_WORKSPACE_NODE_POLICY_SELECTOR: {
+  readonly matchLabels: Readonly<Record<string, string>>;
+} = { matchLabels: { "openclaw.dev/workload-role": "agent" } };
 
 interface LifecycleOwnerSelection {
   readonly driver: Driver;
@@ -2686,11 +2692,33 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayNamespace,
     );
     if (embedded) {
+      // The serving embedded Gateway is replaced only on activation, which then
+      // re-applies these policies. Until then a Gateway from a pre-profile
+      // template keeps its model and repository egress.
+      const unprofiledGateway =
+        existingGateway !== undefined &&
+        existingGatewayRevisionId !== revision.id &&
+        asRecord(asRecord(asRecord(existingGateway.spec?.template)?.metadata)?.labels)?.[
+          NETWORK_PROFILE_LABEL
+        ] !== ORDINARY_NETWORK_PROFILE;
+      const runtimePolicy = `allow-agent-runtime-${sha256Hex(revision.agentId, 12)}`;
       for (const { resource: policy, namespace: target } of this.agentNetworkPolicies(
         revision,
         namespace,
       )) {
-        await this.reconcile(policy, gatewayOwnership, target);
+        await this.reconcile(
+          unprofiledGateway && policy.metadata.name === runtimePolicy
+            ? {
+                ...policy,
+                spec: {
+                  ...policy.spec,
+                  podSelector: withoutNetworkProfile(asRecord(policy.spec?.podSelector)),
+                },
+              }
+            : policy,
+          gatewayOwnership,
+          target,
+        );
       }
     } else if (this.options.runtime !== undefined) {
       for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
@@ -5655,8 +5683,33 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const name = this.workspaceNodeName(revision);
     const ownership = this.pluginRuntimeOwnership(revision);
     const namespaceOwnership = { namespaceId: revision.namespaceId };
+    const nodePolicy = this.workspaceNodeNetworkPolicy(namespaceOwnership, namespace);
+    const existingNodePolicy = await this.getOwned(
+      "NetworkPolicy",
+      nodePolicy.metadata.name,
+      namespace,
+      namespaceOwnership,
+    );
+    // allow-node-gateway is namespace-wide but written while preparing one
+    // Agent. Narrowing a pre-profile policy here would strip workspace-node
+    // egress from every other Agent's unprofiled Pods, so it keeps its exact
+    // legacy selector until the namespace is recreated.
+    const legacy =
+      existingNodePolicy !== undefined &&
+      isDeepStrictEqual(
+        existingNodePolicy.spec?.podSelector,
+        LEGACY_WORKSPACE_NODE_POLICY_SELECTOR,
+      );
     await this.reconcile(
-      this.workspaceNodeNetworkPolicy(namespaceOwnership, namespace),
+      legacy
+        ? {
+            ...nodePolicy,
+            spec: {
+              ...nodePolicy.spec,
+              podSelector: structuredClone(LEGACY_WORKSPACE_NODE_POLICY_SELECTOR),
+            },
+          }
+        : nodePolicy,
       namespaceOwnership,
       namespace,
     );

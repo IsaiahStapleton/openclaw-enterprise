@@ -8774,3 +8774,198 @@ test("ordinary network profile selectors remain detached across caller results",
   assert.equal(second.spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
   assert.equal(second.spec.podSelector.matchLabels["openclaw.dev/agent"], revision.agentId);
 });
+
+// Namespaces provisioned before the explicit profile keep their namespace-wide
+// policies: allow-dns selected every Pod and allow-gateway-ingress and
+// allow-node-gateway selected only the workload role. Preparing one Agent must
+// not narrow them, or every other Agent's unprofiled Pods lose DNS, Gateway
+// ingress and workspace-node egress.
+function preProfilePolicy(policy) {
+  const legacy = structuredClone(policy);
+  legacy.metadata.uid = `${policy.metadata.namespace}-${policy.metadata.name}-legacy-uid`;
+  legacy.metadata.resourceVersion = "1";
+  legacy.spec.podSelector =
+    policy.metadata.name === "allow-dns" || policy.metadata.name === "default-deny"
+      ? {}
+      : { matchLabels: withProfile(policy.spec.podSelector.matchLabels, undefined) };
+  return legacy;
+}
+
+for (const embedded of [true, false]) {
+  test(`${embedded ? "embedded" : "dedicated"} preparation keeps pre-profile namespace grants for every Agent`, async () => {
+    const { driver, revision, namespace, objects, records, context } =
+      workspaceSetupFixture(embedded);
+    const execution = { name: namespace, plane: "execution" };
+    const control = { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" };
+    const ownership = { namespaceId: tenant.id };
+    const legacy = [
+      ...driver.networkPolicies(ownership, execution),
+      ...driver.networkPolicies(ownership, control),
+      driver.workspaceNodeNetworkPolicy(ownership, execution),
+    ].map(preProfilePolicy);
+    for (const policy of legacy) {
+      objects.set(`NetworkPolicy:${policy.metadata.namespace}:${policy.metadata.name}`, policy);
+    }
+
+    await driver.prepareRevision(revision, context);
+
+    const stored = (policy) =>
+      objects.get(`NetworkPolicy:${policy.metadata.namespace}:${policy.metadata.name}`);
+    for (const policy of legacy) {
+      const current = stored(policy);
+      assert.equal(current.metadata.uid, policy.metadata.uid);
+      assert.deepEqual(current.spec, policy.spec, `${policy.metadata.name} must keep its selector`);
+    }
+    const namespaceWide = new Set(legacy.map(({ metadata }) => metadata.name));
+    assert.equal(
+      records.some(
+        ({ kind, metadata }) =>
+          kind === "NetworkPolicy" &&
+          namespaceWide.has(metadata.name) &&
+          metadata.name !== "allow-node-gateway",
+      ),
+      false,
+      "preparation must not write namespace-wide DNS, deny or Gateway ingress policies",
+    );
+    if (!embedded) {
+      // The workspace-node policy is reconciled on every dedicated preparation.
+      assert.equal(
+        records.some(({ metadata }) => metadata.name === "allow-node-gateway"),
+        true,
+      );
+    }
+
+    // Pods from the prepared Agent's new templates carry the profile; its
+    // previous Pods and every other Agent's Pods predate it.
+    const templates = [...objects.values()]
+      .filter(({ kind }) => kind === "Deployment")
+      .map((deployment) => deployment.spec.template.metadata.labels);
+    assert.equal(templates.length, embedded ? 1 : 2);
+    for (const labels of templates) {
+      assert.equal(labels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+    }
+    const others = ["gateway", "agent"].map((role) => ({
+      "openclaw.dev/namespace": tenant.id,
+      "openclaw.dev/workload-role": role,
+      "openclaw.dev/agent": "another-agent",
+      "openclaw.dev/revision": "another-revision",
+    }));
+    const pods = [
+      ...templates,
+      ...templates.map((labels) => withProfile(labels, undefined)),
+      ...others,
+    ];
+    const byName = (name, target) =>
+      stored({ metadata: { name, namespace: target.name } }).spec.podSelector;
+    for (const labels of pods) {
+      const role = labels["openclaw.dev/workload-role"];
+      for (const target of [execution, control]) {
+        assert.equal(selectorMatches(byName("allow-dns", target), labels), true);
+        assert.equal(
+          selectorMatches(byName("allow-gateway-ingress", target), labels),
+          role === "gateway",
+        );
+      }
+      assert.equal(
+        selectorMatches(byName("allow-node-gateway", execution), labels),
+        role === "agent",
+      );
+    }
+
+    // Per-Agent grants are re-rendered with the profile and select the new templates.
+    const perAgent = records.filter(
+      ({ kind, metadata }) => kind === "NetworkPolicy" && !namespaceWide.has(metadata.name),
+    );
+    assert.notEqual(perAgent.length, 0);
+    for (const policy of perAgent) {
+      const selector = policy.spec.podSelector;
+      assert.equal(selector.matchLabels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+      assert.equal(
+        templates.some((labels) => selectorMatches(selector, labels)),
+        true,
+        `${policy.metadata.name} must select a prepared template`,
+      );
+      assert.equal(
+        others.some((labels) => selectorMatches(selector, labels)),
+        false,
+        `${policy.metadata.name} must not select another Agent`,
+      );
+    }
+
+    // New namespaces are narrowed: unprofiled Pods receive no ordinary grant.
+    for (const policy of [
+      ...driver.networkPolicies(ownership, execution),
+      driver.workspaceNodeNetworkPolicy(ownership, execution),
+    ]) {
+      if (policy.metadata.name === "default-deny") {
+        continue;
+      }
+      for (const labels of others) {
+        assert.equal(selectorMatches(policy.spec.podSelector, labels), false);
+      }
+    }
+  });
+}
+
+test("dedicated preparation keeps a profiled workspace-node policy narrowed", async () => {
+  const { driver, revision, namespace, objects, context } = workspaceSetupFixture(false);
+  const key = `NetworkPolicy:${namespace}:allow-node-gateway`;
+  const current = driver.workspaceNodeNetworkPolicy(
+    { namespaceId: tenant.id },
+    { name: namespace, plane: "execution" },
+  );
+  for (const podSelector of [current.spec.podSelector, {}]) {
+    const seeded = structuredClone(current);
+    seeded.metadata.uid = "node-policy-uid";
+    seeded.spec.podSelector = structuredClone(podSelector);
+    objects.set(key, seeded);
+    await driver.prepareRevision(revision, context);
+    // Only the exact pre-profile selector is preserved; anything else is repaired.
+    assert.deepEqual(objects.get(key).spec.podSelector, current.spec.podSelector);
+  }
+});
+
+test("embedded preparation keeps model egress for a serving pre-profile Gateway until activation", async () => {
+  const { driver, revision, namespace, objects, records, state, context } =
+    workspaceSetupFixture(true);
+  await driver.prepareRevision(revision, context);
+  const gatewayKey = `Deployment:${namespace}:gateway-${digest(revision.agentId)}`;
+  const runtimeKey = `NetworkPolicy:${namespace}:allow-agent-runtime-${digest(revision.agentId)}`;
+  // The serving Gateway was rendered before the explicit profile existed.
+  const serving = objects.get(gatewayKey);
+  serving.spec.template.metadata.labels = withProfile(
+    serving.spec.template.metadata.labels,
+    undefined,
+  );
+  const servingLabels = serving.spec.template.metadata.labels;
+  const replacement = { ...revision, id: "embedded-replacement", revision: revision.revision + 1 };
+  const replacementContext = { ...context, ...authContext(replacement) };
+  records.length = 0;
+  await driver.prepareRevision(replacement, replacementContext);
+  const retained = objects.get(runtimeKey);
+  assert.equal(retained.spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL], undefined);
+  assert.equal(selectorMatches(retained.spec.podSelector, servingLabels), true);
+  assert.equal(
+    selectorMatches(retained.spec.podSelector, { ...servingLabels, "openclaw.dev/agent": "other" }),
+    false,
+  );
+  assert.deepEqual(objects.get(gatewayKey).spec.template.metadata.labels, servingLabels);
+
+  // Activation replaces the Gateway with a profiled template, then narrows the grant.
+  state.ready = true;
+  await driver.activateRevision(replacement, replacementContext);
+  const replaced = objects.get(gatewayKey).spec.template.metadata.labels;
+  assert.equal(replaced[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+  const narrowed = objects.get(runtimeKey).spec.podSelector;
+  assert.equal(narrowed.matchLabels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+  assert.equal(selectorMatches(narrowed, servingLabels), false);
+  assert.equal(selectorMatches(narrowed, replaced), true);
+
+  // With a profiled Gateway serving, preparation keeps the grant narrowed.
+  const next = { ...replacement, id: "embedded-next", revision: replacement.revision + 1 };
+  await driver.prepareRevision(next, { ...context, ...authContext(next) });
+  assert.equal(
+    objects.get(runtimeKey).spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL],
+    ORDINARY_PROFILE,
+  );
+});
