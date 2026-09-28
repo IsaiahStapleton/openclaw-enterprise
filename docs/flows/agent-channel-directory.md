@@ -76,8 +76,12 @@ An incomplete page cannot establish that a name is absent or unique.
 `apps/controller/src/console/channels/slack.mjs:appendFields`,
 `apps/controller/src/console/agents/slack-directory.mjs:createSlackDirectoryField`
 
-The Console debounces typing and shows each candidate's name, exact ID, and
-workspace. It buffers the provider's complete returned batch and divides it into
+The Console presents bot-token selection before channel access and explains that
+name lookup needs that token. It debounces typing and shows each candidate's name,
+exact ID, and workspace. The directory result panel overlays the form, following
+the Secret picker pattern in `apps/controller/src/console/console.css`. Closing
+results on focus loss cancels pending searches without moving the clicked control;
+name-status hints retain their layout space while results are open. It buffers the provider's complete returned batch and divides it into
 [display pages](../reference/drivers/slack-channel.md). Previous and Next reuse
 those pages before Next follows the provider cursor. An empty provider page with
 a continuation still offers Next. New input, dismissal, or a changed Secret
@@ -91,6 +95,15 @@ when the editor opens or the selected Secret changes. A denied or failed lookup 
 exact-ID entry available; no directory result changes the saved Configuration
 until the operator saves the channel edit.
 
+When Agent detail performs a browser-refocus access check, it keeps the mounted
+view. The picker keeps its open query and results while controls are temporarily
+inert; moving focus to another Console control closes the list. Read-only
+directory lookups do not invalidate tab retention, so a completed search can
+keep its picker when switching Agent tabs and returning.
+Those results are from the last authorized lookup. A new search rechecks the
+exact edit target and Secret `operate` grant, and denied Agent access removes the
+view.
+
 ## Debugging and Verification
 
 - A denied lookup requires checking the exact edit permission and Secret
@@ -102,6 +115,8 @@ until the operator saves the channel edit.
 - Directory conformance tests cover provider pagination and safe errors. The
   OCC API integration test covers both authorization checks and response
   projection. Browser checks cover name display and exact-ID saving.
+- The Agent plugin approver browser check holds the refocus access read and
+  verifies that an open directory search remains available without a second lookup.
 - Fixture and simulated provider tests do not prove a live Slack token, bot
   visibility, or channel message delivery.
 
@@ -117,6 +132,10 @@ until the operator saves the channel edit.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 23:35: Put credentials first and prevent result dismissal from moving form controls during a click. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - bb11b3974bc7ec80db1dd4cfab4e1a166e386de3)
+
+- 2026-09-27 22:07: Preserve open Slack directory results through Console refocus checks. (01a0e4c7-ee1f-79a1-a8dd-9e423c47d564 - f56e99c912e9c77a23b7d5f02e765a35dc1f5fce)
 
 - 2026-09-27 21:52: Buffer directory results for compact pages and cancel superseded browser searches. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - 1e1628335710f7bcb66e0c3d0d6bdc35b6a0baaf)
 

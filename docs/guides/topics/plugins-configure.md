@@ -23,6 +23,11 @@ for the result. Catalog visibility alone does not prove that the plugin is
 installed or available to the running Agent. Hosted discovery uses the Agent's
 current draft credential, which may differ from its running revision's.
 
+For an unavailable plugin, use the information button beside its row to open the
+reason and any setup link. Press Escape or click outside to dismiss the popover.
+Selecting the row also shows this guidance in the detail pane; **Add** stays
+disabled.
+
 The default approval menu follows the selected Driver's capabilities. Codex
 offers all four choices; embedded OpenClaw disables `all_actions` and
 `write_actions`. The API rejects those unsupported values as well.

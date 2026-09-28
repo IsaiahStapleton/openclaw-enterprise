@@ -686,7 +686,8 @@ export const scenarios = {
       { selector: "#provider-credential-secret", value: "sec_storybook_pat" },
       click("Configure plugins"),
     ],
-    description: "The selected Secret enables discovery without entering a separate token.",
+    description:
+      "Selecting the Secret starts catalog discovery before the picker opens, without entering a separate token.",
     steps: [
       "Choose Calendar to load its details, then click Done and select another Secret to clear the catalog.",
       "Without a selected Secret, the optional token field remains available for a preview.",
@@ -765,14 +766,67 @@ export const scenarios = {
     pluginCapabilities,
     actions: pluginDiscoveryForm,
     description:
-      "The actual form lists the first catalog page, places enableable plugins first, and retains unavailable entries with their reason. Selecting a plugin loads its tools before Add becomes available.",
+      "The actual form lists the first catalog page, places enableable plugins first, and keeps unavailable rows compact with reasons in popovers. Selecting a plugin loads its tools before Add becomes available.",
     steps: [
       "Review the Driver's workspace access and service account setup guidance. Connection status is unverified; catalog availability does not confirm linked credentials. External help links open separately from plugin navigation.",
-      "Compare the administrator, plan, and unsupported-runtime reasons in the list. Choose each unavailable plugin to see its reason and help link in detail; Add stays disabled.",
+      "Open the information button beside each unavailable plugin to compare its administrator, plan, or unsupported-runtime reason and help link. Escape or a click outside dismisses the popover. Choose the plugin row to see the same guidance in detail; Add stays disabled.",
       "Available and Configured share a compact sidebar; page controls stay below the scrolling list. Next page and Previous page navigate server pages.",
       "Choose Calendar to load its tools and inspect their IDs beneath the titles, then Add Calendar. Configure its plugin defaults and expand a tool to override them.",
       "Type create into Filter tools: only Create event remains, and the caret stays after the text. Clear it to restore the other tools. Search plugins for Documents before visiting its catalog page, then clear the query.",
       "Click Done and expand Plugin selections JSON: one heading labels a bounded monospace editor. Replacing the dummy token or authentication method clears discovery results and preserves selections.",
+    ],
+    gap: pluginDiscoveryGap,
+  },
+  createPluginsPrefetch: {
+    group: "Pages/Create Agent",
+    name: "Preload plugins after entering a service account token",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: pluginDiscoveryForm.slice(0, -1),
+    description:
+      "Entering the dummy service account token starts the first catalog request while Configure plugins stays closed.",
+    steps: [
+      "Open Configure plugins after the background request completes. Calendar appears without another first-page request.",
+      "Close the picker, replace the dummy token, and reopen it. The new credential gets a fresh catalog; previous selections remain.",
+    ],
+    gap: pluginDiscoveryGap,
+  },
+  createPluginsSearchLoading: {
+    group: "Pages/Create Agent",
+    name: "Plugin search loading",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: [
+      ...pluginDiscoveryForm,
+      { selector: 'button[aria-label="Calendar"]', focus: true },
+      { selector: "#plugin-search", value: "Documents", focus: true },
+    ],
+    rules: [{ suffix: "/agents/plugins", method: "POST", skip: 1, hold: true }],
+    description:
+      "Search shows a loading state immediately while waiting for the debounce and held catalog request, without a no-results message.",
+    steps: [
+      "Confirm the search field keeps Documents and its focus while the catalog indicates that results are loading.",
+      "Type another query while loading. The field remains usable and the obsolete search is canceled.",
+      "Close the picker to cancel the request. Reset the story before the simulated request reaches its timeout to capture the pending state again.",
+    ],
+    gap: pluginDiscoveryGap,
+  },
+  createPluginsToolsLoading: {
+    group: "Pages/Create Agent",
+    name: "Plugin tools loading",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: [...pluginDiscoveryForm, { selector: 'button[aria-label="Calendar"]', click: true }],
+    rules: [{ suffix: "/agents/plugins/details", method: "POST", hold: true }],
+    description:
+      "Selecting Calendar shows a pending tool lookup instead of reporting that its tools are unavailable. Add stays disabled until details arrive.",
+    steps: [
+      "Confirm Calendar's detail panel announces loading tools and keeps Add Calendar disabled.",
+      "Compare Load plugin tools for the completed result and Plugin tool discovery failed for a retryable failure.",
+      "Close the picker to cancel the request. Reset the story to review the pending state again.",
     ],
     gap: pluginDiscoveryGap,
   },
@@ -985,6 +1039,26 @@ export const scenarios = {
       "Review the Driver-specific policy fields supplied by the capability descriptor.",
       "Expand Create event, change a tool setting, then click Done and inspect Plugin selections JSON.",
       "Reopen Configure plugins, click inside its padding, then click the gray backdrop. Only the backdrop closes it; selections remain and focus returns to Configure plugins.",
+    ],
+    gap: pluginPreviewGap,
+  },
+  pluginsUnavailableReasonPopover: {
+    group: "Components/Plugins",
+    name: "Unavailable reason popover",
+    component: "plugins",
+    pluginCatalog,
+    pluginCapabilities,
+    actions: [
+      click("Configure plugins"),
+      { selector: 'button[aria-label="Why Team chat is unavailable"]', focus: true },
+    ],
+    description:
+      "Unavailable plugins keep compact rows. The information button opens the Driver's reason and help link without selecting the plugin or changing the list layout.",
+    steps: [
+      "Open Team chat's information button to review its administrator guidance and Manage workspace plugins link without following the external destination during fixture review.",
+      "Press Escape to dismiss the popover while keeping Configure plugins open. Focus the information button and press Enter to reopen it; click outside to dismiss it.",
+      "Open the information buttons for Analytics and Archive to compare plan and unsupported-runtime guidance. The list keeps its row heights as each popover opens.",
+      "Choose the Team chat row. Its detail pane retains the reason and help link, and Add Team chat stays disabled.",
     ],
     gap: pluginPreviewGap,
   },
@@ -1806,7 +1880,7 @@ export const scenarios = {
     description:
       "Edit Agent-owned plugin selections on the draft while the admitted version keeps its original snapshot.",
     steps: [
-      "Review Calendar's saved policy. The catalog loads from the Agent's saved Service Accounts token.",
+      "The first catalog page loads in the background when the Plugins tab opens, using the saved Service Accounts token. Open Configure plugins to review Calendar's saved policy.",
       "Open Calendar and inspect the tool IDs beneath their titles. Type create into Filter tools, then clear it; filtering should keep the cursor in the search box.",
       "In Configure plugins, change Calendar's tool policy, add Documents from the next page, and select Done.",
       "Select Save plugin selections, then Deploy new version. Compare the new version with the earlier immutable plugin snapshot.",
@@ -1873,12 +1947,19 @@ export const scenarios = {
     agentPluginApprovers: [],
     pluginCapabilities,
     actions: [
+      { selector: '.content [aria-live="polite"][aria-busy="false"]' },
       click("Plugins"),
       { selector: 'select[aria-label="Default plugin approvers mode"]', value: "chosen" },
       { selector: '[aria-label="Default plugin approvers people"]', focus: true },
+      { selector: '[aria-label="Default plugin approvers people"]', value: "Alex" },
+      { selector: '[aria-label="Default plugin approvers people results"] [role="option"]' },
     ],
     description:
-      "The selected bot Secret resolves names within Demo workspace. Duplicate Alex Chen results show their distinct user IDs; choosing one saves a team-qualified selector.",
+      "The selected bot Secret resolves names within Demo workspace. The open Alex search keeps its results on browser refocus; choosing one saves a team-qualified selector.",
+    steps: [
+      "Switch to another browser tab and return. The open query and results remain while Agent access is checked.",
+      "Move focus to another Console control to close the list, then focus the search field to reopen it.",
+    ],
     gap: "The fixture simulates directory data; it does not contact Slack or read a real Secret.",
   },
   pluginsAdmitted: {
@@ -2250,7 +2331,7 @@ export const scenarios = {
     slack: true,
     actions: [click("Edit Slack")],
     description:
-      "Edit channels, users, mention requirement, and enabled state. Token references remain fixed; token values belong in Credentials.",
+      "Select or create Slack token Secrets at the top, then configure channel and direct-message access. The bot token enables name lookup; both tokens are required before deployment.",
     steps: [
       "Change the channel IDs, then click inside the panel and drag from its heading onto the gray backdrop. The editor stays open.",
       "Click the gray backdrop. Reopen Edit Slack and confirm the unsaved channel changes were discarded, just as with Cancel.",
@@ -2267,6 +2348,7 @@ export const scenarios = {
     steps: [
       "Use Next page to see design and engineering, then Previous page to restore the first five without another directory request.",
       "Use Next page twice to fetch product and announcements. Type platform and select its result.",
+      "Type another query, then click Save configuration once while results are open. The dropdown closes without moving Save, and only selected channel chips are saved.",
     ],
     gap: "Directory data and Secret access are simulated; no Slack API call occurs.",
   },
@@ -2353,8 +2435,14 @@ export const scenarios = {
     path: `${draft}&tab=channels`,
     slack: true,
     slackBindings: "app",
-    actions: [click("Edit Slack"), { selector: "#slack-channel-ids-search", focus: true }],
-    description: "The picker explains that a Slack bot token Secret must be selected first.",
+    actions: [click("Edit Slack")],
+    description:
+      "Credentials appear before access settings. The instructions explain that name lookup needs a bot token; exact-ID entry remains available.",
+    steps: [
+      "At the top of the editor, open Slack bot token and choose Slack bot token (simulated). Existing IDs resolve to names.",
+      "Continue to Channels, search for platform, and select the result. Review channel and direct-message access before saving.",
+    ],
+    gap: "Secret choices and directory responses are simulated; this does not verify a real Slack token.",
   },
   slackEveryone: {
     group: "Components/Channels",

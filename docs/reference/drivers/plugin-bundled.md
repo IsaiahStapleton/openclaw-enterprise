@@ -34,9 +34,9 @@ drivers:
 The curated catalog includes Linear, Slack, GitHub, Notion, Figma, Canva,
 Datadog, Sentry, Adobe, Coursera Learning, and Google Contacts. Their recorded
 identities and presentation metadata do not include tool inventory or
-account-specific availability. Notion, Figma, Canva, Sentry, and Adobe are
-unavailable because their recorded releases require unsupported skills or local
-components. Select a plugin and set its default policy; per-tool controls are
+account-specific availability. Notion, Figma, Canva, and Adobe include supported
+hosted apps with skills. Sentry remains unavailable because its recorded release
+has no concrete hosted app. Select a plugin and set its default policy; per-tool controls are
 unavailable until the catalog supplies tool details. Startup resolves native
 metadata independently and still requires the Agent's actual authentication and
 provider access. Catalog membership does not grant access or prove execution.
@@ -62,10 +62,16 @@ This reader starts native app-server, calls `plugin/list`, and may update its ca
 In hosted mode, Create Agent discovery hydrates entered PAT identity and reads GLOBAL
 plugin-service pages of up to 20 entries, fetching tools on demand. A nonempty
 query uses hosted search; the curated catalog searches its bundled entries.
+The console preloads the first page after a PAT is entered or selected in Create
+Agent, and when opening an editable Agent's Plugins tab with a bound PAT Secret.
+Opening **Configure plugins** reuses that page or its pending request. Replacing
+the PAT clears discovery results and preloads a fresh first page; selections remain.
 Console waits 300 ms after the last keystroke before searching and resets pagination
-when the query changes. Enter, page navigation, and explicit loads run immediately.
-Configured-plugin and tool filters remain instant and local. Closing the picker or
-changing its credential cancels pending searches. Requests have
+when the query changes. Loading feedback starts during that delay and continues
+until the response, including when no earlier entries exist. Tool lookups show
+loading feedback until details arrive. Enter, page navigation, and explicit loads
+run immediately. Configured-plugin and tool filters remain instant and local.
+Closing the picker or changing its credential cancels pending searches. Requests have
 a 15-second deadline and 4 MiB response limit. Discovery does not read Codex home,
 install plugins, or return download URLs. A same-Namespace Secret reference can supply the PAT; managed ServiceAccount references are unsupported. Plugin details show available website, privacy-policy,
 and terms-of-service links; invalid or non-HTTPS URLs are omitted.
@@ -165,8 +171,16 @@ as do two selected IDs targeting the same native tool.
 Catalog classifications are not required, and app defaults are not expanded into
 per-tool rules. The optional controller catalog reader still returns `tools:null`.
 
-The scope remains concrete hosted apps. Marketplace visibility does not imply
-support for remote skills, hooks, arbitrary MCP servers, or template-only apps.
+Codex plugins must expose concrete hosted apps and may include skills. Native
+Codex installs the selected bundle and loads its skill instructions; OCE does not
+repackage or translate them. Skills grant no additional app tool permissions.
+Hooks, native MCP servers, and scheduled tasks remain unsupported, as do skill-only
+and template-only plugins without concrete apps.
+
+OCE selection constrains hosted app tools through native app policy and the
+OpenClaw bridge. It does not restrict skills from other plugins already enabled
+on the credential's account. Limiting those plugins requires separate native
+plugin default enablement support and OCE startup integration.
 The selected-only OpenClaw bridge is required for the dedicated Agent path.
 Effective nested policy requires the bridge changes in
 [OpenClaw #151260](https://github.com/openclaw/openclaw/pull/151260) and
@@ -184,15 +198,22 @@ if managed `requiredOnModels` includes the current model, or model selection
 cannot be verified against a nonempty requirement. Omitted reviewers do not
 trigger these explicit-choice checks.
 
-Before readiness, startup checks every effective nested tool's enablement and
-approval against its requested override or app default. Absent/null fields inherit;
-an explicit tool enablement is rejected if neither level requested it, because
-it can bypass category restrictions. Account/link approval defaults must match
-the requested app approval.
+Before readiness, startup reads configuration for the Agent workspace and checks
+all managed app fields, including unexpected enablement/category defaults and tool
+exposure restrictions. An enabled app outside the selection fails verification;
+unselected disabled apps remain permitted. Native serialized defaults/nulls and
+omitted reviewers preserve inheritance. Category settings (`destructive_enabled`
+and `open_world_enabled`) compare against the requested app value, then requested
+global value, then native `true`. An explicit native value equal to that expected
+default is accepted. Every nested tool's enablement/approval must match its override
+or app default; account approval must match the app. Unexpected explicit enablement
+is rejected because it can bypass category rules.
 
-These checks verify startup configuration. Future turn routing, session/model
-changes, strict review, workspace configuration, managed requirements beyond
-reviewer checks, and real Agent enforcement remain draft acceptance gates; see
+This verifies loaded startup configuration, including trusted workspace layers.
+Codex 0.156 does not expose managed app/tool requirements through `config/read` or
+`configRequirements/read`; complete native effective-policy introspection remains
+required. Later workspace/session/model changes, strict review, and real Agent
+enforcement also remain acceptance gates. See
 [runtime proof notes](../../testing/plugins.md#current-proof-notes).
 
 Dedicated Codex starts without user plugins/apps, including when no PluginDriver
@@ -286,4 +307,7 @@ not write the shared native registry while the prior gateway is running.
 Source and contract tests do not establish compatibility with every runtime
 image. Native proof requires the testing guide's opt-in real-runtime lane.
 
-Disabling a selection does not uninstall it. Native remote installation can enable a plugin on the credential’s account; Agent-local app configuration and the OpenClaw bridge still block its execution. Agent enablement does not manage account-wide installation state.
+Disabling a selection does not uninstall it or guarantee its skills are unloaded.
+Native remote installation can enable a plugin on the credential's account;
+Agent-local app configuration and the OpenClaw bridge block its hosted app tools.
+Agent enablement does not manage account-wide installation state.

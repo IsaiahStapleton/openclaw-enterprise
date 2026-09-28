@@ -83,6 +83,7 @@ export function renderAgentPlugins(
     canDiscover: () =>
       agent.executionMode === "dedicated" &&
       (catalogCredential === "none" || (catalogCredential === "required" && hasBoundCredential)),
+    canPrefetch: () => hasBoundCredential,
     isPending: () => pending,
     unavailableMessage: () =>
       agent.executionMode !== "dedicated"
