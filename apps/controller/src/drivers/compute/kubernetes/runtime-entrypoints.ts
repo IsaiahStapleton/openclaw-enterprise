@@ -45,6 +45,7 @@ const {
 } = require("node:crypto");
 const { spawn: pluginSpawn, spawnSync: pluginSpawnSync } = require("node:child_process");
 const { createServer: pluginCreateServer } = require("node:http");
+const { isDeepStrictEqual: pluginDeepEqual } = require("node:util");
 
 const CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS ?? "10000");
 const CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS ?? "60000");
@@ -110,7 +111,8 @@ function readGatewayPluginRuntime() {
   if (
     runtime.manifest?.kind === "codex" &&
     (Object.keys(runtime.manifest.selections ?? {}).length > 0 ||
-      runtime.manifest.repositoryBrokerNetworkPolicy !== undefined)
+      runtime.manifest.repositoryBrokerNetworkPolicy !== undefined ||
+      runtime.manifest.pluginApprovers !== undefined)
   ) {
     return runtime;
   }
@@ -649,7 +651,45 @@ function isManagedOpenClawPluginEntry(value) {
   );
 }
 
+function conflictingApproverList(configured, managedList) {
+  return isPlainObject(configured) && Object.hasOwn(configured, "approvers") &&
+    managedList !== undefined &&
+    (!Array.isArray(configured.approvers) ||
+      !pluginDeepEqual(
+        configured.approvers.map((id) => typeof id === "string" ? id.toLowerCase() : id).sort(),
+        managedList.map((id) => id.toLowerCase()).sort(),
+      ));
+}
+
 function assertNoOpenClawPluginConfigConflict(base, overlay, options = {}) {
+  const managedApprovers = objectAtPath(overlay, ["approvals", "plugin", "slack"]);
+  const configuredApprovers = objectAtPath(base, ["approvals", "plugin", "slack"]);
+  if (managedApprovers !== undefined && configuredApprovers !== undefined) {
+    // A native child list must not bypass an inherited Agent or plugin approver list.
+    const managedDefault = managedApprovers.approvers;
+    const configuredPlugins = isPlainObject(configuredApprovers.plugins)
+      ? Object.entries(configuredApprovers.plugins)
+      : [];
+    const conflictingPlugin = configuredPlugins.some(([pluginId, configuredPlugin]) => {
+      const managedPlugin = isPlainObject(managedApprovers.plugins)
+        ? managedApprovers.plugins[pluginId]
+        : undefined;
+      const pluginList = managedPlugin?.approvers ?? managedDefault;
+      if (conflictingApproverList(configuredPlugin, pluginList)) return true;
+      const configuredTools = isPlainObject(configuredPlugin?.tools)
+        ? Object.entries(configuredPlugin.tools)
+        : [];
+      return configuredTools.some(([toolId, configuredTool]) => {
+        const managedTool = isPlainObject(managedPlugin?.tools)
+          ? managedPlugin.tools[toolId]
+          : undefined;
+        return conflictingApproverList(configuredTool, managedTool?.approvers ?? pluginList);
+      });
+    });
+    if (conflictingApproverList(configuredApprovers, managedDefault) || conflictingPlugin) {
+      throw new Error("OpenClaw plugin approval configuration conflicts with managed Agent approvers.");
+    }
+  }
   const baseEntries = objectAtPath(base, ["plugins", "entries"]);
   const overlayEntries = objectAtPath(overlay, ["plugins", "entries"]);
   if (overlayEntries === undefined) return;
@@ -798,13 +838,14 @@ function samePluginFailures(left, right) {
 
 function openClawPluginConfiguration(runtime, failures = []) {
   if (runtime.manifest?.kind === "openclaw") {
-    return pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures).configuration;
+    return pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures, runtime.manifest.pluginApprovers).configuration;
   }
   if (runtime.manifest?.kind === "codex") {
     return pluginRuntimeTranslator.codexOpenClawConfiguration(
       runtime.manifest.selections ?? {},
       failures,
       runtime.manifest.repositoryBrokerNetworkPolicy,
+      runtime.manifest.pluginApprovers,
     );
   }
   return undefined;
@@ -940,7 +981,7 @@ function verifyOpenClawPluginInstall(plugin) {
 function installOpenClawPlugins(runtime, failures = []) {
   const artifact =
     runtime.manifest?.kind === "openclaw"
-      ? pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures)
+      ? pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures, runtime.manifest.pluginApprovers)
       : { installs: [] };
   const installs = artifact.installs ?? [];
   const failed = [...failures];
@@ -1179,14 +1220,43 @@ async function writeCodexAppConfiguration(configuration) {
 }
 
 async function readCodexAppConfiguration() {
-  const response = await codexAppServerRequest("config/read", {});
+  // Match the dedicated Harness workspace; a thread-agnostic read omits its
+  // trusted .codex layers and can validate a different policy than the Agent uses.
+  const response = await codexAppServerRequest("config/read", { cwd: "/home/node/workspace" });
   return response?.config;
 }
 
-function verifyCodexNestedPolicy(configuration, effective) {
-  for (const [appId, app] of Object.entries(configuration.apps ?? {})) {
+function verifyCodexAppConfiguration(configuration, effective) {
+  assertConfigContainsOverlay(effective, configuration);
+  for (const [appId, actual] of Object.entries(effective.apps ?? {})) {
+    const app = configuration.apps?.[appId];
+    if (app === undefined) {
+      // An explicit app entry overrides _default.enabled. Unselected disabled
+      // entries are harmless; never admit an enabled app outside the selection.
+      if (actual.enabled !== false) {
+        throw new Error("Codex effective app policy conflicts with the selected apps; remove the unselected enabled app.");
+      }
+      continue;
+    }
+    // Failed-only bindings are disabled by the required-field check above.
+    // Their inherited defaults and tool exceptions cannot enable a disabled app.
+    if (appId !== "_default" && app.enabled === false) continue;
+    for (const [field, value] of Object.entries(actual)) {
+      if (field === "tools" || field === "links" || value == null) continue;
+      if (field === "approvals_reviewer" && app.approvals_reviewer === undefined) continue;
+      // Codex serializes global category defaults as true, optional fields as
+      // null, and an empty exposure list imposes no additional restriction.
+      if (field === "omit_tools_from" && Array.isArray(value) && value.length === 0 && app[field] === undefined) continue;
+      // Category values inherit; resolve OCE's intended defaults, not the native
+      // values being checked. Explicit tool enablement still requires an exact match.
+      const expected = ["destructive_enabled", "open_world_enabled"].includes(field)
+        ? app[field] ?? configuration.apps?._default?.[field] ?? true
+        : app[field];
+      if (JSON.stringify(value) !== JSON.stringify(expected)) {
+        throw new Error("Codex effective app policy conflicts at apps." + appId + "." + field + "; remove the native override or update the Agent policy.");
+      }
+    }
     if (appId === "_default") continue;
-    const actual = effective?.apps?.[appId];
     // Native tables merge across layers; replacing the user app table does not
     // remove inherited tool exceptions. Null fields mean inheritance, not overrides.
     for (const [toolName, tool] of Object.entries(actual?.tools ?? {})) {
@@ -1424,10 +1494,12 @@ async function installCodexSelectionSet(selections, failures = []) {
     const detail = installedDetails[readParamsList.indexOf(readParams)];
     verifyCodexPluginDetail(plugin, readParams, detail);
   }
+  // TODO: use native effective app/tool policy introspection when available.
+  // Codex 0.156 config/read omits managed app requirements applied at execution;
+  // this readback verifies loaded configuration, not future thread policy.
   const effectiveConfiguration = await readCodexAppConfiguration();
   await verifyCodexReviewerConfiguration(effectiveResolvedArtifact.configuration, effectiveConfiguration);
-  assertConfigContainsOverlay(effectiveConfiguration, effectiveResolvedArtifact.configuration);
-  verifyCodexNestedPolicy(effectiveResolvedArtifact.configuration, effectiveConfiguration);
+  verifyCodexAppConfiguration(effectiveResolvedArtifact.configuration, effectiveConfiguration);
   return { successfulPluginIds, failures: failed };
 }
 
@@ -1846,7 +1918,18 @@ function probeCodexAuthenticationFailureCode() {
       "Reply only READY. Do not use tools.",
     ], {
       cwd: directory,
-      env: { PATH: process.env.PATH, HOME: directory, CODEX_HOME: process.env.CODEX_HOME, RUST_LOG: "error" },
+      // Keep the runtime's TLS trust anchors so a TLS-inspecting egress proxy can serve the probe.
+      env: {
+        PATH: process.env.PATH,
+        HOME: directory,
+        CODEX_HOME: process.env.CODEX_HOME,
+        RUST_LOG: "error",
+        ...Object.fromEntries(
+          ["SSL_CERT_FILE", "SSL_CERT_DIR"]
+            .filter((name) => typeof process.env[name] === "string" && process.env[name].length > 0)
+            .map((name) => [name, process.env[name]]),
+        ),
+      },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
     });
