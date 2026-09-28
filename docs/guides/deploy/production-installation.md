@@ -8,8 +8,11 @@ first. Workspace access is required: install the
 and keep routing enabled in both example files. Control UI is enabled in the
 production values; complete [native admin prerequisites](native-admin.md#requirements).
 
-Run from the repository root; retain this shell and protected files for
-[Agent deployment](production-agents.md).
+Run from a clean repository checkout at the image source revision, so the chart,
+examples, and helpers match the selected images. See
+[Deliver images to a private registry](private-registry-images.md) for release
+provenance, copying verified images to ECR, and chart selection. Retain this
+shell and protected files for [Agent deployment](production-agents.md).
 
 ## Use published images
 
@@ -37,15 +40,10 @@ export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:
 export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:792f0ffe88ec9f935b55c36f41ee646a828e3d83df21427cf7955a5beef52460'
 ```
 
-Use the controller image for API, worker, migration, and bootstrap, and one
-runtime image for gateways and Agents. Keep the tested digest references.
-
-For Kubernetes, configure approved cluster/node pull credentials for **both
-control-plane and tenant Pods**. Local `docker login` does not authenticate
-cluster nodes. Both images support amd64 and arm64 nodes. Continue at [Configure the Installation](#configure-the-installation)
-with these exports; skip the build-and-publish block below. Local quickstart and
-image-test readers should return to their calling guide after authentication
-and exporting the image references.
+Configure approved node pull credentials for **both control-plane and tenant
+Pods**; local `docker login` does not authenticate nodes. Continue at
+[Configure the Installation](#configure-the-installation) with these exports.
+Local quickstart and image-test readers should return to their calling guide.
 
 ## Build and publish production images
 
@@ -104,9 +102,9 @@ export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
 export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
 ```
 
-Continue after both builds and digest lookups succeed; retain the exported
-digests for YAML configuration. For private registries, configure cluster/node pull credentials for both
-control-plane and tenant Pods; `docker login` only authenticates your builder.
+After both builds and digest lookups succeed, retain the digests for YAML
+configuration. Configure private registry pull credentials for control-plane
+and tenant Pods; builder login does not authenticate nodes.
 
 ## Configure the Installation
 
@@ -150,8 +148,8 @@ configures Drivers, runtime images, identity, networking, storage, and logging.
 For `logging.level`, follow [Choose the log level](../observability.md#1-choose-the-log-level),
 including when to restart OCC and deploy a new AgentRevision.
 
-If you built the production images above, write their digest references into
-the protected copies (skip this block for the local Kubernetes import path):
+For registry-backed images, write their digest references into the protected
+copies (skip this block for the local Kubernetes import path):
 
 ```bash
 : "${CONTROLLER_IMAGE:?Set the controller digest reference}"

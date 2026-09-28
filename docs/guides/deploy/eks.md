@@ -65,6 +65,13 @@ install -d -m 700 "$OCC_INPUT_DIRECTORY"
 aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER" \
   --alias "$CONTEXT" --kubeconfig "$KUBECONFIG_FILE"
 chmod 600 "$KUBECONFIG_FILE"
+```
+
+For a private-only API, connect from the VPC or a connected network. If you
+need a Session Manager tunnel, follow [private EKS access and recovery](eks-private-access.md)
+before the checks below. Then verify the selected context:
+
+```bash
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" version
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" get nodes -L oce-role
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" get storageclasses
@@ -86,8 +93,9 @@ aws ecr get-login-password --region "$AWS_REGION" | \
   docker login --username AWS --password-stdin "$OCC_IMAGE_REGISTRY"
 ```
 
-Retain these exports for the shared image-build procedure. Configure node pull
-permissions separately; builder login does not authorize EKS nodes.
+Retain these exports for the shared image-build procedure. To copy already
+verified GHCR images without rebuilding, follow [private image delivery](private-registry-images.md#copy-the-verified-images-to-ecr).
+Configure node pull permissions separately; builder login does not authorize EKS nodes.
 
 ## Configure network enforcement and storage
 

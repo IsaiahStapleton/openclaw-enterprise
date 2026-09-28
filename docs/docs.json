@@ -413,6 +413,10 @@
                     "label": "Control Plane Setup"
                   },
                   {
+                    "page": "guides/deploy/private-registry-images",
+                    "label": "Private Images"
+                  },
+                  {
                     "page": "guides/deploy/upgrade-checklist",
                     "label": "Upgrade Checklist"
                   },
@@ -431,6 +435,10 @@
                   {
                     "page": "guides/deploy/eks",
                     "label": "Amazon EKS"
+                  },
+                  {
+                    "page": "guides/deploy/eks-private-access",
+                    "label": "Private EKS Access"
                   },
                   {
                     "page": "guides/deploy/codex-sandbox",
