@@ -18,6 +18,13 @@ alone does not establish the image contents. Publication smoke checks do not
 prove a production deployment. Select images that include the features you need
 and support the target node architectures.
 
+For the current production example, select a controller supporting the curated
+Codex catalog (`catalogSource: openai-curated`) and the
+[browser request origin check](../../reference/authentication.md#browser-request-origin).
+The historical controller in [Use published images](production-installation.md#use-published-images)
+predates the origin check and is not suitable for the current example, even when
+its digest and source chart match.
+
 Use a clean checkout at that exact commit for the Helm chart, Installation
 examples, and helpers. From the repository root, compare `git rev-parse HEAD`
 with the recorded full source SHA and check `git status --short` for changes.
