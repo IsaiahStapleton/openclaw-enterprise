@@ -11,7 +11,13 @@ egress proxy. Verify these protections before release.
 
 OpenShell gives the Agent a placeholder; its network proxy substitutes the real
 credential for an allowed HTTP request to a bound destination. The trusted proxy
-may hold the credential. This is an integration goal, not deployed OCE capability. [OpenShell credential injection](https://github.com/NVIDIA/OpenShell/blob/d1155aa70042d3e2ee49dbfa15346b108b7c1d92/docs/sandboxes/manage-providers.mdx#how-credential-injection-works)
+may hold the credential. OCE's Credential Gateway Driver for OpenShell shipped in #461
+([reference](../docs/reference/drivers/credential-gateway.md); design in
+`specs/39-sandbox-credential-injection.md`, proposed in #452); it is optional,
+not selected by production installations, and OpenShell v0.1.0 is not a
+supported production runtime. Compute refuses repository credentials when a
+SandboxDriver is selected (`validateRepositoryCredentialSupport`), so no combined
+GitHub+OpenShell revision exists on main. [OpenShell credential injection](https://github.com/NVIDIA/OpenShell/blob/d1155aa70042d3e2ee49dbfa15346b108b7c1d92/docs/sandboxes/manage-providers.mdx#how-credential-injection-works)
 describes the upstream behavior.
 
 ```mermaid
