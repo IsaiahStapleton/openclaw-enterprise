@@ -226,6 +226,7 @@ test(
         });
         assert.deepEqual((await app.inject({ url: "/api/auth/providers" })).json().data, {
           github: false,
+          google: false,
           sessionBinding: false,
         });
         const signedIn = await signedInHeaders(

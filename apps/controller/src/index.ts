@@ -3240,18 +3240,21 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           response: responses({
             type: "object",
             additionalProperties: false,
-            required: ["github", "sessionBinding"],
-            properties: { github: { type: "boolean" }, sessionBinding: { type: "boolean" } },
+            required: ["github", "google", "sessionBinding"],
+            properties: {
+              github: { type: "boolean" },
+              google: { type: "boolean" },
+              sessionBinding: { type: "boolean" },
+            },
           }),
         },
       },
       async (request, reply) => {
         reply.header("cache-control", "no-store");
+        const github = options.auth.githubEnabled === true;
+        const google = options.auth.googleEnabled === true;
         return {
-          data: {
-            github: options.auth.githubEnabled === true,
-            sessionBinding: options.auth.githubEnabled === true,
-          },
+          data: { github, google, sessionBinding: github || google },
           meta: { requestId: request.id },
         };
       },
@@ -3325,6 +3328,76 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         },
       },
       async (request, reply) => options.auth.githubResult(request, reply),
+    );
+    routes.post(
+      "/api/auth/providers/google/start",
+      {
+        schema: {
+          operationId: "startGoogleSignIn",
+          summary: "Start Google sign-in for an enrolled account",
+          description:
+            "Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
+          tags: ["Authentication"],
+          security: [],
+          response: {
+            ...responses({
+              type: "object",
+              additionalProperties: false,
+              required: ["url", "attemptId"],
+              properties: {
+                url: { type: "string", format: "uri" },
+                attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" },
+              },
+            }),
+            403: { description: "Forbidden", ...error },
+          },
+        },
+      },
+      async (request, reply) => options.auth.googleStart(request, reply),
+    );
+    routes.get(
+      "/api/auth/providers/google/callback",
+      {
+        schema: {
+          operationId: "completeGoogleSignIn",
+          summary: "Complete an enrolled Google sign-in",
+          description:
+            "Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.",
+          tags: ["Authentication"],
+          security: [],
+          response: { 302: { description: "Redirect to Console", type: "null" } },
+        },
+      },
+      async (request, reply) => options.auth.googleCallback(request, reply),
+    );
+    routes.post(
+      "/api/auth/providers/google/result",
+      {
+        schema: {
+          operationId: "confirmGoogleSignIn",
+          summary: "Confirm which session a Google sign-in created",
+          description:
+            "Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.",
+          tags: ["Authentication"],
+          security: [{ sessionCookie: [] }],
+          body: {
+            type: "object",
+            additionalProperties: false,
+            required: ["attemptId"],
+            properties: { attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
+          },
+          response: {
+            ...responses({
+              type: "object",
+              additionalProperties: false,
+              required: ["sessionKey"],
+              properties: { sessionKey: { type: "string" } },
+            }),
+            403: { description: "Forbidden", ...error },
+          },
+        },
+      },
+      async (request, reply) => options.auth.googleResult(request, reply),
     );
 
     const accountParams = {
@@ -3441,6 +3514,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         summary: "Attach an exact GitHub identity to an existing account",
       },
       {
+        operationName: "google",
+        path: "/api/auth/accounts/:userId/providers/google",
+        operationId: "attachGoogleIdentity",
+        summary: "Attach an exact Google identity to an existing account",
+      },
+      {
         operationName: "disable",
         path: "/api/auth/accounts/:userId/disable",
         operationId: "disableAuthAccount",
@@ -3505,12 +3584,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               type: "object",
               additionalProperties: false,
               required:
-                operationName === "github" ? ["subject", "expectedVersion"] : ["expectedVersion"],
+                operationName === "github" || operationName === "google"
+                  ? ["subject", "expectedVersion"]
+                  : ["expectedVersion"],
               properties: {
                 expectedVersion: { type: "integer", minimum: 1, maximum: 2147483647 },
                 ...(operationName === "github"
                   ? { subject: { type: "string", pattern: "^[1-9][0-9]{0,19}$" } }
-                  : {}),
+                  : operationName === "google"
+                    ? { subject: { type: "string", pattern: "^[\\x21-\\x7E]{1,255}$" } }
+                    : {}),
               },
             },
             response: {
@@ -3542,6 +3625,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             }
             const { subject } = request.body as { subject: string };
             await options.auth.attachGitHub(userId, subject, actor, expectedVersion);
+          } else if (operationName === "google") {
+            if (!options.auth.attachGoogle || !options.auth.googleEnabled) {
+              throw failure(409, "RESOURCE_CONFLICT", "Google sign-in is not configured.");
+            }
+            const { subject } = request.body as { subject: string };
+            await options.auth.attachGoogle(userId, subject, actor, expectedVersion);
           } else if (operationName === "detach") {
             if (!options.auth.detachMethod) {
               throw dependencyUnavailable();
