@@ -72,7 +72,7 @@ esac
     yq,
     `#!/usr/bin/env bash
 case "$*" in
-  '-o=json '*)
+  *'-o=json '*)
     for path in "$@"; do :; done
     cat "$path"
     ;;
