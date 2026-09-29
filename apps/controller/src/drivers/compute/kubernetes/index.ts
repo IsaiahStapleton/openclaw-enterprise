@@ -428,6 +428,12 @@ interface TargetedKubernetesResource {
   readonly resource: ManagedKubernetesObject;
 }
 
+/** How preparation widens Agent-scoped policies while another revision serves. */
+interface AgentPolicyPreparation {
+  readonly anyRevision?: boolean;
+  readonly unprofiledGateway?: boolean;
+}
+
 interface RuntimeCredentialContext {
   readonly namespaceId: string;
   readonly namespace: KubernetesNamespaceAddress;
@@ -3053,17 +3059,23 @@ export class KubernetesComputeDriver implements ComputeDriver {
     // strictly. Until then a Gateway from a pre-profile template keeps its
     // Gateway-side grants (model and repository egress when embedded; Harness
     // transport and plugin status when dedicated).
-    const unprofiledGateway =
-      existingGateway !== undefined &&
-      existingGatewayRevisionId !== revision.id &&
-      asRecord(asRecord(asRecord(existingGateway.spec?.template)?.metadata)?.labels)?.[
-        NETWORK_PROFILE_LABEL
-      ] !== ORDINARY_NETWORK_PROFILE;
+    // The Agent-scoped policies are shared by name across revisions, so while
+    // another revision serves they select every revision of this Agent.
+    const predecessorServes =
+      existingGateway !== undefined && existingGatewayRevisionId !== revision.id;
+    const preparation: AgentPolicyPreparation = {
+      anyRevision: predecessorServes,
+      unprofiledGateway:
+        predecessorServes &&
+        asRecord(asRecord(asRecord(existingGateway.spec?.template)?.metadata)?.labels)?.[
+          NETWORK_PROFILE_LABEL
+        ] !== ORDINARY_NETWORK_PROFILE,
+    };
     if (embedded) {
       for (const { resource: policy, namespace: target } of this.agentNetworkPolicies(
         revision,
         namespace,
-        unprofiledGateway,
+        preparation,
       )) {
         await this.reconcile(policy, gatewayOwnership, target);
       }
@@ -3071,7 +3083,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
         revision,
         namespace,
-        unprofiledGateway,
+        preparation,
       )) {
         await this.reconcile(policy, gatewayOwnership, target);
       }
@@ -3244,7 +3256,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         );
       }
       if (this.options.runtime !== undefined) {
-        for (const policy of this.agentNetworkPolicies(revision, namespace, unprofiledGateway)) {
+        for (const policy of this.agentNetworkPolicies(revision, namespace, preparation)) {
           await this.reconcile(policy.resource, gatewayOwnership, policy.namespace);
         }
         await this.reconcile(
@@ -3366,7 +3378,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
         revision,
         namespace,
-        unprofiledGateway,
+        preparation,
       )) {
         await this.reconcile(policy, gatewayOwnership, target);
       }
@@ -8316,22 +8328,28 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     await this.reconcile(policy, ownership, namespace);
   }
 
-  /** `unprofiledGateway` widens every Gateway-side selector to the Agent's
-   * Gateway Pods with or without the profile. Only preparation passes it, while
-   * a pre-profile Gateway of another revision serves. */
+  /** Only preparation passes `preparation`, while a Gateway of another revision
+   * serves. `unprofiledGateway` widens every Gateway-side selector to the
+   * Agent's Gateway Pods with or without the profile (a pre-profile Gateway).
+   * `anyRevision` drops the revision from every Agent-scoped selector: these
+   * policies have one name per Agent, so pinning them to the candidate would
+   * cut the serving predecessor off until activation pins them again. */
   private pluginStatusNetworkPolicies(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
-    unprofiledGateway = false,
+    preparation: AgentPolicyPreparation = {},
   ): TargetedKubernetesResource[] {
+    const { unprofiledGateway = false } = preparation;
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+    const revisionScope =
+      preparation.anyRevision === true ? {} : { "openclaw.dev/revision": revision.id };
     const agent = ordinaryNetworkPolicySelector({
       "openclaw.dev/namespace": revision.namespaceId,
       "openclaw.dev/workload-role": "agent",
       "openclaw.dev/agent": revision.agentId,
-      "openclaw.dev/revision": revision.id,
+      ...revisionScope,
     });
     const profiledGateway = ordinaryNetworkPolicySelector({
       "openclaw.dev/namespace": revision.namespaceId,
@@ -8371,7 +8389,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
             policy("allow-plugin-status-proxy", {
               podSelector: ordinaryNetworkPolicySelector({
                 "openclaw.dev/agent": revision.agentId,
-                "openclaw.dev/revision": revision.id,
+                ...revisionScope,
               }),
               policyTypes: ["Ingress"],
               ingress: [
@@ -8461,8 +8479,9 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
   private agentNetworkPolicies(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
-    unprofiledGateway = false,
+    preparation: AgentPolicyPreparation = {},
   ): TargetedKubernetesResource[] {
+    const { unprofiledGateway = false } = preparation;
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
@@ -8470,7 +8489,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       "openclaw.dev/namespace": revision.namespaceId,
       "openclaw.dev/workload-role": "agent",
       "openclaw.dev/agent": revision.agentId,
-      "openclaw.dev/revision": revision.id,
+      ...(preparation.anyRevision === true ? {} : { "openclaw.dev/revision": revision.id }),
     });
     const profiledGateway = ordinaryNetworkPolicySelector({
       "openclaw.dev/namespace": revision.namespaceId,
@@ -8497,7 +8516,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         },
       };
     };
-    const statusPolicies = this.pluginStatusNetworkPolicies(revision, namespace, unprofiledGateway);
+    const statusPolicies = this.pluginStatusNetworkPolicies(revision, namespace, preparation);
     const runtime = this.options.runtime;
     if (runtime === undefined) {
       return statusPolicies;
