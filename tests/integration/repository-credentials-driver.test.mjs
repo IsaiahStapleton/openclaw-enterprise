@@ -1,15 +1,19 @@
+import { startReceiptState } from "../fixtures/repository-credentials/receipt-state.mjs";
+import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
+import { run } from "../fixtures/repository-credentials/process.mjs";
+import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { request } from "node:https";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DependencyUnavailableError, ScopeViolationError } from "../../packages/occ/src/index.ts";
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
-import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
+import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/backends/repository-credentials/control-client.ts";
 import {
   defaultRegistryRepositories,
   startRegistryCredentialServiceFixture,
@@ -29,7 +33,7 @@ async function unusedPort() {
 function driverFor(registry, socket, sessionDurationSeconds = 3600, publicCa) {
   return new GitHubRepoDriver(
     {
-      id: registry.providerId,
+      id: registry.backendId,
       client: new UnixRepositoryCredentialControlClient({ controlSocket: socket }),
       drivers: { repo: "repository-credentials" },
     },
@@ -84,6 +88,7 @@ test(
   { timeout: 30000 },
   async (t) => {
     const fixture = await startRegistryCredentialServiceFixture(t, {
+      namespaceId: `ns_${randomUUID()}`,
       autoOpen: false,
       repositories: defaultRegistryRepositories.map((entry) =>
         entry.repositoryRef === "repo-b"
@@ -120,6 +125,7 @@ test(
       controlSocket: fixture.config.gateway.controlSocket,
     });
     await client.health(signal);
+    await driver.checkAdmissionReady(signal);
     const contributor = driver.resolve({
       namespaceId: fixture.namespaceId,
       bindings: [{ repositoryRef: "repo-a" }],
@@ -127,21 +133,26 @@ test(
     // This exact registry used to admit the narrower git-write grant under this
     // digest. The real Driver/control/service join must reject its stale authority
     // before either repository's provider sees acquisition or exchange traffic.
+    const deadlineWallMs = fixture.clock.wallNow() + 1800_000;
+    const receipts = await startReceiptState(t, fixture, resolution.bindings, deadlineWallMs);
+    const staleId = `${fixture.clock.wallNow()}-${randomUUID()}`;
+    await receipts.prepare(staleId, contributor.repositoryRef, 3600);
     const legacyGrant = "sha256:94c2dc4513de2fa4a6f885c7fd2f857110510100111cb4f4424db6ddf8d37ae5";
     assert.notEqual(contributor.grant.grantId, legacyGrant);
     await assert.rejects(
       driver.open(
         {
           namespaceId: fixture.namespaceId,
-          admissionId: `${fixture.clock.wallNow()}-${randomUUID()}`,
+          admissionId: staleId,
           binding: { ...contributor, grant: { ...contributor.grant, grantId: legacyGrant } },
           durationSeconds: 3600,
-          deadlineWallMs: fixture.clock.wallNow() + 1800_000,
+          deadlineWallMs,
         },
         signal,
       ),
-      ScopeViolationError,
+      DependencyUnavailableError,
     );
+    await receipts.advance(staleId, "opening", "invalidated");
     assert.ok(
       fixture.repositories.every(
         (entry) => entry.github.trace.length === 0 && entry.github.issuesOfTokens.length === 0,
@@ -152,9 +163,20 @@ test(
       admissionId: `${fixture.clock.wallNow()}-${randomUUID()}`,
       binding,
       durationSeconds: 3600,
-      deadlineWallMs: fixture.clock.wallNow() + 1800_000,
+      deadlineWallMs,
     }));
+    for (const input of inputs) {
+      await receipts.prepare(input.admissionId, input.binding.repositoryRef, input.durationSeconds);
+    }
     const opened = await Promise.all(inputs.map((input) => driver.open(input, signal)));
+    for (let index = 0; index < opened.length; index++) {
+      await receipts.advance(
+        inputs[index].admissionId,
+        "opening",
+        "open",
+        opened[index].session.sessionId,
+      );
+    }
     for (let index = 0; index < opened.length; index++) {
       assert.equal(opened[index].kind, "created");
       const result = opened[index];
@@ -220,15 +242,21 @@ test(
       driver.open({ ...inputs[0], durationSeconds: 3599 }, signal),
       ScopeViolationError,
     );
+    await receipts.advance(inputs[0].admissionId, "open", "closing");
     const fenced = { ...inputs[0], admissionId: `${fixture.clock.wallNow()}-${randomUUID()}` };
+    await receipts.prepare(
+      fenced.admissionId,
+      fenced.binding.repositoryRef,
+      fenced.durationSeconds,
+    );
     assert.deepEqual(await driver.open({ ...fenced, recoverOnly: true }, signal), {
       kind: "missing",
     });
     assert.deepEqual(await driver.open(fenced, signal), { kind: "missing" });
 
-    // A changed local Provider registry must not obstruct restrictive cleanup of the old admission.
+    // A changed local Backend registry must not obstruct restrictive cleanup of the old admission.
     const changedProvider = driverFor(
-      { ...fixture.registry, providerId: "replacement-provider" },
+      { ...fixture.registry, backendId: "replacement-provider" },
       fixture.config.gateway.controlSocket,
     );
     assert.equal(
@@ -237,17 +265,30 @@ test(
     );
     await assert.rejects(changedProvider.open(inputs[0], signal), ScopeViolationError);
 
+    await receipts.advance(inputs[1].admissionId, "open", "closing");
     for (let index = 0; index < opened.length; index++) {
       const closed = await driver.close(opened[index].session.sessionId, signal);
       assertPublicStatus(closed, inputs[index].binding.grant);
       assert.notEqual(closed.state, "OPEN");
     }
 
+    for (const result of opened) {
+      let status;
+      for (let index = 0; index < 100; index++) {
+        status = await driver.status(result.session.sessionId, signal);
+        if (status?.state === "DISPOSED") {
+          break;
+        }
+        await delay(20);
+      }
+      assert.equal(status?.state, "DISPOSED");
+    }
     await fixture.restart();
-    assert.equal(await driver.status(opened[0].session.sessionId, signal), undefined);
-    assert.deepEqual(await driver.open({ ...inputs[0], recoverOnly: true }, signal), {
-      kind: "missing",
-    });
+    assert.equal((await driver.status(opened[0].session.sessionId, signal)).state, "DISPOSED");
+    assert.equal(
+      (await driver.open({ ...inputs[0], recoverOnly: true }, signal)).kind,
+      "recovered",
+    );
     await assert.rejects(
       local.status(opened[0].session.sessionId, signal),
       DependencyUnavailableError,
@@ -263,7 +304,7 @@ test("Unix control rejects malformed status and preserves authoritative absence 
   const driver = driverFor(
     {
       version: 1,
-      providerId: "github-test",
+      backendId: "github-test",
       providerInstanceId: "instance",
       appId: "1",
       githubInstallationId: "2",
@@ -543,3 +584,159 @@ test("Unix control rejects malformed status and preserves authoritative absence 
     );
   }
 });
+
+test("durable admission capability rejects an old response, malformed replies, and timeouts", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "repository-capability-"));
+  const socket = join(directory, "control.sock");
+  let response = { status: 404, body: { error: "not-found" } };
+  const server = createServer((incoming, outgoing) => {
+    if (incoming.url === "/healthz") {
+      outgoing.writeHead(200, { "content-type": "application/json" });
+      outgoing.end(JSON.stringify({ ready: true, protocolVersion: 1 }));
+      return;
+    }
+    if (response === undefined) {
+      return;
+    }
+    outgoing.writeHead(response.status, { "content-type": "application/json" });
+    outgoing.end(JSON.stringify(response.body));
+  });
+  await new Promise((resolve) => server.listen(socket, resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const client = new UnixRepositoryCredentialControlClient({ controlSocket: socket });
+  // An older broker reports healthy protocol 1 but does not recognize this endpoint.
+  await client.health(AbortSignal.timeout(1000));
+  await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(1000)));
+  for (const value of [
+    { status: 200, body: {} },
+    { status: 200, body: { durableAdmissionVersion: 2 } },
+    { status: 200, body: { durableAdmissionVersion: "1" } },
+    { status: 503, body: { error: "unavailable" } },
+  ]) {
+    response = value;
+    await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(1000)));
+  }
+  response = undefined;
+  await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(50)));
+});
+
+test(
+  "controller image probe correlates real Driver calls with an isolated receipt fixture",
+  { timeout: 30000 },
+  async (t) => {
+    const fixture = await startRegistryCredentialServiceFixture(t, {
+      autoOpen: false,
+      clock: { ...createControlledClock(), wallNow: Date.now },
+      gateway: { listen: `127.0.0.1:${await unusedPort()}` },
+    });
+    const receipts = [];
+    let hideReceiptObservation = false;
+    const receiptServer = createServer(async (incoming, outgoing) => {
+      const chunks = [];
+      for await (const chunk of incoming) {
+        chunks.push(chunk);
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (!hideReceiptObservation) {
+        receipts.push(body);
+      }
+      // The fixture supplies only a missing recovery result or a failed reserve.
+      // It never acknowledges a reservation or creates provider authority.
+      if (body.kind === "recover") {
+        outgoing.writeHead(200, { "content-type": "application/json" });
+        outgoing.end(JSON.stringify({ kind: "missing" }));
+      } else {
+        outgoing.writeHead(503, { "content-type": "application/json" });
+        outgoing.end(JSON.stringify({ error: "fixture-unavailable" }));
+      }
+    });
+    const receiptSocket = join(dirname(fixture.config.gateway.controlSocket), "receipt.sock");
+    await new Promise((resolve, reject) => {
+      receiptServer.once("error", reject);
+      receiptServer.listen(receiptSocket, resolve);
+    });
+    t.after(async () => {
+      receiptServer.closeAllConnections();
+      await new Promise((resolve) => receiptServer.close(resolve));
+    });
+    const probe = new URL(
+      "../../apps/controller/src/drivers/repo/github/credentials/admission-probe.mjs",
+      import.meta.url,
+    ).pathname;
+    for (const [mode, outcome] of [
+      ["recover", "missing"],
+      ["reserve", "unavailable"],
+    ]) {
+      const admissionId = `${Date.now()}-${randomUUID()}`;
+      const result = await run(process.execPath, [
+        probe,
+        fixture.config.gateway.controlSocket,
+        mode,
+        admissionId,
+      ]);
+      const report = JSON.parse(result.stdout);
+      assert.deepEqual(
+        {
+          version: report.version,
+          mode: report.mode,
+          admissionId: report.admissionId,
+          outcome: report.outcome,
+        },
+        { version: 1, mode, admissionId, outcome },
+      );
+      const observed = receipts.at(-1);
+      assert.equal(observed.kind, mode);
+      assert.equal(observed.admissionId, admissionId);
+      assert.deepEqual(observed.input, report.input);
+    }
+    // An old Driver omits durableAdmission; the new broker rejects it before
+    // contacting the receipt fixture, so a generic failure cannot qualify the pair.
+    const input = { ...receipts[0].input, recoverOnly: true };
+    const body = JSON.stringify(input);
+    const before = receipts.length;
+    const status = await new Promise((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          socketPath: fixture.config.gateway.controlSocket,
+          path: "/v1/sessions",
+          method: "POST",
+          headers: {
+            host: "localhost",
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(body),
+            "x-admission-id": `${Date.now()}-${randomUUID()}`,
+          },
+        },
+        (incoming) => {
+          incoming.resume();
+          incoming.once("end", () => resolve(incoming.statusCode));
+          incoming.once("error", reject);
+        },
+      );
+      outgoing.once("error", reject);
+      outgoing.end(body);
+    });
+    assert.equal(status, 400);
+    assert.equal(receipts.length, before);
+    // An unavailable result alone cannot prove which request reached the
+    // broker. Qualification must also match the fixture's reserve observation.
+    hideReceiptObservation = true;
+    const unobservedId = `${Date.now()}-${randomUUID()}`;
+    const unobserved = await run(process.execPath, [
+      probe,
+      fixture.config.gateway.controlSocket,
+      "reserve",
+      unobservedId,
+    ]);
+    assert.equal(JSON.parse(unobserved.stdout).outcome, "unavailable");
+    assert.equal(
+      receipts.some(({ admissionId }) => admissionId === unobservedId),
+      false,
+    );
+    assert.ok(fixture.repositories.every(({ github }) => github.issuesOfTokens.length === 0));
+  },
+);

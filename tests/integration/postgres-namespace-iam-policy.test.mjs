@@ -66,7 +66,7 @@ async function createNamespaceAgentState(state, options = {}) {
     namespaceId: namespace.id,
     name: `Agent ${randomUUID()}`,
     configurationId: configuration.id,
-    providerId: null,
+    backendId: null,
     harnessAuth: options.harnessAuth ?? null,
     executionMode: "embedded",
     servicePrincipalId: `service-agent-${randomUUID()}`,
@@ -127,6 +127,71 @@ function deferred() {
 function isLockTimeout(error) {
   return error?.code === "55P03" || /lock timeout/.test(error?.message ?? "");
 }
+
+test(
+  "selected native IAM sees original-unit grants and revocations before rollback",
+  requiresPostgres,
+  async (context) => {
+    const { Pool } = await import("pg");
+    // One connection also catches an accidental nested policy read: it cannot
+    // acquire a second client while the original transaction owns the first.
+    const pool = new Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 1000 });
+    context.after(() => pool.end());
+    const state = new PostgresPlatformState(pool);
+    const iam = new NativeIAMDriver(state);
+    const { namespace, secret, agent } = await createNamespaceAgentState(state);
+    const request = {
+      principalId: agent.servicePrincipalId,
+      action: "operate",
+      resource: { kind: "secret", id: secret.id, namespaceId: namespace.id },
+    };
+    assert.equal((await iam.authorize(request)).allowed, false);
+    const roleId = identifier("role");
+    await assert.rejects(
+      state.transact(async (unit) => {
+        await iam.createNamespaceRole(
+          { policy: unit.iamPolicy },
+          {
+            id: roleId,
+            namespaceId: namespace.id,
+            permissions: [{ action: "operate", resourceKind: "secret" }],
+          },
+        );
+        const binding = await iam.createNamespaceAccessBinding(
+          { policy: unit.iamPolicy },
+          {
+            id: identifier("binding"),
+            namespaceId: namespace.id,
+            subjectKind: "identity",
+            subjectId: agent.servicePrincipalId,
+            roleId,
+            resourceKind: "secret",
+            resourceId: secret.id,
+          },
+        );
+        const granted = await iam.authorize(request);
+        assert.equal(granted.allowed, true);
+        assert.deepEqual(granted.evidence.bindingIds, [binding.id]);
+        assert.equal(
+          await iam.deleteNamespaceAccessBinding(
+            { policy: unit.iamPolicy },
+            namespace.id,
+            binding.id,
+          ),
+          true,
+        );
+        assert.equal((await iam.authorize(request)).allowed, false);
+        throw new Error("abort original policy operation");
+      }),
+      /abort original policy operation/,
+    );
+    assert.equal((await iam.authorize(request)).allowed, false);
+    assert.equal(
+      await state.read((unit) => unit.iamPolicy.getRole(namespace.id, roleId)),
+      undefined,
+    );
+  },
+);
 
 test(
   "PostgreSQL native IAM creates exact Namespace bindings atomically with audit",
@@ -346,6 +411,55 @@ test(
     await create;
 
     assert.equal(binding.resourceId, secret.id);
+    // Existence is not enough for asynchronous Agent teardown: status changes
+    // do not modify a key, so the grant must also conflict with ordinary UPDATE.
+    const agentRole = await createState.transact((unit) =>
+      iam.createNamespaceRole(
+        { policy: unit.iamPolicy },
+        {
+          id: identifier("role"),
+          namespaceId: namespace.id,
+          permissions: [{ action: "read", resourceKind: "agent" }],
+        },
+      ),
+    );
+    const agentBinding = {
+      id: identifier("binding"),
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: agent.servicePrincipalId,
+      roleId: agentRole.id,
+      resourceKind: "agent",
+      resourceId: agent.id,
+    };
+    await createState.transact(async (unit) => {
+      await iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, agentBinding);
+      await assert.rejects(
+        deleteState.transact(async (other) => {
+          await deleteState.queryInTransaction(other, "SET LOCAL lock_timeout = '50ms'");
+          await other.agents.transitionAgentStatus(namespace.id, agent.id, "active", "deleting");
+        }),
+        isLockTimeout,
+      );
+    });
+    assert.equal(
+      (
+        await deleteState.transact((unit) =>
+          unit.agents.transitionAgentStatus(namespace.id, agent.id, "active", "deleting"),
+        )
+      ).status,
+      "deleting",
+    );
+    await assert.rejects(
+      createState.transact((unit) =>
+        iam.createNamespaceAccessBinding(
+          { policy: unit.iamPolicy },
+          { ...agentBinding, id: identifier("binding") },
+        ),
+      ),
+      /target does not belong to the exact Namespace/,
+    );
+
     assert.equal(
       await deleteState.transact((unit) => unit.secrets.deleteSecret(namespace.id, secret.id)),
       true,
@@ -539,7 +653,7 @@ test(
         namespaceId: namespace.id,
         agentId: agent.id,
         revision: 1,
-        providerId: null,
+        backendId: null,
         configurationId: configuration.id,
         configurationKind: "agent",
         configurationGeneration: configuration.generation,

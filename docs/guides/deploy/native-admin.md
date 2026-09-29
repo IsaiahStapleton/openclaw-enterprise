@@ -120,28 +120,34 @@ await fetch("/namespaces/<namespaceId>/agents/<agentId>/native-admin", {
 }).then((response) => response.json());
 ```
 
-A `200` response with `data.status: "unsupported"` can still include `data.host`, `data.origin`, `data.activeRevisionId`, and `data.url`. Copy the returned `data.origin` into the Agent Configuration, preserving the existing model, Harness, channel, and gateway settings:
+A `200` response with `data.status: "unsupported"` can still include `data.host`, `data.origin`, `data.activeRevisionId`, and `data.url`. Copy the exact returned `data.origin`, including any port. In the [console Configuration editor](../console/agent-details.md#configuration-tab), merge the following JSON fields into the selected Agent's existing Configuration:
 
-```yaml
-gateway:
-  auth:
-    mode: trusted-proxy
-    trustedProxy:
-      userHeader: x-occ-identity
-      allowUsers:
-        - occ-workspace-files
-      deviceAutoApprove:
-        enabled: true
-        scopes:
-          - operator.admin
-    identityScopes:
-      occ-workspace-files:
-        - operator.admin
-  controlUi:
-    enabled: true
-    allowedOrigins:
-      - https://agent-<opaque-hash>.agents.oce.example.com
+```json
+{
+  "gateway": {
+    "auth": {
+      "mode": "trusted-proxy",
+      "trustedProxy": {
+        "userHeader": "x-occ-identity",
+        "allowUsers": ["occ-workspace-files"],
+        "deviceAutoApprove": {
+          "enabled": true,
+          "scopes": ["operator.admin"]
+        }
+      },
+      "identityScopes": {
+        "occ-workspace-files": ["operator.admin"]
+      }
+    },
+    "controlUi": {
+      "enabled": true,
+      "allowedOrigins": ["https://agent-<opaque-hash>.agents.oce.example.com"]
+    }
+  }
+}
 ```
+
+Keep existing model, Harness, channel, gateway, Secret reference, and allowed origin settings. Add the exact origin to any existing allowed origins. Review any other Agents sharing this Configuration before saving; they use its new values on their next deployment. Resolve explicitly disabled UI or device approval and conflicting authentication policy with the Configuration owner instead of silently overwriting them. The editor preserves Secret bindings, but its freshness check cannot prevent a concurrent write racing with the save.
 
 Do not set unsupported gateway authentication fields, `controlUi.dangerouslyDisableDeviceAuth`, or `controlUi.dangerouslyAllowHostHeaderOriginFallback`. Deploy the updated Agent revision, then call the status route again and expect `data.status: "available"` with the same `data.origin`. A stopped Agent with no active revision returns only `data.status: "stopped"`; deploy it if native admin access is intended. If the response is `data.status: "unavailable"`, check active revision selection before saving the native configuration; OCC cannot derive the Agent origin until it can select the active revision.
 
@@ -150,6 +156,63 @@ native edits affect a Pod-local copy and are discarded when the Pod is replaced
 or the Agent is redeployed; persistent workspace and gateway data remain.
 See [Kubernetes managed native configuration](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#managed-native-configuration)
 for the exact opt-in conditions and storage lifecycle.
+
+## Enable HTML previews
+
+HTML previews use the runtime's separate sandbox listener. Exposing the native
+admin UI alone does not expose this listener: without sandbox routing, the browser
+may try the Agent hostname on port 8081 and report a refused connection.
+
+Provision a wildcard HTTPS certificate and DNS for a separate preview domain,
+for example `*.previews.example.net`. This domain must be outside
+`agentNativeAdmin.sharedCookieDomain`; it must not receive OCE session cookies.
+Store the wildcard certificate in a TLS Secret in the Helm release namespace.
+Enable a separate Envoy listener with explicit public ingress peers:
+
+```yaml
+gatewayRouting:
+  sandbox:
+    enabled: true
+    domain: previews.example.net
+    tlsSecretName: preview-wildcard
+    listenerPort: 8443
+    ingressPeers:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-nginx
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: ingress-nginx
+```
+
+Route the preview wildcard through your ingress to the Envoy Service's sandbox
+port, preserving the requested hostname and TLS server name. Keep the private
+administrative listener restricted. `listenerPort` is also the Envoy Pod port;
+it must be at least 1024 and differ from the private Envoy HTTPS target port.
+For local testing, a loopback port-forward to that Service port can provide the
+same TLS endpoint; normal certificate validation must succeed.
+
+In the Installation's `drivers.compute.configuration.gatewayRouting`, add:
+
+```yaml
+sandbox:
+  domain: previews.example.net
+  publicPort: 443
+```
+
+The domain must match Helm. `publicPort` is the browser-facing HTTPS port and
+may differ from Envoy's listener port; it defaults to 443. Restart the API and
+worker after changing startup configuration, then deploy the Agent normally.
+Compute derives each Agent's hostname, renders `mcp.apps.sandboxOrigin` and
+`sandboxPort`, and creates its Service and route. New Agents need no manual
+hostname mapping. Remove conflicting tenant overrides of those two native
+fields rather than redirecting the sandbox to the admin origin.
+
+Open a generated HTML file from the native chat. Verify it renders on the preview
+domain, the request carries no OCE session cookie, and the preview host cannot
+serve `/console/`, Gateway RPCs or workspace data. A successful shell request
+alone does not prove the file rendered. After replacing the Gateway Pod, reopen
+the same file and verify its contents are retained.
 
 ## Tests
 
