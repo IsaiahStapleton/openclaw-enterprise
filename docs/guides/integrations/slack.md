@@ -36,10 +36,10 @@ For Slack-enabled k3d and EKS installations, configure both paths before
 creating a Slack-enabled Agent. A working Socket Mode connection does not
 establish that Console user or channel search works.
 
-| Path                            | Required setting                                                                   | Consumer          |
-| ------------------------------- | ---------------------------------------------------------------------------------- | ----------------- |
-| Slack messaging and Socket Mode | Installation `drivers.compute.configuration.runtime.channels.proxyUrl`             | Dedicated gateway |
-| Console user and channel lookup | Helm `api.channelDirectoryProxyUrl`, rendered as `OCC_CHANNEL_DIRECTORY_PROXY_URL` | OCC API           |
+| Path                                     | Required setting                                                                   | Consumer          |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- | ----------------- |
+| Slack messaging and Socket Mode          | Installation `drivers.compute.configuration.runtime.channels.proxyUrl`             | Dedicated gateway |
+| Console lookup and credential validation | Helm `api.channelDirectoryProxyUrl`, rendered as `OCC_CHANNEL_DIRECTORY_PROXY_URL` | OCC API           |
 
 Provision a reviewed HTTP CONNECT proxy reachable from each consumer. Use a
 literal IPv4 address and explicit port, with no URL credentials or path. The
@@ -97,8 +97,8 @@ Before handing off the Slack setup, verify both paths:
 3. Confirm the proxy denies an unrelated public destination and a private
    upstream destination from the same permitted caller path.
 
-A directory response of `501` means the API path is not configured; a missing
-scope response requires updating the bot's Slack scopes. Missing gateway proxy
+A directory response of `503` can indicate that the API cannot reach Slack;
+check its proxy route. A missing-scope response requires updating the bot's Slack scopes. Missing gateway proxy
 configuration prevents Slack-enabled workload preparation. Resolve each path
 independently; entering exact IDs does not verify directory lookup.
 
