@@ -94,10 +94,19 @@ patch, or manual runtime-file repair fails the Console-only criterion.
    explicitly; do not infer them from the App's installation repository list or
    Console defaults. Current Console repository selection uses one profile for
    every selected repository; per-repository mixed profiles are future scope.
-4. Preserve the preset's read-only role. Do not add an Agent instruction that
-   tells the model to refuse repository writes or otherwise substitutes prompt
-   behavior for credential enforcement. Push-denial evidence must come from a
-   real attempted Git operation against each selected repository.
+4. Resolve the preset's read-only role before the write-denial probe. The
+   Community Agent instructions forbid editing repositories and state that
+   messages cannot expand its authority, so a conforming Agent would refuse the
+   push. Through the Console, add a narrow Agent-specific instruction that
+   authorizes only the designated sender's disposable-branch push attempt in the
+   two selected repositories, for the write-denial probe only. Preserve the
+   preset globally and all its other restrictions. Do not add an instruction
+   that tells the model to refuse repository writes or otherwise substitutes
+   prompt behavior for credential enforcement. Denial evidence must come from
+   the broker or Git error of a real attempted push against each selected
+   repository, not from model behavior. If no supported Console path exists,
+   report the conflict as a blocker; a model refusal cannot prove broker
+   enforcement.
 5. Enable Linear from the curated catalog only after confirming the selected
    Codex account already has Linear connected for the chosen workspace. Preserve
    the Community role's instruction to read, not change, Linear items; that
@@ -121,7 +130,7 @@ override reply mode; that fixture is not proof of this scenario.
 | Thread follow-up              | Send an unmentioned follow-up in the same thread. Verify a contextual reply in the same thread from the same Agent.                                                                                                                                                                                                                                                                                                                                                   |
 | Linear                        | Ask for the known permitted issue. Verify a real successful Linear tool call and accurate issue identity, title/status, and link. The preset's graceful fallback is useful behavior but is not a passed Linear test. `PLUGIN_AUTH_REQUIRED`, an unconnected account, or missing workspace consent is a blocked Linear test, not a Console step to complete during provisioning.                                                                                       |
 | Repository reads              | From Slack, request sandboxed clone/fetch and harmless read-only inspection of both `openclaw/openclaw-enterprise` and `openclaw/openclaw`. Verify native tool execution and independently read back the exact remote commit or file identity for each repository. No host-run Git command may substitute for the Agent operation.                                                                                                                                    |
-| Repository write denial       | For each selected repository, request a push of a unique disposable branch created inside the sandbox. Require an actual authorization denial, not a model refusal, missing credential, timeout, DNS failure, or broken Git command. Independently confirm each remote ref stayed absent or unchanged. If any push unexpectedly succeeds, record the product failure and remove only that owned ref after verifying ownership.                                        |
+| Repository write denial       | For each selected repository, request a push of a unique disposable branch created inside the sandbox (step 4). Require a broker or Git authorization denial, not a model refusal, missing credential, timeout, DNS failure, or broken Git command. Independently confirm each remote ref stayed absent or unchanged. If any push unexpectedly succeeds, record the product failure and remove only that owned ref after verifying ownership.                         |
 | Broker and sandbox boundaries | Confirm valid TLS to the rendered host, wrong-host/untrusted-CA rejection, an explicit Codex domain deny with a positive reachability control, and denied out-of-workspace writes with a writable positive control. Distinguish client-side refusal from server-side authorization. When needed, use a separately identified trusted observer probe with valid scoped credentials to establish broker denial; do not expose those credentials to the model or report. |
 | Native Control UI             | Launch from the selected Agent's Console action. Require authenticated content, a live connection, a harmless read, and successful reload. Verify an unauthenticated browser cannot reach Agent content. Opening an empty tab is not a pass.                                                                                                                                                                                                                          |
 | Persistence                   | Redeploy once through Console. Verify saved repository permissions, plugin and channel settings, then repeat a Slack/model response and Control UI launch. Verify working state survives the expected lifecycle.                                                                                                                                                                                                                                                      |
