@@ -37,8 +37,8 @@ The sidebar opens **Agents** or **Namespaces**; **Refresh** repeats the read.
 Set up models during Agent creation; the [experimental Backends](backends.md)
 tab is hidden. Namespace rows are read-only.
 
-A configured [observability URL](configuration.md#installation-startup-configuration)
-appears as an admin-only **Observability** link with an external-link icon. The destination authenticates independently.
+Installation administrators see an external **Observability** link for a configured
+[observability URL](configuration.md#installation-startup-configuration).
 
 | Page       | Scope and permission                                                     |
 | ---------- | ------------------------------------------------------------------------ |
@@ -56,8 +56,7 @@ are scoped to account, session, route, and Namespace; sign-out, session changes,
 and exit clear them. Failed reads show recovery. Installation-wide Backend
 denial clears all previews.
 
-Use the **Namespace** selector in the page header to switch scope on desktop or
-mobile. It lists readable Namespaces and shows the current selection. The
+Use the header **Namespace** selector to switch scope. It lists readable Namespaces and shows the current selection. The
 Installation-wide Namespaces page omits the selector. The bottom
 **OpenClaw Enterprise** menu contains **Settings** and **Logout**. Settings shows
 the signed-in account and no configurable settings.
