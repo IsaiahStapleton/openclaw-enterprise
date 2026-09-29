@@ -25,7 +25,12 @@ import {
   googleNonce,
   type GoogleLoginConfiguration,
 } from "./google.ts";
-import { providerJSON, rejected } from "./provider-transport.ts";
+import {
+  providerExchangeFailure,
+  providerJSON,
+  rejected,
+  type ProviderExchange,
+} from "./provider-transport.ts";
 
 export interface GitHubLoginConfiguration {
   readonly clientId: string;
@@ -78,7 +83,7 @@ interface ExternalProvider {
     code: string,
     codeVerifier: string,
     state: string,
-  ): Promise<string | undefined>;
+  ): Promise<ProviderExchange>;
 }
 
 export function digest(value: string): string {
@@ -95,7 +100,7 @@ async function exchangeGithubSubject(
   code: string,
   codeVerifier: string,
   redirectURI: string,
-): Promise<string | undefined> {
+): Promise<ProviderExchange> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   timer.unref();
@@ -135,10 +140,10 @@ async function exchangeGithubSubject(
     if (!subject) {
       throw rejected();
     }
-    return subject;
-  } catch {
+    return { subject };
+  } catch (error) {
     // Never expose provider response bodies, token values or request credentials.
-    return undefined;
+    return providerExchangeFailure(error, controller.signal);
   } finally {
     clearTimeout(timer);
     controller.abort();
@@ -341,8 +346,11 @@ export function createHumanLogin(
   const receipts = receiptLedger();
   const cookieAttributes = { httpOnly: true, secure, sameSite: "lax" as const, path: "/" };
 
-  async function rejectExternalIdentity(): Promise<never> {
-    await state.recordDenied("EXTERNAL_IDENTITY_REJECTED");
+  // Callback denials say whether the attempt, the provider, or the identity failed.
+  async function rejectExternal(
+    reason: "INVALID_ATTEMPT" | "EXTERNAL_IDENTITY_REJECTED" | "PROVIDER_UNAVAILABLE",
+  ): Promise<never> {
+    await state.recordDenied(reason);
     throw rejected();
   }
 
@@ -498,7 +506,7 @@ export function createHumanLogin(
                 (!error && (!code || code.length > 1024)) ||
                 (error && (error.length > 200 || code))
               ) {
-                return rejectExternalIdentity();
+                return rejectExternal("INVALID_ATTEMPT");
               }
               const attempt = await state.consumeAttempt({
                 stateHash: digest(stateValue),
@@ -506,26 +514,34 @@ export function createHumanLogin(
                 providerId: provider.attemptProviderId,
                 callbackURL: provider.callbackURL,
               });
-              if (!attempt || error) {
-                return rejectExternalIdentity();
+              if (!attempt) {
+                return rejectExternal("INVALID_ATTEMPT");
+              }
+              if (error) {
+                // RFC 6749 section 4.1.2.1: the provider reports its own failure.
+                return rejectExternal(
+                  error === "server_error" || error === "temporarily_unavailable"
+                    ? "PROVIDER_UNAVAILABLE"
+                    : "EXTERNAL_IDENTITY_REJECTED",
+                );
               }
               ctx.setCookie(bindingCookie, "", { ...cookieAttributes, maxAge: 0 });
-              const subject = await provider.exchange(
+              const exchange = await provider.exchange(
                 ctx.context.secret,
                 code!,
                 attempt.codeVerifier,
                 stateValue,
               );
-              if (!subject) {
-                return rejectExternalIdentity();
+              if ("denial" in exchange) {
+                return rejectExternal(exchange.denial);
               }
               const snapshot = await state.snapshotExternal(
                 provider.providerId,
-                subject,
+                exchange.subject,
                 attempt.createdAt,
               );
               if (!snapshot) {
-                return rejectExternalIdentity();
+                return rejectExternal("EXTERNAL_IDENTITY_REJECTED");
               }
               const startedAt = performance.now();
               const session = await proofScope.run({ proof: snapshot.proof }, () =>
