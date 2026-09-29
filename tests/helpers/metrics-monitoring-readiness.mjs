@@ -1,5 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 
+function isConnectionError(error) {
+  return ["ECONNREFUSED", "ECONNRESET", "UND_ERR_SOCKET"].includes(error.cause?.code);
+}
+
 function monitoringFailure(stage, reason, details = {}) {
   const error = new Error(`Monitoring ${stage} failed: ${reason}`);
   error.openclawCiDiagnostic = { kind: "metrics-monitoring", stage, reason, ...details };
@@ -35,9 +39,7 @@ export async function waitForMonitoring(stage, read, containers, inspectContaine
       if (error.openclawCiDiagnostic?.reason === "query-error") {
         throw error;
       }
-      const connectionError = ["ECONNREFUSED", "ECONNRESET", "UND_ERR_SOCKET"].includes(
-        error.cause?.code,
-      );
+      const connectionError = isConnectionError(error);
       const serverError = error.httpStatus >= 500 && error.httpStatus <= 599;
       const datasourceProvisioning =
         stage === "grafana-datasource" && [400, 404].includes(error.httpStatus);
@@ -47,7 +49,9 @@ export async function waitForMonitoring(stage, read, containers, inspectContaine
         !serverError &&
         !datasourceProvisioning
       ) {
-        throw error;
+        throw monitoringFailure(stage, "query-error", {
+          lastHttpStatus: error.httpStatus ?? lastHttpStatus,
+        });
       }
       lastHttpStatus = error.httpStatus ?? lastHttpStatus;
     }
@@ -93,6 +97,27 @@ export async function checkGrafanaDatasource(origin) {
     error.httpStatus = response.status;
     throw error;
   }
-  const datasource = await response.json();
+  let datasource;
+  try {
+    datasource = await response.json();
+  } catch (error) {
+    if (isConnectionError(error) || ["TimeoutError", "AbortError"].includes(error.name)) {
+      error.httpStatus = response.status;
+      throw error;
+    }
+    throw monitoringFailure("grafana-datasource", "query-error", {
+      lastHttpStatus: response.status,
+    });
+  }
+  if (
+    datasource === null ||
+    typeof datasource !== "object" ||
+    Array.isArray(datasource) ||
+    typeof datasource.status !== "string"
+  ) {
+    throw monitoringFailure("grafana-datasource", "query-error", {
+      lastHttpStatus: response.status,
+    });
+  }
   return datasource.status === "OK";
 }

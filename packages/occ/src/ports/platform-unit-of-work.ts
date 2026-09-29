@@ -104,10 +104,15 @@ export function bindPlatformUnitOfWork(
     ]),
     repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
       "findAttempt",
+      "findBrokerReceipt",
+      "findBrokerReceiptBySession",
       "listRevisionAttempts",
       "listNamespaceAttempts",
       "createAttempt",
       "advanceAttempt",
+      "lockAttempt",
+      "createBrokerReceipt",
+      "advanceBrokerReceipt",
     ]),
     provisioning: bindRepository(repositories.provisioning, lifetime, [
       "findByWorkId",

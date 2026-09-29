@@ -337,7 +337,11 @@
                   { "const": "CHANNEL_DIRECTORY_MISSING_SCOPE", "type": "string" },
                   { "const": "CHANNEL_DIRECTORY_RATE_LIMITED", "type": "string" },
                   { "const": "CHANNEL_DIRECTORY_INVALID_RESPONSE", "type": "string" },
-                  { "const": "CHANNEL_DIRECTORY_UNAVAILABLE", "type": "string" }
+                  { "const": "CHANNEL_DIRECTORY_UNAVAILABLE", "type": "string" },
+                  { "const": "CHANNEL_CREDENTIAL_ROLE_MISMATCH", "type": "string" },
+                  { "const": "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED", "type": "string" },
+                  { "const": "CHANNEL_CREDENTIAL_UNAVAILABLE", "type": "string" },
+                  { "const": "CHANNEL_CREDENTIAL_BINDING_REQUIRED", "type": "string" }
                 ]
               },
               "details": {

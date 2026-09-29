@@ -30,10 +30,23 @@ Slack service produces a safe error without returning the token or upstream
 payload. Retry after fixing the token or scopes. Exact IDs can be entered when
 directory browsing is unavailable.
 
+## Credential validation
+
+Before API provisioning or deployment, enabled Slack accounts require
+Secret-backed native environment references. Socket Mode app tokens must start
+with `xapp-`; bot tokens must start with `xoxb-` and pass `auth.test` with a bot
+identity and workspace. HTTP mode skips the app-token check. Disabled Slack
+accounts make no provider call. Validation has an eight-second request budget
+and never opens a Socket Mode connection or sends a message.
+
+Failures return sanitized `CHANNEL_CREDENTIAL_*` errors with the native field
+path. App-token prefixes do not prove validity, scopes, or app/bot pairing.
+Validation checks the current values; credentials can change before runtime
+startup, which remains a separate connectivity check.
+
 ## Enable lookup in production
 
-The production API leaves directory lookup unavailable unless the operator sets
-Helm `api.channelDirectoryProxyUrl` to an approved HTTP or HTTPS proxy endpoint,
+The production API selects the Slack Driver. With default-deny egress, set Helm `api.channelDirectoryProxyUrl` to an approved HTTP or HTTPS proxy endpoint,
 for example `http://198.51.100.25:3128` after replacing the example IP and port.
 The value must contain one literal IPv4 address and an explicit port, without
 credentials or a path. The chart passes it to the API as
@@ -44,8 +57,8 @@ The proxy must permit HTTP `CONNECT` to `slack.com:443`. The Driver sends its
 Slack API requests through that tunnel and verifies Slack's TLS certificate.
 Restrict the proxy to that destination. Keep the selected bot token in the
 same-Namespace Secret; the proxy endpoint needs no token or other credential in
-the Helm value. When the value is empty, authorized lookups return an unavailable
-response and the Console offers exact-ID entry. See the
+the Helm value. Without a reachable Slack route, lookup and credential validation
+return unavailable. See the
 [production controller settings](../settings/production.md) for the environment
 contract.
 

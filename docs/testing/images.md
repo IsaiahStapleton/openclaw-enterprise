@@ -24,30 +24,75 @@ GitHub permissions, or hosted publication. Without the selector the test skips.
 
 ### Check published images
 
-On a `linux/amd64` or `linux/arm64` host, follow [Use published images](../guides/deploy/production-installation.md#use-published-images)
-to authenticate to private GHCR and export `HISTORICAL_CONTROLLER_IMAGE` and
-`HISTORICAL_RUNTIME_IMAGE`. To check a different pair, set these variables to
-its digests. Docker pulls the variant matching the host. These commands check that variant;
-they do not test both architectures in one invocation. Run from the repository
-root with the [local test prerequisites](local.md).
-To reproduce the published release's checks, use its recorded source revision;
-when validating source changes, build images from that checkout instead.
+On a `linux/amd64` or `linux/arm64` host, use the source revision that produced
+the images. Docker pulls the variant matching the host; run these checks on a
+native host for each target architecture. Run from the repository root with the
+[local test prerequisites](local.md).
+
+On each check host, authenticate Docker to the selected private registry with
+pull access to both repositories. The temporary Skopeo auth file used for
+[private image delivery](../guides/deploy/private-registry-images.md) does not
+authenticate Docker. For ECR, set `AWS_REGION` and `ECR_REGISTRY` to the target
+Region and registry. Run this block on its own and stop if it fails:
 
 ```bash
-docker pull "$HISTORICAL_CONTROLLER_IMAGE"
-docker pull "$HISTORICAL_RUNTIME_IMAGE"
-OCC_TEST_PRODUCTION_IMAGE="$HISTORICAL_CONTROLLER_IMAGE" \
-OCC_TEST_RUNTIME_IMAGE="$HISTORICAL_RUNTIME_IMAGE" \
+if [[ -n "${AWS_REGION:-}" && -n "${ECR_REGISTRY:-}" ]]; then
+  (
+    set -o pipefail
+    aws ecr get-login-password --region "$AWS_REGION" | \
+      docker login --username AWS --password-stdin "$ECR_REGISTRY"
+  )
+else
+  printf 'Set AWS_REGION and ECR_REGISTRY before logging in to ECR.\n' >&2
+  false
+fi
+```
+
+ECR credentials expire; authenticate again if needed. For GHCR, follow
+[Use published images](../guides/deploy/production-installation.md#use-published-images).
+For another private registry, follow its Docker login procedure. Protect Docker
+credentials according to your registry policy. This login does not grant nodes
+pull access.
+
+For a current release or custom pair selected for installation, set the check-only
+variables from the immutable `CONTROLLER_IMAGE` and `RUNTIME_IMAGE` exports:
+
+```bash
+: "${CONTROLLER_IMAGE:?Set the controller digest reference}"
+: "${RUNTIME_IMAGE:?Set the runtime digest reference}"
+export OCC_IMAGE_CHECK_CONTROLLER="$CONTROLLER_IMAGE"
+export OCC_IMAGE_CHECK_RUNTIME="$RUNTIME_IMAGE"
+```
+
+For historical image tests, follow [Use published images](../guides/deploy/production-installation.md#use-published-images)
+to authenticate and export the historical pair. Select it explicitly without
+changing the installation variables:
+
+```bash
+: "${HISTORICAL_CONTROLLER_IMAGE:?Set the historical controller digest}"
+: "${HISTORICAL_RUNTIME_IMAGE:?Set the historical runtime digest}"
+export OCC_IMAGE_CHECK_CONTROLLER="$HISTORICAL_CONTROLLER_IMAGE"
+export OCC_IMAGE_CHECK_RUNTIME="$HISTORICAL_RUNTIME_IMAGE"
+```
+
+Pull and check the selected pair:
+
+```bash
+docker pull "$OCC_IMAGE_CHECK_CONTROLLER"
+docker pull "$OCC_IMAGE_CHECK_RUNTIME"
+OCC_TEST_PRODUCTION_IMAGE="$OCC_IMAGE_CHECK_CONTROLLER" \
+OCC_TEST_RUNTIME_IMAGE="$OCC_IMAGE_CHECK_RUNTIME" \
   node --test tests/integration/production-image-startup.test.mjs \
     tests/integration/runtime-image-startup.test.mjs \
     tests/integration/repository-runtime-volume.test.mjs
 ```
 
-All three image suites must run without skips. If the registry denies a pull, check
-the account's package access and token scope; successful `git clone` alone does not
-establish `read:packages` token scope. These checks verify the release images,
-not unbuilt changes in the working tree. Source CI continues to build the
-revision it tests.
+Before installation, all three suites must pass without skips for the exact
+current pair selected in `CONTROLLER_IMAGE` and `RUNTIME_IMAGE`. Rebuilding or
+changing a digest requires new checks. The historical pair does not meet current
+installation requirements. If GHCR denies a pull, check package access and token
+scope; successful `git clone` alone does not establish `read:packages` access.
+These checks verify the selected images, not unbuilt changes in the working tree.
 
 ### Build images from the checkout
 
