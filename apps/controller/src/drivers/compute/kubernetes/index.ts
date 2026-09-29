@@ -3079,7 +3079,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
           ? incomplete()
           : agentReadiness;
       }
-      const workspaceNodeIsReady = await this.workspaceNodeReady(revision, namespace);
       const pluginWarnings = agentReadiness.warnings ?? [];
       await this.reconcile(
         this.service(
@@ -3100,6 +3099,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (!(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))) {
         return incomplete();
       }
+      // Enrolling the workspace node replaces the Harness and restarts its
+      // Gateway. Wait for that Gateway before making enrollment RPCs.
+      const workspaceNodeIsReady = await this.workspaceNodeReady(revision, namespace);
       if (pluginRuntime?.runtime.kind === "codex" && hasEnabledPluginSelections) {
         const gatewayStatus = await this.pluginRuntimeStatus(
           revision,

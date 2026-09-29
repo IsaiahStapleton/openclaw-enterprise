@@ -477,6 +477,7 @@ test("activation refuses a missing or foreign workspace node before changing the
 test("dedicated startup initializes Harness plugins before enrolling its workspace node", async () => {
   let setupCalls = 0;
   let connected = false;
+  let enrollmentAvailable = true;
   const driver = new KubernetesComputeDriver(
     routedOptions({
       runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
@@ -488,6 +489,9 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
           return { setupId: "setup-1", setupCode: "setup-code", expiresAtMs: Date.now() + 60000 };
         },
         async observeSetup() {
+          if (!enrollmentAvailable) {
+            throw new Error("Gateway is restarting after the Harness replacement");
+          }
           return connected ? { deviceId: "node-1", connected: true } : undefined;
         },
         async isConnected() {
@@ -743,6 +747,19 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     ),
   );
   markReady(agentName);
+  // Adding the workspace node replaces the Harness. Its Gateway restarts when
+  // the peer changes, so enrollment must wait for Gateway readiness as well.
+  const restartingGateway = read(
+    "Deployment",
+    gatewayName,
+    kubernetesGatewayNamespaceName(tenant.id),
+  );
+  restartingGateway.status.readyReplicas = 0;
+  save(restartingGateway);
+  enrollmentAvailable = false;
+  assert.equal((await prepare()).ready, false, "Gateway restart keeps deployment pending");
+  enrollmentAvailable = true;
+  markReady(gatewayName);
   assert.equal((await prepare()).ready, false, "running workloads alone are not node readiness");
   connected = true;
   assert.equal((await prepare()).ready, true);
