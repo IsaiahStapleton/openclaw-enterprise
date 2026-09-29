@@ -131,7 +131,6 @@ Do not install dependencies as a verification side effect.
 | Root `README.md` and `docs/README.md` | Project orientation and the documentation map.                                  |
 | `docs/layout.md`                      | Repository organization and file-placement conventions.                         |
 | `docs/design.md` and `docs/design/`   | Authoritative architecture, design requirements, and implementation status.     |
-| `docs/ARCHITECTURE.md`                | Former architecture route; links to the consolidated overview.                  |
 | `docs/reference/`                     | Living supported-feature specifications and Driver contracts.                   |
 | `docs/guides/`                        | Product user and operator procedures, including console, CLI, and API tasks.    |
 | `docs/contributing/`                  | Onboarding and workflows for people changing the platform source or docs.       |

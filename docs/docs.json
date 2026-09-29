@@ -819,7 +819,6 @@
               "guides/deploy/local-repository-credentials",
               "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
-              "ARCHITECTURE",
               "design/resources",
               "design/access",
               "design/workloads",

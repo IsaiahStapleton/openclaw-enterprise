@@ -148,8 +148,7 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 - Root `README.md` and `docs/README.md` own orientation and navigation.
   `docs/design.md` owns the authoritative architecture, with implemented behavior
   and remaining design work distinguished explicitly. `docs/design/` owns its
-  detailed requirements and implementation limits. `docs/ARCHITECTURE.md` preserves
-  the former route and links to the consolidated overview.
+  detailed requirements and implementation limits.
 - `docs/reference/` owns living specifications for supported features and Driver
   contracts. State development, production, and verification-only limits explicitly;
   do not promote a proposed capability into current reference before implementation.
@@ -180,7 +179,7 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 
 Keep `docs/design.md` and its chapters about system structure, ownership,
 trust boundaries, and major interactions; update them for architectural changes
-or corrections to implementation status. Keep `docs/ARCHITECTURE.md` as a link page.
+or corrections to implementation status.
 Put feature details, configuration, edge cases, and delivery history in their
 owning reference, guide, flow, or spec. Link as needed, without per-PR entries.
 
