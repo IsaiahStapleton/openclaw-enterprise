@@ -116,9 +116,13 @@ roots upstream and supplies child tools with its managed CA bundle. Preserve
 inherited `GIT_SSL_CAINFO`; TLS verification remains enabled in both paths.
 
 Production currently permits public TCP/443 egress for model access; a
-restricted model proxy is not yet available. Channels require an approved
-literal-IP HTTP(S) proxy configured through `runtime.channels`; direct public
-channel-provider access is denied.
+restricted model proxy is not yet available. Before readiness, each dedicated
+revision receives its own authentication-only egress policy. Concurrent pending
+candidates cannot replace each other's grant; stop and retirement remove the
+exact revision's policy after its Harness terminates. Channels require an
+approved HTTP(S) proxy configured through `runtime.channels`: either a literal
+IP endpoint or the exact Helm-managed proxy Service paired with
+`runtime.channels.managedProxy`. Direct public channel-provider access is denied.
 
 ## Private Agent gateway routes
 

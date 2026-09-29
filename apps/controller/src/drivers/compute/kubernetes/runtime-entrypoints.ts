@@ -41,6 +41,7 @@ const {
 } = require("node:fs");
 const {
   createHmac,
+  timingSafeEqual: pluginTimingSafeEqual,
   randomUUID: pluginRandomUUID,
 } = require("node:crypto");
 const { spawn: pluginSpawn, spawnSync: pluginSpawnSync } = require("node:child_process");
@@ -50,6 +51,7 @@ const { isDeepStrictEqual: pluginDeepEqual } = require("node:util");
 const CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS ?? "10000");
 const CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS ?? "60000");
 const PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/status";
+const REMOTE_PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/remote-status";
 const RUNTIME_STATUS_PATH = "/openclaw/runtime/status";
 const RUNTIME_DIAGNOSTICS_PATH = "/openclaw/runtime/diagnostics";
 const RUNTIME_IMAGE_PATH = "/openclaw/runtime/image";
@@ -107,16 +109,9 @@ function readPluginRuntime(kind) {
 function readGatewayPluginRuntime() {
   const runtime = readRuntimePayload();
   if (runtime === undefined) return undefined;
-  if (runtime.manifest?.kind === "openclaw") return runtime;
-  if (
-    runtime.manifest?.kind === "codex" &&
-    (Object.keys(runtime.manifest.selections ?? {}).length > 0 ||
-      runtime.manifest.repositoryBrokerNetworkPolicy !== undefined ||
-      runtime.manifest.pluginApprovers !== undefined)
-  ) {
+  if (runtime.manifest?.kind === "openclaw" || runtime.manifest?.kind === "codex") {
     return runtime;
   }
-  if (runtime.manifest?.kind === "codex") return undefined;
   throw new Error("Plugin runtime artifact kind mismatch.");
 }
 
@@ -251,6 +246,12 @@ function runtimeStatusReport() {
     podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
     ...(runtimeStartupFailure === undefined ? {} : { runtimeFailure: runtimeStartupFailure }),
   };
+}
+
+function remotePluginStatusAuthorization() {
+  const token = requireNonEmptyString(pluginBaseAppServerToken, "Plugin status base token");
+  return "Bearer " + createHmac("sha256", token)
+    .update("openclaw-plugin-status/v1\\0" + pluginRuntimeRevisionId()).digest("hex");
 }
 
 function statusCheckFromBoolean(check, value, checkedAt, failureCode) {
@@ -480,9 +481,19 @@ function startPluginRuntimeStatusServer() {
   if (port === undefined) return;
   const server = pluginCreateServer(async (request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const remote = pathname === REMOTE_PLUGIN_STATUS_PATH && process.env.OPENCLAW_REMOTE_PLUGIN_STATUS === "true";
+    if (remote) {
+      const expected = Buffer.from(remotePluginStatusAuthorization());
+      const supplied = Buffer.from(typeof request.headers.authorization === "string" ? request.headers.authorization : "");
+      if (expected.length !== supplied.length || !pluginTimingSafeEqual(expected, supplied)) {
+        response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
+        response.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+    }
     if (
       request.method !== "GET" ||
-      ![
+      !remote && ![
         RUNTIME_STATUS_PATH,
         RUNTIME_DIAGNOSTICS_PATH,
         PLUGIN_STATUS_PATH,
@@ -773,13 +784,24 @@ function readPluginFailuresFromEnvironment() {
 }
 
 async function readPeerPluginRuntimeStatus() {
-  if (typeof process.env.APP_SERVER_URL !== "string" || !process.env.APP_SERVER_URL.startsWith("ws://")) {
-    return undefined;
+  let url;
+  const remote = process.env.OPENCLAW_PEER_PLUGIN_STATUS_URL;
+  if (remote !== undefined) {
+    url = new URL(remote);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+      throw new Error("Peer plugin status requires a verified HTTPS endpoint.");
+    }
+  } else {
+    if (typeof process.env.APP_SERVER_URL !== "string" || !process.env.APP_SERVER_URL.startsWith("ws://")) return undefined;
+    url = new URL(process.env.APP_SERVER_URL.replace(/^ws:/, "http:"));
+    url.port = String(pluginRuntimeStatusPort() ?? "");
+    url.pathname = PLUGIN_STATUS_PATH;
   }
-  const url = new URL(process.env.APP_SERVER_URL.replace(/^ws:/, "http:"));
-  url.port = String(pluginRuntimeStatusPort() ?? "");
-  url.pathname = PLUGIN_STATUS_PATH;
-  const response = await fetch(url, { signal: AbortSignal.timeout(CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS) });
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS),
+    redirect: "error",
+    ...(remote === undefined ? {} : { headers: { authorization: remotePluginStatusAuthorization() } }),
+  });
   if (response.status !== 200) throw new Error("Peer plugin runtime status is unavailable.");
   const status = await response.json();
   if (
@@ -1213,8 +1235,47 @@ function codexAppConfigEdits(configuration) {
 }
 
 async function writeCodexAppConfiguration(configuration) {
+  const effective = await readCodexAppConfiguration();
+  const edits = codexAppConfigEdits(configuration);
+  // Replacing a user table does not erase descendants inherited from other
+  // config layers. Materialize the selection and approval policy at those keys.
+  // Native requirements still apply independently; readback below remains mandatory.
+  for (const [appId, actual] of Object.entries(effective?.apps ?? {})) {
+    if (appId === "_default") continue;
+    const app = configuration.apps?.[appId];
+    const path = "apps." + codexConfigPathSegment(appId);
+    if (app === undefined) {
+      edits.push({ keyPath: path + ".enabled", mergeStrategy: "replace", value: false });
+      continue;
+    }
+    if (app.enabled === false) continue;
+    for (const [toolName, tool] of Object.entries(actual?.tools ?? {})) {
+      for (const [field, defaultField] of [
+        ["enabled", "default_tools_enabled"],
+        ["approval_mode", "default_tools_approval_mode"],
+      ]) {
+        const expected = app.tools?.[toolName]?.[field] ?? app[defaultField];
+        if (tool[field] == null || expected === undefined) continue;
+        edits.push({
+          keyPath: path + ".tools." + codexConfigPathSegment(toolName) + "." + field,
+          mergeStrategy: "replace",
+          value: expected,
+        });
+      }
+    }
+    for (const [linkId, link] of Object.entries(actual?.links ?? {})) {
+      for (const field of ["default_tools_approval_mode", "approvals_reviewer"]) {
+        if (link[field] == null || app[field] === undefined) continue;
+        edits.push({
+          keyPath: path + ".links." + codexConfigPathSegment(linkId) + "." + field,
+          mergeStrategy: "replace",
+          value: app[field],
+        });
+      }
+    }
+  }
   await codexAppServerRequest("config/batchWrite", {
-    edits: codexAppConfigEdits(configuration),
+    edits,
     reloadUserConfig: true,
   });
 }
@@ -1384,16 +1445,28 @@ async function readCodexToolStatuses() {
   throw new Error("Codex tool discovery exceeded its page limit.");
 }
 
+async function readCodexPluginDetails(readParamsList, read = (params) => codexAppServerRequest("plugin/read", params)) {
+  const details = [];
+  // Bound concurrent authenticated requests and drain each batch before a
+  // retry or any installation/configuration write can start.
+  for (let offset = 0; offset < readParamsList.length; offset += 4) {
+    const results = await Promise.allSettled(readParamsList.slice(offset, offset + 4).map(
+      async (params, index) => read(params, offset + index),
+    ));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure !== undefined) throw failure.reason;
+    details.push(...results.map((result) => result.value));
+  }
+  return details;
+}
+
 async function installCodexSelectionSet(selections, failures = []) {
   if (Object.keys(selections).length === 0) return { successfulPluginIds: [], failures: [] };
   const enabledPluginIds = enabledCodexSelectionIds(selections);
   const listed = await codexAppServerRequest("plugin/list", {});
   const readParamsList = pluginRuntimeTranslator.codexReadParamsForSelections(selections, listed);
   if (readParamsList.length === 0) return { successfulPluginIds: [], failures: [] };
-  const resolvedDetails = [];
-  for (const readParams of readParamsList) {
-    resolvedDetails.push(await codexAppServerRequest("plugin/read", readParams));
-  }
+  const resolvedDetails = await readCodexPluginDetails(readParamsList);
   const failed = [...failures];
   const failedIds = pluginFailureIds(failed);
   const successfulPluginIds = [];
@@ -1464,8 +1537,7 @@ async function installCodexSelectionSet(selections, failures = []) {
     : [];
   const effectiveResolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails, failed, toolStatuses);
   await writeCodexAppConfiguration(effectiveResolvedArtifact.configuration);
-  const installedDetails = [];
-  for (const readParams of readParamsList) {
+  const installedDetails = await readCodexPluginDetails(readParamsList, (readParams, index) => {
     const selectedPlugin = installs.find(
       (candidate) => candidate.remotePluginId === readParams.pluginName,
     );
@@ -1473,11 +1545,10 @@ async function installCodexSelectionSet(selections, failures = []) {
       selectedPlugin !== undefined &&
       (failedIds.has(selectedPlugin.pluginId) || !enabledPluginIds.has(selectedPlugin.pluginId))
     ) {
-      installedDetails.push(resolvedDetails[readParamsList.indexOf(readParams)]);
-    } else {
-      installedDetails.push(await codexAppServerRequest("plugin/read", readParams));
+      return resolvedDetails[index];
     }
-  }
+    return codexAppServerRequest("plugin/read", readParams);
+  });
   const installedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, installedDetails, failed, toolStatuses);
   if (JSON.stringify(installedArtifact.installs) !== JSON.stringify(effectiveResolvedArtifact.installs)) {
     throw new Error("Codex plugin installed release metadata does not match startup resolution.");
@@ -1507,7 +1578,7 @@ async function installCodexPlugins(runtime, failures = []) {
   assertCodexPluginRuntime(runtime);
   const selections = runtime.manifest.selections ?? {};
   const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
-  let lastError;
+  let lastError = new Error("Codex plugin installation deadline expired before the first attempt.");
   let result = { successfulPluginIds: [], failures };
   while (Date.now() < deadline) {
     try {
@@ -1572,7 +1643,7 @@ function probeOpenClawAuthenticationFailureCode() {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
     });
-    if (result.error?.code === "ETIMEDOUT" || result.signal === "SIGKILL") return "MODEL_PROBE_TIMEOUT";
+    if (result.error?.code === "ETIMEDOUT") return "MODEL_PROBE_TIMEOUT";
     if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const results = JSON.parse(result.stdout).auth?.probes?.results;
     return Array.isArray(results) && results.length === 1 &&
@@ -1718,13 +1789,11 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
       const appServer = (entries.codex.config ??= {}).appServer ??= {};
       appServer.remoteWorkspaceRoot ??= remoteRoot;
     }
-    // OCC edits four owner documents; bootstrap additionally reads these two.
+    // OCC edits four owner documents; native previews read the Agent workspace.
     const editable = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
-    const readable = [...editable, "BOOTSTRAP.md", "MEMORY.md"];
     const memoryPaths = ["MEMORY.md", "memory.md", "DREAMS.md", "dreams.md", "memory", "memory/**"]
       .map((name) => remoteRoot + "/" + name);
     const skillRoots = [
-      remoteRoot + "/skills", remoteRoot + "/.agents/skills",
       "/home/node/.openclaw/skills", "/home/node/.openclaw/plugin-skills",
       "/home/node/.agents/skills", "/home/node/openclaw-runtime-assets/bundled-skills",
       "/home/node/openclaw-runtime-assets/plugin-skills",
@@ -1735,13 +1804,9 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
         ask: "off",
         allowReadPaths: [
           remoteRoot,
-          ...readable.map((name) => remoteRoot + "/" + name),
-          ...memoryPaths,
+          remoteRoot + "/**",
           "/home/node/.openclaw",
           ...skillRoots.flatMap((root) => [root, root + "/**"]),
-          remoteRoot + "/media/inbound/openclaw-staged-*",
-          remoteRoot + "/media/inbound/openclaw-staged-*/**",
-          remoteRoot + "/media/outbound/**",
         ],
         allowWritePaths: [
           ...editable.map((name) => remoteRoot + "/" + name),
@@ -1751,30 +1816,7 @@ if (workspaceNodeId !== undefined || process.env.APP_SERVER_URL !== undefined) {
         ],
         followSymlinks: false,
       };
-      const hook = config.hooks?.internal?.entries?.["bootstrap-extra-files"];
-      if (config.hooks?.internal?.enabled !== false && hook && hook.enabled !== false) {
-        const declared = [hook.paths, hook.patterns, hook.files]
-          .map((value) => Array.isArray(value)
-            ? value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean)
-            : [])
-          .find((value) => value.length > 0) ?? [];
-        const paths = new Set(declared.filter((value) => !/[?*{}]/u.test(value))
-          .map((value) => pluginResolve(remoteRoot, value))
-          .filter((value) => value.startsWith(remoteRoot + "/")
-            && readable.includes(value.slice(value.lastIndexOf("/") + 1))));
-        // Native bootstrap accepts literal bracketed paths. Reuse command-bound
-        // exact grants instead of interpreting those paths as policy globs.
-        for (const requestedPath of paths) {
-          for (const command of ["file.fetch", "file.stat"]) {
-            (fileConfig.literalGrants ??= []).push({
-              nodeId: workspaceNodeId, command, requestedPath, canonicalPath: requestedPath,
-            });
-          }
-        }
-      }
     }
-    // TODO(workspace-storage-split): support bootstrap glob traversal and contained
-    // symlinks through the node file policy.
     fileConfig.policyVersion ??= 2;
     (fileConfig.workspaces ??= {}).main = { nodeId: workspaceNodeId, remoteRoot };
   }
@@ -1827,6 +1869,7 @@ export const AGENT_RUNTIME_ENTRYPOINT = String.raw`
 const { createHash } = require("node:crypto");
 const { mkdirSync, mkdtempSync, rmSync } = require("node:fs");
 const { spawn, spawnSync } = require("node:child_process");
+const { performance } = require("node:perf_hooks");
 
 ${PLUGIN_RUNTIME_HELPERS}
 ${AUTH_PROBE_FAILURE_HELPER}
@@ -1874,12 +1917,18 @@ const loginArguments = loginMode === "api_key"
       "login",
       "--with-access-token",
     ];
-const login = spawnSync("codex", loginArguments, {
-  input: loginMode === "api_key" ? apiKey : accessToken,
-  encoding: "utf8",
-  stdio: ["pipe", "ignore", "pipe"],
-  timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
-});
+let login;
+for (let attempt = 0; attempt < 3; attempt++) {
+  login = spawnSync("codex", loginArguments, {
+    input: loginMode === "api_key" ? apiKey : accessToken,
+    encoding: "utf8",
+    stdio: ["pipe", "ignore", "pipe"],
+    timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+  });
+  // Access-token login validates the same credential remotely before saving it.
+  // A cold-node login timeout may recover; model probing has its own bounded retry.
+  if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") break;
+}
 if (login.status !== 0 || login.error) {
   holdFailedAuthentication("login", "LOGIN_FAILED");
 } else {
@@ -1887,11 +1936,17 @@ delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
 
-function probeCodexAuthenticationFailureCode() {
+function probeCodexAuthentication(timeout) {
+  let result;
+  const finish = (code) => ({
+    code,
+    exitCode: Number.isInteger(result?.status) ? result.status : null,
+    signal: ["SIGKILL", "SIGTERM", "SIGINT"].includes(result?.signal) ? result.signal : null,
+  });
   const directory = mkdtempSync("/tmp/codex-auth-probe-");
   try {
     const selectedModel = process.env.OPENCLAW_HARNESS_MODEL;
-    if (typeof selectedModel !== "string" || !/^(openai|codex)\/.+/.test(selectedModel)) return "UNAVAILABLE";
+    if (typeof selectedModel !== "string" || !/^(openai|codex)\/.+/.test(selectedModel)) return finish("UNAVAILABLE");
     // Pinned native features suppress executable and external tools. Metadata may
     // still advertise apply_patch: read-only + never denies its writes. Any tool
     // event makes this probe unsuccessful, including harmless request_user_input.
@@ -1903,7 +1958,7 @@ function probeCodexAuthenticationFailureCode() {
       "sleep_tool", "goals", "workspace_dependencies", "skill_search",
       "skill_mcp_dependency_install", "tool_suggest", "recommended_plugins", "request_permissions_tool",
     ];
-    const result = spawnSync("codex", [
+    result = spawnSync("codex", [
       ...disabled.flatMap((feature) => ["--disable", feature]),
       "-a", "never", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
       "--skip-git-repo-check", "--json", "--sandbox", "read-only", "--cd", directory,
@@ -1931,35 +1986,59 @@ function probeCodexAuthenticationFailureCode() {
         ),
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+      timeout, killSignal: "SIGKILL", maxBuffer: 262144,
     });
-    if (result.error?.code === "ETIMEDOUT" || result.signal === "SIGKILL") return "MODEL_PROBE_TIMEOUT";
-    if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
-    const events = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
+    const output = result.stdout?.trim() ?? "";
+    const events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
     const allowed = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "item.updated", "item.completed"]);
     // Native item.error is an advisory (for example missing catalog metadata),
     // distinct from fatal top-level error/turn.failed. A completed model turn is
     // still required; no tool item can satisfy this authentication check.
     if (events.some((event) => !allowed.has(event.type) ||
-      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return "MODEL_PROBE_FAILED";
-    return events.filter((event) => event.type === "turn.completed").length === 1 &&
+      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return finish("MODEL_PROBE_FAILED");
+    // A timeout cannot make an observed tool call or protocol failure retryable.
+    if (result.error?.code === "ETIMEDOUT") return finish("MODEL_PROBE_TIMEOUT");
+    if (result.status !== 0 || result.error) return finish("MODEL_PROBE_FAILED");
+    return finish(events.filter((event) => event.type === "turn.completed").length === 1 &&
       events.filter((event) => event.type === "turn.started").length === 1 &&
       events.at(-1)?.type === "turn.completed" &&
       events.some((event) => event.type === "item.completed" && event.item?.type === "agent_message" &&
         typeof event.item.text === "string" && event.item.text.trim().length > 0)
         ? undefined
-        : "MODEL_PROBE_FAILED";
+        : "MODEL_PROBE_FAILED");
   } catch {
-    return "MODEL_PROBE_FAILED";
+    return finish("MODEL_PROBE_FAILED");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 }
 
-const codexAuthenticationFailureCode = probeCodexAuthenticationFailureCode();
-if (codexAuthenticationFailureCode !== undefined) {
-  holdFailedAuthentication("model-probe", codexAuthenticationFailureCode);
-} else {
+// A single startup budget includes both process attempts and the retry delay.
+// No signal handler is installed during backoff, so termination exits promptly.
+function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 61000) {
+  const startedAt = performance.now();
+  const timeout = Math.min(30000, Math.floor(deadline - startedAt));
+  if (timeout <= 0) {
+    holdFailedAuthentication("model-probe", "MODEL_PROBE_TIMEOUT");
+    return;
+  }
+  const result = probeCodexAuthentication(timeout);
+  console.error(JSON.stringify({
+    event: "codex.model_probe",
+    attempt,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    exitCode: result.exitCode,
+    signal: result.signal,
+    code: result.code ?? "READY",
+  }));
+  if (result.code === "MODEL_PROBE_TIMEOUT" && attempt === 1 && performance.now() + 1000 < deadline) {
+    setTimeout(() => startAuthenticatedCodex(2, deadline), 1000);
+    return;
+  }
+  if (result.code !== undefined) {
+    holdFailedAuthentication("model-probe", result.code);
+    return;
+  }
 
 function forwardTermination(child) {
   let terminating = false;
@@ -2021,6 +2100,7 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 
   }
 })();
 }
+startAuthenticatedCodex();
 }
 `;
 

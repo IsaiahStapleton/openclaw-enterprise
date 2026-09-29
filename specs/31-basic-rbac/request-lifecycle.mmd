@@ -1,0 +1,104 @@
+---
+title: "Proposed RBAC request lifecycle"
+config:
+  theme: base
+  htmlLabels: false
+  themeVariables:
+    fontFamily: "Arial, sans-serif"
+    fontSize: "16px"
+    actorBkg: "#EDF2F7"
+    actorBorder: "#879AB0"
+    actorTextColor: "#25364A"
+    noteBkgColor: "#F7F1E5"
+    noteBorderColor: "#B3A078"
+    noteTextColor: "#344054"
+    signalColor: "#748798"
+    signalTextColor: "#25364A"
+  sequence:
+    useMaxWidth: false
+    actorMargin: 26
+    width: 140
+    height: 70
+    diagramMarginX: 18
+    diagramMarginY: 18
+    boxMargin: 12
+    boxTextMargin: 12
+    messageMargin: 28
+    noteMargin: 12
+    mirrorActors: true
+    wrap: true
+---
+sequenceDiagram
+  actor U as Human
+  participant C as Native connector<br/>Gateway
+  box rgb(237,243,248) Control plane process
+    participant O as OCC<br/>IAM and State unit
+  end
+  participant D as PostgreSQL
+  participant H as Actual Harness<br/>Agent runtime
+  participant K as Credential owner
+  participant R as Protected model<br/>repository receivers
+
+  Note over U,R: 1 · Enroll and grant exact access
+  U->>O: Administrator enrolls human, then explicit grants
+  O->>D: Original transaction and complete lock order
+  D-->>O: Committed receipt or uncertain COMMIT
+  O-->>U: Recoverable policy outcome
+  Note over O,D: Uncertain COMMIT remains unknown.<br/>No replay or destructive compensation.
+
+  Note over U,R: 2 · Admit a native request
+  U->>C: Requester B sends personal DM or team mention
+  C->>O: Verified event, sender and original reply handle
+  O->>O: Current account, context, invoke and baseline
+  alt Missing or stale authority
+    O-->>C: Denied or unavailable
+    Note over C,H: Failed admission blocks default dispatch.
+  else Current authority
+    O->>D: Commit invocation, authority, audit and dispatch fence
+    D-->>O: Durable admission
+    O-->>C: Original invocation identity
+
+  Note over U,R: 3 · Prepare exact protected execution
+  O->>H: Select usable execution and observe actual incarnation
+  H-->>O: Exact observed execution
+  O->>O: Bind immutable delivery attempt
+  O->>K: Open registered session and read back exact material
+  K-->>O: Original admitted session
+  O->>H: Deliver material bound to observed incarnation
+  H->>R: Protected probe from actual execution
+  R-->>O: Receiving evidence for current-serving selection
+  O->>O: Select current serving after required evidence
+  Note over O,R: Existing usable execution can be reused.<br/>Original authority and session horizons remain fixed.
+
+  Note over U,R: 4 · Dispatch once and use admitted authority
+  O->>H: Dispatch original admitted turn
+  H-->>O: Runtime turn reference or unknown start
+  O->>D: Retain turn or uncertainty
+  Note over O,H: Unknown start cannot authorize redispatch.<br/>Only the actual admitted turn continues.
+  H->>R: Model or git-read operation for original requester
+  R->>R: Verify actual request and current authority
+  R-->>H: Protected operation result
+  H-->>O: Runtime result reference
+
+  Note over U,R: 5 · Disclose to the authorized audience
+  O->>O: Recheck content, full audience and original reply authority
+  O->>D: Retain separate native submission fence
+  D-->>O: Original eligible submission
+  O->>C: Authorized result and original handle
+  C-->>U: Native response
+  C->>O: Confirmed, failed or unknown send
+  O->>D: Retain outcome and late observations
+  Note over C,D: Unknown send never permits resend.<br/>Late observations cannot reopen eligibility.
+
+  end
+
+  Note over U,R: 6 · Withdraw affected authority
+  U->>O: Authorized narrowing change
+  O->>D: Commit narrowing and refuse new work/results
+  O->>K: Close affected sessions after committed narrowing
+  O->>R: Protective traffic closure survives permission loss
+  O->>H: Cancel affected work or stop exact revision
+  R-->>O: Traffic closure evidence
+  H-->>O: Observed stop or unresolved termination
+  Note over O,R: Measure new-work refusal and last protected bytes within 30 seconds.<br/>Scoped five-second ceilings remain stricter.<br/>Physical stop and provider cleanup are separate outcomes.
+  Note over U,R: Entire lifecycle proposed and unqualified.<br/>Time flows downward. Solid arrows request. Dashed arrows reply.

@@ -26,7 +26,7 @@ This profile uses the pinned K3s image and installs PostgreSQL and OCE in
 the private state directory. It does not install OpenShell.
 
 Before bootstrapping, startup checks the dedicated Codex sandbox with the exact
-imported runtime image and the supported Codex `0.156.0` version. If the node's
+imported runtime image and the supported Codex `0.158.0` version. If the node's
 `RuntimeDefault` blocks it, the launcher
 derives the [reviewed compatibility profile](codex-sandbox.md) from that node's
 actual policy, installs it only on the owned k3d node, and verifies workspace
@@ -103,6 +103,74 @@ For separate stacks, select distinct state directories, cluster names, and
 published API ports. Generated runtime workloads have a 2 GiB memory limit
 each; size the local engine VM for OCC plus the Agents you run. Keep each
 stack's resources under the helper's lifecycle until cleanup.
+
+## Require both proxies before enabling Slack
+
+For a Slack-enabled local installation, complete [both Slack proxy paths](../integrations/slack.md#configure-both-slack-proxies)
+before creating or deploying the Agent. The launcher does not provision these
+proxies or configure their URLs automatically.
+
+Provision the reviewed proxy on the owned k3d container network, or another
+private address reachable from the API and dedicated gateway Pods. Do not use
+host loopback as the proxy address: `127.0.0.1` inside a Pod is that Pod. For a
+proxy container on the k3d network, no host-published listener is needed. Restrict
+its source access to the actual traffic from this cluster, accounting for node
+source NAT.
+
+Back up both generated files in the private state directory, then update them:
+
+- `installation.yaml`: set `drivers.compute.configuration.runtime.channels.proxyUrl`
+  for gateway Slack messaging.
+- `helm-values.json`: set `api.channelDirectoryProxyUrl` for Console user and
+  channel lookup. Kubernetes-only mode runs the production API, where lookup
+  stays disabled without this setting.
+
+Apply the edits to the existing development release with the commands below.
+Use the chart source matching the installed controller, retain its image
+references and other protected inputs, and plan a maintenance window if Agents
+are running. Confirm the release and namespace; the values below are the
+launcher defaults. The checksum rolls the API and worker even when only the
+Installation document changed.
+
+```bash
+set -euo pipefail
+umask 077
+export OCC_SLACK_STATE='<existing private state directory>'
+export OCC_SLACK_CONTEXT='<context printed by scripts/dev-up>'
+export OCC_SLACK_NAMESPACE='oce-system'
+export OCC_SLACK_RELEASE='openclaw-enterprise'
+
+node --input-type=module <<'NODE'
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const root = process.env.OCC_SLACK_STATE;
+const path = join(root, 'helm-values.json');
+const values = JSON.parse(readFileSync(path, 'utf8'));
+values.controlPlane ??= {};
+values.controlPlane.installationChecksum = createHash('sha256')
+  .update(readFileSync(join(root, 'installation.yaml'))).digest('hex');
+writeFileSync(path, JSON.stringify(values, null, 2) + '\n');
+NODE
+
+kubectl --kubeconfig "$OCC_SLACK_STATE/kubeconfig" --context "$OCC_SLACK_CONTEXT" \
+  -n "$OCC_SLACK_NAMESPACE" create secret generic occ-installation-startup \
+  --from-file=installation.yaml="$OCC_SLACK_STATE/installation.yaml" \
+  --dry-run=client -o yaml | \
+  kubectl --kubeconfig "$OCC_SLACK_STATE/kubeconfig" --context "$OCC_SLACK_CONTEXT" \
+    -n "$OCC_SLACK_NAMESPACE" apply -f -
+
+helm upgrade "$OCC_SLACK_RELEASE" deploy/helm/openclaw-enterprise \
+  --kubeconfig "$OCC_SLACK_STATE/kubeconfig" --kube-context "$OCC_SLACK_CONTEXT" \
+  --namespace "$OCC_SLACK_NAMESPACE" -f "$OCC_SLACK_STATE/helm-values.json" \
+  --wait --timeout 5m
+```
+
+Do not rerun `dev-up`, recreate bootstrap storage, or delete the cluster to apply
+this configuration. After OCC recovers, deploy a new revision for each affected
+running Slack Agent so its gateway receives the new proxy and network policy.
+Verify directory search and gateway Socket Mode using the
+[Slack checks](../integrations/slack.md#configure-both-slack-proxies).
 
 ## Verify the local boundary
 

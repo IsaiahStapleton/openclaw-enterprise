@@ -337,7 +337,11 @@
                   { "const": "CHANNEL_DIRECTORY_MISSING_SCOPE", "type": "string" },
                   { "const": "CHANNEL_DIRECTORY_RATE_LIMITED", "type": "string" },
                   { "const": "CHANNEL_DIRECTORY_INVALID_RESPONSE", "type": "string" },
-                  { "const": "CHANNEL_DIRECTORY_UNAVAILABLE", "type": "string" }
+                  { "const": "CHANNEL_DIRECTORY_UNAVAILABLE", "type": "string" },
+                  { "const": "CHANNEL_CREDENTIAL_ROLE_MISMATCH", "type": "string" },
+                  { "const": "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED", "type": "string" },
+                  { "const": "CHANNEL_CREDENTIAL_UNAVAILABLE", "type": "string" },
+                  { "const": "CHANNEL_CREDENTIAL_BINDING_REQUIRED", "type": "string" }
                 ]
               },
               "details": {
@@ -5298,7 +5302,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Begin deletion of an exact Namespace-owned Agent and its AgentRevisions",
+        "summary": "Begin or retry deletion of an exact Namespace-owned Agent and its AgentRevisions",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "delete", "resourceKind": "agent", "scope": "requested" }
@@ -6572,6 +6576,54 @@
                           "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "progress": {
+                          "anyOf": [
+                            { "type": "null" },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "lastAttempt": {
+                                  "anyOf": [
+                                    { "type": "null" },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "at": {
+                                          "format": "date-time",
+                                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                                          "type": "string"
+                                        },
+                                        "code": {
+                                          "maxLength": 64,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "message": { "minLength": 1, "type": "string" }
+                                      },
+                                      "required": ["at", "code", "message"],
+                                      "type": "object"
+                                    }
+                                  ],
+                                  "description": "Latest reconciliation result bound to this exact deployment work item. Null means no bound result is available, not proof that work never ran. Codes and messages are allowlisted; provider text is not exposed."
+                                },
+                                "nextAttemptAt": {
+                                  "anyOf": [
+                                    {
+                                      "format": "date-time",
+                                      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                                      "type": "string"
+                                    },
+                                    { "type": "null" }
+                                  ],
+                                  "description": "Earliest time queued work is eligible to run, not a promised start time. Null while claimed."
+                                }
+                              },
+                              "required": ["lastAttempt", "nextAttemptAt"],
+                              "type": "object"
+                            }
+                          ],
+                          "description": "Pending deployment progress. Null for terminal outcomes. A last attempt describes a recorded result, not current runtime health."
+                        },
                         "status": {
                           "anyOf": [
                             { "const": "queued", "type": "string" },
@@ -6610,6 +6662,7 @@
                         "namespaceId",
                         "agentId",
                         "status",
+                        "progress",
                         "error",
                         "warnings"
                       ],
@@ -12072,6 +12125,7 @@
                                     "type": "object"
                                   },
                                   "name": { "$ref": "#/components/schemas/def-0" },
+                                  "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                                   "plugins": { "$ref": "#/components/schemas/def-0" }
                                 },
                                 "type": "object"
@@ -12278,6 +12332,7 @@
                             "type": "object"
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
+                          "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                           "plugins": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
@@ -12423,6 +12478,7 @@
                                   "type": "object"
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
+                                "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
@@ -12743,6 +12799,7 @@
                                   "type": "object"
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
+                                "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
@@ -12953,6 +13010,7 @@
                             "type": "object"
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
+                          "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                           "plugins": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
@@ -13097,6 +13155,7 @@
                                   "type": "object"
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
+                                "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
                                 "plugins": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"

@@ -1,7 +1,7 @@
 ---
 created: "2026-09-20"
-updated: "2026-09-23"
-last_updated_session: "codex/01a0d075-a358-7620-8c16-fd4290acddf1"
+updated: "2026-09-29"
+last_updated_session: "codex/01a0eb4c-5933-7752-bddc-f787e8da79e7"
 ---
 
 # Namespace IAM Policy Flow
@@ -79,14 +79,30 @@ platform-provided policy repository. It rejects missing Roles, cross-Namespace
 targets, unsupported subjects, duplicate IDs, referenced Role deletion, and
 unknown exact bindings without weakening authorization.
 
+When the selected native Driver reloads policy during a PostgreSQL State callback,
+`PostgresPlatformState.loadNativeIAMState` reads through that State instance's
+original transaction. Authorization therefore sees that unit's pending grants
+and removals. Outside a callback, the loader opens its ordinary read transaction.
+Work that escapes the callback retains its original closed lifetime and fails;
+it cannot obtain another client after commit, rollback, or an unknown outcome.
+This transaction binding supplies neither authenticated session custody nor a
+fence against concurrent policy invalidation.
+
 ### 5. Platform state commits policy and audit together
 
 `packages/occ/src/state/postgres-state.ts:PostgresPlatformState`
 
 The PostgreSQL state implementation writes Roles and AccessBindings through the
 same unit of work used by the API audit append. If commit outcome is unknown,
-OCC reports dependency failure rather than assuming policy state. Later
-authorization requests read the current policy through the IAM Driver.
+State discards the connection without another query. OCC reports dependency
+failure; a caller must not infer rollback or replay the mutation from that
+result. Later authorization requests read the current policy through the IAM
+Driver.
+
+State also provides an opt-in Installation authority and native-IAM barrier
+for an original transaction. Its SQL supplier is unregistered, and the
+Namespace routes above do not use it. It does not protect these routes until the
+selected account, session, and policy writers join the same protocol.
 
 ## Debugging and Verification
 
@@ -96,6 +112,8 @@ authorization requests read the current policy through the IAM Driver.
   responses expose `servicePrincipalId` without accepting caller-supplied values.
 - `node --test tests/integration/postgres-namespace-iam-policy.test.mjs` checks
   PostgreSQL persistence, audit atomicity, and deletion behavior with real state.
+- `node --test tests/conformance/postgres-transaction-unknown-commit.test.mjs`
+  checks that an unknown commit does not wait for a later rollback query.
 - A `403` means the caller lacks Installation administration, exact Namespace
   read, or target read for binding creation. A `409` on Role deletion means a
   binding still references the Role.
@@ -112,5 +130,7 @@ authorization requests read the current policy through the IAM Driver.
 
 ## Changelog
 
+- 2026-09-29 05:28: Bind selected native policy reloads to the original State transaction and reject escaped reads. (codex/01a0eb4c-5933-7752-bddc-f787e8da79e7 - 2a191c74c0079e329db130d0a81a1f0f87869bb9)
+- 2026-09-27 19:15: Clarify unknown commit handling and the unregistered authority barrier. (codex/01a0b3bf-83a8-7392-ae2d-1a369b54ab3f - 181b0472f9a5a9d422035edf5121d3a15c200cb5)
 - 2026-09-23 22:56: Update source ownership for extracted IAM HTTP handlers; preserve admission and transaction boundaries. (codex/01a0d075-a358-7620-8c16-fd4290acddf1 - 4df9f9800836dc1c2b57afd5f8af4d91f55088d5)
 - 2026-09-20 09:32: Document Namespace IAM policy management flow. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 5f7728e8c5d128bc7067b7035e07f06c3c4da92c)

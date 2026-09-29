@@ -1,7 +1,7 @@
 ---
 created: 2026-09-27
-updated: 2026-09-27
-last_updated_session: 01a0e4d2-4f51-7780-b0fc-2352cb99078f
+updated: 2026-09-28
+last_updated_session: authoring-run/5b79ed06-59ff-4a5d-9cf4-0479d7c8d717
 ---
 
 # Agent Channel Directory Lookup Flow
@@ -33,7 +33,10 @@ graph TD
   B -->|denied or missing| X["Return safe lookup error"]
   B -->|authorized| P{"ChannelDriver selected?"}
   P -->|no| U["Return 501; Console offers exact-ID entry"]
-  P -->|yes| C["SecretDriver reads current value"]
+  P -->|yes| M{"Managed Helm proxy?"}
+  M -->|yes| H["API reaches proxy Service DNS"]
+  M -->|no| C["API reaches external proxy IP"]
+  H --> C["SecretDriver reads current value"]
   C --> D["OCC rechecks target, Secret grant, and backend identity"]
   D -->|changed| X
   D -->|current| E["Slack Driver reads workspace and bounded directory pages"]
@@ -61,8 +64,13 @@ Production composition selects the bundled Slack ChannelDriver only when the
 API has an approved `OCC_CHANNEL_DIRECTORY_PROXY_URL`. Without it, an authorized
 lookup returns `501` before the Secret value is read. Development selects the
 Driver directly. In production the Driver tunnels requests to `slack.com:443`
-through the configured proxy; the chart grants the API Pod egress only to that
-proxy IP and port.
+through the configured proxy. Helm can set that proxy to its managed
+`openclaw-enterprise-slack-proxy.<namespace>.svc` Service, pass the exact managed
+host in `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST`, and grant API egress only to
+the proxy Pod selector. Otherwise it can use an external literal IPv4 proxy and
+grant API egress only to that IP and port. The managed proxy accepts CONNECT
+only for Slack hostnames on port 443, while its NetworkPolicy limits upstream
+egress to operator-supplied CIDRs.
 The selected SecretDriver invokes `withValue` and verifies backend ownership.
 OCC rechecks grants and Secret backend identity after the read. It passes the
 token only in process to the ChannelDriver. The bundled Slack implementation
@@ -89,11 +97,14 @@ cancels the queued search and its browser request; generation checks also discar
 obsolete responses. Browser cancellation does not guarantee cancellation of
 provider work already started by the API.
 
-Selecting a result or confirming pasted IDs adds removable chips to the field; search text remains separate from committed IDs. Arrow keys
-and Enter select results, and Escape closes the list. It resolves saved IDs again
-when the editor opens or the selected Secret changes. A denied or failed lookup leaves manual
-exact-ID entry available; no directory result changes the saved Configuration
-until the operator saves the channel edit.
+Selecting a result or confirming pasted IDs adds removable chips to the field;
+search text remains separate from committed IDs. Plugin approver fields accept
+raw Slack user IDs when lookup is unavailable; directory-selected approvers
+remain workspace-qualified. Arrow keys and Enter select results, and Escape
+closes the list. It resolves saved IDs again when the editor opens or the
+selected Secret changes. A denied or failed lookup leaves manual exact-ID entry
+available; no directory result changes the saved Configuration until the
+operator saves the channel edit.
 
 When Agent detail performs a browser-refocus access check, it keeps the mounted
 view. The picker keeps its open query and results while controls are temporarily
@@ -110,8 +121,9 @@ view.
   `operate` grant. A token, scope, rate limit, or provider error returns a
   safe code without the token or upstream payload.
 - A `501` lookup in production means the API has no directory proxy configured.
-  Set the approved proxy IP and port in Helm `api.channelDirectoryProxyUrl`, and
-  verify that the proxy permits CONNECT to `slack.com:443`.
+  Enable Helm `slackProxy` with reviewed upstream CIDRs or set the approved
+  external proxy IP and port in `api.channelDirectoryProxyUrl`, then verify that
+  the proxy permits CONNECT to `slack.com:443`.
 - Directory conformance tests cover provider pagination and safe errors. The
   OCC API integration test covers both authorization checks and response
   projection. Browser checks cover name display and exact-ID saving.
@@ -132,6 +144,10 @@ view.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 15:37: Document the managed Helm Slack proxy path and selector-scoped API egress. (authoring-run/5b79ed06-59ff-4a5d-9cf4-0479d7c8d717 - 6c56149f1f2b7290d8526d87c3624c9b7db09fbf)
+
+- 2026-09-28 01:19: Document raw Slack user ID entry for plugin approver fields. (01a0e579-79b9-7a22-b707-d5bc1e024e31 - f90ca58bf4085a6075faa1c46e75ee96d2fbdafb)
 
 - 2026-09-27 23:35: Put credentials first and prevent result dismissal from moving form controls during a click. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - bb11b3974bc7ec80db1dd4cfab4e1a166e386de3)
 

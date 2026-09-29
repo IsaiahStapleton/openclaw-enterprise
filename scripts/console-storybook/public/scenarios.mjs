@@ -341,7 +341,7 @@ const devdayCreateCheckpoint = [
   { selector: "#slack-secret-slack-bot-token", value: "sec_devday_slack_bot_token" },
   click("Apply channel settings"),
   click("Create Agent"),
-  { selector: '[id="workspace-AGENTS.md"]' },
+  { selector: ".deployment-status" },
 ];
 const devdayAdminCheckpoint = [
   { selector: 'a[href*="agt_00000000-0000-4000-8000-000000000001"]', click: true },
@@ -1245,6 +1245,33 @@ export const scenarios = {
     description:
       "Codex creation submits provisioning with inline Configuration and Secret references prepared through the channel modal.",
   },
+  createDeploymentPending: {
+    group: "Pages/Create Agent",
+    name: "Created Agent with pending deployment",
+    path: create,
+    actions: readyForm,
+    provisionedDeploymentStatus: "queued",
+    description:
+      "Creation opens Agent details after provisioning completes, while the first deployment remains queued.",
+    steps: [
+      "Click Create Agent and wait for Agent details to open.",
+      "Inspect Deployment activity: the recorded status remains queued, and no version is selected.",
+      "Click Refresh deployment. The simulated deployment stays queued; the create form does not reopen.",
+    ],
+  },
+  createDeploymentFailed: {
+    group: "Pages/Create Agent",
+    name: "Created Agent with failed deployment",
+    path: create,
+    actions: readyForm,
+    provisionedDeploymentStatus: "failed",
+    description:
+      "A first-deployment failure appears on Agent details after successful provisioning, without trapping creation on the form.",
+    steps: [
+      "Click Create Agent and wait for Agent details to open.",
+      "Inspect the failed Deployment activity and its reconciliation error.",
+    ],
+  },
   createUnsupportedProvisioning: {
     group: "Pages/Create Agent",
     name: "Unsupported provisioning",
@@ -1867,6 +1894,56 @@ export const scenarios = {
     description:
       "Edit native JSON on the current draft. Save Configuration persists values; deployment remains a separate action.",
   },
+  gatewayPasswordAccess: {
+    group: "Pages/Agent detail",
+    name: "Enable Gateway password access",
+    path: draft,
+    deployed: true,
+    description: "Configure the generated Gateway password without typing native JSON.",
+    steps: [
+      "Select Enable Gateway password access. The draft receives a password reference; no password value is displayed.",
+      "Cancel to discard the edit, or Save Configuration to persist it.",
+      "Confirm the saved-access message, then Deploy new version to apply the reference.",
+    ],
+    gap: "Simulated UI proof; does not verify credential generation, delivery, or a real Gateway login.",
+  },
+  gatewayPasswordEnabled: {
+    group: "Pages/Agent detail",
+    name: "Gateway password access configured",
+    path: draft,
+    gatewayPassword: true,
+    description:
+      "The saved Configuration uses the generated password; deployment is still required to apply edits.",
+  },
+  gatewayPasswordSaveDenied: {
+    group: "Pages/Agent detail",
+    name: "Gateway password save denied",
+    path: draft,
+    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    rules: [
+      {
+        method: "PATCH",
+        suffix: "/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        status: 403,
+      },
+    ],
+    description: "A denied save retains the draft and does not change the saved Configuration.",
+  },
+  gatewayPasswordSaving: {
+    group: "Pages/Agent detail",
+    name: "Gateway password save in progress",
+    path: draft,
+    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    rules: [
+      {
+        method: "PATCH",
+        suffix: "/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        hold: true,
+      },
+    ],
+    description:
+      "A pending save blocks further Configuration edits and deployment; a timed-out write requires draft readback.",
+  },
   pluginsDraft: {
     group: "Pages/Agent detail",
     name: "Edit plugins in new version",
@@ -1962,6 +2039,37 @@ export const scenarios = {
     ],
     gap: "The fixture simulates directory data; it does not contact Slack or read a real Secret.",
   },
+  pluginApproversDirectoryUnavailable501: {
+    group: "Pages/Agent detail",
+    name: "Plugin approvers accept raw Slack IDs",
+    path: draft,
+    slack: true,
+    auth: "codex_pat",
+    agentPlugins: JSON.parse(pluginSelections),
+    agentPluginApprovers: [],
+    pluginCapabilities,
+    pluginDiscovery,
+    rules: [{ suffix: "/channel-directory/lookup", method: "POST", status: 501 }],
+    actions: [
+      { selector: '.content [aria-live="polite"][aria-busy="false"]' },
+      click("Plugins"),
+      { selector: 'select[aria-label="Default plugin approvers mode"]', value: "chosen" },
+      { selector: '[aria-label="Default plugin approvers people"]', focus: true },
+      { selector: '[aria-label="Default plugin approvers people"]', value: "UDEMO123" },
+      { selector: ".slack-directory-panel:not([hidden]) .error:not(:empty)" },
+      click("Add UDEMO123"),
+      click("Save plugin selections"),
+      { selector: '.content [aria-live="polite"][aria-busy="false"]' },
+    ],
+    description:
+      "When the API reports channel directory lookup as unavailable, the approver field still accepts a raw Slack user ID and saves it on the draft Agent.",
+    steps: [
+      "Confirm the directory error explains that exact IDs can still be entered.",
+      "Review the saved default plugin approver chip: UDEMO123 remains visible because names could not be resolved.",
+      "Open Plugin selections JSON or inspect the saved Agent response in browser tools to confirm the plugin policy JSON was not changed by the approver save.",
+    ],
+    gap: "The 501 directory response, Slack user ID, and Agent save are simulated. This proves Console behavior only, not Slack identity validity or runtime approval delivery.",
+  },
   pluginsAdmitted: {
     group: "Pages/Agent detail",
     name: "Plugins in admitted version",
@@ -2028,6 +2136,40 @@ export const scenarios = {
     candidateDeploymentStatus: "running",
     description:
       "A worker holds the v7 deployment claim while v6 remains selected. The API does not expose finer runtime stages.",
+  },
+  deploymentDeferred: {
+    group: "Pages/Agent detail",
+    name: "Deployment waiting for runtime",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "queued",
+    deploymentLastAttempt: {
+      at: "2026-09-26T22:53:00.000Z",
+      code: "REVISION_INCOMPLETE",
+      message: "Waiting for the runtime to become ready.",
+    },
+    description:
+      "v7 has already been checked and is waiting for another reconciliation. Its last result and timestamp remain distinct from current runtime health.",
+    steps: [
+      "Read the pending reason and Last checked time in Deployment activity.",
+      "Click Refresh deployment; the simulated pending result remains visible.",
+      "View v6 and confirm the latest deployment still describes v7.",
+    ],
+    gap: "Simulated API results demonstrate presentation only. PostgreSQL integration covers durable work attribution.",
+  },
+  deploymentRetrying: {
+    group: "Pages/Agent detail",
+    name: "Deployment retry after dependency failure",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "running",
+    deploymentLastAttempt: {
+      at: "2026-09-26T22:53:00.000Z",
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "A dependency was unavailable. The controller will retry.",
+    },
+    description:
+      "A worker is active again. The previous dependency failure is explicitly labeled as the last recorded result, not a current failure or a terminal outcome.",
   },
   currentVersionDuringDeployment: {
     group: "Pages/Agent detail",
@@ -3013,7 +3155,7 @@ export const scenarios = {
     steps: [
       "Choose Research assistant, fill Variable: name, then Use Preset.",
       "Review the Configuration, masked pre-existing model Secret reference, and four seeded workspace files; click Create Agent.",
-      "Wait for the simulated provisioning and deployment to finish; the Console opens Workspace files for the admitted revision.",
+      "Wait for provisioning to finish; the Console opens Agent details with the queued deployment. Refresh deployment to finish simulated activation, then open Workspace files.",
       "Use Versions to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
     ],
     gap: "The fixture supplies a ready Namespace, Preset, and model Secret. Set those up outside the console. Verify actual serving health and a model response outside this walkthrough.",
@@ -3141,7 +3283,7 @@ export const scenarios = {
       "Open Configure plugins. The simulated curated catalog is available for every Preset and Secret choice in this Storybook flow; add Linear, set Linear default reviewer to Automatic review, and set Create issue approval to Ask for approval.",
       "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access.",
       "Open Edit Slack. Confirm the six prefilled channels: oce-feedback (C0C49E7CS4A), oce-team (C0C43A2QA11), oce-feedback-test (C0C569NN9ME), oce-team-test (C0C4A0JH2BG), oce-community (C0C5KF0JLSC), and oce-community-test (C0C5KF0DWLQ); mentions are not required. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
-      "Create Agent and keep the Console visible while the fixture progresses through provisioning and deployment activation until Workspace files open for the admitted revision.",
+      "Create Agent and wait for provisioning to open Agent details. Inspect Deployment activity and use Refresh deployment to finish simulated activation.",
       "Use ← Agents and open oceclaw in the same fixture to continue segment 2. The next-segment link starts an independent resettable fixture.",
     ],
     gap: "This Storybook flow proves only the UI sequence and fixture state. It does not store a real credential, deploy a workload, prove GitHub authorization, or prove Slack delivery.",
@@ -3190,10 +3332,10 @@ export const scenarios = {
     ],
     actions: devdayCreateCheckpoint,
     description:
-      "Auto-run checkpoint for reviewers who want the deployed end state of the DevDay create segment without replaying every presenter click.",
+      "Auto-run checkpoint for reviewers who want the created Agent detail view without replaying every presenter click.",
     steps: [
       "Use the primary DevDay segment 1 story for recording the manual presenter flow.",
-      "This checkpoint clicks through the same controls, including the Linear plugin policy choices, and waits until Workspace files open for the admitted revision.",
+      "This checkpoint clicks through the same controls, including the Linear plugin policy choices, and opens Agent details while the first deployment remains queued.",
     ],
     gap: "Checkpoint automation is a setup aid. Use the manual story for the demo video.",
   },

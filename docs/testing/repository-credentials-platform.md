@@ -37,10 +37,41 @@ Follow [PostgreSQL setup](postgresql.md) for a migrated disposable application-r
 database, then select `tests/integration/postgres-repository-sessions.test.mjs`
 with `OCC_TEST_DATABASE_URL`. Its SQL constraints and State operations cover exact
 revision ownership, immutable attempt inputs, phases and safe recovery identity.
-The `postgres-restart-recovery.test.mjs` and `postgres-worker-agent-revision.test.mjs`
-cases cover atomic terminal-retirement transfer, retries after Compute failure
-and restart, and session-only repair that preserves the healthy workload.
+The `postgres-repository-broker-receipts.test.mjs` case joins the real broker,
+private receipt listener and limited application role to verify confirmed disposal
+and fencing across service restart. The `postgres-restart-recovery.test.mjs` and
+`postgres-worker-agent-revision.test.mjs` cases cover terminal-retirement transfer,
+retries and session-only repair.
 These checks do not prove a running Kubernetes Pod or a model turn.
+
+## Controller and broker image compatibility probe
+
+Use this probe only with a disposable broker configured with a synthetic registry,
+synthetic TLS and App material, and an isolated receipt socket fixture. Never
+point it at a live broker or production receipt listener. The controller image
+contains the entrypoint `/app/apps/controller/src/drivers/repo/github/credentials/admission-probe.mjs`.
+Run it as `node <entrypoint> <control-socket> <mode> <admission-id>`, once for
+`recover` and once for `reserve`. Use distinct, fresh IDs formatted as a
+13-digit wall-clock millisecond timestamp, a hyphen, and a lowercase UUIDv4.
+
+The probe calls the image's actual GitHub Repo Driver with a fixed synthetic
+binding and a two-second deadline. Exit 0 returns one JSON object containing
+`version: 1`, the `mode`, `admissionId`, `outcome`, and normalized `input`.
+Recovery succeeds only with `outcome: "missing"`; reservation succeeds only
+with `outcome: "unavailable"`. Exit 1 prints a generic error to stderr. No bearer
+or provider authority is printed. Missing entrypoints, invalid requests and
+unsupported broker capability fail the probe. A reserve timeout can produce an
+unavailable outcome and therefore cannot qualify the pair without the matching
+receipt observation.
+
+The receipt fixture must independently record each broker request and match its
+kind, admission ID, and normalized input to the report. It must respond to the
+matching `recover` request with HTTP 200 and `{"kind":"missing"}`, and reject
+the matching `reserve` request with HTTP 503 without acknowledging a reservation.
+Require both reports and both observations. An unavailable outcome by itself is
+ambiguous: it can also mean the broker or receipt listener was unreachable.
+Synthetic missing proves the wire exchange, not session absence, disposal, or
+PostgreSQL durability. The fixture must not create sessions or contact a provider.
 
 ## Exercise the controlled platform path
 
@@ -69,8 +100,9 @@ GitHub. With the [CI runner prerequisites](ci.md) prepared, run:
 Preparation supplies the explicit kubeconfig/context, database URL, immutable
 `OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE`, and private fixture relay
 `OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS` through prepared state. The runner
-selects `tests/integration/repository-credentials-platform.test.mjs` with
-`OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM=1`. The lane belongs to the normal `ci`
+selects both `repository-credentials-platform.test.mjs` and
+`repository-credentials-platform-recovery.test.mjs` with
+`OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM=1` and a fresh database per file. The lane belongs to the normal `ci`
 and `full` groups. The fixture image contains a substituted Harness and makes no
 model-execution claim.
 
@@ -79,8 +111,10 @@ destinations, concurrent real clients, native PR creation and read-only denial.
 With a push-ref policy configured, a mixed-ref push must leave upstream refs
 unchanged and send no receive-pack request. This does not imply denial before
 Git discovery or authentication.
-They also withhold a created admission response until the real PostgreSQL claim
-expires, then check recovery without bearer replay. Additional assertions inspect
+They withhold a created admission response until the real PostgreSQL claim
+expires, then check recovery without bearer replay. A separate Agent stop case
+withholds a committed disposal response, kills the broker, and checks that the
+worker recovers the exact receipt without issuing a replacement token. Additional assertions inspect
 private regular-file modes, retained material after worker replacement, exact
 missing-Secret repair, Reader write denial and ordinary stop cleanup without
 closing a sibling Agent's sessions. The credential service runs in a separate
@@ -89,12 +123,14 @@ controlled provider inventories. After the crash, the replacement service reject
 the old bearer through HTTPS without provider authentication, while the exact
 previously observed provider tokens remain unrevoked and unexpired.
 
-Lost exposed sessions refuse automatic continuation of that revision. The case
-checks actual Pod/container and Secret retirement alongside the retained session
-attempts and their exact unresolved cleanup Work owner. A new authorized HTTP
-deploy creates a distinct revision; its replacement Pod retains the workspace
-PVC, unpushed commit and dirty files. This does not establish disposal of lost
-provider obligations or replay Git/PR operations. Controlled service/provider
+After graceful broker restart, the worker recovers confirmed disposal receipts
+and replaces those sessions within the same revision while retaining the workspace.
+After an abrupt crash, active receipts remain unavailable and maintenance retains
+the original sessions without issuing replacements. A new authorized HTTP deploy
+creates a distinct revision and retires the predecessor runtime; the unresolved
+sessions remain in closing with their durable cleanup Work. The replacement Pod
+retains the workspace PVC, unpushed commit and dirty files. This does not establish
+disposal of lost provider obligations or replay Git/PR operations. Controlled service/provider
 clocks then advance past hour thirteen to check fresh tokens with unchanged
 material. This is a simulated
 elapsed-time test, not a thirteen-hour wait or provider soak. The case skips
