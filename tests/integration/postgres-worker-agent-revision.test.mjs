@@ -351,6 +351,16 @@ function codexPluginRevisionState(pluginId) {
   };
 }
 
+// Model the next cleanup interval without waiting an hour for the boundary
+// Driver. Change only this revision's queued due times; claims remain real.
+async function advanceCleanupRetries(fixture, revision) {
+  await fixture.observerPool.query(
+    `UPDATE occ.controller_work SET available_at = clock_timestamp()
+     WHERE state = 'queued' AND idempotency_key LIKE $1`,
+    [`agent_revision:${revision.id}:repository_cleanup:%`],
+  );
+}
+
 // This boundary Driver supplies protocol observations. The real worker, native
 // IAM, State, and PostgreSQL queue own every lifecycle decision asserted below;
 // these cases do not qualify the concrete credential service or Compute runtime.
@@ -961,6 +971,47 @@ test(
     const [pendingAttempt] = await repositoryAttempts(fixture, pendingRevision);
     assert.equal(pendingAttempt.phase, "closing");
     assert.equal(pendingAttempt.liveRevisionId, null);
+    // Unsettled provider authority must retain durable cleanup without using
+    // the foreground readiness cadence and repeatedly occupying the worker.
+    const deferredCleanup = await waitFor("pending cleanup to release its claim", async () => {
+      const result = await fixture.observerPool.query(
+        `SELECT idempotency_key, state, claim_token, lease_expires_at,
+           EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+         FROM occ.controller_work WHERE idempotency_key LIKE $1 AND state = 'queued'`,
+        [`agent_revision:${pendingRevision.id}:repository_cleanup:%`],
+      );
+      return events.some(
+        (event) =>
+          event.workId === result.rows[0]?.idempotency_key &&
+          event.code === "REPOSITORY_CLEANUP_PENDING",
+      )
+        ? result.rows[0]
+        : undefined;
+    });
+    assert.ok(Number(deferredCleanup.delay_ms) >= driver.maintenanceIntervalMs - 1_000);
+    assert.equal(deferredCleanup.claim_token, null);
+    assert.equal(deferredCleanup.lease_expires_at, null);
+    const nextOwner = await fixture.agent("repository-cleanup-neighbor");
+    const nextRevision = await fixture.revision(
+      nextOwner,
+      1,
+      undefined,
+      candidate.repositoryCredentials,
+    );
+    await fixture.work(nextRevision, "succeeded");
+    const scheduled = await fixture.observerPool.query(
+      "SELECT state, available_at > clock_timestamp() AS deferred FROM occ.controller_work WHERE idempotency_key = $1",
+      [deferredCleanup.idempotency_key],
+    );
+    assert.deepEqual(scheduled.rows, [{ state: "queued", deferred: true }]);
+    assert.equal(
+      (
+        await fixture.state.read((view) =>
+          view.repositorySessions.findAttempt(pendingAttempt.admissionId),
+        )
+      ).phase,
+      "closing",
+    );
     assert.equal(
       (
         await fixture.observerPool.query(
@@ -971,6 +1022,12 @@ test(
       1,
     );
     await clock.advance(3_600_001);
+    // Advance this exact retry after provider expiry instead of waiting for
+    // the real 30-second interval. The worker still claims and settles it.
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1 AND state = 'queued'",
+      [deferredCleanup.idempotency_key],
+    );
     const settled = await waitFor(
       "settled provider cleanup to dispose retained evidence",
       async () => {
@@ -1823,9 +1880,10 @@ test(
     });
     // The foreground is already terminal and every session is disposed. Compute
     // must retain a separate durable obligation beyond its ordinary failure budget.
-    await waitFor("retirement to retry beyond the foreground's five attempts", async () =>
-      stopped.length > 5 ? true : undefined,
-    );
+    await waitFor("retirement to retry beyond the foreground's five attempts", async () => {
+      await advanceCleanupRetries(fixture, candidate);
+      return stopped.length > 5 ? true : undefined;
+    });
     await fixture.stop();
     const retirement = await fixture.observerPool.query(
       `SELECT idempotency_key, state, actor_id FROM occ.controller_work
@@ -1846,10 +1904,16 @@ test(
     await fixture.start(compute, () => {}, undefined, undefined, fixture.createWorkerPool());
     await fixture.work(newer, "succeeded");
     await fixture.work(siblingRevision, "succeeded");
-    await waitFor("the restarted worker to resume exact retirement", async () =>
-      stopped.length > stopsBeforeRestart ? true : undefined,
+    await waitFor("the restarted worker to resume exact retirement", async () => {
+      await advanceCleanupRetries(fixture, candidate);
+      return stopped.length > stopsBeforeRestart ? true : undefined;
+    });
+    await fixture.work(
+      { id: candidate.id, idempotencyKey: retirement.rows[0].idempotency_key },
+      "queued",
     );
     unavailable = false;
+    await advanceCleanupRetries(fixture, candidate);
     await fixture.work(
       { id: candidate.id, idempotencyKey: retirement.rows[0].idempotency_key },
       "succeeded",
@@ -2145,6 +2209,7 @@ test(
           : undefined;
       },
     );
+    await advanceCleanupRetries(fixture, candidate);
     await fixture.work({ id: candidate.id, idempotencyKey: cleanupKey }, "succeeded");
     const cleanup = await fixture.observerPool.query(
       `SELECT idempotency_key FROM occ.controller_work
@@ -4914,6 +4979,7 @@ test(
     );
     await fixture.work(candidate, "failed_permanent");
     await waitFor("the incomplete runtime's durable retirement to finish", async () => {
+      await advanceCleanupRetries(fixture, candidate);
       const cleanup = await fixture.observerPool.query(
         `SELECT state FROM occ.controller_work
          WHERE revision_id = $1 AND idempotency_key LIKE $2`,
