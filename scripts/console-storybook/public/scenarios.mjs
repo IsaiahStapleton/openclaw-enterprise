@@ -606,6 +606,19 @@ export const scenarios = {
       "When the session check fails, confirm the sign-in form replaces all private content. Browser Back must not restore the collection.",
     ],
   },
+  observabilityLink: {
+    group: "Components/Navigation",
+    name: "Admin Observability link",
+    observabilityUrl: "https://observability.example.test/d/occ-observability",
+    description:
+      "Installation administrators see Observability with an external-link icon; it opens in a new tab.",
+  },
+  observabilityDenied: {
+    group: "Components/Navigation",
+    name: "Observability access denied",
+    observabilityDenied: true,
+    description: "Namespace-only access keeps Observability out of navigation.",
+  },
   agentsEmpty: {
     group: "Pages/Agents",
     name: "Empty",

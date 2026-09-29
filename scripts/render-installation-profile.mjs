@@ -199,6 +199,22 @@ function asString(source, path, diagnostics, { pattern, validate, description } 
   return value;
 }
 
+function observabilityDestination(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    ["http:", "https:"].includes(url.protocol) &&
+    url.hostname !== "" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.hash === ""
+  );
+}
+
 function optionalString(source, path, diagnostics, { pattern, validate, description } = {}) {
   const value = source[path.at(-1)];
   if (value === undefined) {
@@ -397,6 +413,7 @@ function buildInput(rawInput, diagnostics) {
       "metrics",
       "databaseCa",
       "loggingCollector",
+      "observabilityUrl",
     ],
     diagnostics,
   );
@@ -555,6 +572,17 @@ function buildRendered(profile, parsed, diagnostics) {
     );
   }
 
+  // Same rule the controller applies to Installation observability.url at startup.
+  const observabilityUrl = optionalString(
+    controlPlane,
+    ["controlPlane", "observabilityUrl"],
+    diagnostics,
+    {
+      validate: observabilityDestination,
+      description: "an absolute HTTP or HTTPS URL without credentials or a fragment",
+    },
+  );
+
   const values = {
     images: {
       controller: controllerImage,
@@ -700,6 +728,7 @@ function buildRendered(profile, parsed, diagnostics) {
     occ: {
       cluster: clusterName,
     },
+    ...(observabilityUrl === undefined ? {} : { observability: { url: observabilityUrl } }),
     backend: [],
     presets: {
       includeDefaults: true,

@@ -37,13 +37,13 @@ The sidebar opens **Agents** or **Namespaces**; **Refresh** repeats the read.
 Set up models during Agent creation; the [experimental Backends](backends.md)
 tab is hidden. Namespace rows are read-only.
 
-| Page       | Scope and permission                                                     |
-| ---------- | ------------------------------------------------------------------------ |
-| Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |
-| Namespaces | Installation-wide collection filtered by exact Namespace `read`.         |
+| Page          | Scope and permission                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Agents        | Selected Namespace; Namespace `read`, then exact Agent `read` filtering.                                             |
+| Namespaces    | Installation-wide collection filtered by exact Namespace `read`.                                                     |
+| Observability | External [`observability.url`](configuration.md#installation-startup-configuration) link; Installation `administer`. |
 
-The console uses a light appearance and OCC-served fonts; no external font
-service is required.
+The console uses a light appearance and OCC-served fonts.
 
 Returning pages retain content during access checks; controls await authorization.
 Unchanged pages and Agent tabs keep their loaded controls and expanded panels.

@@ -123,6 +123,11 @@ Managed issuance is separate from the default `codex_pat` path. The rendered
 Backend and ServiceAccount Driver wiring does not prove that live
 service-account creation works.
 
+To show Installation administrators an external **Observability** console link,
+set `controlPlane.observabilityUrl`. The renderer writes it as
+[`observability.url`](../../reference/configuration.md#installation-startup-configuration)
+and rejects URLs the controller would reject at startup.
+
 If you opt in to repositories, add the broker inputs:
 
 ```json

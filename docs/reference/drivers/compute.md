@@ -229,15 +229,16 @@ deactivation. If a required stage becomes unavailable, the worker cannot proceed
 A Driver may implement `requiresStoppedPredecessors(revision)` to return `true`
 for workloads needing exclusive preparation. Before preparing that revision,
 the worker closes earlier credential sessions and calls `stopRevision` for every
-earlier snapshot, including failed candidates. Stop must wait for resource
-release, preserve durable data, and be safe to repeat. A stop failure prevents
+earlier snapshot, including failed candidates. Later passes re-stop after
+failures and doubling lease intervals. Stop must wait for resource release,
+preserve durable data, and be safe to repeat. A stop failure prevents
 preparation. The Driver owns backend-specific termination and Sandbox cleanup.
 
 A newer admitted exclusive revision supersedes older reconciliation and
 maintenance, even while the old revision remains the last committed active
-pointer. This prevents an old pass from recreating a competing runtime. This
-mode accepts downtime and has no automatic rollback: restore a configuration by
-deploying a new higher revision. Other Drivers keep the default ordering.
+pointer, so no old pass recreates a competing runtime. This mode accepts
+downtime without automatic rollback: deploy a higher revision instead. Other
+Drivers keep the default ordering.
 
 ### SandboxDriver coordination
 

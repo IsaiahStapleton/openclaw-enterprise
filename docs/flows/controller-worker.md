@@ -175,12 +175,12 @@ a pending observation defers convergence.
 
 `apps/controller/src/worker.ts:ControllerWorker.prepareRevision` checks Compute's
 `requiresStoppedPredecessors` capability. When selected, it loads earlier
-snapshots, closes their credential sessions, and calls `stopRevision` under the
-claim heartbeat before preparing the candidate. This includes failed candidates;
-a release failure prevents preparation. The per-Agent queue serializes the work,
-and the dispatch guard prevents maintenance from recreating a predecessor between
-observations. Durable storage remains Driver-owned. This path accepts downtime
-and recovers through a new higher revision.
+snapshots, including failed candidates, closes their credential sessions, and
+calls `stopRevision` under the claim heartbeat before preparing the candidate; a
+release failure prevents preparation. Later passes re-stop after failures and
+doubling lease intervals. The per-Agent queue serializes work, and the dispatch
+guard keeps maintenance from recreating a predecessor. This path accepts
+downtime; recovery needs a higher revision.
 
 The worker validates Compute's startup plugin warning codes and selection keys
 against the immutable revision. Compute must verify failed selections are disabled

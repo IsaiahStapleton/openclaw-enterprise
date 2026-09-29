@@ -153,6 +153,9 @@ export async function createConsoleAppFixture(t, options = {}) {
       options.configurationDriver ?? createTestConfigurationDriver({ id: "console-configuration" }),
     ...(secretDriver === undefined || secretDriver === null ? {} : { secretDriver }),
     ...(publicOrigin === undefined ? {} : { publicOrigin }),
+    ...(options.observabilityUrl === undefined
+      ? {}
+      : { observabilityUrl: options.observabilityUrl }),
     ...(options.nativeAdmin === undefined ? {} : { nativeAdmin: options.nativeAdmin }),
     ...(options.nativeAdminGatewayApiKey === undefined
       ? {}
