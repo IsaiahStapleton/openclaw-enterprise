@@ -992,7 +992,7 @@ export function installFixture(scenario, evidence) {
           return response(roles);
         }
         if (method === "POST") {
-          const role = { ...body, id: `role_${serial++}` };
+          const role = { ...body, id: `role_${serial++}`, namespaceId };
           roles.push(role);
           return response(role, 201);
         }
@@ -1002,10 +1002,19 @@ export function installFixture(scenario, evidence) {
           return response(bindings);
         }
         if (method === "POST") {
-          const binding = { ...body, id: `binding_${serial++}` };
+          const binding = { ...body, id: `binding_${serial++}`, namespaceId };
           bindings.push(binding);
           return response(binding, 201);
         }
+      }
+      const bindingMatch = resource.match(/^iam\/access-bindings\/([^/]+)$/);
+      if (bindingMatch && method === "DELETE") {
+        const index = bindings.findIndex((binding) => binding.id === bindingMatch[1]);
+        if (index < 0) {
+          return error(404);
+        }
+        bindings.splice(index, 1);
+        return new Response(null, { status: 204 });
       }
       if (resource === "secrets") {
         if (method === "POST" && scenario.denySecretCreate) {

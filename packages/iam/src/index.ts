@@ -205,6 +205,7 @@ const ACTIONS: readonly PermissionAction[] = [
 ];
 
 const MANAGED_RESOURCE_KINDS: readonly ManagedIAMResourceKind[] = [
+  "namespace",
   "preset",
   "agent",
   "agent_revision",
@@ -283,6 +284,10 @@ function validatedManagedPermissions(permissions: readonly Permission[]): readon
     assertCondition(
       MANAGED_RESOURCE_KINDS.includes(permission.resourceKind as ManagedIAMResourceKind),
       "managed Role permission resource kind is invalid",
+    );
+    assertCondition(
+      permission.resourceKind !== "namespace" || permission.action === "read",
+      "managed Namespace Role permissions support only read",
     );
     const key = `${permission.action}\u0000${permission.resourceKind}`;
     assertCondition(!keys.has(key), "managed Role permissions must be duplicate-free");
