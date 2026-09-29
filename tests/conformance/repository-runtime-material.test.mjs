@@ -701,13 +701,20 @@ test("Dedicated credential refresh preserves its enrolled workspace node", async
   // Gateway readiness permits enrollment. The setup reaches the running Harness
   // through its volume without replacing it, and this fixture pairs at once.
   assert.equal((await f.driver.prepareRevision(f.revision, f.context([original]))).ready, true);
-  // Activation binds the recorded node ID into the Gateway and waits for it.
-  await assert.rejects(
-    f.driver.activateRevision(f.revision, f.context([original])),
-    /gateway is not ready/,
+  // Activation delivers the recorded node ID through the Gateway's binding
+  // ConfigMap; the serving Gateway is not replaced.
+  const gatewayBeforeActivation = structuredClone(
+    f.deployments().find((deployment) => deployment !== f.consumer()),
   );
-  f.markReady();
   await f.driver.activateRevision(f.revision, f.context([original]));
+  assert.deepEqual(
+    f.deployments().find((deployment) => deployment !== f.consumer()).spec.template,
+    gatewayBeforeActivation.spec.template,
+  );
+  const binding = [...f.objects.values()].find(
+    (object) => object.kind === "ConfigMap" && object.metadata.name.endsWith("-workspace-node"),
+  );
+  assert.equal(JSON.parse(binding.data["workspace-node.json"]).deviceId, "workspace-node");
   const before = structuredClone(f.consumer());
   const nodeSecret = [...f.objects.values()].find(
     (secret) => secret.kind === "Secret" && secret.data?.deviceId,
