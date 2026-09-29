@@ -222,7 +222,9 @@ create child resources. Human enrollment and grant creation are separate steps.
 
 Roles and bindings cannot be updated. Create replacements and explicitly
 remove old bindings. A referenced Role cannot be deleted (`409`), and deleting
-one binding preserves equivalent and unrelated bindings. After an unknown
+one binding preserves equivalent and unrelated bindings. Deleting an Agent,
+Configuration, Preset, Secret, credential source, or ServiceAccount removes the
+bindings that target it in the same transaction. After an unknown
 creation outcome, list and inspect policy before retrying; equivalent bindings
 may coexist. Names are labels: inspect permissions before reusing a Role.
 

@@ -194,7 +194,7 @@ Disable a human account
 
 **Operation ID:** `disableAuthAccount`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -244,7 +244,7 @@ Re-enable a disabled human account
 
 **Operation ID:** `enableAuthAccount`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -337,7 +337,7 @@ Detach an external sign-in identity from an account
 
 **Operation ID:** `detachAuthMethod`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -388,7 +388,7 @@ Attach an exact GitHub identity to an existing account
 
 **Operation ID:** `attachGitHubIdentity`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -439,7 +439,7 @@ Attach an exact Google identity to an existing account
 
 **Operation ID:** `attachGoogleIdentity`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -490,7 +490,7 @@ Revoke all sessions for a human account
 
 **Operation ID:** `revokeAuthAccountSessions`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -623,7 +623,7 @@ Start GitHub sign-in for an enrolled account
 
 **Operation ID:** `startGitHubSignIn`
 
-**Permissions:** Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
+**Permissions:** Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
 
 ##### Responses
 
@@ -706,7 +706,7 @@ Start Google sign-in for an enrolled account
 
 **Operation ID:** `startGoogleSignIn`
 
-**Permissions:** Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
+**Permissions:** Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
 
 ##### Responses
 
@@ -3410,11 +3410,12 @@ List readable credential sources without revealing credential values
 
 **Operation ID:** `listCredentialSources`
 
-**Permissions:** Requires read permission for CredentialSource resources in the requested Namespace.
+**Permissions:** Requires read permission on the requested Namespace. Only CredentialSource resources with individual read permission are returned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
-| `read` | `credential_source` | `namespace` |
+| `read` | `namespace` | `requested` |
+| `read` | `credential_source` | `each_returned` |
 
 ##### Parameters
 
@@ -4377,11 +4378,12 @@ List readable Namespace-owned Secret metadata without revealing material
 
 **Operation ID:** `listSecrets`
 
-**Permissions:** Requires read permission for Secret resources in the requested Namespace.
+**Permissions:** Requires read permission on the requested Namespace. Only Secret resources with individual read permission are returned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
-| `read` | `secret` | `namespace` |
+| `read` | `namespace` | `requested` |
+| `read` | `secret` | `each_returned` |
 
 ##### Parameters
 

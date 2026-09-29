@@ -2843,8 +2843,8 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
   ): Promise<readonly Readonly<SecretMetadata>[]> {
+    const namespace = await this.getNamespace(principalId, namespaceId);
     return this.read(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       const readable: Readonly<SecretMetadata>[] = [];
       for (const secret of await state.secrets.listSecrets(namespace.id)) {
         if (
@@ -3095,8 +3095,8 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
   ): Promise<readonly Readonly<CredentialSourceMetadata>[]> {
+    const namespace = await this.getNamespace(principalId, namespaceId);
     return this.read(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       const readable: Readonly<CredentialSourceMetadata>[] = [];
       for (const source of await state.credentialSources.listCredentialSources(namespace.id)) {
         if (
@@ -4753,15 +4753,33 @@ export class OpenClawController {
       await state.workspaceSetups.delete(namespace.id, agent.id);
       // Keep in-flight teardown idempotent. The original caller can explicitly
       // retry terminal work after repairing the dependency or permission failure.
+      // Another authorized caller can take over only once the initiating actor
+      // no longer holds delete permission on this Agent (for example, it was
+      // offboarded), so terminal teardown is never stranded.
       if (agent.status === "deleting") {
         const workId = `agent:${agent.id}:reconcile:deleted`;
         const work = await state.operations.findWork(workId);
         if (work?.state === "failed_permanent") {
-          if (work.actorId !== principalId) {
+          const takeover = work.actorId !== principalId;
+          if (
+            takeover &&
+            (
+              await this.authorizationDecision(work.actorId, "delete", {
+                kind: "agent",
+                id: agent.id,
+                namespaceId: namespace.id,
+              })
+            ).decision.allowed
+          ) {
             throw new AuthorizationDeniedError("Only the initiating actor can retry deletion.");
           }
           if (
-            !(await state.operations.retryFailedAgentDeletion(namespace.id, agent.id, principalId))
+            !(await state.operations.retryFailedAgentDeletion(
+              namespace.id,
+              agent.id,
+              work.actorId,
+              principalId,
+            ))
           ) {
             throw new ResourceConflictError("The Agent deletion work changed during retry.");
           }
@@ -4780,6 +4798,7 @@ export class OpenClawController {
               workId,
               previousAttemptCount: work.attemptCount,
               previousReasonCode: work.reasonCode,
+              ...(takeover ? { takeover: true, previousActorId: work.actorId } : {}),
             },
           });
         }

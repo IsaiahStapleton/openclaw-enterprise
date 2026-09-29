@@ -402,7 +402,8 @@ helm upgrade --install oce deploy/helm/openclaw-enterprise \
   --wait --timeout 5m
 ```
 
-For the [published chart](../../../.github/chart-publication.md#pull-and-install),
+For an explicitly [published chart release](../../../.github/chart-publication.md#pull-and-install)
+(created with `publish_chart: true`),
 authenticate Helm, verify its receipt, then use
 `oci://ghcr.io/openclaw/charts/openclaw-enterprise` with `--version "$OCE_VERSION"`.
 

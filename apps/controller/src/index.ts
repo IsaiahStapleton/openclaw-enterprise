@@ -497,7 +497,7 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     ];
   }
 
-  if (operation.operationId === "createSecret" || operation.operationId === "listSecrets") {
+  if (operation.operationId === "createSecret") {
     return [{ ...permission, scope: "namespace" }];
   }
 
@@ -710,6 +710,8 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
         { ...permission, scope: "each_returned" },
       ];
     case "namespace_and_service_account_candidates":
+    case "namespace_and_secret_candidates":
+    case "namespace_and_credential_source_candidates":
       return [
         { action: "read", resourceKind: "namespace", scope: "requested" },
         { ...permission, scope: "each_returned" },
@@ -3325,7 +3327,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: "startGitHubSignIn",
           summary: "Start GitHub sign-in for an enrolled account",
           description:
-            "Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
+            "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
           tags: ["Authentication"],
           security: [],
           response: {
@@ -3395,7 +3397,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: "startGoogleSignIn",
           summary: "Start Google sign-in for an enrolled account",
           description:
-            "Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
+            "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
           tags: ["Authentication"],
           security: [],
           response: {
@@ -3481,6 +3483,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       request: FastifyRequest,
       operation: OccApiRoute,
       context: RequestContext,
+      targetUserId?: string,
     ) {
       const admitted = admissions.get(request);
       if (
@@ -3495,9 +3498,37 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           "A current human session and trusted browser origin are required.",
         );
       }
-      const { selected } = await requireInstallationAdmin(request, operation, context);
+      const { selected, decision } = await requireInstallationAdmin(request, operation, context);
       if (!(selected instanceof NativeIAMDriver)) {
         throw dependencyUnavailable();
+      }
+      // A change to an account acts for its Principal (an attached identity signs in as it), so
+      // the actor must already hold every grant of that Principal, as for service keys.
+      if (targetUserId !== undefined) {
+        let covered;
+        try {
+          const principal = await selected.lookupIdentity({
+            issuer: options.auth.issuer,
+            subject: targetUserId,
+          });
+          // Without a Principal the account is not enrolled, and State refuses the change.
+          covered =
+            principal?.kind !== "principal" ||
+            (await selected.coversIdentityAccess({
+              principalId: context.actorId,
+              targetIdentityId: principal.id,
+            })) === true;
+        } catch {
+          throw dependencyUnavailable();
+        }
+        if (!covered) {
+          await denial(operation, request, "authorization_denial", context, decision.evidence);
+          throw failure(
+            403,
+            "FORBIDDEN",
+            "The caller does not hold every grant of the target account's Principal.",
+          );
+        }
       }
       return {
         userId: admitted.session.userId,
@@ -3632,7 +3663,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             operationId: operation.operationId,
             summary: operation.summary,
             description:
-              "Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
+              "Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
             tags: [...operation.tags],
             security: [{ sessionCookie: [] }],
             "x-openclaw-permissions": [
@@ -3675,9 +3706,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           if (!context || !options.auth.readAccount || !options.auth.changeAccount) {
             throw dependencyUnavailable();
           }
-          const actor = await humanAccountActor(request, operation, context);
-          const { expectedVersion } = request.body as { expectedVersion: number };
           const { userId } = request.params as { userId: string };
+          const actor = await humanAccountActor(request, operation, context, userId);
+          const { expectedVersion } = request.body as { expectedVersion: number };
           if (operationName === "github") {
             if (!options.auth.attachGitHub || !options.auth.githubEnabled) {
               throw failure(409, "RESOURCE_CONFLICT", "GitHub sign-in is not configured.");

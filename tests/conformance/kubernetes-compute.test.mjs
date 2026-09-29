@@ -6577,14 +6577,15 @@ test("provider Harness activation fails before routing on absent, ambiguous, or 
 
 test("provider Harness requires its assigned network profile before readiness and activation", async () => {
   const fixture = providerReadinessFixture();
-  // The provider receives the profile from the ordinary template requirements.
-  assert.equal(fixture.labels["openclaw.dev/network-profile"], "broad-egress-v1");
+  // The provider receives the provider-fenced profile, derived from the ordinary template.
+  assert.equal(fixture.labels["openclaw.dev/network-profile"], "provider-fenced-v1");
   fixture.setObservation({ items: [fixture.pod("approved")] });
   assert.equal(await fixture.ready(), true);
 
   // A provider may preserve identity and report Ready while losing the network
-  // classification. Reject that candidate before activation can change routing.
-  for (const profile of [undefined, "", "unknown-profile"]) {
+  // classification, or gaining the ordinary one and with it Compute's egress grants.
+  // Reject that candidate before activation can change routing.
+  for (const profile of [undefined, "", "unknown-profile", "broad-egress-v1"]) {
     const pod = fixture.pod("unapproved");
     if (profile === undefined) {
       delete pod.metadata.labels["openclaw.dev/network-profile"];
@@ -6620,9 +6621,17 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
   const provisions = [];
   const fixture = providerReadinessFixture({
     async provisionHarness(context) {
-      assert.ok(
+      // The provider fences Harness egress; a Compute auth grant would be unioned with it.
+      assert.equal(
         objects.has(key("NetworkPolicy", `allow-agent-auth-${digest(context.revision.agentId)}`)),
-        "API-key candidates need provider egress before Sandbox startup",
+        false,
+        "provider-fenced Harnesses receive no Compute authentication egress",
+      );
+      assert.ok(
+        objects.has(
+          key("NetworkPolicy", `allow-agent-runtime-${digest(context.revision.agentId)}`),
+        ),
+        "the Gateway transport ingress exists before Sandbox startup",
       );
       provisions.push(context);
       return {
@@ -10690,6 +10699,79 @@ test("ordinary embedded and dedicated policy callers retain exact model and Harn
   );
   assert.equal(
     selectorMatches(auth.spec.podSelector, { ...agentLabels, "openclaw.dev/agent": "another" }),
+    false,
+  );
+});
+
+// A SandboxDriver that provisions the Harness fences its egress (OpenShell's
+// workload policy has `egress: []`). NetworkPolicies are additive, so any
+// Compute egress grant selecting that Pod would reopen DNS and public 443.
+test("SandboxDriver Harness Pods get Compute's transport ingress but none of its egress", () => {
+  const options = routedOptions({
+    network: { pluginStatusProxySourceCidrs: ["192.0.2.20/32"] },
+    runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
+    servicePrincipalCredentials: {
+      mode: "projectedServiceAccountToken",
+      audience: "openclaw-controller",
+      expirationSeconds: 900,
+    },
+  });
+  const driver = new KubernetesComputeDriver(options, {
+    sandboxDriver: { id: "sandbox-provider", async provisionHarness() {} },
+  });
+  // Repository credentials are unsupported with a SandboxDriver.
+  const { repositoryCredentials: _unsupported, ...dedicated } = profileNetworkRevision(
+    driver,
+    "dedicated",
+  );
+  const revision = { ...dedicated, sandboxDriverId: "sandbox-provider" };
+  const execution = { name: kubernetesNamespaceName(tenant.id), plane: "execution" };
+  const control = { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" };
+  const ordinaryAgent = profileNetworkWorkload(driver, revision, "agent");
+  const { labels: harness } = driver.harnessRequirementsFromDeployment(ordinaryAgent, "api_key");
+  assert.equal(harness[ORDINARY_PROFILE_LABEL], "provider-fenced-v1");
+  const gatewayLabels = profileNetworkWorkload(driver, revision, "gateway").spec.template.metadata
+    .labels;
+  const policies = [
+    ...driver.networkPolicies({ namespaceId: tenant.id }, execution),
+    driver.workspaceNodeNetworkPolicy({ namespaceId: tenant.id }, execution),
+    ...driver.agentNetworkPolicies(revision, execution).map(({ resource }) => resource),
+    ...driver
+      .agentNetworkPolicies(revision, execution, { anyRevision: true })
+      .map(({ resource }) => resource),
+  ].filter((policy) => policy.metadata.namespace === execution.name);
+  const selecting = policies.filter((policy) => selectorMatches(policy.spec.podSelector, harness));
+  for (const policy of selecting) {
+    assert.deepEqual(
+      policy.spec.egress ?? [],
+      [],
+      `${policy.metadata.name} must not grant the provider-fenced Harness egress`,
+    );
+  }
+  // Compute must not issue an authentication egress grant for a fenced Harness.
+  assert.throws(
+    () => driver.agentAuthenticationNetworkPolicy(revision, execution),
+    /approved model egress policy/,
+  );
+  // The Gateway still reaches the Harness transport in both directions.
+  const runtime = selecting.find(
+    (policy) => policy.metadata.name === `allow-agent-runtime-${digest(revision.agentId)}`,
+  );
+  assert.ok(runtime, "the Harness keeps its Gateway transport ingress");
+  assert.deepEqual(runtime.spec.policyTypes, ["Ingress"]);
+  assert.equal(selectorMatches(runtime.spec.ingress[0].from[0].podSelector, gatewayLabels), true);
+  const gatewayEgress = driver
+    .agentNetworkPolicies(revision, execution)
+    .map(({ resource }) => resource)
+    .find((policy) => policy.metadata.name === `allow-gateway-agent-${digest(revision.agentId)}`);
+  assert.equal(gatewayEgress.metadata.namespace, control.name);
+  assert.equal(selectorMatches(gatewayEgress.spec.egress[0].to[0].podSelector, harness), true);
+  // An ordinary-profile Pod of this revision gains nothing from the fenced grants.
+  assert.equal(
+    selectorMatches(runtime.spec.podSelector, {
+      ...harness,
+      [ORDINARY_PROFILE_LABEL]: ORDINARY_PROFILE,
+    }),
     false,
   );
 });

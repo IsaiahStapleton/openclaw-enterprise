@@ -121,7 +121,10 @@ import {
 import {
   NETWORK_PROFILE_LABEL,
   ORDINARY_NETWORK_PROFILE,
+  PROVIDER_FENCED_NETWORK_PROFILE,
+  type NetworkProfile,
   ordinaryNetworkPolicySelector,
+  profileNetworkPolicySelector,
   withoutNetworkProfile,
 } from "./resources/network.ts";
 import {
@@ -3306,11 +3309,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
         for (const policy of this.agentNetworkPolicies(revision, namespace, preparation)) {
           await this.reconcile(policy.resource, gatewayOwnership, policy.namespace);
         }
-        await this.reconcile(
-          this.agentAuthenticationNetworkPolicy(revision, namespace),
-          agentOwnership,
-          namespace,
-        );
+        if (this.harnessNetworkProfile(revision) === ORDINARY_NETWORK_PROFILE) {
+          await this.reconcile(
+            this.agentAuthenticationNetworkPolicy(revision, namespace),
+            agentOwnership,
+            namespace,
+          );
+        }
       }
       await this.reconcileHarnessRoute(revision, namespace);
       const launch = await this.lifecycle.beforeWorkloadStart(revision);
@@ -5456,6 +5461,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
+  /** The profile of the revision's Harness Pod. A SandboxDriver that provisions
+   * the Harness fences its egress, so Compute grants that Pod ingress only. */
+  private harnessNetworkProfile(revision: AgentRevision): NetworkProfile {
+    return revision.harness.mode === "dedicated" &&
+      this.sandboxDriverForRevision(revision)?.provisionHarness !== undefined
+      ? PROVIDER_FENCED_NETWORK_PROFILE
+      : ORDINARY_NETWORK_PROFILE;
+  }
+
   private sandboxDriverForRevision(revision: AgentRevision): SandboxDriver | undefined {
     if (revision.sandboxDriverId === undefined) {
       return undefined;
@@ -6122,6 +6136,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (harnessLabels[NETWORK_PROFILE_LABEL] !== ORDINARY_NETWORK_PROFILE) {
       throw new ConfigurationFailure("Dedicated Harness requires the ordinary network profile.");
     }
+    // The provider fences the Harness egress itself. The provider-fenced profile
+    // keeps Compute's DNS, model and authentication egress grants off the Pod.
+    harnessLabels[NETWORK_PROFILE_LABEL] = PROVIDER_FENCED_NETWORK_PROFILE;
     return {
       image,
       command: command as readonly string[],
@@ -8767,7 +8784,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const revisionScope =
       preparation.anyRevision === true ? {} : { "openclaw.dev/revision": revision.id };
-    const agent = ordinaryNetworkPolicySelector({
+    const agent = profileNetworkPolicySelector(this.harnessNetworkProfile(revision), {
       "openclaw.dev/namespace": revision.namespaceId,
       "openclaw.dev/workload-role": "agent",
       "openclaw.dev/agent": revision.agentId,
@@ -8907,7 +8924,8 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const agent = ordinaryNetworkPolicySelector({
+    const harnessProfile = this.harnessNetworkProfile(revision);
+    const agent = profileNetworkPolicySelector(harnessProfile, {
       "openclaw.dev/namespace": revision.namespaceId,
       "openclaw.dev/workload-role": "agent",
       "openclaw.dev/agent": revision.agentId,
@@ -9001,7 +9019,10 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       }),
       policy("allow-agent-runtime", {
         podSelector: agent,
-        policyTypes: ["Ingress", "Egress"],
+        // A provider-fenced Harness keeps only the Gateway transport ingress; its
+        // provider's egress fence must not be unioned with model egress.
+        policyTypes:
+          harnessProfile === ORDINARY_NETWORK_PROFILE ? ["Ingress", "Egress"] : ["Ingress"],
         ingress: [
           {
             from: [
@@ -9014,7 +9035,9 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
             ports: transport,
           },
         ],
-        egress: [...modelEgress, ...repositoryEgress],
+        ...(harnessProfile === ORDINARY_NETWORK_PROFILE
+          ? { egress: [...modelEgress, ...repositoryEgress] }
+          : {}),
       }),
       ...statusPolicies,
     ];

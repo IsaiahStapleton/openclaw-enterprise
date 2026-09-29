@@ -94,7 +94,7 @@ discovery egress into the base input:
 ```json
 {
   "runtime": {
-    "codexSeccompProfile": "openclaw/codex-0.156.0-<profile-sha256>.json"
+    "codexSeccompProfile": "openclaw/codex-0.158.0-<profile-sha256>.json"
   },
   "codex": {
     "modelDiscoveryCidrs": ["198.51.100.20/32"]
@@ -176,6 +176,13 @@ If you opt in to repositories, add the broker inputs:
   }
 }
 ```
+
+`serviceName` is optional. When omitted, the renderer leaves it out of
+`values.yaml`: a new installation gets the chart's `git` Service, and a Helm
+upgrade fails until you set it. When upgrading an installation whose broker
+Service has another name, set `serviceName` to that current name so TLS and
+active repository sessions keep working, then switch it deliberately after
+sessions drain.
 
 ## Render files
 

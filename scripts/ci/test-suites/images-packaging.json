@@ -15,6 +15,14 @@
   },
   "files": [
     {
+      "path": "tests/integration/container-publication-workflow.test.mjs",
+      "expectedTests": [
+        "publication workflow requires explicit chart opt-in and a successful image job",
+        "chart publication consumes the exact successful image receipt without archives",
+        "publication keeps its lock across jobs and reports image success after chart failure"
+      ]
+    },
+    {
       "path": "tests/integration/docker-compute-token-retry.test.mjs",
       "expectedTests": [
         "Docker driver keeps dedicated transport coherent and rejects foreign owners across retries"

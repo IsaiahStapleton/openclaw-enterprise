@@ -129,7 +129,7 @@ function render(
   };
 }
 
-function helmTemplate(output, extraValueFiles = [], releaseName = "oce") {
+function helmTemplate(output, extraValueFiles = [], releaseName = "oce", extraArgs = []) {
   return execFileSync(
     helm,
     [
@@ -141,6 +141,7 @@ function helmTemplate(output, extraValueFiles = [], releaseName = "oce") {
       "--values",
       join(output.directory, "values.yaml"),
       ...extraValueFiles.flatMap((path) => ["--values", path]),
+      ...extraArgs,
     ],
     {
       cwd: repository,
@@ -346,8 +347,8 @@ test(
       }),
     );
 
-    assert.match(original.values, /installationChecksum: [a-f0-9]{64}/);
-    assert.match(changed.values, /installationChecksum: [a-f0-9]{64}/);
+    assert.match(original.values, /installationChecksum: "?[a-f0-9]{64}"?$/m);
+    assert.match(changed.values, /installationChecksum: "?[a-f0-9]{64}"?$/m);
     assert.notEqual(original.installation, changed.installation);
 
     const originalManifests = helmTemplate(original);
@@ -423,6 +424,44 @@ test("Helm catches generated profile Secret collisions", { skip: helmSkip }, () 
   );
 });
 
+test("label values that YAML 1.1 would retype stay strings", () => {
+  const labels = {
+    spot: "no",
+    enabled: "on",
+    legacy: "Off",
+    short: "y",
+    scale: "1e3",
+    hex: "0x1f",
+    octal: "0o17",
+    sexagesimal: "1:20",
+    infinity: ".inf",
+    team: "@platform",
+    trailing: "zone:",
+    yes: "keep",
+  };
+  const input = baseInput();
+  input.controlPlane.nodeSelector = labels;
+  const output = render("openclaw", input);
+  for (const [key, value] of Object.entries(labels)) {
+    const quotedValue = JSON.stringify(value);
+    const expected = key === "yes" ? '"yes": keep' : `${key}: ${quotedValue}`;
+    assert.ok(
+      output.values.includes(expected),
+      `expected ${key} to render as a quoted string in values.yaml`,
+    );
+  }
+});
+
+test("Helm renders YAML 1.1 lookalike label values as strings", { skip: helmSkip }, () => {
+  const input = baseInput();
+  input.controlPlane.nodeSelector = { spot: "no", scale: "1e3", team: "@platform" };
+  const manifests = helmTemplate(render("openclaw", input));
+  assert.match(manifests, /spot: ["']no["']/);
+  assert.match(manifests, /scale: ["']1e3["']/);
+  assert.match(manifests, /team: ["']@platform["']/);
+  assert.doesNotMatch(manifests, /spot: false/);
+});
+
 test("renderer rejects the removed default profile", () => {
   assert.throws(() => render("default", baseInput()), /--profile must be one of: openclaw, codex/);
 });
@@ -456,6 +495,39 @@ test("repository opt-in is explicit and keeps the two-stage placeholders separat
     output.preflight.warnings.join("\n"),
     /Active repository sessions are not restored after broker loss/,
   );
+});
+
+test("repository serviceName is left to the chart so its upgrade guard applies", () => {
+  const repositoryInput = {
+    enabled: true,
+    image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
+    backendId: "github-primary",
+    registryConfigMapName: "occ-repository-registry-v1",
+    serviceConfigSecretName: "occ-repository-service-config",
+    appKeySecretName: "occ-repository-app-key",
+    tlsSecretName: "occ-repository-tls",
+    publicCaSecretName: "occ-repository-public-ca",
+    upstreamCidrs: ["192.0.2.30/32"],
+  };
+  const omitted = render("codex", codexInput({ repository: repositoryInput }));
+  assert.doesNotMatch(omitted.values, /serviceName: git/);
+  if (!helmSkip) {
+    assert.match(helmTemplate(omitted), /name: git\n/);
+    const error = renderError(() => helmTemplate(omitted, [], "oce", ["--is-upgrade"]));
+    assert.match(
+      `${error.stdout ?? ""}${error.stderr ?? ""}`,
+      /repositoryCredentials\.serviceName must be explicit during upgrades/,
+    );
+  }
+
+  const kept = render(
+    "codex",
+    codexInput({ repository: { ...repositoryInput, serviceName: "oce-git" } }),
+  );
+  assert.match(kept.values, /serviceName: oce-git/);
+  if (!helmSkip) {
+    assert.match(helmTemplate(kept, [], "oce", ["--is-upgrade"]), /name: oce-git\n/);
+  }
 });
 
 test("preflight rejects inputs that the selected profile does not consume", () => {

@@ -538,7 +538,15 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   } else if (nativeProvider.value === "anthropic" || binding?.method === "runtime") {
     mode.value = "embedded";
   }
-  harness.value = mode.value === "dedicated" ? "codex" : "openclaw";
+  // A Preset or draft keeps its own harness; execution mode only chooses the default.
+  const configuredHarness =
+    rendered.configuration?.values?.agents?.defaults?.models?.[initialModel]?.agentRuntime?.id;
+  // Service account tokens authenticate Codex only.
+  harness.value =
+    mode.value === "dedicated" &&
+    (authMethod.value === "codex_pat" || configuredHarness !== "openclaw")
+      ? "codex"
+      : "openclaw";
   const currentTemplate = () =>
     JSON.stringify(
       configurationTemplate(harness.value, nativeProvider.value, model.value.trim()),

@@ -118,12 +118,10 @@ test(
                   (SELECT count(*)::int FROM occ.session) AS sessions`,
         )
       ).rows[0];
-    const denials = async () =>
+    const denials = async (reason) =>
       (await state.transact((unit) => unit.audit.list())).filter(
         ({ action, outcome, reasonCode }) =>
-          action === "authentication.login" &&
-          outcome === "denied" &&
-          reasonCode === "EXTERNAL_IDENTITY_REJECTED",
+          action === "authentication.login" && outcome === "denied" && reasonCode === reason,
       ).length;
     const attach = async (userId, provider, subject) => {
       const response = await app.inject({
@@ -138,9 +136,13 @@ test(
       assert.equal(response.statusCode, 200, response.body);
       return response;
     };
-    async function assertGoogleRefused(authorization, message) {
+    async function assertGoogleRefused(
+      authorization,
+      message,
+      reason = "EXTERNAL_IDENTITY_REJECTED",
+    ) {
       const before = await counts();
-      const deniedBefore = await denials();
+      const deniedBefore = await denials(reason);
       const { callback } = await googleSignIn(app, origin, google, authorization, address());
       assert.equal(callback.statusCode, 302, message);
       assert.equal(callback.headers.location, "/console/?authError=google", message);
@@ -150,7 +152,7 @@ test(
         `${message}: no session cookie`,
       );
       assert.deepEqual(await counts(), before, `${message}: no user, method or session`);
-      assert.equal(await denials(), deniedBefore + 1, `${message}: the denial is audited`);
+      assert.equal(await denials(reason), deniedBefore + 1, `${message}: the denial is audited`);
     }
     async function assertGoogleSignIn(subject, userId, claims) {
       const signIn = await googleSignIn(
@@ -413,6 +415,15 @@ test(
         headers: { origin: "https://evil.example.test" },
       });
       assert.equal(crossOrigin.statusCode, 403);
+      // Like sign-out, a supplied Sec-Fetch-Site must be same-origin.
+      const sameSite = await app.inject({
+        method: "POST",
+        url: "/api/auth/providers/google/start",
+        remoteAddress: address(),
+        headers: { origin, "sec-fetch-site": "same-site" },
+      });
+      assert.equal(sameSite.statusCode, 403, sameSite.body);
+      assert.equal(sameSite.headers["set-cookie"], undefined);
     });
 
     await t.test("password sign-in and the recovery lane still work with Google", async () => {
@@ -428,7 +439,11 @@ test(
       // A Google provider outage leaves password sign-in working.
       google.mode = "error";
       try {
-        await assertGoogleRefused({ subject: memberSubject }, "provider outage");
+        await assertGoogleRefused(
+          { subject: memberSubject },
+          "provider outage",
+          "PROVIDER_UNAVAILABLE",
+        );
         assert.equal((await passwordSignIn(app, origin, admin, address())).statusCode, 200);
       } finally {
         google.mode = "up";
