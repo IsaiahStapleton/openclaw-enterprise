@@ -156,7 +156,7 @@ export async function composeProduction(config: ProductionConfig) {
     controller.selectDriver("compute", computeDriver.id);
     controller.registerDriver(secretDriver);
     controller.selectDriver("secret", secretDriver.id);
-    if (config.channelDirectoryProxyUrl !== undefined) {
+    {
       const channelDriver = new SlackChannelDriver(
         globalThis.fetch,
         config.channelDirectoryProxyUrl,
