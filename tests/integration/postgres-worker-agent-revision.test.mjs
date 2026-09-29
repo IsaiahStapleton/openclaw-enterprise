@@ -3633,6 +3633,105 @@ test(
 );
 
 test(
+  "another authorized actor takes over failed Agent deletion once the initiator loses permission",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context, { maxAttempts: 1 });
+    const owner = await fixture.agent("delete-takeover");
+    const revision = await fixture.revision(owner, 1);
+    let unavailable = true;
+    let retirementAttempts = 0;
+    await fixture.start({
+      ...fixture.compute,
+      async retireRevision(target) {
+        assert.equal(target.id, revision.id);
+        retirementAttempts += 1;
+        if (unavailable) {
+          throw new Error("Compute temporarily unavailable during teardown");
+        }
+      },
+    });
+    await fixture.work(revision, "succeeded");
+    const deletion = await fixture.requestDeletion(owner);
+    await fixture.work(deletion, "failed_permanent");
+    const observe = () =>
+      fixture.state.read((view) => view.operations.findWork(deletion.idempotencyKey));
+    const exhausted = await observe();
+    assert.equal(exhausted.actorId, fixture.actor.id);
+
+    const otherActor = `delete-successor-${randomUUID()}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_identities (id, kind, issuer, subject)
+       SELECT $1, kind, issuer, $1 FROM occ.iam_identities WHERE id = $2`,
+      [otherActor, fixture.actor.id],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+       SELECT 'binding-' || gen_random_uuid(), namespace_id, $1, role_id,
+              resource_kind, resource_id
+       FROM occ.iam_access_bindings WHERE identity_subject_id = $2`,
+      [otherActor, fixture.actor.id],
+    );
+    // The initiator is offboarded: it no longer holds any access.
+    await fixture.observerPool.query(
+      `DELETE FROM occ.iam_access_bindings WHERE identity_subject_id = $1`,
+      [fixture.actor.id],
+    );
+    // A caller without delete permission still cannot take over.
+    await assert.rejects(
+      fixture.controller.deleteAgent(
+        `unprivileged-${randomUUID()}`,
+        fixture.namespace.id,
+        owner.id,
+      ),
+    );
+    assert.deepEqual(await observe(), exhausted);
+
+    unavailable = false;
+    await fixture.controller.deleteAgent(otherActor, fixture.namespace.id, owner.id);
+    const retried = await observe();
+    assert.ok(
+      retried === undefined || ["queued", "claimed"].includes(retried.state),
+      "an authorized takeover must requeue the exhausted teardown",
+    );
+    if (retried !== undefined) {
+      assert.equal(retried.actorId, otherActor);
+      assert.equal(retried.idempotencyKey, exhausted.idempotencyKey);
+    }
+    await waitFor("taken-over deletion to remove its Agent", async () =>
+      (await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      )) === undefined
+        ? true
+        : undefined,
+    );
+    assert.equal(retirementAttempts, 2);
+    const { rows: retryAudit } = await fixture.observerPool.query(
+      `SELECT actor_id AS "actorId", outcome, details FROM occ.audit_events
+       WHERE namespace_id = $1 AND resource_id = $2 AND action = 'openclaw.agents.delete.retry'`,
+      [fixture.namespace.id, owner.id],
+    );
+    assert.deepEqual(
+      retryAudit.map((event) => ({
+        actorId: event.actorId,
+        outcome: event.outcome,
+        takeover: event.details.takeover,
+        previousActorId: event.details.previousActorId,
+      })),
+      [
+        {
+          actorId: otherActor,
+          outcome: "success",
+          takeover: true,
+          previousActorId: fixture.actor.id,
+        },
+      ],
+    );
+  },
+);
+
+test(
   "repeating Namespace deletion recovers a teardown that exceeded its convergence deadline",
   requiresPostgres,
   async (context) => {

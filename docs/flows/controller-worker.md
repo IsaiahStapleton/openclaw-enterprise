@@ -102,11 +102,11 @@ key with a different actor, owner, or target is rejected. The API returns accept
 state before Compute; the worker takes over.
 
 For an already-deleting Agent, `OpenClawController.deleteAgent` leaves active
-work unchanged. The initiating actor can retry terminal failure after correcting
-its cause. OCC checks current delete permission, then calls
-`operations.retryFailedAgentDeletion` and appends the retry audit atomically.
-Only the exact stopped, deleting Agent's terminal work is reset; identity and
-prior audits remain. The worker reauthorizes normally.
+work unchanged. The initiator can retry terminal failure; once it lost
+permission, another permitted caller takes over as the work's actor, audited as
+`takeover`. After checking delete permission, `operations.retryFailedAgentDeletion`
+resets only the stopped, deleting Agent's terminal work, keeping prior audits.
+The worker reauthorizes normally.
 `deleteNamespace` recovers Namespace teardown via
 `retryFailedNamespaceDeletion`.
 

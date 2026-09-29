@@ -3973,26 +3973,16 @@ export class PostgresPlatformState implements PlatformStateStore {
             }),
           );
         },
-        retryFailedAgentDeletion: async (namespaceId, agentId, actorId) => {
+        retryFailedAgentDeletion: async (namespaceId, agentId, initiatingActorId, actorId) => {
           await this.requireInitialized(context);
+          // Work actor identity is frozen for the application role; this
+          // definer function is the one path that may hand terminal teardown
+          // to another caller after OCC has verified the takeover.
           const retried = await client.query(
-            `UPDATE occ.controller_work AS work
-             SET state = 'queued', attempt_count = 0,
-                 available_at = clock_timestamp(), claim_token = NULL,
-                 lease_expires_at = NULL, completed_at = NULL,
-                 reason_code = NULL, result_data = NULL, updated_at = clock_timestamp()
-             FROM occ.agents AS agent
-             WHERE work.idempotency_key = $1
-               AND work.work_kind = 'lifecycle'
-               AND work.namespace_id = $2 AND work.agent_id = $3 AND work.actor_id = $4
-               AND work.revision_id IS NULL AND work.namespace_target IS NULL
-               AND work.agent_target = 'deleted' AND work.state = 'failed_permanent'
-               AND agent.namespace_id = work.namespace_id AND agent.id = work.agent_id
-               AND agent.status = 'deleting' AND agent.desired_runtime_state = 'stopped'
-             RETURNING work.idempotency_key`,
-            [`agent:${agentId}:reconcile:deleted`, namespaceId, agentId, actorId],
+            "SELECT occ.retry_failed_agent_deletion($1::text, $2::text, $3::text, $4::text) AS retried",
+            [namespaceId, agentId, initiatingActorId, actorId],
           );
-          return retried.rowCount === 1;
+          return (retried.rows[0] as { retried?: unknown } | undefined)?.retried === true;
         },
         retryFailedNamespaceDeletion: async (namespaceId, actorId) => {
           await this.requireInitialized(context);

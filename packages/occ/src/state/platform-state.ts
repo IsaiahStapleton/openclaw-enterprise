@@ -618,7 +618,17 @@ export interface PlatformOperationReadRepository {
 
 export interface PlatformOperationRepository extends PlatformOperationReadRepository {
   append(operation: PlatformOperation): Promise<void>;
-  retryFailedAgentDeletion(namespaceId: string, agentId: string, actorId: string): Promise<boolean>;
+  /**
+   * Requeue the exact deleting Agent's terminal teardown initiated by
+   * `initiatingActorId`, assigning it to `actorId` (the same actor for a plain
+   * retry, another for a takeover).
+   */
+  retryFailedAgentDeletion(
+    namespaceId: string,
+    agentId: string,
+    initiatingActorId: string,
+    actorId: string,
+  ): Promise<boolean>;
   retryFailedNamespaceDeletion(namespaceId: string, actorId: string): Promise<boolean>;
 }
 
