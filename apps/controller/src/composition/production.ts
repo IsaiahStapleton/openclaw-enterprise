@@ -207,6 +207,9 @@ export async function composeProduction(config: ProductionConfig) {
       backends: installation.backend,
       defaultPresets: config.drivers.defaultPresets ?? [],
       loggingLevel: config.drivers.installation.logging.level,
+      ...(installation.runtime === undefined
+        ? {}
+        : { nativeWorkerSupport: installation.runtime.nativeWorkerSupport }),
     });
     controller.registerDriver(iamDriver);
     controller.selectDriver("iam", driverId);
