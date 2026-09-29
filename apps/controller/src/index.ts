@@ -3900,7 +3900,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         schema: {
           operationId: "signInEmail",
           summary: "Sign in with email and password",
-          description: "Authenticates a local account and issues a user session cookie.",
+          description:
+            "Authenticates a local account and issues a user session cookie. Repeated failed attempts from one client address or for one email return 429 with Retry-After.",
           tags: ["Authentication"],
           security: [],
           body: {
@@ -3912,15 +3913,18 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               password: accountBody.properties.password,
             },
           },
-          response: responses({
-            type: "object",
-            additionalProperties: false,
-            required: ["authenticated"],
-            properties: {
-              authenticated: { type: "boolean", const: true },
-              sessionKey: { type: "string" },
-            },
-          }),
+          response: {
+            ...responses({
+              type: "object",
+              additionalProperties: false,
+              required: ["authenticated"],
+              properties: {
+                authenticated: { type: "boolean", const: true },
+                sessionKey: { type: "string" },
+              },
+            }),
+            429: { description: "Too Many Requests", ...error },
+          },
         },
       },
       async (request, reply) => options.auth.signInEmail(request, reply),

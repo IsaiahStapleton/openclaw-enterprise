@@ -939,7 +939,7 @@ Sign in with email and password
 
 **Operation ID:** `signInEmail`
 
-**Permissions:** Authenticates a local account and issues a user session cookie.
+**Permissions:** Authenticates a local account and issues a user session cookie. Repeated failed attempts from one client address or for one email return 429 with Retry-After.
 
 ##### Request body
 
@@ -958,6 +958,7 @@ Sign in with email and password
 | --- | --- |
 | `200` | OK |
 | `401` | Unauthorized |
+| `429` | Too Many Requests |
 | `503` | Service Unavailable |
 
 **`200` response body:** `application/json`

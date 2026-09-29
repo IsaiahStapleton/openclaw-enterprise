@@ -38,6 +38,12 @@ import {
 import { googleLoginConfiguration, type GoogleSignInConfiguration } from "./google.ts";
 import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
 import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
+import {
+  SignInRateLimited,
+  passwordFailureAdmission,
+  passwordFailureBudget,
+  type PasswordSignInAdmission,
+} from "./admission.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
 export {
@@ -129,6 +135,13 @@ export interface ControllerAuthOptions {
   readonly humanLogin?: ReturnType<typeof createHumanLogin>;
   /** Trusted proxies whose client-address header keys sign-in admission. */
   readonly clientAddress?: ClientAddressConfiguration;
+  /**
+   * Password-only profile: whether a user administers the Installation, which gives that
+   * account the reserved password lane. Without it no account has the reserved lane.
+   */
+  readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
+  /** Password-only profile: replaces the in-memory failure-counting admission. */
+  readonly passwordAdmission?: PasswordSignInAdmission;
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
@@ -400,7 +413,13 @@ function authFailure(error: unknown): { readonly status: number; readonly code: 
       return {
         status,
         code:
-          status === 401 ? "UNAUTHENTICATED" : status === 409 ? "RESOURCE_CONFLICT" : "FORBIDDEN",
+          status === 401
+            ? "UNAUTHENTICATED"
+            : status === 409
+              ? "RESOURCE_CONFLICT"
+              : status === 429
+                ? "RATE_LIMITED"
+                : "FORBIDDEN",
       };
     }
     if (error instanceof APIError) {
@@ -408,6 +427,12 @@ function authFailure(error: unknown): { readonly status: number; readonly code: 
     }
   }
   return { status: 503, code: "DEPENDENCY_UNAVAILABLE" };
+}
+
+// Credential rejections spend the password budget; dependency failures do not.
+function countsAsSignInFailure(error: unknown): boolean {
+  const { status } = authFailure(error);
+  return status >= 400 && status < 500;
 }
 
 function authBody(request: FastifyRequest): Record<string, unknown> {
@@ -578,6 +603,9 @@ async function sendAuthEndpoint(
     });
   } catch (error) {
     const failure = authFailure(error);
+    if (error instanceof SignInRateLimited) {
+      reply.header("retry-after", String(error.retryAfterSeconds));
+    }
     reply.status(failure.status).send({
       error: { code: failure.code, message: failureMessage },
       meta: { requestId: request.id },
@@ -871,6 +899,24 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     },
   });
   const api = auth.api;
+  // Password-only profile: failure-counting admission keyed on client address and email,
+  // with a reserved lane for Installation administrators (see admission.ts).
+  const passwordAdmission =
+    humanLogin !== undefined
+      ? undefined
+      : (options.passwordAdmission ??
+        passwordFailureAdmission({
+          ...passwordFailureBudget,
+          countsAsFailure: countsAsSignInFailure,
+          // Timing differences here are hidden by the reserved lane's refusal floor.
+          async isReserved(email) {
+            if (options.passwordAdministrator === undefined) {
+              return false;
+            }
+            const found = await (await auth.$context).internalAdapter.findUserByEmail(email);
+            return found !== null && (await options.passwordAdministrator(found.user.id));
+          },
+        }));
 
   /** Validates and hashes a new password account without writing it. */
   async function prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount> {
@@ -986,6 +1032,16 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await context.internalAdapter.deleteUser(account.id);
   }
 
+  function clientAddressOf(request: FastifyRequest): string {
+    return resolveClientAddress(
+      options.clientAddress,
+      request.ip,
+      options.clientAddress === undefined
+        ? undefined
+        : request.headers[options.clientAddress.header],
+    );
+  }
+
   async function runPrivateEndpoint(
     request: FastifyRequest,
     path: string,
@@ -998,16 +1054,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     const headers = authHeaders(request.headers);
     headers.set("host", new URL(options.baseURL).host);
     // Sign-in admission keys on this value; Better Auth reads only this address header.
-    headers.set(
-      "x-occ-client-ip",
-      resolveClientAddress(
-        options.clientAddress,
-        request.ip,
-        options.clientAddress === undefined
-          ? undefined
-          : request.headers[options.clientAddress.header],
-      ),
-    );
+    headers.set("x-occ-client-ip", clientAddressOf(request));
     // Password sign-in keeps the established browser/CLI origin contract; sign-out already
     // required the exact browser Origin before reaching this point.
     if (!headers.has("origin") && path === "/oce/password") {
@@ -1112,13 +1159,19 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/password", body);
         }
-        return api.signInEmail({
-          body: { ...body, rememberMe: true },
-          headers: authHeaders(request.headers),
-          asResponse: false,
-          returnHeaders: true,
-          returnStatus: true,
-        });
+        const attempt = {
+          clientAddress: clientAddressOf(request),
+          email: body.email.trim().toLowerCase(),
+        };
+        return passwordAdmission!.admit(attempt, () =>
+          api.signInEmail({
+            body: { ...body, rememberMe: true },
+            headers: authHeaders(request.headers),
+            asResponse: false,
+            returnHeaders: true,
+            returnStatus: true,
+          }),
+        );
       },
       (response) => {
         const sessionKey = (response as { readonly sessionKey?: unknown } | null)?.sessionKey;
@@ -1333,6 +1386,27 @@ export async function activateRecoveryAccount(
   return { ...activation, recoveryUserId, seedIgnored };
 }
 
+/** Whether a Better Auth user's Principal holds Installation `administer`. */
+async function administersInstallation(
+  iamDriver: IAMDriver,
+  installationId: string,
+  userId: string,
+): Promise<boolean> {
+  const principal = await iamDriver.lookupIdentity({
+    issuer: betterAuthIssuer(installationId),
+    subject: userId,
+  });
+  if (!principal || principal.kind !== "principal") {
+    return false;
+  }
+  const decision = await iamDriver.authorize({
+    principalId: principal.id,
+    action: "administer",
+    resource: { kind: "installation", id: installationId },
+  });
+  return decision.allowed;
+}
+
 /** Hash a local password exactly as the controller's password sign-in verifies it. */
 export async function hashLocalPassword(password: string): Promise<string> {
   if (password.length < LOCAL_PASSWORD_MIN_LENGTH || password.length > LOCAL_PASSWORD_MAX_LENGTH) {
@@ -1400,6 +1474,12 @@ export async function createPostgresControllerAuth(
   const auth = createControllerAuth({
     ...controllerOptions,
     ...(humanLogin === undefined ? {} : { humanLogin }),
+    ...(humanLogin !== undefined || iamDriver === undefined
+      ? {}
+      : {
+          passwordAdministrator: (userId: string) =>
+            administersInstallation(iamDriver, options.installationId, userId),
+        }),
     database: await createOccAuthDatabase(pool),
   });
   // Finish static auth initialization before the one-way activation transaction.

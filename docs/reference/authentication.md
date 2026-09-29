@@ -14,7 +14,7 @@ For a sign-in procedure, see
 For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
 The [platform console](console.md) provides login at `/console/` and uses these
 same session endpoints. Public signup, generic OIDC, and bearer
-credentials are not supported controller API authentication paths.
+credentials are unsupported.
 
 ## Installation and account ownership
 
@@ -112,7 +112,11 @@ revokes nor clears the cookie. Without the header, requests are unchanged. Conso
 pins each tab's key this way.
 
 Sign-in takes `{"email": "...", "password": "..."}`. The session credential
-arrives only through `Set-Cookie`; protected API calls use it.
+arrives only through `Set-Cookie`.
+
+Without an external provider, only failures count: 20 per minute per client
+address and 10 per email, then `429` with `Retry-After`. Installation
+administrators keep a reserved lane.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
@@ -301,7 +305,7 @@ A representative provisioning body is:
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
 Provisioning has no public email-verification or signup flow; duplicates are
-rejected. There is no password reset API.
+rejected.
 
 ## Authorization and failures
 
@@ -319,8 +323,7 @@ headers and bearer credentials are not authorization evidence.
 | Duplicate account during provisioning                          | `409 RESOURCE_CONFLICT`.                                                           |
 | Authentication or IAM dependency unavailable                   | The request fails closed; dependency failures return `503 DEPENDENCY_UNAVAILABLE`. |
 
-The optional session-inspection route is not a protected resource operation:
-anonymous inspection returns `200` with `data: null`.
+Anonymous session inspection returns `200` with `data: null`.
 
 ## Automation credentials
 
@@ -329,9 +332,8 @@ Non-Agent automation uses `x-api-key` with an existing IAM ServicePrincipal. [Se
 ## Evidence and related references
 
 The [authentication implementation](../../apps/controller/src/auth/index.ts)
-owns session verification and safe responses; the
-[HTTP routes](../../apps/controller/src/index.ts) own public endpoint exposure
-and account-provisioning authorization.
+owns sessions; the [HTTP routes](../../apps/controller/src/index.ts) own
+endpoint exposure and provisioning authorization.
 
 - [Local authentication tests](../testing/local.md#authentication-and-authorization-coverage)
 - [Service-key persistence tests](../testing/postgresql.md#service-key-persistence)
