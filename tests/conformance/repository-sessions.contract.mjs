@@ -6,10 +6,14 @@ import {
   repositoryGrant,
 } from "../fixtures/repository-credentials/session-state.mjs";
 
-export async function seedSessionRevision(store, credentials = repositoryCredentials()) {
+export async function seedSessionRevision(
+  store,
+  credentials = repositoryCredentials(),
+  options = {},
+) {
   const createdAt = "2030-03-17T17:46:40.000Z";
   const namespace = {
-    id: `ns_${randomUUID()}`,
+    id: options.namespaceId ?? `ns_${randomUUID()}`,
     name: `Repository session ${randomUUID()}`,
     status: "ready",
     createdAt,
@@ -353,6 +357,7 @@ export async function verifyRepositorySessions(t, store) {
           binding: revision.repositoryCredentials.bindings[0],
         },
         phase: "opening",
+        brokerProtocol: 0,
         updatedAt: input.createdAt,
       });
       assert.ok(Object.isFrozen(opened));

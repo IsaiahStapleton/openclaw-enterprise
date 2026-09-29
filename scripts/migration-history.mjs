@@ -118,6 +118,9 @@ function classifyReceipts(receipts, manifest) {
       if (receipts.length === 33) {
         return "prePluginApprovers";
       }
+      if (receipts.length === 34) {
+        return "preBrokerReceipts";
+      }
       return "providerCompleted";
     }
     if (!receiptsMatchEntries(receipts, manifest.entries)) {
@@ -158,6 +161,9 @@ function classifyReceipts(receipts, manifest) {
   }
   if (receipts.length === 33) {
     return "prePluginApprovers";
+  }
+  if (receipts.length === 34) {
+    return "preBrokerReceipts";
   }
   refuse("an incomplete or unsupported development history is installed");
 }
