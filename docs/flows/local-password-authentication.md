@@ -224,7 +224,7 @@ that version and invalidate target sessions and proofs without changing IAM.
 A guarded read returns current account and method state, not a prior operation
 receipt. Unknown completion returns an explicit dependency failure without
 replay or compensation; operators must resolve uncertainty before a new action.
-Logout commits deletion and audit before clearing the cookie. The [authentication reference](../reference/authentication.md#github-sign-in-for-existing-accounts)
+Logout commits deletion and audit before clearing the cookie. The [authentication reference](../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
 owns configuration, recovery limits, and operator-visible behavior.
 
 ### 4. Admit and authorize protected API calls
