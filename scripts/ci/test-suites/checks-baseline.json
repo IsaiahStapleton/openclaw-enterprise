@@ -16,6 +16,9 @@
       "path": "tests/conformance/configuration-occ.test.mjs"
     },
     {
+      "path": "tests/conformance/console-api-client.test.mjs"
+    },
+    {
       "path": "tests/conformance/contracts.test.mjs"
     },
     {
