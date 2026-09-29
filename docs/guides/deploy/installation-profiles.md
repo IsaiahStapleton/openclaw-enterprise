@@ -158,9 +158,13 @@ On success, the output directory contains:
 - `preflight.json`: rendered output paths, warnings, prerequisites, and next
   steps.
 
-If required input is missing or unsupported input is present, the renderer writes
-`preflight.json` with `ok: false`, does not write `values.yaml` or
-`installation.yaml`, and exits nonzero.
+Once CLI arguments are valid, the renderer clears these three generated files
+before loading the new input, including when reusing an output directory. Other
+files are preserved. If required input is missing or unsupported input is present,
+it writes `preflight.json` with `ok: false` and only the report path in `outputs`,
+leaves both YAML files absent, and exits nonzero. Unreadable or malformed input
+JSON also leaves no preflight report. Correct the input and rerun successfully
+before applying either artifact.
 
 ## Apply rendered output
 

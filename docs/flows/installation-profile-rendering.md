@@ -1,7 +1,7 @@
 ---
 created: 2026-09-28
 updated: 2026-09-28
-last_updated_session: authoring-run/6f2a325a-cf1c-4277-9ce3-7623626f68c6
+last_updated_session: authoring-run/c35ba3ae-a801-46fc-af68-f8f7a27d56ed
 ---
 
 # Installation Profile Rendering Flow
@@ -35,7 +35,8 @@ graph TD
   A["Operator invokes renderer"] --> B["Parse profile, input path, and output directory"]
   B --> C{"Profile is openclaw or codex?"}
   C -->|No| X["Exit before reading input"]
-  C -->|Yes| D["Load deploy/profiles/<profile>.json and input JSON"]
+  C -->|Yes| R["Clear prior generated files and preflight"]
+  R --> D["Load deploy/profiles/<profile>.json and input JSON"]
   D --> E["Reject unsupported sections and fields"]
   E --> F["Validate consumed image, CIDR, proxy, label, and Backend inputs"]
   F --> G{"Any diagnostics errors?"}
@@ -57,6 +58,10 @@ The command accepts exactly three operator inputs: `--profile`, `--input`, and
 `default` profile. Release name and namespace live in the JSON input so they
 have one owner and can feed both Helm instructions and Installation settings.
 Unsupported flags fail before any file is rendered.
+After valid arguments identify the output directory, the renderer removes only
+its prior `values.yaml`, `installation.yaml`, and `preflight.json`. Unrelated
+files remain. Clearing these before input loading prevents an unreadable or
+malformed JSON input from leaving deployable files or an old success report.
 
 ### 2. Load profile and site input
 
@@ -116,6 +121,9 @@ matching ServiceAccount Driver; otherwise Codex Agents use the existing
 proxy is enabled, Compute receives the generated Service DNS URL and selector
 for API-to-proxy egress. Repository opt-in adds the GitHub Backend, Repo Driver,
 and worker peer expected by the broker sidecar.
+The Compute Gateway name follows Helm's release-name derivation, including its
+63-character truncation and trailing-hyphen removal, so HTTPRoute parent
+references identify the Gateway actually rendered by the chart.
 
 ### 6. Write outputs and preflight
 
@@ -125,7 +133,8 @@ Successful runs render deterministic `installation.yaml`, compute a SHA-256
 checksum from those exact bytes, inject that digest into
 `values.yaml` as `controlPlane.installationChecksum`, then write
 `values.yaml`, `installation.yaml`, and `preflight.json`. Failed validation
-writes only `preflight.json` with `ok:false` and exits nonzero. The preflight
+writes only `preflight.json` with `ok:false`, lists only that report in `outputs`,
+and exits nonzero. Input-loading failures exit without a preflight report. The preflight
 report includes warnings, external prerequisites, and the next operator steps.
 It tells the operator to update the Installation startup Secret before the Helm
 upgrade so API and worker pod-template annotations roll when startup-only
@@ -162,6 +171,8 @@ repository registry creation are separate evidence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 19:57: Match Helm Gateway names and invalidate prior generated files before rerendering. (authoring-run/c35ba3ae-a801-46fc-af68-f8f7a27d56ed - 15bab9571fa12a2192a4d5dbff70f3e263468ee7)
 
 - 2026-09-28 15:36: Documented installation profile rendering flow. (authoring-run/6f2a325a-cf1c-4277-9ce3-7623626f68c6 - 6c56149f1f2b7290d8526d87c3624c9b7db09fbf)
 

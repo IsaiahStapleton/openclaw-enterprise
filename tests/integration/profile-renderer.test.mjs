@@ -92,8 +92,11 @@ function managedCodexInput(overrides = {}) {
   });
 }
 
-function render(profile, input) {
-  const directory = mkdtempSync(join(tmpdir(), `oce-profile-${profile}-`));
+function render(
+  profile,
+  input,
+  directory = mkdtempSync(join(tmpdir(), `oce-profile-${profile}-`)),
+) {
   const inputPath = join(directory, "input.json");
   writeFileSync(inputPath, `${JSON.stringify(input, null, 2)}\n`);
   let summary;
@@ -125,12 +128,12 @@ function render(profile, input) {
   };
 }
 
-function helmTemplate(output, extraValueFiles = []) {
+function helmTemplate(output, extraValueFiles = [], releaseName = "oce") {
   return execFileSync(
     helm,
     [
       "template",
-      "oce",
+      releaseName,
       "deploy/helm/openclaw-enterprise",
       "--namespace",
       "openclaw-system",
@@ -228,6 +231,77 @@ test("managed ChatGPT service-account wiring is optional and explicit", () => {
   assert.match(codex.values, /backend:\n {2}chatgpt:\n {4}enabled: true/);
   assert.match(codex.installation, /service_account: chatgpt-service-accounts/);
   assert.match(codex.preflight.warnings.join("\n"), /issuance is wired but remains unverified/);
+});
+
+test(
+  "long release names keep Installation routing attached to the rendered Gateway",
+  { skip: helmSkip },
+  () => {
+    for (const profile of ["openclaw", "codex"]) {
+      // Exercise the DNS-name boundary and Helm's maximum supported release length.
+      for (const length of [48, 49, 53]) {
+        const input = profile === "codex" ? codexInput() : baseInput();
+        const releaseName = "r".repeat(length);
+        input.controlPlane.releaseName = releaseName;
+        const output = render(profile, input);
+        const gateway = helmTemplate(output, [], releaseName)
+          .split(/\n---\n/)
+          .find((document) => /\nkind: Gateway\n/.test(document));
+        assert.ok(gateway, "Helm must render the Gateway referenced by Compute");
+        const gatewayName = gateway.match(/^ {2}name: (\S+)$/m)?.[1];
+        const routingName = output.installation.match(/^\s+gatewayName: (\S+)$/m)?.[1];
+        assert.ok(gatewayName && gatewayName.length <= 63);
+        assert.equal(routingName, gatewayName, `${profile}: release length ${length}`);
+      }
+    }
+  },
+);
+
+test("failed rerenders remove stale deployable artifacts from a reused directory", () => {
+  for (const profile of ["openclaw", "codex"]) {
+    const input = profile === "codex" ? codexInput() : baseInput();
+    const output = render(profile, input);
+    const notes = join(output.directory, "operator-notes.txt");
+    writeFileSync(notes, "Retain operator-owned files.\n");
+
+    // A failed second run must not leave the first run's configuration deployable.
+    const invalid = structuredClone(input);
+    invalid.controlPlane.databaseCidrs = ["invalid-cidr"];
+    const error = renderError(() => render(profile, invalid, output.directory));
+    assert.match(error.profileRendererOutput, /must be an IPv4 \/32 CIDR/);
+    for (const name of ["values.yaml", "installation.yaml"]) {
+      assert.equal(existsSync(join(output.directory, name)), false);
+    }
+    const preflight = JSON.parse(readFileSync(join(output.directory, "preflight.json"), "utf8"));
+    assert.equal(preflight.ok, false);
+    assert.deepEqual(preflight.outputs, { preflight: join(output.directory, "preflight.json") });
+    assert.equal(readFileSync(notes, "utf8"), "Retain operator-owned files.\n");
+
+    // Recovery regenerates both artifacts; malformed JSON must also invalidate that success.
+    assert.equal(render(profile, input, output.directory).preflight.ok, true);
+    writeFileSync(join(output.directory, "input.json"), "{");
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            "scripts/render-installation-profile.mjs",
+            "--profile",
+            profile,
+            "--input",
+            join(output.directory, "input.json"),
+            "--out-dir",
+            output.directory,
+          ],
+          { cwd: repository, stdio: "pipe" },
+        ),
+      /unavailable or invalid JSON/,
+    );
+    for (const name of ["values.yaml", "installation.yaml", "preflight.json"]) {
+      assert.equal(existsSync(join(output.directory, name)), false);
+    }
+    assert.equal(readFileSync(notes, "utf8"), "Retain operator-owned files.\n");
+  }
 });
 
 test("rendered profile values pass Helm chart validation", { skip: helmSkip }, () => {

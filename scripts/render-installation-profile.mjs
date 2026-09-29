@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -760,7 +760,7 @@ function buildRendered(profile, parsed, diagnostics) {
             ),
           },
           gatewayRouting: {
-            gatewayName: `${releaseName}-agent-gateways`,
+            gatewayName: `${releaseName}-agent-gateways`.slice(0, 63).replace(/-$/, ""),
             gatewayNamespace: namespace,
             envoyNamespace,
           },
@@ -1014,6 +1014,13 @@ async function writePreflight(outDir, profile, diagnostics, output = {}) {
 const args = parseArgs(process.argv.slice(2));
 const outDir = resolve(args.outDir);
 await mkdir(outDir, { recursive: true });
+const output = {
+  values: resolve(outDir, "values.yaml"),
+  installation: resolve(outDir, "installation.yaml"),
+  preflight: resolve(outDir, "preflight.json"),
+};
+// A failed rerender must not expose artifacts or a success report from a prior run.
+await Promise.all(Object.values(output).map((path) => rm(path, { force: true })));
 const diagnostics = { errors: [], warnings: [], prerequisites: [], nextSteps: [] };
 const [profile, rawInput] = await Promise.all([
   readProfile(args.profile),
@@ -1021,12 +1028,6 @@ const [profile, rawInput] = await Promise.all([
 ]);
 const parsed = buildInput(rawInput, diagnostics);
 const { values, installation } = buildRendered(profile, parsed, diagnostics);
-
-const output = {
-  values: resolve(outDir, "values.yaml"),
-  installation: resolve(outDir, "installation.yaml"),
-  preflight: resolve(outDir, "preflight.json"),
-};
 
 if (diagnostics.errors.length === 0) {
   const installationYaml = renderYaml(installation);
@@ -1039,7 +1040,12 @@ if (diagnostics.errors.length === 0) {
     writeFile(output.installation, installationYaml),
   ]);
 }
-const preflight = await writePreflight(outDir, profile.name, diagnostics, output);
+const preflight = await writePreflight(
+  outDir,
+  profile.name,
+  diagnostics,
+  diagnostics.errors.length === 0 ? output : { preflight: output.preflight },
+);
 process.stdout.write(`${JSON.stringify(preflight, null, 2)}\n`);
 if (!preflight.ok) {
   process.exit(1);
