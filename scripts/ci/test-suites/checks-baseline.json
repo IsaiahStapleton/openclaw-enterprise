@@ -1,4 +1,7 @@
 {
+  "env": {
+    "NODE_OPTIONS": "--max-old-space-size=4096"
+  },
   "files": [
     {
       "path": "tests/conformance/audit.test.mjs"
@@ -13,10 +16,19 @@
       "path": "tests/conformance/configuration-occ.test.mjs"
     },
     {
+      "path": "tests/conformance/console-api-client.test.mjs"
+    },
+    {
       "path": "tests/conformance/contracts.test.mjs"
     },
     {
+      "path": "tests/conformance/credential-source-occ.test.mjs"
+    },
+    {
       "path": "tests/conformance/docker-compute.test.mjs"
+    },
+    {
+      "path": "tests/conformance/grafana-overview-dashboard.test.mjs"
     },
     {
       "path": "tests/conformance/iam.test.mjs"
@@ -52,6 +64,9 @@
       "path": "tests/conformance/platform-state-memory.test.mjs"
     },
     {
+      "path": "tests/conformance/pr-status.test.mjs"
+    },
+    {
       "path": "tests/conformance/presets.test.mjs"
     },
     {
@@ -83,6 +98,9 @@
     },
     {
       "path": "tests/integration/presets-controller.test.mjs"
+    },
+    {
+      "path": "tests/integration/profile-renderer.test.mjs"
     },
     {
       "path": "tests/integration/bootstrap-output.test.mjs"
@@ -181,10 +199,28 @@
       "path": "tests/integration/ci-runner.test.mjs"
     },
     {
+      "path": "tests/integration/metrics-monitoring-readiness.test.mjs",
+      "expectedTests": [
+        "datasource readiness retries a transient HTTP 400",
+        "non-retryable Grafana health failures retain their stage and status",
+        "non-retryable Grafana datasource failures retain their stage and status",
+        "malformed Grafana datasource responses retain their stage and status",
+        "datasource readiness retries an interrupted response body",
+        "invalid Grafana datasource response shapes retain their stage and status",
+        "a timed-out Prometheus response body retries and accepts a later valid query",
+        "Prometheus readiness retries an interrupted response body",
+        "a null Prometheus response retains its stage and status",
+        "malformed Prometheus responses remain query errors"
+      ]
+    },
+    {
       "path": "tests/integration/full-integration-preflight.test.mjs"
     },
     {
       "path": "tests/integration/ci-cleanup.test.mjs"
+    },
+    {
+      "path": "tests/integration/ci-image-reconciliation.test.mjs"
     },
     {
       "path": "tests/integration/ci-prepare.test.mjs"
@@ -199,7 +235,22 @@
       "path": "tests/browser/console-agents.test.mjs"
     },
     {
-      "path": "tests/browser/console-agent-details.test.mjs"
+      "path": "tests/browser/console-agent-repositories.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-draft-guards.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-detail.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-presets.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-plugin-approvers.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-channels.test.mjs"
     },
     {
       "path": "tests/browser/console-repository-dedicated.test.mjs"
@@ -218,6 +269,12 @@
     },
     {
       "path": "tests/integration/container-release.test.mjs"
+    },
+    {
+      "path": "tests/integration/cli-release.test.mjs",
+      "expectedTests": [
+        "CLI release builds four installable platform binaries and rejects changed assets"
+      ]
     },
     {
       "path": "tests/integration/container-resume.test.mjs"
@@ -241,6 +298,9 @@
       "path": "tests/conformance/plugin-driver.test.mjs"
     },
     {
+      "path": "tests/conformance/slack-channel-directory.test.mjs"
+    },
+    {
       "path": "tests/conformance/hosted-plugin-discovery.test.mjs"
     },
     {
@@ -250,10 +310,17 @@
       "path": "tests/integration/plugin-driver-startup.test.mjs"
     },
     {
+      "path": "tests/integration/plugin-driver-real-preflight.test.mjs"
+    },
+    {
       "path": "tests/conformance/repository-transactions.test.mjs"
     },
     {
       "path": "tests/conformance/postgres-transaction-commit.test.mjs"
+    },
+    {
+      "path": "tests/conformance/postgres-transaction-unknown-commit.test.mjs",
+      "expectedTests": ["lost COMMIT response returns unknown without waiting for a hung rollback"]
     },
     {
       "path": "tests/integration/native-admin-access.test.mjs",
@@ -287,6 +354,9 @@
     },
     {
       "path": "tests/conformance/repository-credentials-ownership-boundaries.test.mjs"
+    },
+    {
+      "path": "tests/conformance/repository-credentials-tool-evidence.test.mjs"
     },
     {
       "path": "tests/conformance/repository-credentials-fixture-ownership.test.mjs",
@@ -337,11 +407,17 @@
       "expectedTests": [
         "TEST-001: SIGKILL after confirmed GitHub issuance loses session inventory",
         "TEST-002: lost GitHub issuance response stays charged while service survives",
-        "TEST-002: SIGKILL before GitHub issuance response loses local reservation"
+        "TEST-002: SIGKILL before GitHub issuance response loses local reservation",
+        "a lost revocation response is not proof of disposal across broker loss",
+        "captured GitHub authority expires by elapsed time when revocation is unconfirmed",
+        "a broker restart cannot accept bound admissions without durable fencing"
       ]
     },
     {
       "path": "tests/conformance/repository-credentials-registry.test.mjs"
+    },
+    {
+      "path": "tests/conformance/repository-client-environment.test.mjs"
     },
     {
       "path": "tests/conformance/repository-runtime-material.test.mjs"
@@ -365,7 +441,41 @@
       "path": "tests/integration/repository-runtime-materialization.test.mjs"
     },
     {
+      "path": "tests/integration/codex-plugin-startup-reads.test.mjs"
+    },
+    {
+      "path": "tests/integration/kubernetes-peer-status.test.mjs",
+      "expectedTests": [
+        "real peer-status HTTPS transport authenticates its revision and verifies server trust"
+      ]
+    },
+    {
       "path": "tests/integration/runtime-assets.test.mjs"
+    },
+    {
+      "path": "tests/conformance/module-boundaries.test.mjs"
+    },
+    {
+      "path": "tests/conformance/module-policy.test.mjs",
+      "expectedTests": [
+        "repository source obeys its dependency policy with exact current exceptions",
+        "repository policy allows a public root and rejects a new HTTP Driver import"
+      ]
+    },
+    {
+      "path": "tests/integration/github-login-transport.test.mjs"
+    },
+    {
+      "path": "tests/integration/google-id-token.test.mjs"
+    },
+    {
+      "path": "tests/integration/google-login-transport.test.mjs"
+    },
+    {
+      "path": "tests/integration/client-address.test.mjs"
+    },
+    {
+      "path": "tests/integration/password-sign-in-admission.test.mjs"
     }
   ]
 }

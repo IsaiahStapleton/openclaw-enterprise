@@ -33,7 +33,7 @@ function kubernetesCompute(Driver = KubernetesComputeDriver, provisioning = fals
     requests: { cpu: "100m", memory: "64Mi" },
     limits: { cpu: "250m", memory: "128Mi" },
   };
-  return new Driver(
+  const compute = new Driver(
     {
       ...(provisioning
         ? {
@@ -70,6 +70,9 @@ function kubernetesCompute(Driver = KubernetesComputeDriver, provisioning = fals
     },
     provisioning ? { nodeEnrollment: {} } : {},
   );
+  // Repository admission has no cluster; its transport credential prerequisite is satisfied.
+  compute.getAgentRuntimeCredentialStatus = async () => ({ transportConfigured: true });
+  return compute;
 }
 
 function sshCompute() {
@@ -693,7 +696,7 @@ test("Agent updates apply repository access and validate plugin policy together"
   const denied = await f.request("PATCH", path, {
     configurationId: f.configuration.id,
     repositoryAccess: nextAccess,
-    plugins: { "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "prompt" } } },
+    plugins: { "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "all_actions" } } },
   });
   assert.equal(denied.status, 400, JSON.stringify(denied));
   const unchanged = await f.request("GET", path);
@@ -704,7 +707,7 @@ test("Agent updates apply repository access and validate plugin policy together"
   assert.deepEqual(unchanged.data.plugins, initialPlugins);
 
   const nextPlugins = {
-    "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "approve" } },
+    "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "none" } },
   };
   const updated = await f.request("PATCH", path, {
     configurationId: f.configuration.id,

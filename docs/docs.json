@@ -107,6 +107,10 @@
                     "label": "Console Walkthrough"
                   },
                   {
+                    "page": "guides/console/agent-sharing",
+                    "label": "Share Agents"
+                  },
+                  {
                     "page": "reference/console/create-and-deploy",
                     "label": "Create and Deploy in the Console"
                   },
@@ -147,6 +151,10 @@
                         "label": "Service Accounts"
                       },
                       {
+                        "page": "reference/authentication/external-sign-in",
+                        "label": "External Sign-In"
+                      },
+                      {
                         "page": "reference/authentication/service-api-keys",
                         "label": "Service API Keys"
                       }
@@ -163,6 +171,10 @@
                   {
                     "page": "guides/topics/secrets",
                     "label": "Secrets"
+                  },
+                  {
+                    "page": "reference/credential-sources",
+                    "label": "Credential Sources"
                   },
                   {
                     "page": "guides/topics/audit-log",
@@ -208,6 +220,7 @@
             ],
             "hidden": [
               "reference/console/debug-fields",
+              "reference/console/agent-sharing",
               "reference/configuration/secrets",
               "reference/security/runtime-isolation",
               "reference/agents",
@@ -282,11 +295,29 @@
                     ]
                   },
                   {
+                    "group": "Credential Gateway",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/openshell-credential-gateway",
+                        "label": "OpenShell"
+                      }
+                    ]
+                  },
+                  {
                     "group": "Secrets",
                     "pages": [
                       {
                         "page": "reference/drivers/kubernetes-secret",
                         "label": "Kubernetes"
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Channels",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/slack-channel",
+                        "label": "Slack Directory"
                       }
                     ]
                   },
@@ -365,7 +396,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "hidden": ["guides/repository-credentials/standalone-service"]
           },
           {
             "tab": "Operate",
@@ -391,8 +423,32 @@
                     "label": "Control Plane Setup"
                   },
                   {
+                    "page": "guides/deploy/private-registry-images",
+                    "label": "Private Images"
+                  },
+                  {
+                    "page": "guides/deploy/installation-profiles",
+                    "label": "Profiles"
+                  },
+                  {
+                    "page": "guides/deploy/upgrade-checklist",
+                    "label": "Upgrade Checklist"
+                  },
+                  {
                     "page": "guides/deploy/production-upgrade",
                     "label": "Image Upgrades"
+                  },
+                  {
+                    "page": "guides/deploy/auth-maintenance",
+                    "label": "Sign-in Maintenance"
+                  },
+                  {
+                    "page": "guides/deploy/google-sign-in",
+                    "label": "Google Sign-in"
+                  },
+                  {
+                    "page": "guides/deploy/local-k3d-image-upgrade",
+                    "label": "Local k3d Upgrades"
                   },
                   {
                     "page": "guides/deploy/kubernetes",
@@ -401,6 +457,10 @@
                   {
                     "page": "guides/deploy/eks",
                     "label": "Amazon EKS"
+                  },
+                  {
+                    "page": "guides/deploy/eks-private-access",
+                    "label": "Private EKS Access"
                   },
                   {
                     "page": "guides/deploy/codex-sandbox",
@@ -490,7 +550,13 @@
                 ]
               }
             ],
-            "hidden": ["guides/deploy/service-keys", "guides/deploy/local-operations"]
+            "hidden": [
+              "guides/deploy/service-keys",
+              "guides/deploy/local-operations",
+              "flows/installation-profile-rendering",
+              "guides/deploy/published-images",
+              "guides/deploy/production-tui"
+            ]
           },
           {
             "tab": "Reference",
@@ -573,6 +639,10 @@
                     "label": "Overview"
                   },
                   {
+                    "page": "contributing/rfcs",
+                    "label": "RFCs"
+                  },
+                  {
                     "page": "contributing/design-philosophy",
                     "label": "Design Philosophy"
                   },
@@ -581,12 +651,8 @@
                     "label": "Readable Code"
                   },
                   {
-                    "page": "ARCHITECTURE",
-                    "label": "Current Architecture"
-                  },
-                  {
                     "page": "design",
-                    "label": "Target Architecture"
+                    "label": "Architecture"
                   },
                   {
                     "page": "reference/controller",
@@ -608,12 +674,20 @@
                     "group": "Driver Contracts",
                     "pages": [
                       {
+                        "page": "reference/drivers/channel",
+                        "label": "Channel"
+                      },
+                      {
                         "page": "reference/drivers/compute",
                         "label": "Compute"
                       },
                       {
                         "page": "reference/drivers/configuration",
                         "label": "Configuration"
+                      },
+                      {
+                        "page": "reference/drivers/credential-gateway",
+                        "label": "Credential Gateway"
                       },
                       {
                         "page": "reference/drivers/iam",
@@ -686,6 +760,14 @@
                         "label": "Local Tests"
                       },
                       {
+                        "page": "testing/module-boundaries",
+                        "label": "Module Boundaries"
+                      },
+                      {
+                        "page": "testing/repository-boundaries",
+                        "label": "Repository Boundaries"
+                      },
+                      {
                         "page": "testing/fixtures-and-scenarios",
                         "label": "Fixtures and Scenarios"
                       },
@@ -722,17 +804,24 @@
                     "label": "Preview and Validate"
                   },
                   {
+                    "page": "contributing/documentation-hosting",
+                    "label": "Hosting and Launch"
+                  },
+                  {
                     "page": "base-driver-docs-template",
                     "label": "Driver Docs"
                   },
                   {
                     "page": "documentation-inventory",
-                    "label": "Inventory"
+                    "label": "Historical Inventory"
                   }
                 ]
               }
             ],
             "hidden": [
+              "contributing/rfc-template",
+              "guides/deploy/local-repository-credentials",
+              "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
               "design/access",
@@ -746,9 +835,13 @@
               "flows/docker-compose-development/startup",
               "flows/docker-compose-development/agent-execution",
               "flows/common-logging",
+              "flows/audit-ledger",
               "flows/controller-worker",
+              "flows/agent-deployment-diagnostics",
               "flows/platform-console",
               "flows/platform-console/agent-editing",
+              "flows/platform-console/agent-sharing",
+              "flows/platform-console/observability-link",
               "flows/configuration-driver",
               "flows/configuration-driver/persistence-and-revisions",
               "flows/local-password-authentication",
@@ -760,8 +853,11 @@
               "flows/harness-execution-topology",
               "flows/compute-driver-lifecycle-hooks",
               "flows/openshell-sandbox-provisioning",
+              "flows/credential-source-lifecycle",
               "flows/driver-plugin-loading",
               "flows/agent-plugins",
+              "flows/agent-channel-directory",
+              "flows/agent-plugin-approvals",
               "flows/agent-provisioning",
               "flows/agent-native-admin",
               "flows/kubernetes-existing-namespace-placement",
@@ -772,12 +868,15 @@
               "flows/github-actions-testing",
               "flows/container-package-bootstrap",
               "flows/container-publication",
+              "flows/cli-publication",
               "flows/github-actions-testing/preparation",
               "testing/postgresql",
               "testing/images",
               "testing/docker",
               "testing/ssh",
               "testing/kubernetes",
+              "testing/production-network-access",
+              "testing/two-cluster-local",
               "testing/gateway-routing",
               "testing/production-tui",
               "testing/slack",
@@ -786,6 +885,7 @@
               "testing/openshell",
               "testing/openshell-pre5-local-experiment",
               "driver-docs-inventory",
+              "documentation-inventory/quality-audit-2026-09-29",
               "documentation-inventory/gaps",
               "documentation-inventory/getting-started",
               "documentation-inventory/topics",

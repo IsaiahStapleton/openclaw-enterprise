@@ -65,29 +65,36 @@ export async function runService(
       pendingAuxiliary: summary.pendingAuxiliary + (descriptions?.pendingAuxiliary ?? 0),
       graceExpired: summary.graceExpired || (descriptions?.graceExpired ?? false),
     }));
-    const forced = setTimeout(() => {
+    const forceExit = () => {
       process.stderr.write(
         `${JSON.stringify({ event: "shutdown", graceExpired: true, unresolved: true })}\n`,
       );
       loaded.close();
       process.exit(1);
-    }, grace);
-    void pending.then(
-      async (summary) => {
+    };
+    let forced = setTimeout(forceExit, grace);
+    void (async () => {
+      try {
+        const summary = await pending;
+        if (!summary.graceExpired) {
+          // Provider ownership has drained. Reserve a separate bounded window
+          // for committing the original broker's terminal observations.
+          clearTimeout(forced);
+          forced = setTimeout(forceExit, 10_000);
+        }
         await listeners.close();
         loaded.close();
         process.stdout.write(`${JSON.stringify({ event: "shutdown", ...summary })}\n`);
         clearTimeout(forced);
         process.exit(summary.graceExpired ? 1 : 0);
-      },
-      () => {
+      } catch {
         process.stderr.write(
           `${JSON.stringify({ event: "shutdown", graceExpired: true, unresolved: true })}\n`,
         );
         loaded.close();
         process.exit(1);
-      },
-    );
+      }
+    })();
   };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);

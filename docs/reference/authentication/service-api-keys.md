@@ -9,7 +9,8 @@ upstream credentials managed by [Service accounts](../service-accounts.md).
 ## Requirements
 
 - A working OCC Installation and a loopback development URL or approved
-  production HTTPS endpoint, assigned to `OCC_URL`.
+  production HTTPS endpoint, assigned to `OCC_URL`. Set `OCC_ORIGIN` to the
+  matching origin of `OCC_AUTH_BASE_URL` (scheme, host, and optional port only).
 - A human administrator session, or an Installation-scoped service principal
   with current `administer` on the singleton Installation.
 - An existing non-Agent service principal and its exact Namespace, if it has
@@ -34,7 +35,7 @@ export OCC_SERVICE_KEY_DIRECTORY='/secure/occ/service-keys'
 install -d -m 700 "$OCC_SERVICE_KEY_DIRECTORY"
 export OCC_SERVICE_KEY_FILE="$(mktemp "$OCC_SERVICE_KEY_DIRECTORY/key.XXXXXX")"
 curl --fail --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
-  "$OCC_URL/api/auth/service-keys" -H 'Content-Type: application/json' \
+  "$OCC_URL/api/auth/service-keys" -H "Origin: $OCC_ORIGIN" -H 'Content-Type: application/json' \
   --data '{"servicePrincipalId":"<service-principal-id>","namespaceId":"<namespace-id>","name":"nightly-reader","expiresIn":2592000}' \
   --output "$OCC_SERVICE_KEY_FILE"
 ```
@@ -66,6 +67,7 @@ To revoke the key in `OCC_SERVICE_KEY_FILE` with the administrator session:
 ```bash
 OCC_SERVICE_KEY_ID="$(python3 -c 'import json, os, pathlib; print(json.loads(pathlib.Path(os.environ["OCC_SERVICE_KEY_FILE"]).read_text())["data"]["id"])')"
 curl --fail --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
+  -H "Origin: $OCC_ORIGIN" \
   --request DELETE "$OCC_URL/api/auth/service-keys/$OCC_SERVICE_KEY_ID"
 ```
 
@@ -101,6 +103,7 @@ finished, revoke the session and remove its file:
 ```bash
 curl --fail-with-body --silent --show-error \
   --cookie "$OCC_SESSION_COOKIE_JAR" --cookie-jar "$OCC_SESSION_COOKIE_JAR" \
+  -H "Origin: $OCC_ORIGIN" \
   --request POST "$OCC_URL/api/auth/sign-out" --output /dev/null
 rm -- "$OCC_SESSION_COOKIE_JAR"
 rmdir -- "$OCC_SESSION_DIRECTORY"
@@ -109,7 +112,8 @@ rmdir -- "$OCC_SESSION_DIRECTORY"
 ## Manage keys with a service administrator
 
 An Installation-scoped non-Agent service principal with `administer` can issue
-or revoke keys without a human cookie. Set `OCC_ADMIN_SERVICE_KEY_FILE` to its
+or revoke keys without a human cookie. It can issue keys only for principals
+whose grants it already holds, as described in [issuance](#issuance). Set `OCC_ADMIN_SERVICE_KEY_FILE` to its
 protected key-response file and `OCC_SERVICE_KEY_FILE` to a new, private output
 file as in [issuance](#issue-a-service-key). Send the admin key through stdin so
 it does not appear in process arguments:
@@ -171,7 +175,11 @@ export key values, password hashes, sessions, or full table dumps.
 ## Issuance
 
 `POST /api/auth/service-keys` requires current IAM `administer` on the singleton
-Installation, even for a Namespace key. The body names an existing
+Installation, even for a Namespace key. A key carries every grant of its
+principal, so the caller must also already hold each of that principal's grants
+at the same or a broader scope; otherwise issuance returns `403`. An
+administrator bound only to the exact Installation cannot issue a key for the
+unscoped bootstrap service administrator or for a Namespace principal. The body names an existing
 `servicePrincipalId`, its exact `namespaceId` when scoped, and a nonblank `name`
 of 1–32 characters. Optional `expiresIn` is an integer from 86,400 to
 31,536,000 seconds (1–365 days); omission gives 30 days. Other fields are

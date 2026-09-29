@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
-updated: 2026-09-24
-last_updated_session: 01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-09-28
+last_updated_session: oce-pr-440-sync
 ---
 
 # Harness Execution Topology Flow
@@ -32,13 +32,23 @@ graph TD
   C --> D["Claim and reauthorize revision work"]
   D --> E{"Approved topology"}
   E -->|embedded OpenClaw| F["Create gateway or stage replacement"]
-  E -->|dedicated Codex| G["Start control-plane Gateway and data-plane Codex in separate namespaces"]
+  E -->|dedicated Codex| G["Start Gateway and Codex in separate namespaces"]
+  E -->|dedicated OpenClaw| Q{"Full-containment provisioning Sandbox?"}
+  Q -->|no| H
+  Q -->|yes| R["Start Gateway; SandboxDriver provisions native Harness"]
   E -->|unsupported or mismatched| H["Reject before workload creation"]
   F --> I["Activate shared gateway; Recreate on replacement"]
   I --> K{"Gateway ready after startup authentication?"}
   K -->|no| L["Stay unready; Agent may be unavailable until repair"]
   K -->|yes| J["Complete activation, retire predecessor, and commit audit"]
-  G --> M["Activate authenticated dedicated revision"]
+  G --> N{"Predecessor Gateway can enroll node?"}
+  N -->|yes| M["Activate authenticated dedicated revision"]
+  N -->|no| O["Start candidate Gateway as bootstrap endpoint"]
+  O --> P["Enroll and observe workspace node"]
+  P --> M
+  R --> S{"Gateway and enrolled Harness ready?"}
+  S -->|no| L
+  S -->|yes| M
   M --> J
 ```
 
@@ -56,8 +66,10 @@ and fallback model through the same resolver; fallbacks must keep the
 primary provider and Harness. It preserves their order in the native configuration.
 The admitted revision immutably
 captures its native configuration, approved harness identity/version, explicit mode, Compute
-selection, and Agent ServicePrincipal. Production admits both approved
-`openclaw`/`embedded` and `codex`/`dedicated` combinations. An associated
+selection, and Agent ServicePrincipal. Production admits approved
+`openclaw`/`embedded` and `codex`/`dedicated`, and `openclaw`/`dedicated` only when
+the selected SandboxDriver provisions Harnesses with networking, filesystem, and
+process containment. An associated
 `access_token` additionally requires dedicated Codex; the frozen account
 contains only its OCC identity, credential kind, and opaque Secret reference.
 
@@ -70,9 +82,8 @@ approved harness, and calls `ComputeDriver.prepareRevision`.
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.prepareRevision`
 
-Docker's existing topology implementation starts an embedded gateway or dedicated
-Codex container, but it does not support the new harness-auth binding contract;
-unsupported bindings fail before deployment. In the underlying container path,
+Docker starts an embedded gateway or dedicated Codex container but does not
+support the harness-auth binding contract; unsupported bindings fail before deployment. In the underlying container path,
 `dockerGatewayConfigurationDocument` admits only supported authentication
 fields and modes. Omitted
 mode renders password mode. An omitted password or explicit managed reference
@@ -91,8 +102,8 @@ validation. See the [SSH flow](pr-24-ssh-compute.md).
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareRevision`
 
 Kubernetes workload rendering calls `prepareHarnessAuth` once for the resolved
-source. It projects the OCC Secret key only into embedded OpenClaw or dedicated
-Codex. Canonical sources live in CP; Compute delivers selected fields into an
+source. It projects the OCC Secret key only into embedded OpenClaw or a dedicated
+Harness. Canonical sources live in CP; Compute delivers selected fields into an
 exact revision-owned DP Secret, including the account token/workspace for ChatGPT.
 Dedicated gateways receive neither model source. This namespace-local delivery
 also applies to fixture images without native runtime configuration; only the
@@ -116,11 +127,23 @@ destination translation. Active Gateway Services carry the Namespace, Agent, and
 gateway workload-role labels, satisfying gateway policy selectors without tying
 the stable Gateway route to a revision. `runtime.gatewayNodeSelector`
 independently places the Gateway Pod and private-state initializer on trusted nodes.
+During a dedicated replacement, preparation keeps a healthy predecessor Gateway in place while
+the candidate Harness enrolls its workspace node. If the predecessor Gateway is the same Agent but
+cannot become ready, preparation starts the candidate Gateway after the candidate Harness is
+otherwise ready. That candidate Gateway provides the bootstrap endpoint; the revision remains
+not ready until the workspace node is enrolled and observed.
 
-Production dedicated workloads keep separate Agent-owned gateway/Codex
-ServiceAccounts, authenticated same-Agent transport, and default-deny network
-policies with auth-method-specific provider login egress. Embedded OpenClaw uses
-one combined workload with its exact Agent identity and model key. The worker
+Dedicated Codex and dedicated OpenClaw keep separate Agent-owned Gateway and
+Harness ServiceAccounts. Compute owns the Gateway Pod; the selected SandboxDriver
+owns the native Harness Pod. The OpenClaw Harness enrolls as a paired node, owns
+its identity and workspace, and alone receives the model key. It reads the
+one-use enrollment target from a private file; later starts reuse the persisted
+device token. Compute pins the enrolled device in a generated `dedicated-native`
+profile with `inference: "worker"`, so a missing or disconnected Harness fails
+the turn rather than using Gateway inference. An exact callback route and
+session-bound worker admission scope the transport to the owning Agent.
+Embedded OpenClaw uses one combined workload with its exact Agent identity
+and model key. The worker
 has scoped Secret permissions for admitted delivery and node enrollment. Its
 trusted workload-writing authority also projects tenant Secrets. Gateway Pods
 receive no controller or Harness Kubernetes credentials.
@@ -128,6 +151,11 @@ receive no controller or Harness Kubernetes credentials.
 The selected Sandbox consumes the same rendered projections and explicit login
 mode in `HarnessWorkloadRequirements`. Unsupported upstream projection fails
 without a test-only credential bridge.
+
+Every Pod template Kubernetes Compute renders carries the ordinary
+[network profile](../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles).
+Ordinary allow policies and Gateway/Harness peers require it, and readiness
+rejects a template without it.
 
 When a selected SandboxDriver provisions the dedicated Harness,
 `providerHarnessReady` lists Pods using the same Agent/revision/role labels as
@@ -146,11 +174,19 @@ for candidate rules and the limits of this observation.
 For dedicated Kubernetes execution, Compute declares
 `requiresStoppedPredecessors`. `ControllerWorker.prepareRevision` stops every
 earlier runtime and waits for Pod termination before preparing the replacement.
+The worker records each predecessor it stopped and skips it on later pending
+passes and maintenance, which avoids repeating every stop on each readiness poll.
+Compute reports a predecessor that came back (for example, a lost claim's late
+write) as an unready successor, not an error, so the worker stops each recorded
+predecessor again after one claim lease, then after two, four and so on. A failed
+preparation pass, or preparing or activating that predecessor, drops the record.
 Old reconciliation and maintenance cannot restart a predecessor after a newer
 exclusive revision is admitted. Both PVCs survive this downtime window; a failed
 candidate is recovered by retry or a new revision, not automatic rollback.
-Dedicated Codex must complete its bounded native authentication/model probe
-before its app-server becomes ready.
+Dedicated Codex and dedicated OpenClaw must complete a bounded native
+authentication/model probe before their Harness becomes ready. The candidate
+Gateway repair in step 2 changes no unrelated Gateway and never activates a
+revision without its exact workspace node.
 Embedded preparation does not validate the replacement's credentials. See the
 [authentication flow](native-service-account-credential-delivery.md#5-authenticate-during-runtime-startup).
 
@@ -178,17 +214,25 @@ Forced termination can delay the successor until the persistent owner lease expi
 Kubernetes gateways in both modes mount their own persistent SQLite and media
 directories. Embedded gateways also retain their attested default workspace on
 the same private claim so continued turns survive Pod replacement. Dedicated
-Codex receives only the Harness workspace claim; the gateway's nested Codex home
-remains ephemeral. The driver creates separate Harness and gateway claims before
+Harnesses receive only the Harness workspace claim, where an Agent-scoped
+subdirectory keeps the node identity across Pod and revision replacement. The
+gateway's nested Codex home remains ephemeral. The driver creates separate Harness and gateway claims before
 their consuming Pods and relies on workload readiness instead of waiting for
 `Bound`, which would deadlock `WaitForFirstConsumer` storage classes. A nonroot
 gateway-image init container prepares private SQLite and media directories
-without credentials or elevated privileges.
+without credentials or elevated privileges, plus a node-owned mode-`0700` `/tmp`
+so the fsGroup-writable `emptyDir` root never becomes a worker workspace ancestor.
 
 Each image initializes its own bundled and plugin assets. Workspace-file access
 uses the enrolled Harness node; generated-image bytes return through the remote
-media reader. There are no shared workspace, session, skill, or image mounts
-between gateway and Harness. See the [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage).
+media reader. Gateway and Harness share no workspace, session, skill, or image mounts. See the [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage).
+The OpenClaw node host keeps Gateway-issued worker bundles in its own state and
+workspaces below `/home/node/workspace`, away from gateway state, `CODEX_HOME`,
+and credentials. A restart republishes image-owned
+runtime assets and reconnects with the paired identity; readiness waits for the
+bounded identity check. The compile cache and model-probe state stay in node
+state and `TMPDIR`, which a Sandbox Driver can grant.
+
 For a selected Sandbox Driver, stopping or retiring a revision always runs its
 required cleanup after stopping a Compute-owned ordinary Harness, or delegates
 provider-owned Harness removal to that cleanup. An absent ordinary Deployment
@@ -211,6 +255,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 - Check guarded activation and recovery:
   `node --test tests/integration/postgres-worker-agent-revision.test.mjs` with its explicitly
   provisioned application-role PostgreSQL database.
+- Check dedicated Gateway repair after an unready predecessor:
+  `pnpm test:files --test-name-pattern='dedicated replacement starts a candidate Gateway' -- tests/conformance/kubernetes-compute.test.mjs`.
 - Run real disposable-k3d Kubernetes coverage for both production topologies, exact identity and
   model-key placement, authenticated dedicated transport, isolated networking, and active routing;
   an HTTP fixture or skipped cluster scenario is not model-turn proof.
@@ -225,6 +271,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
   `OCC_TEST_CHATGPT_ADMIN_KEY_PATH`; this scenario does not use `OPENAI_API_KEY`.
 - Treat unavailable credentials, runtime images, provider access, or either real model response as
   a verification failure. Never substitute a readiness probe, handshake, fixture, or skipped test.
+- An HTTP 401 before worker admission means the callback missed the node-only
+  worker ingress and fell through to the administrative route.
 
 ## Related docs
 
@@ -243,6 +291,10 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 02:55: Trace dedicated native OpenClaw on paired node hosts with full-facet Sandbox provisioning. (oce-pr-440-sync - e2b739f51f89)
+
+- 2026-09-25 18:25: Document candidate Gateway bootstrap during dedicated recovery from an unready predecessor. (authoring-run/9b15ee1e-3767-4dd0-8d9a-56ad2087dcb5 - 7b2345a3cd6e78b9c7c8bae530f3379db56be443)
 
 - 2026-09-24 11:28: Document exclusive dedicated preparation and durable RWO workspaces in the accompanying change. (01a0cf72-6985-7712-ba92-d8cc32470f24 - 14a4508baad876d3eea4e6fe6388f8d8a91559b7)
 

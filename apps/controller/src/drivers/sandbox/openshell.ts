@@ -3,6 +3,7 @@ import { KubernetesObjectApi, type KubernetesObject, PatchStrategy } from "@kube
 import { setTimeout as delay } from "node:timers/promises";
 import type {
   AgentRevision,
+  Backend,
   HarnessWorkloadRequirements,
   KubernetesNamespacedResource,
   Namespace,
@@ -14,9 +15,12 @@ import type {
   SandboxResourceRef,
 } from "@openclaw-enterprise/contracts";
 import {
-  GrpcOpenShellGatewayClient,
+  isOpenShellProviderName,
+  openShellWorkspaceName,
+  type OpenShellGateway,
+} from "../../backends/openshell.ts";
+import {
   type OpenShellGatewayClient,
-  type OpenShellGatewayClientOptions,
   type OpenShellWorkspaceResponse,
   OpenShellSandboxAlreadyExistsError,
   OpenShellWorkspaceAlreadyExistsError,
@@ -50,12 +54,9 @@ export interface OpenShellNetworkBinary {
 }
 
 export interface OpenShellSandboxDriverOptions {
-  readonly gateway: Omit<OpenShellGatewayClientOptions, "endpoint"> & {
+  /** Workspace and readiness policy; the `openshell` Backend owns the gateway connection. */
+  readonly gateway: {
     readonly workspaceMode: "managed" | "operator";
-    readonly endpoint?: string;
-    readonly scheme?: "http" | "https";
-    readonly serviceName?: string;
-    readonly port?: number;
     readonly operatorNamespaceLabels?: Readonly<Record<string, string>>;
     readonly readiness?: {
       readonly serviceName: string;
@@ -99,7 +100,7 @@ export interface OpenShellSandboxDriverOptions {
 export interface OpenShellSandboxDriverSelection {
   readonly id?: string;
   readonly implementation?: string;
-  readonly gatewayClient?: OpenShellGatewayClient;
+  readonly backend: Backend<OpenShellGateway>;
 }
 
 class OpenShellSandboxConfigurationFailure extends Error {}
@@ -136,9 +137,7 @@ function optionalEnumValue(
 }
 
 const DEFAULT_SANDBOX_NAME_PREFIX = "sb";
-const DEFAULT_GATEWAY_PORT = 8080;
 const OPENSHELL_MAX_SANDBOX_NAME_LENGTH = 19;
-const OPENSHELL_MAX_WORKSPACE_NAME_LENGTH = 19;
 const OPENSHELL_MANAGED_BY_LABEL = "app.kubernetes.io/managed-by";
 const OPENSHELL_NAMESPACE_ID_LABEL = "openclaw.dev/namespace-id";
 const OPENSHELL_MANAGED_BY = "openclaw-enterprise";
@@ -194,13 +193,6 @@ function port(value: unknown, description: string): number {
     throw new OpenShellSandboxConfigurationFailure(`${description} must be a valid TCP port.`);
   }
   return Number(value);
-}
-
-function optionalPort(value: unknown, description: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return port(value, description);
 }
 
 function validateKubernetesResource(value: unknown, path: string): void {
@@ -342,16 +334,7 @@ function namespaceName(namespace: Readonly<Namespace>): string {
 }
 
 function workspaceName(namespace: Readonly<Namespace>): string {
-  const name = namespaceName(namespace);
-  if (
-    name.length > OPENSHELL_MAX_WORKSPACE_NAME_LENGTH ||
-    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(name)
-  ) {
-    throw new OpenShellSandboxConfigurationFailure(
-      "OpenShell operator-mode Workspace names require a Kubernetes namespace name that is a DNS-1123 label of at most 19 characters.",
-    );
-  }
-  return name;
+  return openShellWorkspaceName(namespace);
 }
 
 function workspaceLabels(namespace: Readonly<Namespace>): Readonly<Record<string, string>> {
@@ -581,39 +564,6 @@ async function waitForGatewayReadiness(
     }
     await delay(pollIntervalMs, undefined, { signal: context.signal });
   }
-}
-
-function gatewayEndpoint(options: OpenShellSandboxDriverOptions, namespace: string): string {
-  if (options.gateway.endpoint !== undefined) {
-    return nonempty(options.gateway.endpoint, "OpenShell gateway endpoint");
-  }
-  const serviceName = nonempty(
-    options.gateway.serviceName ?? options.gateway.readiness?.serviceName,
-    "OpenShell gateway Service name",
-  );
-  const servicePort =
-    optionalPort(options.gateway.port, "OpenShell gateway port") ?? DEFAULT_GATEWAY_PORT;
-  const scheme =
-    options.gateway.scheme ??
-    (options.gateway.rootCertificatePath === undefined ? "http" : "https");
-  const host = serviceName.includes(".") ? serviceName : `${serviceName}.${namespace}.svc`;
-  return `${scheme}://${host}:${servicePort}`;
-}
-
-function gatewayClientOptions(
-  options: OpenShellSandboxDriverOptions,
-  namespace: string,
-): OpenShellGatewayClientOptions {
-  return {
-    endpoint: gatewayEndpoint(options, namespace),
-    ...(options.gateway.auth === undefined ? {} : { auth: options.gateway.auth }),
-    ...(options.gateway.requestTimeoutMs === undefined
-      ? {}
-      : { requestTimeoutMs: options.gateway.requestTimeoutMs }),
-    ...(options.gateway.rootCertificatePath === undefined
-      ? {}
-      : { rootCertificatePath: options.gateway.rootCertificatePath }),
-  };
 }
 
 function workspaceVolumeName(claimName: string): string {
@@ -892,7 +842,7 @@ function sandboxSpec(
       },
       network_policies: networkPolicies(options),
     },
-    providers: [...(options.providers ?? [])],
+    providers: sandboxProviders(options, requirements),
     command: [...requirements.command],
     tty: false,
   };
@@ -910,26 +860,21 @@ function validateOptions(options: OpenShellSandboxDriverOptions): void {
       "OpenShell gateway workspaceMode must be managed or operator.",
     );
   }
-  if (options.gateway.endpoint !== undefined) {
-    nonempty(options.gateway.endpoint, "OpenShell gateway endpoint");
-  } else if (
-    options.gateway.serviceName === undefined &&
-    options.gateway.readiness?.serviceName === undefined
-  ) {
-    throw new OpenShellSandboxConfigurationFailure(
-      "OpenShell gateway requires either endpoint or a namespace-local Service name.",
-    );
+  for (const key of Object.keys(options.gateway)) {
+    if (
+      ![
+        "workspaceMode",
+        "operatorNamespaceLabels",
+        "readiness",
+        "operatorWorkspaceResources",
+        "networkPolicyResources",
+      ].includes(key)
+    ) {
+      throw new OpenShellSandboxConfigurationFailure(
+        `OpenShell gateway option ${key} belongs to the openshell Backend or is unsupported.`,
+      );
+    }
   }
-  if (
-    options.gateway.scheme !== undefined &&
-    options.gateway.scheme !== "http" &&
-    options.gateway.scheme !== "https"
-  ) {
-    throw new OpenShellSandboxConfigurationFailure(
-      "OpenShell gateway scheme must be http or https.",
-    );
-  }
-  optionalPort(options.gateway.port, "OpenShell gateway port");
   if (options.gateway.operatorNamespaceLabels !== undefined) {
     labels(options.gateway.operatorNamespaceLabels, "OpenShell operator Namespace labels");
     if (Object.keys(options.gateway.operatorNamespaceLabels).length === 0) {
@@ -977,6 +922,17 @@ function validateOptions(options: OpenShellSandboxDriverOptions): void {
     );
   }
   networkPolicies(options);
+  if (
+    options.providers !== undefined &&
+    (!Array.isArray(options.providers) ||
+      options.providers.some(
+        (provider) => !isNonEmptyString(provider) || isOpenShellProviderName(provider),
+      ))
+  ) {
+    throw new OpenShellSandboxConfigurationFailure(
+      "OpenShell static providers must be nonempty names outside the OCC credential-source namespace.",
+    );
+  }
   const prefix = nonempty(
     options.sandboxNamePrefix ?? DEFAULT_SANDBOX_NAME_PREFIX,
     "Sandbox name prefix",
@@ -1002,6 +958,26 @@ export const configurationSchema = Object.freeze({
   },
 });
 
+/**
+ * Static operator providers plus every Credential Gateway attachment. An attachment this
+ * Backend did not issue, or one that shadows a static provider, fails provisioning.
+ */
+function sandboxProviders(
+  options: OpenShellSandboxDriverOptions,
+  requirements: HarnessWorkloadRequirements,
+): string[] {
+  const providers = [...(options.providers ?? [])];
+  for (const attachment of requirements.credentialAttachments) {
+    if (!isOpenShellProviderName(attachment.ref) || providers.includes(attachment.ref)) {
+      throw new OpenShellSandboxConfigurationFailure(
+        "The Harness requires a credential attachment that this OpenShell Backend did not issue.",
+      );
+    }
+    providers.push(attachment.ref);
+  }
+  return providers;
+}
+
 export function validateConfiguration(configuration: unknown): void {
   const options = asRecord(configuration);
   if (options === undefined) {
@@ -1018,17 +994,13 @@ export class OpenShellSandboxDriver implements SandboxDriver {
   readonly implementation: string;
   readonly facets = Object.freeze(["networking", "filesystem", "process"] as const);
   private readonly options: OpenShellSandboxDriverOptions;
-  private readonly injectedGatewayClient: OpenShellGatewayClient | undefined;
-  private readonly gatewayClients = new Map<string, OpenShellGatewayClient>();
+  private readonly backend: Backend<OpenShellGateway>;
 
   static validateConfiguration(configuration: unknown): void {
     validateConfiguration(configuration);
   }
 
-  constructor(
-    options: OpenShellSandboxDriverOptions,
-    selection: OpenShellSandboxDriverSelection = {},
-  ) {
+  constructor(options: OpenShellSandboxDriverOptions, selection: OpenShellSandboxDriverSelection) {
     validateOptions(options);
     this.id = nonempty(selection.id ?? "sandbox-openshell-local", "OpenShell Sandbox Driver ID");
     this.implementation = nonempty(
@@ -1040,13 +1012,32 @@ export class OpenShellSandboxDriver implements SandboxDriver {
         "OpenShell Sandbox Driver implementation must be exactly openshell.",
       );
     }
+    if (selection.backend.drivers.sandbox !== this.id) {
+      throw new OpenShellSandboxConfigurationFailure(
+        "The OpenShell Backend does not declare this Sandbox Driver as a member.",
+      );
+    }
     this.options = options;
-    this.injectedGatewayClient = selection.gatewayClient;
+    this.backend = selection.backend;
   }
 
   configureAgent(
     configuration: Readonly<OpenClawConfigurationDocument>,
+    harness: Readonly<AgentRevision["harness"]>,
   ): OpenClawConfigurationDocument {
+    if (harness.mode !== "dedicated") {
+      throw new OpenShellSandboxConfigurationFailure(
+        "OpenShell SandboxDriver supports only dedicated Harness revisions.",
+      );
+    }
+    if (harness.id === "openclaw") {
+      return { ...configuration };
+    }
+    if (harness.id !== "codex") {
+      throw new OpenShellSandboxConfigurationFailure(
+        "OpenShell SandboxDriver does not support the selected Harness runtime.",
+      );
+    }
     const plugins = optionalAgentConfiguration(
       configuration.plugins,
       "OpenShell Sandbox plugin configuration",
@@ -1121,9 +1112,12 @@ export class OpenShellSandboxDriver implements SandboxDriver {
 
   async provisionHarness(context: SandboxHarnessContext): Promise<SandboxResourceRef> {
     this.requireOperatorWorkspaceMode("provision a Harness");
-    if (context.revision.harness.mode !== "dedicated" || context.revision.harness.id !== "codex") {
+    if (
+      context.revision.harness.mode !== "dedicated" ||
+      (context.revision.harness.id !== "codex" && context.revision.harness.id !== "openclaw")
+    ) {
       throw new OpenShellSandboxConfigurationFailure(
-        "OpenShell SandboxDriver only supports dedicated Codex Harness revisions.",
+        "OpenShell SandboxDriver supports only dedicated Codex or OpenClaw Harness revisions.",
       );
     }
     if (
@@ -1136,7 +1130,10 @@ export class OpenShellSandboxDriver implements SandboxDriver {
     }
     labels(context.requirements.labels, "Harness workload labels");
     const sandbox = this.sandboxRef(context);
-    const targetPort = harnessPort(context.requirements);
+    const codex = context.revision.harness.id === "codex";
+    const serviceExposures = codex
+      ? [{ service: "", targetPort: harnessPort(context.requirements) }]
+      : [];
     let created;
     try {
       created = await this.gatewayClientForNamespace(sandbox.namespaceName).createSandbox(
@@ -1151,7 +1148,7 @@ export class OpenShellSandboxDriver implements SandboxDriver {
             "openclaw.dev/revision-id": context.revision.id,
           },
           spec: sandboxSpec(this.options, context.requirements),
-          serviceExposures: [{ service: "", targetPort }],
+          serviceExposures,
         },
         context.signal,
       );
@@ -1168,7 +1165,13 @@ export class OpenShellSandboxDriver implements SandboxDriver {
         "OpenShell returned a different Sandbox name than requested.",
       );
     }
-    validateHarnessServiceUrl(created.serviceUrls[""]);
+    if (codex) {
+      validateHarnessServiceUrl(created.serviceUrls[""]);
+    } else if (Object.keys(created.serviceUrls).length !== 0) {
+      throw new OpenShellSandboxConfigurationFailure(
+        "OpenShell exposed an unexpected service for the native OpenClaw Harness.",
+      );
+    }
     return Object.freeze(sandbox);
   }
 
@@ -1221,25 +1224,11 @@ export class OpenShellSandboxDriver implements SandboxDriver {
   }
 
   close(): void {
-    this.injectedGatewayClient?.close();
-    for (const client of this.gatewayClients.values()) {
-      client.close();
-    }
-    this.gatewayClients.clear();
+    this.backend.client.close();
   }
 
   private gatewayClientForNamespace(namespace: string): OpenShellGatewayClient {
-    if (this.injectedGatewayClient !== undefined) {
-      return this.injectedGatewayClient;
-    }
-    const options = gatewayClientOptions(this.options, namespace);
-    const existing = this.gatewayClients.get(options.endpoint);
-    if (existing !== undefined) {
-      return existing;
-    }
-    const created = new GrpcOpenShellGatewayClient(options);
-    this.gatewayClients.set(options.endpoint, created);
-    return created;
+    return this.backend.client.clientForNamespace(namespace);
   }
 
   private requireOperatorWorkspaceMode(operation: string): void {
@@ -1266,7 +1255,7 @@ export class OpenShellSandboxDriver implements SandboxDriver {
 
 export function createOpenShellSandboxDriver(
   options: OpenShellSandboxDriverOptions,
-  selection?: OpenShellSandboxDriverSelection,
+  selection: OpenShellSandboxDriverSelection,
 ): OpenShellSandboxDriver {
   return new OpenShellSandboxDriver(options, selection);
 }

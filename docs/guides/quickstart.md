@@ -3,89 +3,65 @@
 <span id="quickstart"></span>
 
 Start an OpenClaw Enterprise installation that can deploy Agents on your
-machine. The OpenClaw Control Plane (OCC) runs in Compose; Agent workloads run
+machine. The OpenClaw Control Plane (OCC), PostgreSQL, and Agent workloads run
 in a local Kubernetes cluster created with k3d. This setup is for development
-and uses loopback addresses. To install OCC itself in a cluster you already
-operate, use [Kubernetes Setup](kubernetes-setup.md).
-
-## Workspace access
-
-For Console workspace access, use [Kubernetes Setup](kubernetes-setup.md).
-That setup includes private gateway routing and Agent authentication so the
-Console can read and save `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md`.
-
-The Compose + k3d helper below is a limited local development profile. It does
-not configure workspace access: `occ dev up` can succeed while the Console
-reports **Workspace access is unavailable**. A deployed Agent or a successful
-model response does not establish file access. The Kubernetes routing guide
-assumes OCC runs in the cluster; its `.svc` endpoint and Pod NetworkPolicies do
-not directly apply to an OCC API running on the host or in Compose.
+and uses loopback addresses. This guide explicitly selects the Kubernetes-only
+profile; without a selection, startup uses a Compose control-plane preview that
+cannot deploy Agents. To install OCC itself in a cluster you already operate,
+use [Kubernetes Setup](kubernetes-setup.md).
 
 ## Before you start
 
 Run the commands below from the repository root on Linux or macOS. You need:
 
-- Docker Engine with Docker Compose, k3d, and kubectl. Podman users should first
+- Docker Engine, k3d, kubectl, and Helm. Podman users should first
   check the [local Kubernetes requirements](deploy/local-kubernetes-development.md#start-the-profile).
 - The Go version in `go.mod`, Node.js 24 or later, and the pnpm version pinned
   in `package.json`.
-- Free local ports `3000` for OCC and `6443` for Kubernetes. If either is in
-  use, override `OPENCLAW_DEV_PORT` or `OCC_DEVELOPMENT_KUBERNETES_API_PORT`;
+- Free local ports `3000` for the API, `8443` for the browser console, and
+  `6443` for Kubernetes. If a port is in use, override `OPENCLAW_DEV_PORT`,
+  `OCC_DEVELOPMENT_BROWSER_PORT`, or `OCC_DEVELOPMENT_KUBERNETES_API_PORT`;
   see [development settings](../reference/settings/development.md#required-development-controller-environment).
 
 You do not need a model credential to install the platform. Have an OpenAI API
 key available when you continue to [deploy your first Agent](first-agent.md).
 
-## Optional: use the published runtime
-
-On an amd64 or ARM64 Docker host, you can avoid the first runtime build by pulling the
-published image. Follow [Use published images](deploy/production-installation.md#use-published-images)
-for private GHCR access, authentication, and the `RUNTIME_IMAGE` digest export.
-Docker selects the matching Linux variant, including on Apple Silicon.
-
-Pull the pinned digest and tag it locally for k3d import:
-
-```bash
-: "${RUNTIME_IMAGE:?Set the published runtime digest reference}"
-docker pull "$RUNTIME_IMAGE"
-docker tag "$RUNTIME_IMAGE" openclaw-enterprise-runtime:published-e3b28515
-export OCC_KUBERNETES_RUNTIME_IMAGE='openclaw-enterprise-runtime:published-e3b28515'
-```
-
-Keep this export in the shell used for `dev up`. The CLI requires an explicitly
-selected runtime image to exist locally and imports it into k3d. OCC's controller
-and worker still build from the checkout's development target. To return to the
-default runtime selection, run `unset OCC_KUBERNETES_RUNTIME_IMAGE` before starting
-a new local stack.
-
 ## Start the local stack
+
+By default, startup builds this checkout. To use published images, first
+[select the `latest` pair](#optional-use-matching-published-images).
 
 ```bash
 pnpm cli:build
-OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev up
+export OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes
+export OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes
+export OCC_DEVELOPMENT_SANDBOX_DRIVER=none
+./bin/occ dev up
 ```
 
-The first start builds the development control plane and imports the runtime
-image, building the runtime too when no local image was selected or cached.
-This can take several minutes. Wait for `OpenClaw Enterprise development stack is ready.` The
+The first start builds and imports both images unless you selected published
+images. This can take several minutes. Wait for `OpenClaw Enterprise development stack is ready.` The
 command prints the API URL, Installation ID, local service-key file, kubeconfig,
 Kubernetes context, and cleanup command. Keep this output; the service-key file
 is an administrator credential and must remain on your machine.
 
-Before deploying a dedicated Agent, [check local RWO workspace storage](deploy/local-kubernetes-development.md#configure-workspace-storage-on-single-node-k3d).
-The stock local-path StorageClass supports the Harness-only RWO claim; no provisioner patch is required.
-
 ## Open the platform console
 
-Open `/console/` on the printed API URL, normally
-`http://127.0.0.1:3000/console/`. On a fresh installation, sign in with username
-`admin@openclaw.local` and password `openclaw-development-password`. If you set
-`OPENCLAW_DEV_EMAIL` or `OPENCLAW_DEV_PASSWORD`, use those values. These defaults
-are for the local development profile only; see [development authentication settings](../reference/settings/development.md#required-development-controller-environment).
+Import the printed browser CA certificate into your browser's trusted CA store
+using your browser's own certificate settings, then open the printed HTTPS
+browser console URL. Only import the public `browser-ca.crt`; keep its private
+key and the entire state directory private. Remove the CA from your browser's
+trust store when you discard this installation.
 
-Open **Namespaces**. Fresh bootstrap creates a platform Namespace named
-`default` and no Agents. Wait for the Namespace to show `ready`. The platform
-Namespace is separate from Kubernetes' built-in `default` namespace.
+Sign in as `admin@development.openclaw.invalid` using the generated password in
+the administrator password file printed by startup. That file and the service
+key are private credentials; keep them on your machine. The separate HTTP API
+URL remains available on loopback for CLI service-key requests.
+
+After signing in, continue with the CLI access check below. For console-created
+Agents later, the default Namespace includes Standard Codex and Standard OpenClaw
+Presets; follow the [Standard Codex prerequisites](topics/standard-codex-preset.md#prerequisites)
+before using that Preset.
 
 ## Read the Installation with the bootstrap service key
 
@@ -109,20 +85,48 @@ key from the file; do not pass the credential value as an argument or share it.
 ```
 
 Expect one Namespace named `default`. Wait for `STATUS` to become `ready` and
-note its server-assigned ID. The control-plane readiness message alone does not
-prove an Agent or model works. Continue to [Deploy your first Agent](first-agent.md)
-to create your own Agent and send it a prompt.
+note its server-assigned ID. This platform Namespace is separate from Kubernetes'
+built-in `default` namespace. Continue to [Deploy your first Agent](first-agent.md)
+to create an Agent and verify its model response.
 
 ## Clean up and stop
 
 When you are finished, run the cleanup command printed by startup. With the
-defaults:
+profile exports above still set:
 
 ```bash
-OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes ./bin/occ dev down
+./bin/occ dev down
 ```
 
 This deletes the local cluster, database, Agents, stored credentials, and audit
 history. If cleanup fails, restore access to the container engine and run the
 same command again. See [local Kubernetes cleanup](deploy/local-kubernetes-development.md#stop-and-clean-up)
 if you used a custom state directory or service-key location.
+
+## Optional: use matching published images
+
+Follow [Use the latest published images](deploy/published-images.md) to pull both
+`latest` tags and select their matching source checkout. Keep its resolved image
+variables in the shell used for startup:
+
+```bash
+export OCC_DEVELOPMENT_CONTROLLER_IMAGE="${CONTROLLER_IMAGE:?Select the latest controller image first}"
+export OCC_KUBERNETES_RUNTIME_IMAGE="${RUNTIME_IMAGE:?Select the latest runtime image first}"
+```
+
+Return to [Start the local stack](#start-the-local-stack) in that checkout.
+To build from source instead, unset both variables before startup.
+
+## Workspace access
+
+Local setup configures private gateway routing. After deploying an Agent,
+[verify its workspace files](deploy/workspace-routing.md#verify-routing-and-file-access).
+Dedicated Agents also need [RWO workspace storage](deploy/local-kubernetes-development.md#configure-workspace-storage-on-single-node-k3d);
+the stock local-path StorageClass supports the Harness-only claim.
+
+## Open an Agent's native admin UI
+
+For a separate console-managed Agent, follow [local native admin setup](deploy/native-admin.md#local-development).
+It requires exact-Agent `administer` permission and the Agent's native access policy.
+The first-Agent helper disables native UI and refuses to reuse its Agent after
+outside Configuration edits.

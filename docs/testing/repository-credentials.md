@@ -37,10 +37,9 @@ parses `composition/repository-credentials/`, `drivers/repo/credentials/`,
 pinned Prettier TypeScript parser. Runtime imports and re-exports must stay within the
 scanned source or use reviewed external modules and named members. Erased
 `import type` and `export type` declarations remain available; inline type
-specifiers can preserve a runtime module load. The GitHub provider, GitHub
-metadata and Agent upstream HTTPS owners have explicit consumer lists; the
-listener, private-file, signing, and client-command owners have separate I/O
-allowances. New network packages, raw global network or loader
+specifiers can preserve a runtime module load. Provider, metadata and Agent
+upstream HTTPS owners have consumer lists; listener, private-file, signing and
+client-command owners have separate I/O allowances. New network packages, raw global network or loader
 access, and new process-output owners fail the check.
 
 Maintainers own the [source guard](../../scripts/verify-repository-credentials-boundary.mjs)
@@ -49,14 +48,10 @@ require explicit security review: identify the authority, caller, scope and
 protecting negative test. Never substitute wildcard allowances. The [guard regression test](../../tests/conformance/repository-credentials-source-boundary.test.mjs)
 adds forbidden capabilities to a disposable copy of the real source tree.
 
-The GitHub metadata sender is available only to credential-service configuration.
-It uses a custody-owned, metadata-only token for one Namespace-approved repository,
-and sends only a bounded HTTPS GET to that repository at the GitHub API origin
-(`https://api.github.com` in production). It verifies the returned numeric
-repository ID before publishing a description. The source guard rejects other
-consumers and raw network re-exports; the controlled metadata integration tests
-also cover Namespace and requested-ref filtering, method and route restrictions,
-profile isolation, token retirement, timeouts and uncertain issuance.
+Only credential-service configuration may use the GitHub metadata sender: one
+bounded HTTPS GET per approved repository with a metadata-only token, checking the
+returned repository ID. Metadata tests cover filtering, routes, retirement and
+timeouts.
 
 The native hook dispatcher can inspect Git configuration and executable hooks,
 read Git's hook input and delegate ordinary hooks. It has no direct credential-file
@@ -67,6 +62,8 @@ This is an accidental-regression guard for reviewed source. It does not perform
 whole-program dataflow analysis, prove that allowed owners handle secrets
 correctly, or sandbox malicious code. It does not replace capability design,
 runtime isolation, or the controlled and live tests below.
+
+For image-pair verification, use the [controller and broker compatibility probe](repository-credentials-platform.md#controller-and-broker-image-compatibility-probe).
 
 ## Run controlled tests
 
@@ -98,13 +95,10 @@ TLS switch or localhost `GH_HOST` substitute is used.
 node --test tests/integration/repository-credentials-service-loss.test.mjs
 ```
 
-These baseline cases run the production service, GitHub factory, custody and
-transports in a child process. A controlled provider survives its termination.
-They prove stale-bearer denial after actual `SIGKILL` and show that lost issuance
-responses remain charged while the service survives, without automatic remint.
-After process replacement, the provider can still hold an unexpired token while
-the service has lost its session and reservation. That observation documents the
-current limit; it does not establish durable cleanup or accounting.
+These cases run the service and GitHub factory in a child process against a
+controlled provider. They cover stale-bearer denial, uncertain issuance, a lost
+revocation response and monotonic cleanup time. Bound admission fails closed
+without the durable journal. These cases do not prove PostgreSQL recovery.
 
 The fixture joins each child death and removes only its verified stale socket
 before replacement. This setup does not prove automatic stale-socket recovery.
@@ -232,7 +226,7 @@ ordinary-Agent routing require the platform checks. The context case rebuilds
 both Docker inputs and rejects source files, compiler artifacts and linked inputs.
 
 Build the service and client images using the
-[operator guide](../guides/repository-credentials.md#container-images). Then
+[operator guide](../guides/repository-credentials/standalone-service.md#container-images). Then
 combine those artifacts in an owned test-only image. Use the same local Docker
 builder for all three builds so it resolves the delivered input images:
 
@@ -319,6 +313,7 @@ qualification image and rendered Compose check.
 | Rendered Compose              | Declared paths and mount separation.                                                                               |
 | Separate running containers   | Delivered image identity and observed client/service custody for the exercised commands.                           |
 | Authorized live smoke         | Real provider behavior and cleanup for the selected repository, grant and client version.                          |
+| Installed Agent turn          | The configured Agent executes Git through its own Harness, tool policy, network path and repository authorization. |
 
 Retain selectors, versions, source/artifact/image identities, pass/fail/skip counts
 and cleanup results. Missing selectors leave evidence unavailable; they do not
@@ -327,6 +322,17 @@ bound to their original artifacts. After changes, record justified equivalence
 for each affected assertion or rerun its owning check. These packaging checks do
 not establish OCC/worker/Compute integration, an installed ordinary-Agent model
 contribution, a real-time thirteen-hour soak or release readiness.
+
+For Codex consumers, do not substitute operator `kubectl exec`, direct container
+Git commands, or runtime-image smoke tests for the installed Agent turn. Those
+checks can prove material delivery, Git configuration and broker authorization
+outside Codex. Exercise stock Codex's generated broker allowance,
+`allow_local_binding = true`, and `mode = "full"` separately. Cover bound/unbound
+dedicated/embedded consumers, broker-host denies, and unallowed hosts. Otherwise allowed private
+addresses are permitted. Require real reads, an authorized temporary write, and
+an unauthorized operation denied by broker authorization.
+For Slack-enabled Agents, start the installed-Agent proof from Slack and verify
+the threaded Agent response instead of using a direct native UI prompt.
 
 ## Run an authorized live smoke
 

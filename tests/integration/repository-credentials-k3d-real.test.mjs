@@ -6,6 +6,7 @@ import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs
 import { kubernetesHash, validateExplicitK3dLoopbackContext } from "../helpers/kubernetes-real.mjs";
 import {
   codexRepositoryEvidenceScript,
+  completedToolResult,
   sessionEvidenceScript,
 } from "../helpers/normal-agent-tools.mjs";
 import {
@@ -57,14 +58,19 @@ const runtimeStartupSummaryScript = String.raw`
   })().catch(() => process.exitCode = 1);
 `;
 
+async function agentPods(f, agentId) {
+  const namespaces = [...new Set([f.tenant, f.gatewayRuntimeNamespace])];
+  const groups = await Promise.all(
+    namespaces.map((namespace) =>
+      f.kubernetes.resources("pods", namespace, "-l", `openclaw.dev/agent=${agentId}`),
+    ),
+  );
+  return groups.flat();
+}
+
 async function recordRuntimeStartupFailure(f, agent) {
   try {
-    const pods = await f.kubernetes.resources(
-      "pods",
-      f.tenant,
-      "-l",
-      `openclaw.dev/agent=${agent.id}`,
-    );
+    const pods = await agentPods(f, agent.id);
     const summaries = [];
     for (const pod of pods.slice(0, 4)) {
       for (const container of pod.spec.containers.filter((c) =>
@@ -84,7 +90,7 @@ async function recordRuntimeStartupFailure(f, agent) {
               await f.kubectl(
                 "--request-timeout=10s",
                 "-n",
-                f.tenant,
+                pod.metadata.namespace,
                 "exec",
                 pod.metadata.name,
                 "-c",
@@ -180,9 +186,27 @@ for (const mode of ["embedded", "dedicated"]) {
   );
 }
 
-function installedRepositoryJourney(mode) {
+test(
+  "installed dedicated read-only Agent fetches and is denied a repository push",
+  {
+    skip: selected
+      ? false
+      : "Set OCC_TEST_REPOSITORY_CREDENTIALS_REAL=1 with explicit authorized repository, protected App inputs, model key and immutable images.",
+    timeout: 1800000,
+  },
+  installedRepositoryJourney("dedicated", "git-read"),
+);
+
+function installedRepositoryJourney(mode, profile = "git-full") {
   return async (context) => {
     const dedicated = mode === "dedicated";
+    const readOnly = profile === "git-read";
+    if (dedicated) {
+      assert.ok(
+        process.env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE,
+        "the reviewed Codex seccomp profile must be prepared before the dedicated Agent starts",
+      );
+    }
     const workspace = dedicated ? "/home/node/workspace" : "/home/node/.openclaw/workspace";
     const commandTool = dedicated ? "bash" : "exec";
     const toolNames = dedicated ? ["bash"] : ["exec", "process"];
@@ -282,6 +306,8 @@ function installedRepositoryJourney(mode) {
     assert.equal((await observe("GET", `git/ref/heads/${branch}`, undefined, 404)).status, 404);
     let agent;
     let workerPod;
+    let workerImage;
+    let brokerImageId;
     let revision;
     let gateway;
     let attempt;
@@ -294,7 +320,24 @@ function installedRepositoryJourney(mode) {
       const backendId = "repository-proof";
       const repositoryRef = "authorized-repository";
       const driverId = "repository-proof-driver";
-      const origin = `https://openclaw-enterprise-repository-credentials.${f.system}.svc`;
+      const repositoryValues = {
+        enabled: true,
+        image: images.credentials,
+        serviceName: "git",
+        backendId,
+        registryConfigMapName: "repository-registry-v1",
+        registryKey: "registry.json",
+        serviceConfigSecretName: "repository-service-config",
+        serviceConfigKey: "config.json",
+        appKeySecretName: "repository-app-key",
+        appKeyKey: "private-key.pem",
+        tlsSecretName: "repository-tls",
+        publicCaSecretName: "repository-public-ca",
+        publicCaKey: "ca.crt",
+        upstreamCidrs,
+      };
+      const renderedBroker = await f.renderRepositoryCredentials(repositoryValues);
+      const { origin, serviceName } = renderedBroker;
       const registry = {
         version: 1,
         backendId,
@@ -306,7 +349,7 @@ function installedRepositoryJourney(mode) {
             repositoryRef,
             repositoryId: app.repositoryId,
             repository,
-            namespaces: [{ namespaceId: f.namespace.id, profiles: ["git-full"] }],
+            namespaces: [{ namespaceId: f.namespace.id, profiles: [profile] }],
           },
         ],
       };
@@ -345,7 +388,6 @@ function installedRepositoryJourney(mode) {
       await f.createSecret("repository-service-config", {
         "config.json": JSON.stringify({
           gateway: {
-            publicOrigin: origin,
             listen: "0.0.0.0:8443",
             controlSocket: socket,
             tlsCertFile: "/etc/openclaw/repository-inputs/tls.crt",
@@ -353,8 +395,8 @@ function installedRepositoryJourney(mode) {
           },
           sessionPolicy: {
             maximumDurationSeconds: 3600,
-            defaultProfile: "git-full",
-            allowedProfiles: ["git-full"],
+            defaultProfile: profile,
+            allowedProfiles: [profile],
           },
           limits: {},
           backend: {
@@ -391,21 +433,7 @@ function installedRepositoryJourney(mode) {
         podLabels: workerLabels,
         port: 8443,
       };
-      await f.upgrade({
-        enabled: true,
-        image: images.credentials,
-        backendId,
-        registryConfigMapName: "repository-registry-v1",
-        registryKey: "registry.json",
-        serviceConfigSecretName: "repository-service-config",
-        serviceConfigKey: "config.json",
-        appKeySecretName: "repository-app-key",
-        appKeyKey: "private-key.pem",
-        tlsSecretName: "repository-tls",
-        publicCaSecretName: "repository-public-ca",
-        publicCaKey: "ca.crt",
-        upstreamCidrs,
-      });
+      assert.deepEqual(await f.upgrade(repositoryValues), renderedBroker);
       // The service shares the worker Pod but neither the API nor worker process
       // receives App key/TLS mounts or the Agent's model credential.
       const pods = await f.kubernetes.resources("pods", f.system);
@@ -417,8 +445,29 @@ function installedRepositoryJourney(mode) {
             p.status.conditions?.some((c) => c.type === "Ready" && c.status === "True"),
         );
         assert.ok(pod, `${component} must be installed and Ready`);
-        const container = pod.spec.containers.find((c) => c.name === component);
-        assert.ok(container);
+        // Match the status list to the selected chart's worker placement,
+        // including a restartable init container when repository access is enabled.
+        const matches = [
+          ...(pod.spec.containers ?? [])
+            .filter((c) => c.name === component)
+            .map((container) => ({
+              container,
+              kind: "container",
+              statuses: pod.status.containerStatuses,
+            })),
+          ...(pod.spec.initContainers ?? [])
+            .filter((c) => c.name === component)
+            .map((container) => ({
+              container,
+              kind: "initContainer",
+              statuses: pod.status.initContainerStatuses,
+            })),
+        ];
+        assert.equal(matches.length, 1, `${component} must appear in exactly one container list`);
+        const { container, kind, statuses } = matches[0];
+        if (component === "api") {
+          assert.equal(kind, "container");
+        }
         assert.equal(container.image, images.controller);
         assert.ok(
           !(container.env ?? []).some((e) => /OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN/.test(e.name)),
@@ -430,10 +479,23 @@ function installedRepositoryJourney(mode) {
         );
         if (component === "worker") {
           workerPod = pod;
+          if (kind === "initContainer") {
+            assert.equal(container.restartPolicy, "Always");
+          }
+          const workerStatus = statuses?.find((status) => status.name === "worker");
+          assert.equal(workerStatus?.ready, true, "worker container must be ready");
+          assert.ok(workerStatus.imageID, "worker image ID must be observed");
+          workerImage = { kind, imageId: workerStatus.imageID };
           assert.equal(
             pod.spec.containers.find((c) => c.name === "repository-credentials")?.image,
             images.credentials,
           );
+          const brokerStatus = pod.status.containerStatuses?.find(
+            (status) => status.name === "repository-credentials",
+          );
+          assert.equal(brokerStatus?.ready, true, "repository broker container must be ready");
+          assert.ok(brokerStatus.imageID, "repository broker image ID must be observed");
+          brokerImageId = brokerStatus.imageID;
         }
       }
       // Sidecar readiness alone cannot prove the worker sees the shared socket:
@@ -593,12 +655,11 @@ function installedRepositoryJourney(mode) {
       native.agents.defaults.sandbox = { mode: "off" };
       if (dedicated) {
         Object.assign(native.gateway, f.gatewayConfiguration);
-        // Native commands run in the isolated Codex container. Kubernetes owns
-        // filesystem and network isolation for this authorized unattended task.
+        // The Agent must use its native workspace sandbox without escalation.
+        // The Compute Driver adds the credential broker to the managed proxy.
         Object.assign(native.plugins.entries.codex.config.appServer, {
-          mode: "yolo",
           approvalPolicy: "never",
-          sandbox: "danger-full-access",
+          sandbox: "workspace-write",
           remoteWorkspaceRoot: workspace,
         });
         native.tools = { allow: ["*"], exec: { mode: "full" }, fs: { workspaceOnly: true } };
@@ -625,7 +686,7 @@ function installedRepositoryJourney(mode) {
           configurationId: configuration.id,
           executionMode: mode,
           harnessAuth: { method: "api_key", source: secret.ref },
-          repositoryBindings: [{ repositoryRef, profile: "git-full" }],
+          repositoryBindings: [{ repositoryRef, profile }],
         },
         201,
       );
@@ -640,20 +701,19 @@ function installedRepositoryJourney(mode) {
       revision = await f.api("POST", `${agentPath}/deploy`, undefined, 202);
       assert.equal(revision.harness.mode, mode);
       assert.equal(revision.harness.id, dedicated ? "codex" : "openclaw");
-      assert.deepEqual(revision.repositoryCredentials.bindings, [
-        { repositoryRef, profile: "git-full" },
-      ]);
+      assert.deepEqual(revision.repositoryCredentials.bindings, [{ repositoryRef, profile }]);
       await f.waitFor(
         "admitted Agent revision active",
         async () => (await f.api("GET", agentPath)).activeRevisionId === revision.id,
         300000,
       );
       const configMap = `gateway-${kubernetesHash(agent.id)}-rev-${kubernetesHash(revision.id)}`;
+      const gatewayNamespace = dedicated ? f.gatewayRuntimeNamespace : f.tenant;
       gateway = await f.waitFor("one Ready Pod serving the exact admitted revision", async () => {
         const candidates = (
           await f.kubernetes.resources(
             "pods",
-            f.tenant,
+            gatewayNamespace,
             "-l",
             `openclaw.dev/agent=${agent.id},openclaw.dev/workload-role=gateway`,
           )
@@ -747,6 +807,10 @@ function installedRepositoryJourney(mode) {
         assert.equal(consumer.spec.securityContext.runAsNonRoot, true);
         assert.equal(consumerContainer.securityContext.readOnlyRootFilesystem, true);
         assert.equal(consumerContainer.securityContext.allowPrivilegeEscalation, false);
+        assert.deepEqual(consumerContainer.securityContext.seccompProfile, {
+          type: "Localhost",
+          localhostProfile: process.env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE,
+        });
         assert.equal(
           consumerContainer.volumeMounts.find(
             ({ mountPath }) => mountPath === "/run/oce/repository-credentials",
@@ -783,7 +847,8 @@ function installedRepositoryJourney(mode) {
         ).trim();
         assert.match(versions.codex, /^codex-cli \d+\.\d+\.\d+/);
       }
-      const service = await f.get("service", "openclaw-enterprise-repository-credentials");
+      const service = await f.get("service", serviceName);
+      assert.equal(origin, `https://${renderedBroker.hostname}`);
       const probe = `const net=require('node:net'); const socket=net.createConnection({host:process.argv[1],port:443}); let done=false; function finish(result){if(done)return;done=true;console.log(result);socket.destroy()}socket.setTimeout(3000);socket.on('connect',()=>finish('connected'));socket.on('timeout',()=>finish('timeout'));socket.on('error',error=>finish(error.code));`;
       assert.equal((await consumerExec(probe, [service.spec.clusterIP])).trim(), "connected");
       if (dedicated) {
@@ -849,7 +914,7 @@ function installedRepositoryJourney(mode) {
       await f.run("kubectl", [
         ...f.kubernetes.kubectlArguments([]),
         "-n",
-        f.tenant,
+        gateway.metadata.namespace,
         "exec",
         gateway.metadata.name,
         "-c",
@@ -878,14 +943,34 @@ function installedRepositoryJourney(mode) {
         versions,
         runtimeImageId: gateway.status.containerStatuses.find((status) => status.name === "gateway")
           ?.imageID,
-        workerImageIds: workerPod.status.containerStatuses.map((status) => ({
-          name: status.name,
-          imageID: status.imageID,
-        })),
+        workerImage,
+        brokerImageId,
       });
       const sessionKey = `agent:main:repository-proof-${f.suffix}`;
       const checkout = `${workspace}/${repository.split("/")[1]}`;
+      // The outside file is writable by the same Pod user before the sandboxed
+      // model command. Independent readback detects any sandbox escape.
+      const outside = `/home/node/repository-sandbox-${f.suffix}.txt`;
+      const sandboxFile = `${workspace}/repository-sandbox-${f.suffix}.txt`;
+      const sandboxContent = `sandbox-${f.suffix}\n`;
+      const outsideContent = `outside-${f.suffix}\n`;
+      const sandboxScript = [
+        'const fs=require("node:fs")',
+        `fs.writeFileSync(${JSON.stringify(sandboxFile)},${JSON.stringify(sandboxContent)})`,
+        'let denied="NO_ERROR"',
+        `try{fs.writeFileSync(${JSON.stringify(outside)},"escaped")}catch(error){denied=error.code}`,
+        'if(!["EACCES","EPERM","EROFS"].includes(denied))process.exit(70)',
+        'process.stdout.write("SANDBOX_DENIED:"+denied+"\\n")',
+      ].join(";");
+      if (dedicated) {
+        await consumerExec(
+          `require("node:fs").writeFileSync(${JSON.stringify(outside)},${JSON.stringify(outsideContent)})`,
+        );
+      }
       const commandSpecs = [
+        ...(dedicated
+          ? [{ operation: "sandboxProbe", workdir: workspace, argv: ["node", "-e", sandboxScript] }]
+          : []),
         {
           operation: "clone",
           workdir: workspace,
@@ -897,41 +982,48 @@ function installedRepositoryJourney(mode) {
           workdir: checkout,
           argv: ["git", "rev-parse", `origin/${base}`],
         },
-        {
-          operation: "branch",
-          workdir: checkout,
-          argv: ["git", "switch", "-c", branch, baseSha],
-        },
-        { operation: "add", workdir: checkout, argv: ["git", "add", "--", file] },
-        {
-          operation: "commit",
-          workdir: checkout,
-          argv: ["git", "commit", "-m", `Installed credential proof ${f.suffix}`],
-        },
+        ...(!readOnly
+          ? [
+              {
+                operation: "branch",
+                workdir: checkout,
+                argv: ["git", "switch", "-c", branch, baseSha],
+              },
+              { operation: "add", workdir: checkout, argv: ["git", "add", "--", file] },
+              {
+                operation: "commit",
+                workdir: checkout,
+                argv: ["git", "commit", "-m", `Installed credential proof ${f.suffix}`],
+              },
+            ]
+          : []),
         {
           operation: "push",
           workdir: checkout,
           argv: ["git", "push", "origin", `HEAD:refs/heads/${branch}`],
         },
-        { operation: "readCommit", workdir: checkout, argv: ["git", "rev-parse", "HEAD"] },
-        {
-          operation: "nativePr",
-          workdir: checkout,
-          argv: [
-            "gh",
-            "pr",
-            "create",
-            ...(dedicated ? ["--draft"] : []),
-            "--base",
-            base,
-            "--head",
-            branch,
-            "--title",
-            `Installed credential proof ${f.suffix}`,
-            "--body",
-            marker,
-          ],
-        },
+        ...(!readOnly
+          ? [
+              { operation: "readCommit", workdir: checkout, argv: ["git", "rev-parse", "HEAD"] },
+              {
+                operation: "nativePr",
+                workdir: checkout,
+                argv: [
+                  "gh",
+                  "pr",
+                  "create",
+                  "--base",
+                  base,
+                  "--head",
+                  branch,
+                  "--title",
+                  `Installed credential proof ${f.suffix}`,
+                  "--body",
+                  marker,
+                ],
+              },
+            ]
+          : []),
       ];
       const quoteArgument = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
       const commands = commandSpecs
@@ -941,12 +1033,14 @@ function installedRepositoryJourney(mode) {
         )
         .join("\n");
       const embeddedPrompt = `Complete this authorized disposable repository task once with your exec tool and normal image-installed git/gh commands. Each Git/gh operation below must be its own standalone exec.command, with the specified exec.workdir. Execute the exact arguments in the listed order. Do not use shell cd, chaining, pipelines, redirection, comments, substitutions or wrappers in those Git/gh commands. Run foreground commands and stop on any failure. If exec nevertheless reports a running process, use process.poll on that exact session until completion before continuing. Do not install tools, read credentials, use alternate tokens, force push, call a provider HTTP API to create the PR, or delegate.
-After clone, its natural destination is ${checkout}. The readBase output must equal ${baseSha}; stop if it differs. Between branch and add, use exec.workdir=${JSON.stringify(checkout)} for every configuration and file-writing exec call. Configure local disposable Git identity Repository proof <repository-proof@example.invalid>, then use a separate exec call of your own to write exactly the following JSON-encoded bytes to the new file at absolute path ${JSON.stringify(`${checkout}/${file}`)}: ${JSON.stringify(content)}. Author that file yourself; do not change any other file. Make exactly one commit and exactly one same-repository PR. readCommit prints the full commit SHA and nativePr prints the PR URL; do not substitute echo commands for either operation. Do not close the PR or delete its branch. Finish with ${marker}.
+After clone, its natural destination is ${checkout}. The readBase output must equal ${baseSha}; stop if it differs. Between branch and add, use exec.workdir=${JSON.stringify(checkout)} for every configuration and file-writing exec call. Configure local disposable Git identity Repository proof <repository-proof@example.invalid>, then use a separate exec call of your own to write exactly the following JSON-encoded bytes to the new file at absolute path ${JSON.stringify(`${checkout}/${file}`)}: ${JSON.stringify(content)}. Author that file yourself; do not change any other file. Make exactly one commit and exactly one same-repository ready-for-review PR. readCommit prints the full commit SHA and nativePr prints the PR URL; do not substitute echo commands for either operation. Do not close the PR or delete its branch. Finish with ${marker}.
 ${commands}`;
-      const dedicatedPrompt = `Complete this authorized disposable repository task once using native Codex shell commands in your workspace. Execute every listed Git/gh operation once, in order, as a separate foreground command with its specified working directory. Use the exact arguments; do not add shell cd, chaining, pipelines, redirection, comments, substitutions or wrappers to Git/gh commands. Use non-login shells. Stop on any failure. Do not install tools, read credentials, use alternate tokens, force push, call a provider HTTP API to create the PR, or delegate.
-After clone, its natural destination is ${checkout}. readBase must equal ${baseSha}; stop if it differs. Between branch and add, configure local Git identity Repository proof <repository-proof@example.invalid> and author exactly these JSON-encoded bytes in the new file ${JSON.stringify(`${checkout}/${file}`)}: ${JSON.stringify(content)}. Do not change any other file. Make one commit and one same-repository draft PR. readCommit must print the actual commit SHA and nativePr the actual PR URL. Do not close the PR or delete the branch. Finish with ${marker}.
+      const dedicatedPrompt = `Complete this authorized disposable repository task once using native Codex shell commands in your workspace. Execute every listed operation, including sandboxProbe, once, in order, as a separate foreground command with its specified working directory. Use the exact arguments; do not add shell cd, chaining, pipelines, redirection, comments, substitutions or wrappers to Git/gh commands. Use non-login shells. Stop on any failure. Do not request escalation, install tools, read credentials, use alternate tokens, force push, call a provider HTTP API to create the PR, or delegate.
+After clone, its natural destination is ${checkout}. readBase must equal ${baseSha}; stop if it differs. Between branch and add, configure local Git identity Repository proof <repository-proof@example.invalid> and author exactly these JSON-encoded bytes in the new file ${JSON.stringify(`${checkout}/${file}`)}: ${JSON.stringify(content)}. Do not change any other file. Make one commit and one same-repository ready-for-review PR. readCommit must print the actual commit SHA and nativePr the actual PR URL. Do not close the PR or delete the branch. Finish with ${marker}.
 ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working directory=${JSON.stringify(workdir)}, command=${JSON.stringify(argv.map(quoteArgument).join(" "))}`).join("\n")}`;
-      const prompt = dedicated ? dedicatedPrompt : embeddedPrompt;
+      const readOnlyPrompt = `Complete this authorized read-only repository check using native Codex shell commands. Execute every listed operation once, in order, as a separate foreground command with the specified working directory and exact arguments. Use non-login shells and do not use shell cd, chaining, pipelines, redirection, substitutions or wrappers. Do not request escalation, use alternate credentials, or delegate. The sandboxProbe must succeed; clone and fetch must succeed and readBase must equal ${baseSha}. The push is intentionally unauthorized: attempt it exactly once and continue after it fails. Do not create a PR or retry; the attempted push must be the only remote write attempt. Finish with ${marker}.
+${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working directory=${JSON.stringify(workdir)}, command=${JSON.stringify(argv.map(quoteArgument).join(" "))}`).join("\n")}`;
+      const prompt = readOnly ? readOnlyPrompt : dedicated ? dedicatedPrompt : embeddedPrompt;
       taskStarted = true;
       let taskFailure;
       let taskTransport = { outcome: "unresolved" };
@@ -964,6 +1058,7 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
               ...(dedicated
                 ? {
                     gatewayUrl: `https://${f.gatewayHostname}/namespaces/${f.namespace.id}/agents/${agent.id}`,
+                    completionMarker: marker,
                   }
                 : {}),
             }),
@@ -1017,11 +1112,15 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
           evidenceKind: "diagnostic-only",
           threadId: nativeTrace.threadId,
           turnId: nativeTrace.turnId,
-          commands: nativeTrace.commands.map(({ operations, status, exitCode }) => ({
-            operations,
-            status,
-            exitCode,
-          })),
+          commands: nativeTrace.commands.map(
+            ({ operations, status, exitCode, http400, sandboxDenied }) => ({
+              operations,
+              status,
+              exitCode,
+              http400,
+              sandboxDenied,
+            }),
+          ),
         });
       }
       // Preserve the normalized call/result evidence before any remote-state
@@ -1103,12 +1202,12 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
         failureSummary,
       });
       assert.equal(
-        (await f.get("pod", gateway.metadata.name, f.tenant)).metadata.uid,
+        (await f.get("pod", gateway.metadata.name, gateway.metadata.namespace)).metadata.uid,
         gateway.metadata.uid,
         "the task must remain bound to the observed Agent Pod",
       );
       assert.equal(
-        (await f.get("pod", consumer.metadata.name, f.tenant)).metadata.uid,
+        (await f.get("pod", consumer.metadata.name, consumer.metadata.namespace)).metadata.uid,
         consumer.metadata.uid,
         "the task must remain bound to the observed repository consumer",
       );
@@ -1117,91 +1216,39 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
         (await readInstalledCredentialSession(f, workerPod, attempt.sessionId)).state,
         "OPEN",
       );
-      const branchResponse = await observe("GET", `git/ref/heads/${branch}`, undefined, [200, 404]);
-      assert.equal(branchResponse.status, 200, "model task must push its branch");
-      const commitSha = branchResponse.data.object.sha;
-      const { data: commit } = await observe("GET", `commits/${commitSha}`);
-      assert.deepEqual(
-        commit.parents.map((p) => p.sha),
-        [baseSha],
-      );
-      assert.deepEqual(
-        commit.files.map((value) => ({ filename: value.filename, status: value.status })),
-        [{ filename: file, status: "added" }],
-      );
-      const { data: remoteFile } = await observe("GET", `contents/${file}?ref=${commitSha}`);
-      assert.equal(Buffer.from(remoteFile.content, "base64").toString("utf8"), content);
-      const { data: pulls } = await observe(
-        "GET",
-        `pulls?state=all&head=${encodeURIComponent(repository.split("/")[0] + ":" + branch)}&per_page=100`,
-      );
-      assert.equal(pulls.length, 1);
-      const pull = pulls[0];
-      assert.equal(pull.head.repo.id, Number(app.repositoryId));
-      assert.equal(pull.head.ref, branch);
-      assert.equal(pull.head.sha, commitSha);
-      assert.equal(pull.base.repo.id, Number(app.repositoryId));
-      assert.equal(pull.base.ref, base);
-      assert.equal(pull.body, marker);
-      assert.equal(pull.state, "open");
       if (dedicated) {
-        assert.equal(pull.draft, true);
-      }
-      remoteEvidence = { commitSha, pullNumber: pull.number };
-      assert.equal(trace.exists, true);
-      if (!dedicated) {
-        assert.equal(trace.promptReportSource, "run");
-        assert.ok(trace.promptToolNames.includes("exec"));
-      }
-      assert.equal(trace.userMarkerSeen, true);
-      assert.equal(trace.assistantMarkerSeen, true);
-      assert.equal(trace.terminalAssistantMarkerSeen, true);
-      assert.equal(trace.assistantError, false);
-      const succeeded = (result) =>
-        !result.isError && result.status === "completed" && result.exitCode === 0;
-      const completionFor = (call) => {
-        const result = trace.results.find(
-          (result) => result.toolCallId === call.id && result.seq > call.seq,
+        const probe = nativeTrace.commands.find((command) =>
+          command.operations.includes("sandboxProbe"),
         );
-        if (!result || result.isError) {
-          return undefined;
-        }
-        if (succeeded(result)) {
-          return result;
-        }
-        // A running exec is proved only by a later successful poll of the exact
-        // returned process session. Its output stays attached to that exec call.
-        if (result.status !== "running" || typeof result.processSessionId !== "string") {
-          return undefined;
-        }
-        for (const poll of trace.calls) {
-          if (
-            poll.name !== "process" ||
-            poll.processAction !== "poll" ||
-            poll.processSessionId !== result.processSessionId ||
-            poll.seq <= result.seq
-          ) {
-            continue;
-          }
-          const completed = trace.results.find(
-            (done) =>
-              done.toolCallId === poll.id &&
-              done.processSessionId === result.processSessionId &&
-              done.seq > poll.seq &&
-              succeeded(done),
-          );
-          if (completed) {
-            return completed;
-          }
-        }
-        return undefined;
-      };
-      let paired = trace.calls
-        .filter((call) => call.name === "exec")
-        .map((call) => ({ ...call, completion: completionFor(call) }))
-        .filter((call) => call.completion);
-      if (dedicated) {
+        assert.ok(
+          probe?.status === "completed" && probe.exitCode === 0 && probe.sandboxDenied,
+          "the actual native command must report an outside-workspace write denial",
+        );
+        const call = trace.calls.find(
+          (entry) =>
+            entry.id === probe.id &&
+            entry.name === "bash" &&
+            entry.mirrorIdentity === `${nativeTrace.turnId}:tool:${probe.id}:call`,
+        );
+        const result = trace.results.find(
+          (entry) =>
+            entry.toolCallId === probe.id &&
+            entry.mirrorIdentity === `${nativeTrace.turnId}:tool:${probe.id}:result`,
+        );
+        assert.ok(call && result && result.seq > call.seq, "the sandbox probe must be mirrored");
+        const files = JSON.parse(
+          await consumerExec(
+            `const fs=require("node:fs");process.stdout.write(JSON.stringify([fs.readFileSync(${JSON.stringify(sandboxFile)},"utf8"),fs.readFileSync(${JSON.stringify(outside)},"utf8")]))`,
+          ),
+        );
+        assert.deepEqual(files, [sandboxContent, outsideContent]);
+      }
+      const branchResponse = await observe("GET", `git/ref/heads/${branch}`, undefined, [200, 404]);
+      if (readOnly) {
         assert.equal(nativeTrace.status, "completed");
+        assert.equal(trace.exists, true);
+        assert.equal(trace.userMarkerSeen, true);
+        assert.equal(trace.terminalAssistantMarkerSeen, true);
         const mirroredTurn = trace.codexTurns.find(
           ({ turnPrefix }) => turnPrefix === nativeTrace.turnId,
         );
@@ -1210,80 +1257,184 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
             mirroredTurn.terminalAssistantSeen &&
             mirroredTurn.toolCallMirrorSeen &&
             mirroredTurn.toolResultMirrorSeen,
-          "native repository commands must belong to the Gateway's mirrored task turn",
         );
-        paired = nativeTrace.commands
-          .filter((command) => command.status === "completed" && command.exitCode === 0)
-          .map((command) => {
-            const call = trace.calls.find(
-              (call) =>
-                call.id === command.id &&
-                call.name === "bash" &&
-                call.mirrorIdentity === `${nativeTrace.turnId}:tool:${command.id}:call`,
-            );
-            const result = trace.results.find(
-              (result) =>
-                result.toolCallId === command.id &&
-                !result.isError &&
-                result.mirrorIdentity === `${nativeTrace.turnId}:tool:${command.id}:result`,
-            );
+        let previousCommand = -1;
+        for (const operation of ["clone", "fetch", "readBase", "push"]) {
+          const matches = nativeTrace.commands.filter((command) =>
+            command.operations.includes(operation),
+          );
+          assert.equal(matches.length, 1, `${operation} must execute once in the native turn`);
+          const command = matches[0];
+          const commandIndex = nativeTrace.commands.indexOf(command);
+          assert.ok(
+            commandIndex > previousCommand,
+            "read and denial operations must occur in order",
+          );
+          previousCommand = commandIndex;
+          const call = trace.calls.find(
+            (entry) =>
+              entry.id === command.id &&
+              entry.name === "bash" &&
+              entry.mirrorIdentity === `${nativeTrace.turnId}:tool:${command.id}:call`,
+          );
+          const result = trace.results.find(
+            (entry) =>
+              entry.toolCallId === command.id &&
+              entry.mirrorIdentity === `${nativeTrace.turnId}:tool:${command.id}:result`,
+          );
+          assert.ok(call && result && result.seq > call.seq, `${operation} must be mirrored`);
+          if (operation === "push") {
+            assert.equal(command.status, "failed");
             assert.ok(
-              call && result && result.seq > call.seq,
-              "native completion must have the same mirrored command call and result",
+              Number.isInteger(command.exitCode) && command.exitCode !== 0,
+              "the read-only push must fail",
             );
-            return { id: command.id, operations: command.operations, completion: command };
-          });
-      }
-      for (const { operation } of commandSpecs) {
-        assert.ok(
-          paired.some((call) => call.operations.includes(operation)),
-          `successful standalone tool trace must account for ${operation}`,
+            assert.equal(command.http400, true, "the broker must reject receive-pack discovery");
+          } else {
+            assert.equal(command.status, "completed");
+            assert.equal(command.exitCode, 0, `${operation} must succeed`);
+            if (operation === "readBase") {
+              assert.ok(command.commitShas.includes(baseSha));
+            }
+          }
+        }
+        assert.equal(branchResponse.status, 404, "the denied push must not create a remote ref");
+        assert.equal(taskFailure, undefined, "the task transport must complete");
+        await f.record("Sandboxed read-only Agent fetched and its push was denied", {
+          agentId: agent.id,
+          revisionId: revision.id,
+          sessionId: attempt.sessionId,
+          baseSha,
+          branch,
+          seccompProfile: process.env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE,
+        });
+      } else {
+        assert.equal(branchResponse.status, 200, "model task must push its branch");
+        const commitSha = branchResponse.data.object.sha;
+        const { data: commit } = await observe("GET", `commits/${commitSha}`);
+        assert.deepEqual(
+          commit.parents.map((p) => p.sha),
+          [baseSha],
         );
+        assert.deepEqual(
+          commit.files.map((value) => ({ filename: value.filename, status: value.status })),
+          [{ filename: file, status: "added" }],
+        );
+        const { data: remoteFile } = await observe("GET", `contents/${file}?ref=${commitSha}`);
+        assert.equal(Buffer.from(remoteFile.content, "base64").toString("utf8"), content);
+        const { data: pulls } = await observe(
+          "GET",
+          `pulls?state=all&head=${encodeURIComponent(repository.split("/")[0] + ":" + branch)}&per_page=100`,
+        );
+        assert.equal(pulls.length, 1);
+        const pull = pulls[0];
+        assert.equal(pull.head.repo.id, Number(app.repositoryId));
+        assert.equal(pull.head.ref, branch);
+        assert.equal(pull.head.sha, commitSha);
+        assert.equal(pull.base.repo.id, Number(app.repositoryId));
+        assert.equal(pull.base.ref, base);
+        assert.equal(pull.body, marker);
+        assert.equal(pull.state, "open");
+        assert.equal(pull.draft, false);
+        remoteEvidence = { commitSha, pullNumber: pull.number };
+        assert.equal(trace.exists, true);
+        if (!dedicated) {
+          assert.equal(trace.promptReportSource, "run");
+          assert.ok(trace.promptToolNames.includes("exec"));
+        }
+        assert.equal(trace.userMarkerSeen, true);
+        assert.equal(trace.assistantMarkerSeen, true);
+        assert.equal(trace.terminalAssistantMarkerSeen, true);
+        assert.equal(trace.assistantError, false);
+        let paired = trace.calls
+          .filter((call) => call.name === "exec")
+          .map((call) => ({ ...call, completion: completedToolResult(trace, call) }))
+          .filter((call) => call.completion);
+        if (dedicated) {
+          assert.equal(nativeTrace.status, "completed");
+          const mirroredTurn = trace.codexTurns.find(
+            ({ turnPrefix }) => turnPrefix === nativeTrace.turnId,
+          );
+          assert.ok(
+            mirroredTurn?.promptSeen &&
+              mirroredTurn.terminalAssistantSeen &&
+              mirroredTurn.toolCallMirrorSeen &&
+              mirroredTurn.toolResultMirrorSeen,
+            "native repository commands must belong to the Gateway's mirrored task turn",
+          );
+          paired = nativeTrace.commands
+            .filter((command) => command.status === "completed" && command.exitCode === 0)
+            .map((command) => {
+              const call = trace.calls.find(
+                (call) =>
+                  call.id === command.id &&
+                  call.name === "bash" &&
+                  call.mirrorIdentity === `${nativeTrace.turnId}:tool:${command.id}:call`,
+              );
+              const result = trace.results.find(
+                (result) =>
+                  result.toolCallId === command.id &&
+                  !result.isError &&
+                  result.mirrorIdentity === `${nativeTrace.turnId}:tool:${command.id}:result`,
+              );
+              assert.ok(
+                call && result && result.seq > call.seq,
+                "native completion must have the same mirrored command call and result",
+              );
+              return { id: command.id, operations: command.operations, completion: command };
+            });
+        }
+        for (const { operation } of commandSpecs) {
+          assert.ok(
+            paired.some((call) => call.operations.includes(operation)),
+            `successful standalone tool trace must account for ${operation}`,
+          );
+        }
+        assert.ok(
+          paired.some(
+            (call) =>
+              call.operations.includes("readBase") && call.completion.commitShas.includes(baseSha),
+          ),
+          "a successful read identifies the independently observed base",
+        );
+        assert.ok(
+          paired.some(
+            (call) =>
+              call.operations.includes("readCommit") &&
+              call.completion.commitShas.includes(commitSha),
+          ),
+          "the successful git rev-parse HEAD result must identify the independently observed commit",
+        );
+        const expectedPullUrl = `https://github.com/${remote.full_name}/pull/${pull.number}`;
+        assert.equal(pull.html_url, expectedPullUrl);
+        assert.ok(
+          paired.some(
+            (call) =>
+              call.operations.includes("nativePr") &&
+              call.completion.pullUrls.includes(expectedPullUrl),
+          ),
+          "the successful native gh pr create result must identify this authorized repository PR",
+        );
+        assert.equal(
+          taskFailure,
+          undefined,
+          "task transport failed despite reconciled remote outcome",
+        );
+        await f.record("Model tools and independent provider readback agree", {
+          sessionKey,
+          taskSessionId: trace.sessionId,
+          agentId: agent.id,
+          revisionId: revision.id,
+          podUid: gateway.metadata.uid,
+          credentialSessionId: attempt.sessionId,
+          commitSha,
+          baseSha,
+          branch,
+          file,
+          pullNumber: pull.number,
+          toolCallIds: paired.map((call) => call.id),
+        });
       }
-      assert.ok(
-        paired.some(
-          (call) =>
-            call.operations.includes("readBase") && call.completion.commitShas.includes(baseSha),
-        ),
-        "the fetch must be followed by a successful read of the independently observed base",
-      );
-      assert.ok(
-        paired.some(
-          (call) =>
-            call.operations.includes("readCommit") &&
-            call.completion.commitShas.includes(commitSha),
-        ),
-        "the successful git rev-parse HEAD result must identify the independently observed commit",
-      );
-      const expectedPullUrl = `https://github.com/${remote.full_name}/pull/${pull.number}`;
-      assert.equal(pull.html_url, expectedPullUrl);
-      assert.ok(
-        paired.some(
-          (call) =>
-            call.operations.includes("nativePr") &&
-            call.completion.pullUrls.includes(expectedPullUrl),
-        ),
-        "the successful native gh pr create result must identify this authorized repository PR",
-      );
-      assert.equal(
-        taskFailure,
-        undefined,
-        "task transport failed despite reconciled remote outcome",
-      );
-      await f.record("Model tools and independent provider readback agree", {
-        sessionKey,
-        taskSessionId: trace.sessionId,
-        agentId: agent.id,
-        revisionId: revision.id,
-        podUid: gateway.metadata.uid,
-        credentialSessionId: attempt.sessionId,
-        commitSha,
-        baseSha,
-        branch,
-        file,
-        pullNumber: pull.number,
-        toolCallIds: paired.map((call) => call.id),
-      });
     } catch (error) {
       workFailure = { error };
       if (agent) {
@@ -1302,12 +1453,7 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
           );
           await f.waitFor("Agent stop, session disposal and material deletion", async () => {
             const current = await f.api("GET", `/namespaces/${f.namespace.id}/agents/${agent.id}`);
-            const pods = await f.kubernetes.resources(
-              "pods",
-              f.tenant,
-              "-l",
-              `openclaw.dev/agent=${agent.id}`,
-            );
+            const pods = await agentPods(f, agent.id);
             const materials = (
               await f.kubectl(
                 "-n",
@@ -1361,43 +1507,60 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
           const reference = await observe("GET", `git/ref/heads/${branch}`, undefined, [200, 404]);
           if (reference.status === 200) {
             const sha = reference.data.object.sha;
-            const { data: commit } = await observe("GET", `commits/${sha}`);
-            assert.deepEqual(
-              commit.parents.map((p) => p.sha),
-              [baseSha],
-            );
-            assert.equal(commit.commit.message, `Installed credential proof ${f.suffix}`);
-            assert.deepEqual(
-              commit.files.map((value) => ({ filename: value.filename, status: value.status })),
-              [{ filename: file, status: "added" }],
-            );
-            const { data: ownedFile } = await observe("GET", `contents/${file}?ref=${sha}`);
-            assert.equal(Buffer.from(ownedFile.content, "base64").toString("utf8"), content);
-            if (remoteEvidence) {
+            if (readOnly) {
+              // If an authorization regression created the unique test ref,
+              // remove it only while it still points to the observed base.
               assert.equal(
                 sha,
-                remoteEvidence.commitSha,
-                "changed branch cannot be cleaned automatically",
+                baseSha,
+                "unexpected read-only ref cannot be cleaned automatically",
               );
-            }
-            assert.ok(matches.length <= 1, "ambiguous PR ownership");
-            for (const pull of matches) {
-              assert.equal(pull.body, marker);
-              assert.equal(pull.head.ref, branch);
-              assert.equal(pull.head.sha, sha);
-              assert.equal(pull.head.repo.id, Number(app.repositoryId));
-              assert.equal(pull.base.ref, base);
-              const { data: current } = await observe("GET", `pulls/${pull.number}`);
-              assert.equal(current.head.sha, sha);
-              assert.equal(current.body, marker);
-              if (current.state === "open") {
-                await observe("PATCH", `pulls/${pull.number}`, { state: "closed" });
+              assert.equal(matches.length, 0, "unexpected PR prevents automatic cleanup");
+              assert.equal(
+                (await observe("GET", `git/ref/heads/${branch}`)).data.object.sha,
+                baseSha,
+              );
+              await observe("DELETE", `git/refs/heads/${branch}`, undefined, 204);
+              await observe("GET", `git/ref/heads/${branch}`, undefined, 404);
+            } else {
+              const { data: commit } = await observe("GET", `commits/${sha}`);
+              assert.deepEqual(
+                commit.parents.map((p) => p.sha),
+                [baseSha],
+              );
+              assert.equal(commit.commit.message, `Installed credential proof ${f.suffix}`);
+              assert.deepEqual(
+                commit.files.map((value) => ({ filename: value.filename, status: value.status })),
+                [{ filename: file, status: "added" }],
+              );
+              const { data: ownedFile } = await observe("GET", `contents/${file}?ref=${sha}`);
+              assert.equal(Buffer.from(ownedFile.content, "base64").toString("utf8"), content);
+              if (remoteEvidence) {
+                assert.equal(
+                  sha,
+                  remoteEvidence.commitSha,
+                  "changed branch cannot be cleaned automatically",
+                );
               }
-              assert.equal((await observe("GET", `pulls/${pull.number}`)).data.state, "closed");
+              assert.ok(matches.length <= 1, "ambiguous PR ownership");
+              for (const pull of matches) {
+                assert.equal(pull.body, marker);
+                assert.equal(pull.head.ref, branch);
+                assert.equal(pull.head.sha, sha);
+                assert.equal(pull.head.repo.id, Number(app.repositoryId));
+                assert.equal(pull.base.ref, base);
+                const { data: current } = await observe("GET", `pulls/${pull.number}`);
+                assert.equal(current.head.sha, sha);
+                assert.equal(current.body, marker);
+                if (current.state === "open") {
+                  await observe("PATCH", `pulls/${pull.number}`, { state: "closed" });
+                }
+                assert.equal((await observe("GET", `pulls/${pull.number}`)).data.state, "closed");
+              }
+              assert.equal((await observe("GET", `git/ref/heads/${branch}`)).data.object.sha, sha);
+              await observe("DELETE", `git/refs/heads/${branch}`, undefined, 204);
+              await observe("GET", `git/ref/heads/${branch}`, undefined, 404);
             }
-            assert.equal((await observe("GET", `git/ref/heads/${branch}`)).data.object.sha, sha);
-            await observe("DELETE", `git/refs/heads/${branch}`, undefined, 204);
-            await observe("GET", `git/ref/heads/${branch}`, undefined, 404);
           } else {
             assert.equal(matches.length, 0, "PR remains after branch disappeared");
           }

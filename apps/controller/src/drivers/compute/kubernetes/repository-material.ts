@@ -258,13 +258,19 @@ export function repositoryMaterialSpec(
   const materialBindings = bindings
     .map((binding): RepositoryMaterialBinding => {
       const input = record(binding);
+      const hasAdmissionId = Object.hasOwn(input, "admissionId");
       const expectedKeys =
         binding.kind === "new"
           ? ["kind", "repositoryRef", "sessionId", "deadlineWallMs", "files"]
           : ["kind", "repositoryRef", "sessionId", "deadlineWallMs"];
+      if (hasAdmissionId) {
+        expectedKeys.push("admissionId");
+      }
       if (
         Object.keys(input).length !== expectedKeys.length ||
         expectedKeys.some((key) => !Object.hasOwn(input, key)) ||
+        (hasAdmissionId &&
+          (typeof binding.admissionId !== "string" || !refPattern.test(binding.admissionId))) ||
         typeof binding.repositoryRef !== "string" ||
         !refPattern.test(binding.repositoryRef) ||
         !references.delete(binding.repositoryRef) ||
@@ -375,10 +381,13 @@ export function repositoryMaterialDeployment(spec: ResolvedRepositoryMaterialSpe
           secret: {
             name: binding.secretName,
             optional: false,
-            items: Object.keys(binding.files).map((file) => ({
-              key: REPOSITORY_MATERIAL_KEYS[file as keyof typeof REPOSITORY_MATERIAL_KEYS],
-              path: `${binding.directory.slice(binding.directory.lastIndexOf("/") + 1)}/${file}`,
-            })),
+            // Secret data is an unordered map; projection items are part of the Pod template.
+            items: Object.keys(binding.files)
+              .sort()
+              .map((file) => ({
+                key: REPOSITORY_MATERIAL_KEYS[file as keyof typeof REPOSITORY_MATERIAL_KEYS],
+                path: `${binding.directory.slice(binding.directory.lastIndexOf("/") + 1)}/${file}`,
+              })),
           },
         })),
       },

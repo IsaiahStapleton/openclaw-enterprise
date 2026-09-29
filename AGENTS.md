@@ -46,6 +46,13 @@ never use `--force`.
 Before each push, verify the PR author, destination ref, and remote head;
 stop on unexpected changes.
 
+Follow the [contribution and review policy](CONTRIBUTING.md#prepare-a-pull-request)
+through merge. Core team authors may use their authorized merge bypass for their
+own PRs after the applicable review, CI, and specific holds are satisfied. Ask
+for human feedback on architectural RFCs early; implementation and RFC revision
+can proceed in parallel. Follow the [RFC process](docs/contributing/rfcs.md).
+New contributors wait for maintainer feedback.
+
 ## Development style
 
 Follow these rules when developing or changing code.
@@ -138,8 +145,10 @@ Use these expansions consistently in documentation and interface labels.
 
 Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 
-- Root `README.md`, `docs/README.md`, `docs/design.md`, and `docs/ARCHITECTURE.md`
-  own orientation, navigation, authoritative target design, and current architecture.
+- Root `README.md` and `docs/README.md` own orientation and navigation.
+  `docs/design.md` owns the authoritative architecture, with implemented behavior
+  and remaining design work distinguished explicitly. `docs/design/` owns its
+  detailed requirements and implementation limits.
 - `docs/reference/` owns living specifications for supported features and Driver
   contracts. State development, production, and verification-only limits explicitly;
   do not promote a proposed capability into current reference before implementation.
@@ -168,10 +177,11 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 - Top-level `specs/` records implementation proposals, milestones, and delivery
   history. Completed specifications do not override current feature reference.
 
-Keep `docs/design.md` and `docs/ARCHITECTURE.md` about system structure, ownership,
-trust boundaries, and major interactions; update them only for architectural
-changes. Put feature details, configuration, edge cases, and delivery history in
-their owning reference, guide, flow, or spec. Link as needed, without per-PR entries.
+Keep `docs/design.md` and its chapters about system structure, ownership,
+trust boundaries, and major interactions; update them for architectural changes
+or corrections to implementation status.
+Put feature details, configuration, edge cases, and delivery history in their
+owning reference, guide, flow, or spec. Link as needed, without per-PR entries.
 
 Document new components under `docs/` in the same change: purpose, setup,
 boundaries, verification, and troubleshooting. Update navigation and affected
@@ -386,14 +396,17 @@ controls:
   static screen or terminal output. Keep the walkthrough within the requested
   behavior; do not invent additional acceptance criteria.
 - Do not commit PR evidence, including screenshots, recordings, or generated
-  evidence reports, to the repository. Keep local captures outside the checkout
-  and upload media as native GitHub attachments for the PR's Verification section.
-- Include the screenshots, video, and Storybook story names or links in **both
-  the task conversation and the PR's Verification section**. Embed media where
-  supported; otherwise provide direct, reviewer-accessible links with captions.
-  A local path or a claim that evidence exists is not a usable PR attachment.
-  When no PR exists yet, deliver the evidence in the conversation and carry it
-  into the PR when opened.
+  evidence reports, to the repository. Keep local captures outside the checkout.
+  Media uploads are optional and are not a merge prerequisite. If media is
+  uploaded, use native GitHub attachments in the PR's Verification section.
+- Include the screenshots, video, and Storybook story names or links in the task
+  conversation. Include the story names or links and any uploaded media in the
+  PR's Verification section. Embed media where supported; otherwise provide
+  direct, reviewer-accessible links with captions. A local path or a claim that
+  evidence exists is not a usable PR attachment. If media is not uploaded, state
+  that in the PR; this does not prohibit merging or require a waiver.
+  When no PR exists yet, deliver the evidence in the conversation and carry the
+  verification details into the PR when opened.
 - Identify the tested revision and environment, what the evidence demonstrates,
   and what remains unverified. Label Storybook fixtures as simulated UI proof;
   they do not establish backend persistence, credential propagation, deployment,
@@ -401,8 +414,8 @@ controls:
   the real supported workflow and report its actual outcome.
 - Check that the media opens and shows the final UI. Refresh evidence after
   material UI changes and exclude credentials, tokens, and private data. If
-  recording, upload, or runtime proof is blocked, state the missing evidence and
-  blocker in both places; do not claim the requested verification is complete.
+  recording or runtime proof is blocked, state the missing evidence and blocker
+  in both places; do not claim the requested verification is complete.
 
 ## TypeScript style and verification
 

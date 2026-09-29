@@ -21,6 +21,15 @@ receivers:
 processors:
   k8sattributes:
     auth_type: serviceAccount
+    # filelog reads existing CRI files as soon as the pipeline starts. A record
+    # processed before the Pod cache syncs gets no service identity, is dropped
+    # as unclassified, and its offset is still committed, so it is lost for good.
+    # Block pipeline start until the Pod cache syncs; the reflector retries while
+    # the API server is unreachable. The timeout is deliberately very long:
+    # Collector 0.159 hangs rather than exits when this wait times out, so a
+    # short bound would turn a slow API into a stuck Collector.
+    wait_for_metadata: true
+    wait_for_metadata_timeout: 8760h
     filter:
       node_from_env_var: K8S_NODE_NAME
     pod_association:

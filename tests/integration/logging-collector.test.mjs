@@ -85,11 +85,21 @@ async function collectorFixture(t, prefix) {
     out,
     backend,
     collector,
-    async startCollector({ receiverPath, publish }) {
+    network,
+    async startCollector({ receiverPath, publish, env = [], volumes = [], configs = [] }) {
       const args = ["run", "--detach", "--name", collector, "--network", network, "--user", user];
       for (const port of publish) {
         args.push("--publish", port);
       }
+      for (const entry of env) {
+        args.push("--env", entry);
+      }
+      for (const volume of volumes) {
+        args.push("--volume", volume);
+      }
+      configs.forEach((path, index) =>
+        args.push("--volume", `${path}:/etc/otel/extra-${index}.yaml:ro`),
+      );
       args.push(
         "--env",
         `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://${backend}:4318/v1/logs`,
@@ -105,6 +115,7 @@ async function collectorFixture(t, prefix) {
         "--config=/etc/otel/collector.yaml",
         "--config=/etc/otel/receiver.yaml",
         "--config=/etc/otel/exporter.yaml",
+        ...configs.map((_, index) => `--config=/etc/otel/extra-${index}.yaml`),
       );
       await docker(args);
     },
@@ -168,7 +179,7 @@ test(
     const namespaceId = `ns_${randomUUID()}`;
     const agentId = `agt_${randomUUID()}`;
     const revisionId = `rev_${randomUUID()}`;
-    const canaries = ["password", "token", "prompt", "tool-output", "email"].map(
+    const canaries = ["password", "token", "prompt", "tool-output", "email", "session"].map(
       (kind) => `CANARY_${kind}_${fixture.suffix}`,
     );
     const payload = Object.fromEntries(canaries.map((value) => [value, value]));
@@ -211,6 +222,34 @@ test(
         await docker(["rm", "--force", name]).catch(() => {});
       }
     }
+    const warningLine = (event) =>
+      JSON.stringify({
+        event,
+        severity: "WARN",
+        code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+        computeDriverId: "kubernetes",
+        message: canaries.join(" "),
+        sessionId: canaries.at(-1),
+        ...payload,
+        "service.name": "forged-service",
+        "openclaw.agent.id": "forged-agent",
+      });
+    const filtered = async () =>
+      /otelcol_processor_filter_logs_filtered[^\n]* [1-9]/.test(
+        await fetch(`http://${metricsAddress}/metrics`).then((response) => response.text()),
+      );
+
+    // No other records have entered this fresh Collector, so a filter count
+    // proves the near-match was processed and rejected before capture assertions.
+    assert.equal(await filtered(), false);
+    await send(
+      "worker",
+      [warningLine("compute.preflight-warning-unreviewed")],
+      [],
+      ["com.docker.compose.service=worker"],
+    );
+    await waitFor(filtered);
+
     await send("gateway", [
       JSON.stringify({
         level: "info",
@@ -244,17 +283,27 @@ test(
       [],
       ["com.docker.compose.service=controller"],
     );
+    await send(
+      "worker",
+      [warningLine("compute.preflight-warning")],
+      [],
+      ["com.docker.compose.service=worker"],
+    );
     await send("gateway", [
       canaries.join(" "),
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 3);
+    await waitFor(async () => (await records()).length >= 4);
     const initial = await records();
-    assert.equal(initial.length, 3, "only reviewed JSON classes and Codex stderr pass");
+    assert.equal(initial.length, 4, "only reviewed JSON classes and Codex stderr pass");
     for (const { resource, record } of initial) {
       assert.ok(record.timeUnixNano, "OTLP record has an Engine timestamp");
-      assert.equal(record.severityNumber, 9, "INFO maps to OTel INFO, not Pino's numeric level");
+      assert.equal(
+        record.severityNumber,
+        resource["service.name"] === "occ-worker" ? 13 : 9,
+        "severity maps to OTel WARN or INFO, not Pino's numeric level",
+      );
       assert.equal(resource["openclaw.agent.id"], agentId);
       assert.equal(resource["openclaw.namespace.id"], namespaceId);
       assert.equal(resource["openclaw.revision.id"], revisionId);
@@ -263,6 +312,7 @@ test(
     assert.deepEqual(initial.map(({ resource }) => resource["service.name"]).sort(), [
       "codex-app-server",
       "occ-api",
+      "occ-worker",
       "openclaw-gateway",
     ]);
     const http = initial.find(({ resource }) => resource["service.name"] === "occ-api");
@@ -274,7 +324,16 @@ test(
     );
     assert.equal(httpAttributes["http.request.method"], "GET");
     assert.equal(httpAttributes["http.response.status_code"], 200);
+    const warning = initial.find(({ resource }) => resource["service.name"] === "occ-worker");
+    assert.equal(warning.record.body.stringValue, "compute.preflight-warning");
+    assert.equal(warning.record.severityText, "WARN");
+    assert.deepEqual(attributes(warning.record.attributes), {
+      "event.name": "compute.preflight-warning",
+      "log.iostream": "stdout",
+      "occ.code": "KUBERNETES_VERSION_BELOW_MINIMUM",
+    });
     const serialized = JSON.stringify(initial);
+    assert.equal(serialized.includes("compute.preflight-warning-unreviewed"), false);
     for (const value of [...canaries, "forged-service", "forged-agent"]) {
       assert.equal(serialized.includes(value), false);
     }
@@ -313,7 +372,14 @@ test(
       }
     });
     await docker(["start", fixture.backend]);
-    await waitFor(async () => (await records()).some(({ record }) => record.severityNumber === 13));
+    await waitFor(async () =>
+      (await records()).some(
+        ({ resource, record }) =>
+          resource["service.name"] === "openclaw-gateway" &&
+          record.severityNumber === 13 &&
+          record.body.stringValue === "gateway.operational",
+      ),
+    );
     await docker(["stop", "--time", "10", fixture.collector]);
     // The file-export test destination starts a new capture segment on restart.
     assert.equal((await records()).length, 1, "the restored destination receives the queued event");
@@ -463,5 +529,252 @@ test(
     ]) {
       assert.equal(serialized.includes(internal), false, `${internal} must not leak downstream`);
     }
+
+    // Stop work includes a per-operation UUID; deletion work has no suffix.
+    // Unsupported shapes must lose correlation fields without losing the event.
+    const agentId = `agt_${randomUUID()}`;
+    const stopWorkId = `agent:${agentId}:reconcile:stopped:${randomUUID()}`;
+    const deleteWorkId = `agent:${agentId}:reconcile:deleted`;
+    const cases = [
+      { operation: "agent.stop", workId: stopWorkId },
+      { operation: "agent.delete", workId: deleteWorkId },
+      {
+        operation: "agent.stop",
+        workId: `agent:${agentId}:reconcile:stopped`,
+        discardWorkId: true,
+      },
+      {
+        operation: "agent.delete",
+        workId: `${deleteWorkId}:${randomUUID()}`,
+        discardWorkId: true,
+      },
+      {
+        operation: "agent.stop",
+        workId: `agent:${agentId}:reconcile:stopped:CANARY_SESSION`,
+        discardWorkId: true,
+      },
+      {
+        operation: "agent.stop",
+        workId: `agent:agt_${"a".repeat(36)}:reconcile:stopped:${randomUUID()}`,
+        discardWorkId: true,
+      },
+      { operation: "agent.restart", workId: stopWorkId, discardOperation: true },
+    ].map((entry) => ({ ...entry, requestId: `req_${randomUUID()}` }));
+    const workerResource = {
+      resource: {
+        attributes: payload.resourceLogs[0].resource.attributes.map((entry) =>
+          entry.key === "occ.component" ? { ...entry, value: { stringValue: "worker" } } : entry,
+        ),
+      },
+      scopeLogs: [
+        {
+          logRecords: cases.map(({ operation, workId, requestId }) => ({
+            timeUnixNano: String(BigInt(Date.now()) * 1000000n),
+            body: {
+              stringValue: JSON.stringify({
+                event: "worker.completed",
+                severity: "INFO",
+                operation,
+                workId,
+                requestId,
+                message: "CANARY_RAW_MESSAGE",
+                sessionId: "CANARY_SESSION",
+                "service.name": "CANARY_FORGED_SERVICE",
+              }),
+            },
+            attributes: [{ key: "log.iostream", value: { stringValue: "stdout" } }],
+          })),
+        },
+      ],
+    };
+    const workerResponse = await fetch(`http://${receiverAddress}/v1/logs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceLogs: [workerResource] }),
+    });
+    assert.equal(workerResponse.status, 200, await workerResponse.text());
+    await waitFor(async () => (await records()).length === 1 + cases.length);
+    const workerRecords = (await records()).filter(
+      ({ resource }) => resource["service.name"] === "occ-worker",
+    );
+    assert.equal(workerRecords.length, cases.length);
+    for (const entry of cases) {
+      const actual = workerRecords.find(
+        ({ attributes }) => attributes["request.id"] === entry.requestId,
+      );
+      assert.equal(actual.record.body.stringValue, "worker.completed");
+      assert.equal(actual.record.severityNumber, 9);
+      assert.deepEqual(actual.attributes, {
+        "event.name": "worker.completed",
+        "log.iostream": "stdout",
+        "request.id": entry.requestId,
+        ...(entry.discardOperation ? {} : { "work.operation": entry.operation }),
+        ...(entry.discardWorkId ? {} : { "work.id": entry.workId }),
+      });
+    }
+    assert.doesNotMatch(JSON.stringify(workerRecords), /CANARY_/);
+  },
+);
+
+// Stands in for the API server behind k8sattributes: serves one Pod through
+// list or watch-list, and withholds every Pod response until the test releases it.
+const podMetadataServer = `
+const http = require('node:http');
+const pod = JSON.parse(process.env.POD);
+const requests = [];
+const held = [];
+let released = false;
+const answer = (url, res) => {
+  res.setHeader('content-type', 'application/json');
+  if (url.searchParams.get('watch') === 'true') {
+    res.writeHead(200);
+    if (url.searchParams.get('sendInitialEvents') === 'true') {
+      res.write(JSON.stringify({ type: 'ADDED', object: pod }) + '\\n');
+      res.write(JSON.stringify({ type: 'BOOKMARK', object: { kind: 'Pod', apiVersion: 'v1',
+        metadata: { resourceVersion: '10', annotations: { 'k8s.io/initial-events-end': 'true' } } } }) + '\\n');
+    }
+    return;
+  }
+  res.end(JSON.stringify({ apiVersion: 'v1', kind: 'PodList', metadata: { resourceVersion: '10' }, items: [pod] }));
+};
+http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://api');
+  if (url.pathname === '/fixture/requests') return res.end(JSON.stringify(requests));
+  if (url.pathname === '/fixture/release') {
+    released = true;
+    held.splice(0).forEach(([u, r]) => answer(u, r));
+    return res.end('released');
+  }
+  if (url.pathname !== '/api/v1/pods') { res.writeHead(404); return res.end('{}'); }
+  requests.push(req.url);
+  if (released) return answer(url, res);
+  held.push([url, res]);
+}).listen(8001, '0.0.0.0');
+`;
+
+test(
+  "native Collector keeps CRI records written before Kubernetes Pod metadata syncs",
+  {
+    skip: selected
+      ? false
+      : "Set OCC_TEST_LOGGING_COLLECTOR=1 for pinned Collector Kubernetes metadata proof.",
+    timeout: 180_000,
+  },
+  async (t) => {
+    const fixture = await collectorFixture(t, "sync");
+    const api = `oce-otel-sync-api-${fixture.suffix}`;
+    t.after(() => docker(["rm", "--force", api]).catch(() => {}));
+    const namespace = `system-${fixture.suffix}`;
+    const podName = `openclaw-enterprise-worker-${fixture.suffix}`;
+    const podUid = randomUUID();
+    const pod = {
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: {
+        name: podName,
+        namespace,
+        uid: podUid,
+        resourceVersion: "10",
+        labels: {
+          "app.kubernetes.io/name": "openclaw-enterprise",
+          "app.kubernetes.io/component": "worker",
+        },
+      },
+      spec: { nodeName: "fixture-node", containers: [{ name: "worker", image: "fixture" }] },
+      status: {
+        containerStatuses: [
+          {
+            name: "worker",
+            image: "fixture",
+            imageID: `registry.example.test/controller@sha256:${"b".repeat(64)}`,
+            containerID: `containerd://${fixture.suffix}`,
+            ready: true,
+            restartCount: 0,
+            state: { running: {} },
+          },
+        ],
+      },
+    };
+    // The worker's only startup event is already on disk when the Collector
+    // starts, exactly as for a DaemonSet added to (or restarted on) a live node.
+    const pods = join(fixture.directory, "pods");
+    const logDirectory = join(pods, `${namespace}_${podName}_${podUid}`, "worker");
+    await mkdir(logDirectory, { recursive: true });
+    await writeFile(
+      join(logDirectory, "0.log"),
+      `${new Date().toISOString()} stdout F ${JSON.stringify({ level: 30, event: "worker.started", computeDriverId: "kubernetes" })}\n`,
+    );
+    await docker([
+      "run",
+      "--detach",
+      "--name",
+      api,
+      "--network",
+      fixture.network,
+      "--publish",
+      "127.0.0.1::8001",
+      "--env",
+      `POD=${JSON.stringify(pod)}`,
+      nodeImage,
+      "node",
+      "-e",
+      podMetadataServer,
+    ]);
+    const control = `http://${(await docker(["port", api, "8001/tcp"])).split("\n")[0]}/fixture`;
+    const podRequests = async () =>
+      fetch(`${control}/requests`)
+        .then((response) => response.json())
+        .catch(() => []);
+    await waitFor(async () =>
+      fetch(`${control}/requests`)
+        .then((response) => response.ok)
+        .catch(() => false),
+    );
+    await writeFile(
+      join(fixture.directory, "kubeconfig"),
+      `${JSON.stringify({
+        apiVersion: "v1",
+        kind: "Config",
+        clusters: [{ name: "fixture", cluster: { server: `http://${api}:8001` } }],
+        users: [{ name: "fixture", user: {} }],
+        contexts: [{ name: "fixture", context: { cluster: "fixture", user: "fixture" } }],
+        "current-context": "fixture",
+      })}\n`,
+    );
+    // Only the credential source differs from the shipped receiver file.
+    await writeFile(
+      join(fixture.directory, "metadata-auth.yaml"),
+      "processors:\n  k8sattributes:\n    auth_type: kubeConfig\n",
+    );
+    await fixture.startCollector({
+      receiverPath: join(root, "deploy/logging/kubernetes.yaml"),
+      publish: [],
+      env: ["K8S_NODE_NAME=fixture-node", "KUBECONFIG=/etc/otel-fixture/kubeconfig"],
+      volumes: [
+        `${pods}:/var/log/pods:ro`,
+        `${join(fixture.directory, "kubeconfig")}:/etc/otel-fixture/kubeconfig:ro`,
+      ],
+      configs: [join(fixture.directory, "metadata-auth.yaml")],
+    });
+    const records = async () =>
+      exportedRecords(fixture.out, (resource, record) => ({
+        resource: attributes(resource.resource?.attributes),
+        record,
+      }));
+
+    // Hold Pod metadata well past filelog's first 200 ms poll. A pipeline that
+    // started without metadata has read, dropped and committed the record by now.
+    await waitFor(async () => (await podRequests()).length > 0);
+    await delay(3_000);
+    assert.deepEqual(await records(), []);
+    await fetch(`${control}/release`, { method: "POST" });
+
+    await waitFor(async () => (await records()).length > 0);
+    const exported = await records();
+    assert.equal(exported.length, 1);
+    assert.equal(exported[0].resource["service.name"], "occ-worker");
+    assert.equal(exported[0].resource["service.instance.id"], podUid);
+    assert.equal(exported[0].record.body?.stringValue, "worker.started");
+    assert.equal(exported[0].record.severityText, "INFO");
   },
 );

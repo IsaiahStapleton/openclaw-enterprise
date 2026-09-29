@@ -1,11 +1,16 @@
 # Enterprise container publication
 
+The [OCC CLI release](cli-publication.md) publishes matching versioned command
+line binaries through a separate protected workflow.
+
 [`container-publish.yml`](workflows/container-publish.yml) prepares the existing
 controller (`Dockerfile`, target `runtime`) and combined gateway/Agent runtime
 (`deploy/runtime/Dockerfile`) as OCI archives containing both `linux/amd64` and
 `linux/arm64`. Each image has one multi-platform index digest; Docker selects
-the matching architecture when pulling it. It does not change recipes,
-package versions, Kubernetes deployment, or the existing CI test matrix.
+the matching architecture when pulling it. Chart publication is opt-in through
+`publish_chart: true`; it packages the OCC Helm chart under the same OCE release
+version. It does not deploy Kubernetes
+resources or change the existing CI test matrix.
 
 ## Source visibility
 
@@ -43,10 +48,10 @@ approval or approval-comment requirement. Complete these prerequisites first.
   approved Node 24 digest used by `scripts/ci/test-suites/images-packaging.json`
   and the runtime Dockerfile. All three must agree. This is an explicit approval,
   not a default.
-- Bootstrap two **private**, pre-existing GHCR container packages,
-  link each to `openclaw/openclaw-enterprise`, and grant this repository Actions
-  access. GHCR packages are first created by pushing an image; the Enterprise
-  publisher deliberately cannot perform that initial push. Use the manual
+- Bootstrap the two **private**, pre-existing GHCR image packages. Chart publication
+  also requires `ghcr.io/openclaw/charts/openclaw-enterprise`. Link each selected
+  package to `openclaw/openclaw-enterprise` and grant this repository Actions access. The
+  Enterprise publisher requires these packages to exist. Use the manual
   [marker bootstrap](#bootstrap-private-packages), then confirm private
   visibility and linkage.
 - Set environment variables `GHCR_CONTROLLER_IMAGE` and `GHCR_RUNTIME_IMAGE`
@@ -96,11 +101,11 @@ organization permits creation of private container packages under those names.
 Dispatch **Bootstrap Enterprise Container Packages** on `main` with that
 `ci_run_id`. The manual dispatch authorizes the run.
 
-The workflow uses its short-lived `GITHUB_TOKEN` to build and push a scratch
-image containing only a fixed marker. Its temporary context contains no checkout
-files or credentials. Existing packages must be private and are left unchanged;
-explicit conflicting repository metadata fails. An authenticated metadata 404 permits only this harmless
-push; it is not proof that a package is absent rather than inaccessible. Other
+The workflow uses its short-lived `GITHUB_TOKEN` to push scratch image markers
+and a nondeployable Helm chart marker. Its temporary image contexts and chart
+contain no checkout files or credentials. Existing private packages remain
+unchanged; conflicting repository metadata fails. An authenticated metadata 404
+permits only this harmless push; it does not prove the package is absent. Other
 metadata errors stop the run. After each push, the metadata lookup retries only
 404 responses up to five times at two-second intervals for registry propagation;
 persistent 404 responses fail. Private visibility and the remote digest must
@@ -108,7 +113,7 @@ verify before bootstrap succeeds. Confirm package linkage during setup before
 real-image publication.
 
 The job summary records package coordinates and marker digests. The unique
-`bootstrap-<run-id>-<attempt>` tags are not runnable Enterprise images. Bootstrap
+`bootstrap-<run-id>-<attempt>` image tags and chart version are not deployable. Bootstrap
 does not change visibility or access grants; if verification fails, inspect the
 package settings and fix the reported cause before retrying. A partial result is retained,
 and a subsequent dispatch leaves valid existing packages untouched. The ordinary
@@ -129,18 +134,40 @@ grant a workstation credential additional scopes.
    current `source_sha`, and that `ci_run_id`. Leave `publish` false for no-push
    preparation. If main moved, select the new SHA and its own completed CI run.
 3. To publish, dispatch with `publish` true after reviewing the SHA, CI run,
-   and [package setup](#confirm-package-linkage). Preparation builds
-   both platforms in one OCI archive, checks the index and child manifest/config
+   and [package setup](#confirm-package-linkage). Leave `image_tag` blank to
+   update `latest` for both images, or enter a custom tag to update that tag
+   instead. The tag can contain up to 128 ASCII letters, digits, underscores,
+   periods, and hyphens; it must start with a letter, digit, or underscore.
+   Tags beginning with `sha-` or `bootstrap-` are reserved, case-insensitively.
+   The selected alias is mutable and an existing tag can be replaced. Preparation
+   builds both platforms in one OCI archive, checks the index and child manifest/config
    digests, and loads each platform into Docker separately. Its config ID must
    match that index entry. Both platforms run the existing controller or runtime
    startup smoke before sealing/uploading. AMD64 and ARM64 builds and smoke tests
    run on their matching native Linux architectures. The publisher copies those exact
    archive and all child manifests with Skopeo and verifies the remote index digests. Source, CI attempt,
    environment branch policy, and package visibility are rechecked before transfer.
-4. Use the `image@sha256:...` references in the job summary and
-   `container-publication-<run-id>-<attempt>` receipt for deployment. No Git tag,
-   release, `latest` alias, or deployment is created. Existing `sha-<source-sha>`
-   image tags cannot be replaced by different bytes.
+4. Use the `image@sha256:...` references in the image job summary and
+   `container-publication-<run-id>-<attempt>` receipt for deployment. Each image
+   receives an immutable `sha-<source-sha>` tag, the selected mutable alias,
+   and, only with `publish_chart: true`, an OCE version tag matching the chart.
+   The image-only `container-publication` receipt records the source tags and alias for
+   promotion and recovery. Existing source and version tags cannot be replaced
+   by different bytes. Publication does not create a Git tag, GitHub release,
+   or deployment.
+
+Image publication defaults to `publish_chart: false` and needs no chart package.
+For a versioned chart release, also select `publish_chart: true` and follow
+[chart publication and installation](chart-publication.md). With `publish: false`,
+preparation never publishes images or a chart regardless of `publish_chart`.
+
+Images and the optional chart have separate jobs. A chart failure leaves the
+verified images and their successful job intact, but fails the combined run.
+The workflow holds the shared publication lock from preparation through both
+publication jobs; preparation-only runs use independent groups. A queued run can
+be superseded before it starts, but an active release retains the lock.
+The final summary reports both outcomes. Chart publication produces its own
+`chart-publication-<run-id>-<attempt>` receipt.
 
 The multi-platform publisher requires both architectures in every seal. Earlier
 amd64-only tags retain their original bytes and digests; building this workflow
@@ -163,7 +190,11 @@ different bytes. Do not delete or overwrite existing tags to evade that
 rejection. Publication of the two images is not transactional; on a partial
 failure inspect each recorded registry digest before deciding on recovery. The
 publisher's concurrency lock serializes these workflow writes, not external
-registry administrators.
+registry administrators. Both source tags are verified before either alias moves,
+but the two alias updates are not atomic. A failure may leave them pointing to
+different publications; inspect both packages and use digest references until
+a later successful publication updates the selected alias for both images.
+Recovery restores source tags only and does not move aliases.
 
 ## Recover a partial publication
 
@@ -221,8 +252,10 @@ end-to-end tests.
 
 Local gate and recovery tests: `node --test tests/integration/container-{release,resume,promote}.test.mjs`.
 Recovery tests use HTTP and transport fixtures; they prove gate ordering, original
-identity, conflict rejection, unchanged existing images, and receipt behavior,
-not a live GHCR transfer.
+identity, conflict rejection, unchanged existing images, and receipt behavior.
+The [registry integration](../docs/testing/images.md#container-publication-registry-proof)
+uses real Skopeo and a disposable registry to check alias replacement and both
+platforms. Neither test proves a live GHCR transfer.
 Workflow syntax: `actionlint .github/workflows/*.yml`.
 Actual no-push builds and the first private-registry transfer still require
 their respective authorized hosted runs; configuration and unit tests alone

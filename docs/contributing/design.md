@@ -1,12 +1,15 @@
 # Platform design
 
-Start with [current architecture](../ARCHITECTURE.md) to understand how the
-OpenClaw Control Plane works today. The [platform design](../design.md) defines
-the approved target; check its [implementation status](../design.md#implementation-status)
-before treating a planned capability as available.
+Start with [platform architecture](../design.md) to understand the OpenClaw
+Control Plane's components, ownership, and trust boundaries. Its
+[implementation status](../design.md#implementation-status) and
+[remaining design work](../design.md#remaining-design-work) distinguish current
+behavior from approved requirements that are not yet supported.
 
 ## Find the right source
 
+- The [RFC guide](rfcs.md) explains how to propose architectural decisions and develop
+  them alongside implementation.
 - [Design philosophy](design-philosophy.md) explains how to put complete caller
   tasks behind small interfaces with clear ownership and failure behavior.
 - [Readable code](readable-code.md) develops those principles through functions,

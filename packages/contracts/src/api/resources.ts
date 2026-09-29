@@ -8,6 +8,11 @@ import {
   ConfigurationId,
   ConfigurationKindSchema,
   ConfigurationValues,
+  CredentialSourceConfig,
+  CredentialSourceId,
+  CredentialSourceReference,
+  CredentialSourceSecrets,
+  CredentialSourceType,
   HarnessExecutionModeSchema,
   HarnessAuthBindingSchema,
   InstallationId,
@@ -67,6 +72,7 @@ const PluginCatalogEntrySchema = Type.Object(
     available: Type.Optional(Type.Boolean()),
     unavailableReason: Type.Optional(Type.String()),
     unavailableHelp: Type.Optional(PluginCatalogLinkSchema),
+    selectableWithoutTools: Type.Optional(Type.Boolean()),
     tools: Type.Union([
       Type.Null(),
       Type.Array(
@@ -114,11 +120,87 @@ export const AgentPluginDetailsResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChannelDirectoryLookupResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        workspaceId: Type.String({ minLength: 1, maxLength: 200 }),
+        workspaceName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+        candidates: Type.Array(
+          Type.Object(
+            {
+              id: Type.String({ minLength: 1, maxLength: 200 }),
+              name: Type.String({ minLength: 1, maxLength: 200 }),
+              displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+            },
+            { additionalProperties: false },
+          ),
+          { maxItems: 100 },
+        ),
+        nextCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
+        complete: Type.Boolean(),
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
 const RuntimeEvidenceTimestamp = Type.String({
   format: "date-time",
   pattern:
     "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$",
 });
+
+const PluginPolicyCapabilitiesSchema = Type.Object(
+  {
+    driver: Type.Ref("PluginDriverIdentity"),
+    approvers: Type.Optional(
+      Type.Object(
+        { agent: Type.Boolean(), plugin: Type.Boolean(), tools: Type.Boolean() },
+        { additionalProperties: false },
+      ),
+    ),
+    toolDefaults: Type.Object(
+      {
+        enabled: Type.Boolean(),
+        approval: Type.Array(PluginApprovalModeSchema),
+        reviewer: Type.Array(PluginReviewerSchema),
+      },
+      { additionalProperties: false },
+    ),
+    tools: Type.Object(
+      {
+        enabled: Type.Boolean(),
+        approval: Type.Array(PluginApprovalModeSchema),
+        reviewer: Type.Array(PluginReviewerSchema),
+      },
+      { additionalProperties: false },
+    ),
+    driverPolicySchema: Type.Record(Type.String(), Type.Unknown()),
+  },
+  { additionalProperties: false },
+);
+
+const PluginDiscoveryCredentialSchema = Type.Union([
+  Type.Literal("required"),
+  Type.Literal("none"),
+]);
+
+export const AgentPluginPolicyCapabilitiesResponse = Type.Object(
+  {
+    data: Type.Object(
+      {
+        ...PluginPolicyCapabilitiesSchema.properties,
+        discoveryCredential: PluginDiscoveryCredentialSchema,
+      },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
 
 const InstallationCapabilitiesSchema = Type.Object(
   {
@@ -128,31 +210,10 @@ const InstallationCapabilitiesSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
-    pluginPolicies: Type.Optional(
-      Type.Object(
-        {
-          driver: Type.Ref("PluginDriverIdentity"),
-          toolDefaults: Type.Object(
-            {
-              enabled: Type.Boolean(),
-              approval: Type.Array(PluginApprovalModeSchema),
-              reviewer: Type.Array(PluginReviewerSchema),
-            },
-            { additionalProperties: false },
-          ),
-          tools: Type.Object(
-            {
-              enabled: Type.Boolean(),
-              approval: Type.Array(PluginApprovalModeSchema),
-              reviewer: Type.Array(PluginReviewerSchema),
-            },
-            { additionalProperties: false },
-          ),
-          driverPolicySchema: Type.Record(Type.String(), Type.Unknown()),
-        },
-        { additionalProperties: false },
-      ),
+    pluginDiscovery: Type.Optional(
+      Type.Object({ credential: PluginDiscoveryCredentialSchema }, { additionalProperties: false }),
     ),
+    pluginPolicies: Type.Optional(PluginPolicyCapabilitiesSchema),
   },
   { additionalProperties: false },
 );
@@ -194,6 +255,7 @@ export const AgentSchema = Type.Object(
     harnessAuth: Type.Union([HarnessAuthBindingSchema, Type.Null()]),
     executionMode: HarnessExecutionModeSchema,
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
+    pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
     repositoryBindings: Type.Optional(RepositoryBindingSelectionsSchema),
     repositoryAccess: Type.Optional(RepositoryAccessSchema),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
@@ -204,9 +266,60 @@ export const AgentSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ConfigurationReadErrorSchema = Type.Object(
+  {
+    code: Type.Literal("SAVED_CONFIGURATION_UNREADABLE"),
+    field: Type.Union([
+      Type.Literal("plugins"),
+      Type.Literal("pluginApprovers"),
+      Type.Literal("repositoryBindings"),
+      Type.Literal("repositoryAccess"),
+      Type.Literal("harnessAuth"),
+      Type.Literal("secretBindings"),
+      Type.Literal("repositoryCredentials"),
+      Type.Literal("configuration"),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+const agentReadDescription =
+  "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth.";
+
+export const AgentReadSchema = Type.Union(
+  [
+    AgentSchema,
+    Type.Object(
+      {
+        ...Type.Omit(AgentSchema, [
+          "plugins",
+          "pluginApprovers",
+          "repositoryBindings",
+          "repositoryAccess",
+          "harnessAuth",
+        ]).properties,
+        configurationReadError: ConfigurationReadErrorSchema,
+      },
+      { additionalProperties: false },
+    ),
+  ],
+  {
+    description: agentReadDescription,
+  },
+);
+
 export const PluginDriverIdentitySchema = Type.Object(
   { id: Type.String({ minLength: 1 }), implementation: Type.String({ minLength: 1 }) },
   { additionalProperties: false, $id: "PluginDriverIdentity" },
+);
+
+export const PluginToolDefaultsSchema = Type.Object(
+  {
+    enabled: Type.Optional(Type.Boolean()),
+    approval: Type.Optional(PluginApprovalModeSchema),
+    reviewer: Type.Optional(PluginReviewerSchema),
+  },
+  { additionalProperties: false, minProperties: 1, $id: "PluginToolDefaults" },
 );
 
 export const PluginToolPolicySchema = Type.Object(
@@ -214,6 +327,7 @@ export const PluginToolPolicySchema = Type.Object(
     enabled: Type.Optional(Type.Boolean()),
     approval: Type.Optional(PluginApprovalModeSchema),
     reviewer: Type.Optional(PluginReviewerSchema),
+    approvers: Type.Optional(Type.Ref("PluginApprovers")),
   },
   { additionalProperties: false, minProperties: 1, $id: "PluginToolPolicy" },
 );
@@ -234,7 +348,8 @@ const PluginToolPolicyMapSchema = Type.Unsafe({
 export const PluginDesiredSelectionSchema = Type.Object(
   {
     enabled: Type.Boolean(),
-    toolDefaults: Type.Optional(Type.Ref("PluginToolPolicy")),
+    approvers: Type.Optional(Type.Ref("PluginApprovers")),
+    toolDefaults: Type.Optional(Type.Ref("PluginToolDefaults")),
     driverPolicy: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     tools: Type.Optional(PluginToolPolicyMapSchema),
   },
@@ -272,6 +387,42 @@ export const SecretSchema = Type.Object(
     namespaceId: NamespaceId,
     name: Name,
     ref: SecretReference,
+  },
+  { additionalProperties: false },
+);
+
+export const CredentialSourceStatusSchema = Type.Object(
+  {
+    state: Type.Union([
+      Type.Literal("ready"),
+      Type.Literal("pending"),
+      Type.Literal("failed"),
+      Type.Literal("absent"),
+    ]),
+    reason: Type.Optional(Type.String({ maxLength: 512 })),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Live status reported by the selected Credential Gateway. It never contains credential values.",
+  },
+);
+
+export const CredentialSourceSchema = Type.Object(
+  {
+    id: CredentialSourceId,
+    namespaceId: NamespaceId,
+    name: Name,
+    type: CredentialSourceType,
+    config: CredentialSourceConfig,
+    secrets: CredentialSourceSecrets,
+    state: Type.Union([
+      Type.Literal("registering"),
+      Type.Literal("ready"),
+      Type.Literal("deleting"),
+    ]),
+    ref: CredentialSourceReference,
+    status: Type.Optional(CredentialSourceStatusSchema),
   },
   { additionalProperties: false },
 );
@@ -400,7 +551,7 @@ export const ServiceAccountSchema = Type.Object(
 export const BackendSummarySchema = Type.Object(
   {
     id: BackendId,
-    type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github")]),
+    type: Type.Union([Type.Literal("chatgpt"), Type.Literal("github"), Type.Literal("openshell")]),
   },
   { additionalProperties: false },
 );
@@ -481,6 +632,19 @@ export const SecretResponse = Type.Object(
   },
 );
 
+export const CredentialSourceResponse = Type.Object(
+  { data: CredentialSourceSchema, meta: Meta },
+  {
+    $id: "CredentialSourceResponse",
+    additionalProperties: false,
+  },
+);
+
+export const CredentialSourceListResponse = Type.Object(
+  { data: Type.Array(CredentialSourceSchema), meta: Meta },
+  { additionalProperties: false },
+);
+
 export const SecretListResponse = Type.Object(
   { data: Type.Array(SecretSchema), meta: Meta },
   { additionalProperties: false },
@@ -498,6 +662,11 @@ export const ServiceAccountListResponse = Type.Object(
 
 export const AgentResponse = Type.Object(
   { data: AgentSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
+export const AgentReadResponse = Type.Object(
+  { data: AgentReadSchema, meta: Meta },
   { additionalProperties: false },
 );
 
@@ -545,7 +714,7 @@ export const IAMAccessBindingListResponse = Type.Object(
 );
 
 export const AgentListResponse = Type.Object(
-  { data: Type.Array(AgentSchema), meta: Meta },
+  { data: Type.Array(AgentReadSchema, { description: agentReadDescription }), meta: Meta },
   { additionalProperties: false },
 );
 
@@ -561,6 +730,17 @@ export const RepositoryOptionListResponse = Type.Object(
       { ...Meta.properties, descriptionsPending: Type.Boolean() },
       { additionalProperties: false },
     ),
+  },
+  { additionalProperties: false },
+);
+
+export const ObservabilityResponse = Type.Object(
+  {
+    data: Type.Object(
+      { url: Type.Union([Type.String({ format: "uri" }), Type.Null()]) },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
   },
   { additionalProperties: false },
 );
@@ -615,6 +795,7 @@ export const AgentRevisionSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
     harnessAuth: HarnessAuthBindingSchema,
     repositoryCredentials: Type.Optional(RepositoryRevisionStateSchema),
     createdAt: Timestamp,
@@ -627,8 +808,42 @@ export const AgentRevisionResponse = Type.Object(
   { additionalProperties: false },
 );
 
+const agentRevisionReadDescription =
+  "An immutable revision with readable saved settings, or revision metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits saved configuration fields.";
+
+export const AgentRevisionReadSchema = Type.Union(
+  [
+    AgentRevisionSchema,
+    Type.Object(
+      {
+        ...Type.Pick(AgentRevisionSchema, [
+          "id",
+          "namespaceId",
+          "agentId",
+          "revision",
+          "backendId",
+          "createdAt",
+        ]).properties,
+        configurationReadError: ConfigurationReadErrorSchema,
+      },
+      { additionalProperties: false },
+    ),
+  ],
+  {
+    description: agentRevisionReadDescription,
+  },
+);
+
+export const AgentRevisionReadResponse = Type.Object(
+  { data: AgentRevisionReadSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 export const AgentRevisionListResponse = Type.Object(
-  { data: Type.Array(AgentRevisionSchema), meta: Meta },
+  {
+    data: Type.Array(AgentRevisionReadSchema, { description: agentRevisionReadDescription }),
+    meta: Meta,
+  },
   { additionalProperties: false },
 );
 
@@ -643,6 +858,41 @@ export const AgentDeploymentStatusSchema = Type.Object(
       Type.Literal("succeeded"),
       Type.Literal("failed"),
     ]),
+    progress: Type.Union(
+      [
+        Type.Null(),
+        Type.Object(
+          {
+            lastAttempt: Type.Union(
+              [
+                Type.Null(),
+                Type.Object(
+                  {
+                    at: Timestamp,
+                    code: Type.String({ minLength: 1, maxLength: 64 }),
+                    message: Type.String({ minLength: 1 }),
+                  },
+                  { additionalProperties: false },
+                ),
+              ],
+              {
+                description:
+                  "Latest reconciliation result bound to this exact deployment work item. Null means no bound result is available, not proof that work never ran. Codes and messages are allowlisted; provider text is not exposed.",
+              },
+            ),
+            nextAttemptAt: Type.Union([Timestamp, Type.Null()], {
+              description:
+                "Earliest time queued work is eligible to run, not a promised start time. Null while claimed.",
+            }),
+          },
+          { additionalProperties: false },
+        ),
+      ],
+      {
+        description:
+          "Pending deployment progress. Null for terminal outcomes. A last attempt describes a recorded result, not current runtime health.",
+      },
+    ),
     error: Type.Union(
       [
         Type.Null(),
@@ -708,6 +958,36 @@ export const AgentDeploymentStatusResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentDeploymentDiagnosticsSchema = Type.Object(
+  {
+    revisionId: RevisionId,
+    observedAt: Timestamp,
+    checks: Type.Array(
+      Type.Object(
+        {
+          component: RuntimeFailureIdentifier,
+          check: RuntimeFailureIdentifier,
+          state: Type.Union([
+            Type.Literal("succeeded"),
+            Type.Literal("failed"),
+            Type.Literal("unknown"),
+          ]),
+          checkedAt: Type.Union([Timestamp, Type.Null()]),
+          code: Type.Optional(RuntimeFailureIdentifier),
+        },
+        { additionalProperties: false },
+      ),
+      { maxItems: 32 },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentDeploymentDiagnosticsResponse = Type.Object(
+  { data: AgentDeploymentDiagnosticsSchema, meta: Meta },
+  { $id: "AgentDeploymentDiagnosticsResponse", additionalProperties: false },
+);
+
 export const WorkspaceFileResponse = Type.Object(
   {
     data: Type.Object(
@@ -745,6 +1025,10 @@ export type ConfigurationWire = Type.Static<typeof ConfigurationSchema>;
 export type SecretWire = Type.Static<typeof SecretSchema>;
 export type ServiceAccountWire = Type.Static<typeof ServiceAccountSchema>;
 export type BackendSummaryWire = Type.Static<typeof BackendSummarySchema>;
+export type AgentReadWire = Type.Static<typeof AgentReadSchema>;
+export type AgentRevisionReadWire = Type.Static<typeof AgentRevisionReadSchema>;
+export type AgentReadResponse = Type.Static<typeof AgentReadResponse>;
+export type AgentRevisionReadResponse = Type.Static<typeof AgentRevisionReadResponse>;
 export type AgentWire = Type.Static<typeof AgentSchema>;
 export type AgentRuntimeCredentialStatusWire = Type.Static<
   typeof AgentRuntimeCredentialStatusSchema
@@ -755,6 +1039,7 @@ export type IAMRoleWire = Type.Static<typeof IAMRoleSchema>;
 export type IAMAccessBindingWire = Type.Static<typeof IAMAccessBindingSchema>;
 export type AgentRevisionWire = Type.Static<typeof AgentRevisionSchema>;
 export type AgentDeploymentStatusWire = Type.Static<typeof AgentDeploymentStatusSchema>;
+export type AgentDeploymentDiagnosticsWire = Type.Static<typeof AgentDeploymentDiagnosticsSchema>;
 export type InstallationResponse = Type.Static<typeof InstallationResponse>;
 export type InstallationDeploymentInventoryResponse = Type.Static<
   typeof InstallationDeploymentInventoryResponse
@@ -763,6 +1048,9 @@ export type NamespaceResponse = Type.Static<typeof NamespaceResponse>;
 export type NamespaceListResponse = Type.Static<typeof NamespaceListResponse>;
 export type ConfigurationResponse = Type.Static<typeof ConfigurationResponse>;
 export type SecretResponse = Type.Static<typeof SecretResponse>;
+export type CredentialSourceWire = Type.Static<typeof CredentialSourceSchema>;
+export type CredentialSourceResponse = Type.Static<typeof CredentialSourceResponse>;
+export type CredentialSourceListResponse = Type.Static<typeof CredentialSourceListResponse>;
 export type SecretListResponse = Type.Static<typeof SecretListResponse>;
 export type ServiceAccountResponse = Type.Static<typeof ServiceAccountResponse>;
 export type ServiceAccountListResponse = Type.Static<typeof ServiceAccountListResponse>;
@@ -780,6 +1068,9 @@ export type RepositoryOptionListResponse = Type.Static<typeof RepositoryOptionLi
 export type AgentRevisionResponse = Type.Static<typeof AgentRevisionResponse>;
 export type AgentRevisionListResponse = Type.Static<typeof AgentRevisionListResponse>;
 export type AgentDeploymentStatusResponse = Type.Static<typeof AgentDeploymentStatusResponse>;
+export type AgentDeploymentDiagnosticsResponse = Type.Static<
+  typeof AgentDeploymentDiagnosticsResponse
+>;
 export type WorkspaceFileResponse = Type.Static<typeof WorkspaceFileResponse>;
 export type WorkspaceFileUpdateResponse = Type.Static<typeof WorkspaceFileUpdateResponse>;
 

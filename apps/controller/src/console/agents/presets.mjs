@@ -11,6 +11,14 @@ function harnessSecretVariable(template) {
   return typeof value === "string" ? HARNESS_SECRET_TOKEN.exec(value)?.[1] : undefined;
 }
 
+function variableLabel(name) {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replaceAll("_", " ")
+    .trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : name;
+}
+
 function sameNamespaceSecret(context, secret) {
   return (
     secret?.namespaceId === context.namespaceId &&
@@ -24,9 +32,7 @@ function sameNamespaceSecret(context, secret) {
 function renderSecretOptions(secrets) {
   return [
     element("option", { value: "" }, "Choose an existing Secret"),
-    ...secrets.map((secret) =>
-      element("option", { value: secret.id }, `${secret.name ?? "Secret"} · ${secret.id}`),
-    ),
+    ...secrets.map((secret) => element("option", { value: secret.id }, secret.name ?? "Secret")),
   ];
 }
 
@@ -250,6 +256,7 @@ export function createPresetFields(context, apply) {
       }
       selected = preset;
       fields = Object.entries(preset.template.variables ?? {}).map(([name, definition]) => {
+        const label = variableLabel(name);
         const input =
           definition.type === "boolean"
             ? element(
@@ -285,7 +292,7 @@ export function createPresetFields(context, apply) {
             element(
               "div",
               { className: "form-field" },
-              element("label", { for: input.id }, `Variable: ${name}`),
+              element("label", { for: input.id }, label),
               input,
               definition.description
                 ? element("p", { className: "hint" }, definition.description)
@@ -316,7 +323,7 @@ export function createPresetFields(context, apply) {
         const inputField = element(
           "div",
           { className: "form-field" },
-          element("label", { for: input.id }, `Variable: ${name}`),
+          element("label", { for: input.id }, label),
           input,
           definition.description
             ? element("p", { className: "hint" }, definition.description)
@@ -325,7 +332,7 @@ export function createPresetFields(context, apply) {
         const secretField = element(
           "div",
           { className: "form-field", hidden: true },
-          element("label", { for: secretSelect.id }, `Existing Secret for ${name}`),
+          element("label", { for: secretSelect.id }, `Existing Secret for ${label}`),
           secretSelect,
           secretStatus,
         );
@@ -355,7 +362,7 @@ export function createPresetFields(context, apply) {
           element(
             "div",
             { className: "form-field" },
-            element("label", { for: mode.id }, `Secret source for ${name}`),
+            element("label", { for: mode.id }, `Secret source for ${label}`),
             mode,
             element(
               "p",
@@ -398,7 +405,11 @@ export function createPresetFields(context, apply) {
         return;
       }
       selector.append(
-        ...presets.map((preset) => element("option", { value: preset.id }, preset.name)),
+        ...presets
+          .toSorted((left, right) =>
+            left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+          )
+          .map((preset) => element("option", { value: preset.id }, preset.name)),
       );
       selector.disabled = false;
       if (retained && presets.some((preset) => preset.id === retained.id)) {

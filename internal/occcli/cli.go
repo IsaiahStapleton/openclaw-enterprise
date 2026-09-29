@@ -2,6 +2,7 @@ package occcli
 
 import (
 	"cmp"
+	"context"
 	"encoding/json/jsontext"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ type application struct {
 	namespace      string
 	output         string
 	parsedTimeout  time.Duration
+	ctx            context.Context
 }
 
 // New builds the OCC domain command tree.
@@ -39,7 +41,8 @@ func New(out, errOut io.Writer) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
+			app.ctx = command.Context()
 			return app.validateOptions()
 		},
 	}
@@ -71,7 +74,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 		&app.namespace,
 		"namespace",
 		os.Getenv("OCC_NAMESPACE"),
-		"Namespace scope for Configuration, Secret, IAM, and Agent operations",
+		"Namespace scope for Configuration, Secret, credential source, IAM, and Agent operations",
 	)
 	flags.StringVarP(&app.output, "output", "o", "table", "Output format: table, json, or yaml")
 
@@ -81,6 +84,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 		app.iamCommand(),
 		app.configurationCommand(),
 		app.secretCommand(),
+		app.credentialSourceCommand(),
 		app.agentCommand(),
 		developmentCommand(),
 	)
@@ -622,6 +626,106 @@ func (app *application) secretCommand() *cobra.Command {
 	return command
 }
 
+func (app *application) credentialSourceCommand() *cobra.Command {
+	command := commandGroup(
+		"credential-source",
+		"Manage credential sources held by the selected Credential Gateway",
+	)
+
+	var createFile string
+	create := &cobra.Command{
+		Use:   "create",
+		Short: "Register a credential source from a JSON document",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			body, err := readJSON(createFile)
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			source, err := client.CreateCredentialSource(namespace, body)
+			if err != nil {
+				return err
+			}
+			return app.printCredentialSource(source, false)
+		},
+	}
+	create.Flags().StringVar(&createFile, "file", "", "JSON document path")
+	_ = create.MarkFlagRequired("file")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List credential sources",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			sources, err := client.ListCredentialSources(namespace)
+			if err != nil {
+				return err
+			}
+			return app.printCredentialSource(sources, true)
+		},
+	}
+
+	get := &cobra.Command{
+		Use:   "get ID",
+		Short: "Show a credential source and its live gateway status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			source, err := client.GetCredentialSource(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printCredentialSource(source, false)
+		},
+	}
+
+	deleteCommand := &cobra.Command{
+		Use:   "delete ID",
+		Short: "Delete an unreferenced credential source and its gateway copy",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			if err := client.DeleteCredentialSource(namespace, args[0]); err != nil {
+				return err
+			}
+			return app.printDeletion("credential-source", args[0])
+		},
+	}
+
+	command.AddCommand(create, list, get, deleteCommand)
+	return command
+}
+
 func (app *application) agentCommand() *cobra.Command {
 	command := commandGroup("agent", "Manage Agents in the selected Namespace")
 
@@ -814,7 +918,56 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent)
+	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent, app.agentRuntimeCredentialsCommand())
+	return command
+}
+
+func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
+	command := commandGroup("runtime-credentials", "Manage generated Agent runtime credentials")
+
+	get := &cobra.Command{
+		Use:   "get AGENT_ID",
+		Short: "Show runtime credential metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			credentials, err := client.GetAgentRuntimeCredentials(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printRuntimeCredentials(credentials)
+		},
+	}
+
+	provision := &cobra.Command{
+		Use:   "provision AGENT_ID",
+		Short: "Provision initial runtime credentials with an empty request body",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			credentials, err := client.ProvisionAgentRuntimeCredentials(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printRuntimeCredentials(credentials)
+		},
+	}
+
+	command.AddCommand(get, provision)
 	return command
 }
 
@@ -855,6 +1008,7 @@ func (app *application) client() (*occclient.Client, error) {
 		ServiceKeyFile: app.serviceKeyFile,
 		CABundle:       app.caBundle,
 		Timeout:        app.parsedTimeout,
+		Context:        app.ctx,
 	})
 }
 

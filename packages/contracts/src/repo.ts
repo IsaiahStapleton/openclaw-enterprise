@@ -82,6 +82,10 @@ export type OpenRepositorySessionResult =
 export interface RepoDriver extends Driver {
   readonly capability: "repo";
   readonly maintenanceIntervalMs: number;
+  /** This Driver fences admission and retains confirmed terminal evidence durably. */
+  readonly durableBrokerReceipts?: true;
+  /** Check whether fresh credential admission is currently supported. */
+  checkAdmissionReady?(signal: AbortSignal): Promise<void>;
   listOptions(input: {
     readonly namespaceId: string;
     readonly descriptionRefs?: readonly string[];
@@ -121,6 +125,8 @@ export interface RepositoryCredentialMaterialRef {
 
 export type RepositoryCredentialRuntimeBinding = RepositoryCredentialMaterialRef & {
   readonly deadlineWallMs: number;
+  /** Original persisted attempt identity for correlation; it is not an authority proof. */
+  readonly admissionId?: string;
 } & (
     | { readonly kind: "new"; readonly files: RepositoryCredentialSessionFiles }
     | { readonly kind: "retained" }

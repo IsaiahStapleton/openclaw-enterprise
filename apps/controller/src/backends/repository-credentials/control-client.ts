@@ -33,6 +33,7 @@ export interface RepositoryCredentialControlClient {
       pending: boolean;
     }>
   >;
+  checkAdmissionReady(signal: AbortSignal): Promise<void>;
   open(
     input: RepositoryCredentialBoundSessionInput,
     admissionId: string,
@@ -331,6 +332,14 @@ export class UnixRepositoryCredentialControlClient implements RepositoryCredenti
       ),
       pending: parsed.pending,
     });
+  }
+
+  async checkAdmissionReady(signal: AbortSignal): Promise<void> {
+    const reply = await this.call("GET", "/v1/capabilities", signal);
+    const result = object(reply.body, ["durableAdmissionVersion"]);
+    if (reply.status !== 200 || result.durableAdmissionVersion !== 1) {
+      unavailable();
+    }
   }
 
   async open(

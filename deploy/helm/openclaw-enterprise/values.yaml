@@ -45,6 +45,36 @@ auth:
   baseUrl: ""
   secretName: occ-auth
   secretKey: secret
+  # Existing local password administrator's user ID. Required with auth.github or
+  # auth.google; it designates the recovery account when the API first starts with
+  # external sign-in.
+  recoveryUserId: ""
+  # Optional GitHub browser sign-in for existing password accounts (API Pod only).
+  # Needs an HTTPS baseUrl, auth.recoveryUserId and agentNativeAdmin.enabled: false.
+  # Create the dedicated Secret first.
+  github:
+    enabled: false
+    secretName: occ-github-login
+    clientIdKey: client-id
+    clientSecretKey: client-secret
+    # API Pod HTTPS egress for github.com and api.github.com. Empty allows TCP 443
+    # to 0.0.0.0/0; list the web and api IPv4 ranges from api.github.com/meta to narrow it.
+    egressCidrs: []
+  # Optional Google sign-in (OpenID Connect) for existing password accounts (API Pod
+  # only). Same requirements as auth.github; its Secret must differ from auth.github's.
+  # Create the dedicated Secret first.
+  google:
+    enabled: false
+    secretName: occ-google-login
+    clientIdKey: client-id
+    clientSecretKey: client-secret
+    # Google Workspace hosted domains (the ID token's hd claim). Empty accepts any
+    # Google account; set, it also requires a verified email address.
+    allowedDomains: []
+    # API Pod HTTPS egress for oauth2.googleapis.com and www.googleapis.com; browsers,
+    # not the API, reach accounts.google.com. Empty allows TCP 443 to 0.0.0.0/0; Google
+    # publishes no small stable range, so narrow it with an egress proxy.
+    egressCidrs: []
 
 agentNativeAdmin:
   enabled: false
@@ -72,6 +102,16 @@ backend:
 repositoryCredentials:
   enabled: false
   image: ""
+  # Internal HTTPS Service name. Fresh installs default to git. Upgrades must
+  # set this explicitly to the current Service name until repository sessions
+  # drain, then switch it deliberately to git.
+  serviceName: ""
+  # Kubernetes cluster DNS suffix used to form the broker Service FQDN.
+  clusterDomain: cluster.local
+  # Optional exact Service hostname: <service>.<namespace>.svc or that name
+  # followed by .<clusterDomain>. Empty selects the cluster-qualified name.
+  # Preserve the current hostname during upgrades; it pins TLS and sessions.
+  hostname: ""
   backendId: ""
   # Operator-created immutable, versioned ConfigMap shared by all three consumers.
   registryConfigMapName: ""
@@ -100,8 +140,19 @@ gatewayRouting:
   caSecretName: ""
   caSecretKey: ""
   tlsSecretName: ""
+  serviceType: ClusterIP
+  remoteNodeCidrs: []
   tenantGatewayPort: 8080
   envoyHttpsTargetPort: 10443
+  sandbox:
+    enabled: false
+    # A dedicated wildcard domain outside the OCE session cookie domain.
+    domain: ""
+    # Existing wildcard HTTPS certificate in the release namespace.
+    tlsSecretName: ""
+    # Separate listener: public ingress must not admit the private admin port.
+    listenerPort: 8443
+    ingressPeers: []
   issuerRef:
     # Empty bootstraps a namespaced SelfSigned root and CA Issuer for the leaf.
     name: ""
@@ -124,9 +175,42 @@ database:
 api:
   port: 8080
   clients: []
+  # Optional exact HTTP(S) proxy endpoint for API-side Slack directory lookup.
+  # The proxy must allow CONNECT to slack.com:443; empty disables lookup in production.
+  channelDirectoryProxyUrl: ""
   # Optional model-list discovery: API Pod HTTPS egress to provider IPv4 /32 hosts.
   # Operators maintain these addresses; Console model selection does not require it.
   modelDiscoveryCidrs: []
+  # Trust client-address headers from a proxy in front of the API. Off by default:
+  # the API then rejects forwarded headers and keys sign-in limits on the socket peer.
+  # With a preset, requests whose socket peer is inside cidrs may carry forwarded
+  # headers, and sign-in limits key on the client address from clientAddressHeader.
+  # cidrs never include /0 and must match only proxies that overwrite or append it.
+  #   ingress-nginx: cidrs = ingress controller Pod CIDR; header x-forwarded-for
+  #     (x-real-ip also works). Keep use-forwarded-headers off in ingress-nginx.
+  #   aws: ALB in front of the API; cidrs = ALB subnet CIDRs; header x-forwarded-for.
+  #     An NLB preserves the client source address and needs no preset unless it
+  #     forwards to ingress-nginx (then use ingress-nginx).
+  #   generic: cidrs and clientAddressHeader are both required.
+  trustedProxy:
+    preset: ""
+    cidrs: []
+    # generic only; ingress-nginx and aws always read x-forwarded-for.
+    clientAddressHeader: ""
+
+slackProxy:
+  # Optional chart-managed HTTP CONNECT proxy for Slack channel traffic. It is
+  # inert until enabled. HTTPS egress excludes private and reserved IPv4 ranges.
+  enabled: false
+  serviceName: openclaw-enterprise-slack-proxy
+  port: 3128
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
 
 cluster:
   cidrs: []
@@ -135,6 +219,16 @@ cluster:
 controlPlane:
   nodeSelector: {}
   installationChecksum: ""
+
+# Separate operator-provisioned DP credentials for the API and worker.
+# The Installation selects /etc/openclaw/execution/kubeconfig explicitly.
+executionCluster:
+  enabled: false
+  apiKubeconfigSecretName: ""
+  workerKubeconfigSecretName: ""
+  kubeconfigKey: kubeconfig
+  apiCidrs: []
+  apiPort: 6443
 
 dns:
   namespace: kube-system

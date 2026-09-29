@@ -6,7 +6,14 @@ const scenario = scenarios[id];
 if (!scenario) {
   throw new Error(`Unknown console story: ${id}`);
 }
-const evidence = { id, requests: [], unhandled: [], ready: false, error: null };
+const evidence = {
+  id,
+  requests: [],
+  directoryResponses: [],
+  unhandled: [],
+  ready: false,
+  error: null,
+};
 window.__consoleStory = evidence;
 installFixture(scenario, evidence);
 // Simulated build metadata; deployed images bake this meta tag into their HTML.
@@ -60,13 +67,39 @@ try {
       }
       await new Promise((resolve) => setTimeout(resolve, 30));
     }
-    if (!node || node.disabled) {
+    if (!node || node.disabled || node.closest("[hidden]")) {
       throw new Error(`Story action unavailable: ${JSON.stringify(action)}`);
+    }
+    if (action.focus) {
+      node.focus();
     }
     if (action.click) {
       node.click();
     }
     if (action.value !== undefined) {
+      if (node.getAttribute("role") === "combobox" && !node.closest(".slack-directory-field")) {
+        node.focus();
+        node.value = action.value === "__openclaw_create_secret__" ? "" : action.value;
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        let option;
+        while (Date.now() < deadline) {
+          const menu = document.getElementById(node.getAttribute("aria-controls"));
+          option = [...(menu?.querySelectorAll('[role="option"]') ?? [])].find((item) =>
+            action.value === "__openclaw_create_secret__"
+              ? item.classList.contains("secret-typeahead-create")
+              : !item.classList.contains("secret-typeahead-create"),
+          );
+          if (option) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
+        if (!option) {
+          throw new Error(`Story Secret option unavailable: ${JSON.stringify(action)}`);
+        }
+        option.click();
+        continue;
+      }
       if (node instanceof HTMLSelectElement) {
         while (
           Date.now() < deadline &&
@@ -81,6 +114,11 @@ try {
       node.value = action.value;
       node.dispatchEvent(new Event("input", { bubbles: true }));
       node.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    if (action.key) {
+      node.dispatchEvent(
+        new KeyboardEvent("keydown", { key: action.key, bubbles: true, cancelable: true }),
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

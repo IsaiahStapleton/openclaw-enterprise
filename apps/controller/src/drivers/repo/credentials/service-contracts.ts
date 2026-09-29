@@ -33,6 +33,8 @@ export interface RepositoryCredentialBoundSessionInput extends RepositoryCredent
   readonly deadlineWallMs: number;
   /** Look up an admission without creating a session; not part of replay identity. */
   readonly recoverOnly?: true;
+  /** Requires the durable admission protocol; older brokers must reject it. */
+  readonly durableAdmission?: true;
 }
 
 export interface RepositoryCredentialSessionResult {

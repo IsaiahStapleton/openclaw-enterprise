@@ -16,7 +16,10 @@ function statePath(argv) {
 async function main() {
   const path = statePath(process.argv.slice(2));
   const state = JSON.parse(await readFile(path, "utf8"));
-  assert.equal(state.lane, "gateway-routing", "Reset requires owned gateway-routing state.");
+  assert.ok(
+    ["gateway-routing", "openshell"].includes(state.lane),
+    "Reset requires owned gateway-routing or openshell state.",
+  );
   const databaseIds = state.resources
     .filter(({ kind }) => kind === "postgres-database")
     .map(({ id }) => id);

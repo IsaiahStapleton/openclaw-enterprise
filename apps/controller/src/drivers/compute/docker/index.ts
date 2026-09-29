@@ -24,6 +24,7 @@ import {
   workspaceSetupVerifier,
 } from "../workspace-setup-runtime.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
+import { nodeProgramArguments } from "../node-program.ts";
 import { discoverHarnessModels } from "../model-discovery.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import {
@@ -166,22 +167,7 @@ function dockerGatewayConfigurationDocument(configuration: OpenClawConfiguration
     );
   }
 
-  if (auth.password === undefined) {
-    return {
-      configuration: {
-        ...configuration,
-        gateway: {
-          ...gateway,
-          auth: {
-            ...auth,
-            mode: "password",
-            password: GATEWAY_PASSWORD_REFERENCE,
-          },
-        },
-      },
-      requiresManagedPassword: true,
-    };
-  }
+  const useDefaultPassword = auth.password === undefined;
   return {
     configuration: {
       ...configuration,
@@ -190,10 +176,11 @@ function dockerGatewayConfigurationDocument(configuration: OpenClawConfiguration
         auth: {
           ...auth,
           mode: "password",
+          ...(useDefaultPassword ? { password: GATEWAY_PASSWORD_REFERENCE } : {}),
         },
       },
     },
-    requiresManagedPassword: passwordReference === GATEWAY_PASSWORD_ENV,
+    requiresManagedPassword: useDefaultPassword || passwordReference === GATEWAY_PASSWORD_ENV,
   };
 }
 
@@ -236,6 +223,7 @@ writeFileSync(process.env.OPENCLAW_CONFIG_PATH, process.env.OPENCLAW_CONFIG_JSON
 delete process.env.OPENCLAW_CONFIG_JSON;
 delete process.env.OPENCLAW_LOG_LEVEL;
 const pluginRuntime = readGatewayPluginRuntime();
+try {
 if (pluginRuntime !== undefined) installOpenClawPlugins(pluginRuntime);
 const child = spawn(
   "node",
@@ -244,6 +232,9 @@ const child = spawn(
 );
 forwardTermination(child);
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
+} catch (error) {
+  if (!holdPluginApproverConfigurationFailure(error)) throw error;
+}
 `;
 
 function required(value: unknown, description: string): string {
@@ -1079,7 +1070,7 @@ ${WORKSPACE_SETUP_RUNTIME}`,
         User: "1000:1000",
         Env: Object.entries(input.environment).map(([name, value]) => `${name}=${value}`),
         Entrypoint: ["node"],
-        Cmd: ["-e", input.command],
+        Cmd: ["-e", ...nodeProgramArguments(input.command)],
         Labels: labels,
         ExposedPorts: { [`${input.exposedPort}/tcp`]: {} },
         Healthcheck: {
@@ -1196,7 +1187,7 @@ ${WORKSPACE_SETUP_RUNTIME}`,
       (runtime.kind === "codex" &&
         role === "gateway" &&
         !embedded &&
-        Object.keys(runtime.selections).length > 0);
+        (Object.keys(runtime.selections).length > 0 || runtime.pluginApprovers !== undefined));
     if (!applies) {
       return {};
     }

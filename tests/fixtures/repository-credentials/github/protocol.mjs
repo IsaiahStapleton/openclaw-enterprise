@@ -166,6 +166,9 @@ export function createGitHubProtocol({
     errors,
     authorize: authority.authorize,
     tokenState: authority.tokenState,
+    setRevokeStatus(status) {
+      revokeStatus = status;
+    },
     disconnectAfterMutation(method, target) {
       disconnectMutation = `${method} ${target}`;
     },

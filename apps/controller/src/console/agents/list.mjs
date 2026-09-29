@@ -17,6 +17,18 @@ export function link(label, target, context) {
 }
 
 export function message(error, mutation = false) {
+  if (error.code === "SAVED_CONFIGURATION_UNREADABLE") {
+    const field = {
+      plugins: "plugin selections",
+      pluginApprovers: "plugin approvers",
+      repositoryBindings: "repository access",
+      harnessAuth: "harness authentication",
+      secretBindings: "Secret bindings",
+      repositoryCredentials: "repository credentials",
+      configuration: "native configuration",
+    }[error.field];
+    return `Saved ${field ?? "configuration"} could not be read. Editing and deployment are unavailable for these settings. Ask an administrator to repair the saved configuration, then refresh this page.`;
+  }
   if (error.status === 403) {
     return "Access denied. You do not have permission for this operation.";
   }
@@ -37,6 +49,15 @@ export function message(error, mutation = false) {
     : error.name === "TypeError" || error.name === "TimeoutError"
       ? "Request interrupted. Retry to check current access and saved state."
       : "Service unavailable. The read could not be completed. Please retry.";
+}
+
+export function assertReadableConfiguration(resource) {
+  if (resource.configurationReadError) {
+    throw Object.assign(
+      new Error(message(resource.configurationReadError)),
+      resource.configurationReadError,
+    );
+  }
 }
 
 export function renderAgentList(context) {
@@ -83,7 +104,7 @@ export function renderAgentList(context) {
         element(
           "tr",
           {},
-          ...["Agent", "Execution mode", "Selected revision", "Created"].map((label) =>
+          ...["Agent", "Execution mode", "Current version", "Created"].map((label) =>
             element("th", { scope: "col" }, label),
           ),
         ),
@@ -101,6 +122,9 @@ export function renderAgentList(context) {
             link(item.name, `agents/${item.id}`, context),
             element("span", { className: "resource-id" }, item.id),
             item.status === "deleting" ? element("span", { className: "badge" }, "Deleting") : null,
+            item.configurationReadError
+              ? element("span", { className: "badge" }, "Saved configuration unreadable")
+              : null,
           ),
           element("td", {}, item.executionMode === "dedicated" ? "Dedicated" : "Embedded"),
           element(
@@ -112,7 +136,7 @@ export function renderAgentList(context) {
                   `agents/${item.id}?revision=${item.activeRevisionId}`,
                   context,
                 )
-              : "No selected revision",
+              : "No current version",
           ),
           element("td", {}, displayDate(item.createdAt)),
         ),

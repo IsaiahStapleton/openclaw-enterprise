@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
+	"maps"
 	"strings"
 	"text/tabwriter"
 
@@ -41,6 +42,26 @@ func (app *application) printSecret(value any) error {
 	})
 }
 
+func (app *application) printCredentialSource(value any, collection bool) error {
+	if app.output == "table" && !collection {
+		if resource, ok := value.(map[string]any); ok {
+			if status, ok := resource["status"].(map[string]any); ok {
+				// Table output shows the live gateway state; structured output keeps the full status.
+				row := maps.Clone(resource)
+				row["gatewayStatus"] = status["state"]
+				value = row
+			}
+		}
+	}
+	return app.printItems(value, collection, []column{
+		{title: "ID", key: "id"},
+		{title: "NAME", key: "name"},
+		{title: "TYPE", key: "type"},
+		{title: "STATE", key: "state"},
+		{title: "GATEWAY STATUS", key: "gatewayStatus"},
+	})
+}
+
 func (app *application) printIAMRole(value any, collection bool) error {
 	return app.printItems(value, collection, []column{
 		{title: "ID", key: "id"},
@@ -69,6 +90,12 @@ func (app *application) printAgent(value any, collection bool) error {
 		{title: "DESIRED STATE", key: "desiredRuntimeState"},
 		{title: "STATUS", key: "status"},
 		{title: "ACTIVE REVISION", key: "activeRevisionId"},
+	})
+}
+
+func (app *application) printRuntimeCredentials(value any) error {
+	return app.printItems(value, false, []column{
+		{title: "CONFIGURED", key: "transportConfigured"},
 	})
 }
 

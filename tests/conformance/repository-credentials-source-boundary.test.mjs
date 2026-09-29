@@ -381,6 +381,23 @@ test("credential source boundary rejects new raw capabilities in the real source
       /raw sender backends\/repository-credentials\/control-client.ts/,
     ],
     [
+      "the journal client cannot send HTTPS traffic",
+      'import { request as sendHttps } from "node:https";',
+      /unreviewed runtime import from node:https/,
+      "drivers/repo/credentials/receipt-client.ts",
+    ],
+    [
+      "the journal client is available only to its reviewed consumer",
+      'import { RepositoryReceiptClient } from "./receipt-client.ts";',
+      /raw sender drivers\/repo\/credentials\/receipt-client.ts/,
+    ],
+    [
+      "the journal listener cannot create outbound HTTP requests",
+      'import { request as rawRequest } from "node:http";',
+      /unreviewed runtime import from node:http \(request\)/,
+      "backends/repository-credentials/receipt-server.ts",
+    ],
+    [
       "registry loading cannot write files",
       'import { writeFile } from "node:fs/promises";',
       /unreviewed runtime import from node:fs\/promises/,

@@ -9,8 +9,36 @@ To deploy through the browser, see [Create and deploy Agents in the console](../
 
 ## Connect to your Installation
 
-From the root of a trusted OpenClaw Enterprise checkout, install `occ` on your
-Go binary path:
+For a published OCE version, download the binary matching your machine from
+the [GitHub Releases page](https://github.com/openclaw/openclaw-enterprise/releases).
+The assets are named `occ-v<version>-<os>-<arch>` for macOS (`darwin`) and Linux,
+on `amd64` or `arm64`. Download `SHA256SUMS` from the same release and compare
+the selected binary's SHA-256 before making it executable. Private repository
+downloads require GitHub access. For example, with the GitHub CLI:
+
+```bash
+export OCE_VERSION='v<release-version>'
+export OCC_ASSET="occ-${OCE_VERSION}-darwin-arm64" # Choose your OS and CPU.
+gh release download "$OCE_VERSION" \
+  --repo openclaw/openclaw-enterprise \
+  --pattern "$OCC_ASSET" --pattern SHA256SUMS
+expected="$(awk -v name="$OCC_ASSET" '$2 == name { print $1 }' SHA256SUMS)"
+actual="$(shasum -a 256 "$OCC_ASSET" | awk '{ print $1 }')"
+if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+  mkdir -p "$HOME/.local/bin"
+  install -m 755 "$OCC_ASSET" "$HOME/.local/bin/occ"
+  "$HOME/.local/bin/occ" --version
+else
+  printf 'OCC CLI checksum verification failed; binary not installed.\n' >&2
+fi
+```
+
+Ensure `$HOME/.local/bin` is on `PATH`. On Linux, use
+`sha256sum "$OCC_ASSET"` in place of `shasum -a 256` if `shasum` is not
+installed. The printed CLI version should match the selected release.
+
+To build from a trusted source checkout instead, run this from its root to
+install `occ` on your Go binary path:
 
 ```bash
 go install ./cmd/occ
@@ -18,6 +46,8 @@ go install ./cmd/occ
 
 Ensure that directory is on `PATH`. To use the binary inside the checkout
 instead, run `pnpm cli:build` and substitute `./bin/occ` for `occ` below.
+`occ dev up` and `occ dev down` still require a source checkout even when the
+binary came from a GitHub Release.
 
 Set the endpoint and the service-key file supplied by your administrator or
 created during [bootstrap](../reference/authentication/service-api-keys.md#retrieve-the-bootstrap-service-key):
@@ -45,138 +75,24 @@ commands:
 export OCC_NAMESPACE='<namespace-id>'
 ```
 
-Installation administrators can obtain a fail-closed fleet snapshot for a
-coordinated deployment:
+## Choose your next task
 
-```bash
-occ installation deployment-inventory --output json
-```
+<a id="create-an-agent-draft"></a>
+<a id="deploy-and-check-an-agent"></a>
+<a id="provision-integration-secrets"></a>
+<a id="manage-namespace-iam"></a>
+<a id="manage-local-development"></a>
 
-This command requires exact read access to every Namespace and Agent and exact
-deploy access to each eligible running Agent. OCC rejects the entire request if
-those checks or durable deployment-work checks cannot establish a complete
-inventory. Use the [production upgrade guide](deploy/production-upgrade.md) for
-the supported image-replacement workflow.
-
-## Create an Agent draft
-
-Save this as `configuration.json` to create a draft that will not run yet:
-
-```json
-{
-  "kind": "agent",
-  "values": {}
-}
-```
-
-If you plan to deploy now, use a complete [embedded or dedicated runtime
-Configuration](deploy/production-agents.md#configure-the-agent-runtime)
-instead. Choose a model your Installation can access and keep plaintext
-credentials out of the file.
-
-```bash
-occ configuration create --file configuration.json
-```
-
-Copy the Configuration `ID` into `agent.json`:
-
-```json
-{
-  "name": "support-agent",
-  "configurationId": "<configuration-id>",
-  "executionMode": "embedded"
-}
-```
-
-Use `dedicated` instead if you chose a Codex runtime Configuration. Create the
-Agent:
-
-```bash
-occ agent create --file agent.json
-```
-
-Save the Agent `ID`. Its `DESIRED STATE` is `stopped` and `ACTIVE REVISION` is
-`-`; no workload has started. These calls require permission to create
-Configurations and Agents in the Namespace and to read the exact Configuration.
-See [Configuration](../reference/configuration.md#create-read-update-and-delete)
-and [Agent operations](../reference/agents.md#supported-operations) for optional
-fields.
-
-## Deploy and check an Agent
-
-Complete the [Agent deployment prerequisites](deploy/production-agents.md#configure-the-agent-runtime)
-before deploying. If you created the empty Configuration above, use
-`occ configuration update '<configuration-id>' --file configuration-update.json`.
-The update body contains `values`; omit the create-only `kind` field. To update
-the Agent itself, use `occ agent update '<agent-id>' --file agent-update.json`;
-its [update body](../reference/agents.md#editable-configuration) must include
-`configurationId`.
-
-```bash
-REVISION_ID="$(occ agent deploy '<agent-id>' --output json | jq -r .id)"
-occ agent deployment-status '<agent-id>' "$REVISION_ID"
-occ agent get '<agent-id>'
-```
-
-Deployment returns an immutable revision. `deployment-status` reports the
-durable worker outcome for that revision, and `agent get` shows the desired
-state and selected revision. None of these commands reports live health or
-proves a model responded. Follow
-[Verify production workloads](deploy/production-agents.md#verify-production-workloads)
-to verify a response from this Agent on Kubernetes. If you lost the
-deploy result, check [revision history](../reference/agents/deployment.md#revisions-and-deployment)
-before retrying: each accepted request creates a revision.
-
-Run `occ agent stop '<agent-id>'` to stop the workload while retaining its
-revision history and persistent state.
-
-Run `occ agent delete '<agent-id>'` only when you intend to remove the Agent,
-its revision history, and its runtime credentials. Kubernetes also removes
-Agent-owned workspace data; Namespace-owned Configurations and Secrets survive.
-Deletion runs asynchronously. See [Agent deletion](../reference/agents.md#deletion)
-for the full cleanup behavior.
-
-## Provision integration Secrets
-
-Use Secret commands to create or replace Namespace-owned credentials used by
-Agent harness authentication or Configuration Secret bindings. The CLI sends
-protected JSON documents to OCC and prints metadata only; it never returns stored
-values.
-
-```bash
-export OCC_NAMESPACE='<namespace-id>'
-occ secret create --file slack-bot-token-secret.json
-occ secret get '<secret-id>'
-occ secret update '<secret-id>' --file replacement-secret.json
-occ secret delete '<secret-id>'
-```
-
-Bind the returned Secret references through the owning Agent or Configuration and
-grant the consuming Agent service principal exact `operate` permission before
-deployment. See [Configuration secrets and channels](../reference/configuration/secrets.md)
-for binding shape and delivery boundaries.
-
-## Manage Namespace IAM
-
-Create a Namespace Role and bind it to the Agent's returned
-`servicePrincipalId` when an Agent needs delegated access to an exact resource.
-The IAM commands require Installation administration and Namespace read access.
-
-```bash
-occ iam role create --file role.json
-occ iam access-binding create --file binding.json
-```
-
-Use the request documents in
-[Namespace IAM](../reference/authorization.md#manage-namespace-policy). Inspect
-Role permissions before reusing a Role; its name alone does not establish
-access.
-
-## Manage local development
-
-For a local Installation that can deploy an Agent, follow
-[Local Setup](quickstart.md). The [development commands](../reference/cli.md#local-development)
-explain how to choose the Kubernetes profile and what cleanup removes.
+| Task                                    | Guide                                                                                                                                                              |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Create and deploy an Agent              | [Production Agent deployment](deploy/production-agents.md), including Configuration, model credentials, and verification                                           |
+| Update a Configuration and deploy again | [Agent revisions](topics/agent-revisions.md); its CLI examples also require `jq`                                                                                   |
+| Stop or delete an Agent                 | [Agent lifecycle](topics/agent.md#how-an-agent-runs) and [deletion and cleanup](../reference/agents.md#deletion)                                                   |
+| Create or replace integration Secrets   | [Namespace Secrets](../reference/drivers/kubernetes-secret.md#create-a-namespace-owned-secret) and [Configuration bindings](../reference/configuration/secrets.md) |
+| Use a Credential Gateway                | [Credential sources](../reference/credential-sources.md), including the current OpenShell limits                                                                   |
+| Grant access to a Namespace resource    | [Namespace IAM](../reference/authorization.md#manage-namespace-policy)                                                                                             |
+| Inspect or upgrade the running fleet    | [Production image upgrades](deploy/production-upgrade.md) and the [CLI reference](../reference/cli.md)                                                             |
+| Run a local development installation    | [Local Setup](quickstart.md)                                                                                                                                       |
 
 ## Connection and credential boundaries
 

@@ -53,6 +53,9 @@ Each tenant namespace also receives:
 - A temporary Agent-only TCP/443 internet-egress exception that excludes
   private network ranges and cloud metadata addresses. Replace it with an
   approved model egress proxy before treating destination isolation as complete.
+- While a replacement is prepared beside a serving revision of the same Agent,
+  the Agent-scoped transport, model-egress, and plugin-status grants select
+  every revision of that Agent; activation narrows them to the active revision.
 
 These admission labels, quota, and limit policies apply to both driver-owned
 and operator-owned tenant namespaces. The controller namespace is created and
@@ -78,6 +81,12 @@ settings:
 - `capabilities.drop: ["ALL"]`.
 - `readOnlyRootFilesystem: true`.
 - Explicit CPU and memory requests and limits for each container.
+
+Tenant Gateway and Agent Pods that set `fsGroup: 1000` for private state
+(including the Harness workspace and node-state claims) also set
+`fsGroupChangePolicy: OnRootMismatch`. The kubelet then changes volume ownership
+only when the volume root does not already match, instead of walking every file
+on each Pod start.
 
 Tenant gateway and Agent bounds come from `resources.gateway` and
 `resources.agent` in the selected Compute Driver configuration. Controller API,
@@ -116,7 +125,7 @@ runtime verification. Profile generation and CI use the same reviewed rules;
 host installation remains operator-owned.
 
 The optional profile is for cases where `RuntimeDefault` blocks the
-user-namespace `clone`, `unshare`, `mount`, and `pivot_root` calls used by Codex `0.156.0`
+user-namespace `clone`, `unshare`, `mount`, and `pivot_root` calls used by Codex `0.158.0`
 and bubblewrap. The profile is a syscall compatibility allowlist, not the
 filesystem or network boundary. Codex and bubblewrap continue to own runtime
 filesystem enforcement, and Kubernetes NetworkPolicies plus the configured
@@ -173,11 +182,12 @@ lifecycle hooks, and runtime payload fields cannot supply `RUST_LOG`,
 `LOG_FORMAT`, `OTEL_*`, native `OPENCLAW_*` logging controls, exporter
 credentials, or remote destination settings.
 
-The Collector promotes only fixed operational event classes: reviewed OCC event
-names, gateway subsystem records under `gateway`, and Codex app-server stderr
-records under `codex_app_server`. It parses JSON records up to `32KiB`, maps
-severity explicitly, sets the remote body to the event class, and drops
-malformed, oversized, unclassified, stdout protocol, or content-bearing records.
+The bundled Collector promotes only fixed operational event classes: reviewed OCC
+event names, gateway subsystem records under `gateway`, and Codex app-server
+stderr records under `codex_app_server`. It parses JSON records up to `32KiB`,
+maps severity explicitly, keeps allowlisted attributes, and replaces retained
+bodies with the event class, stripping arbitrary content. It drops malformed,
+oversized, unclassified, unspecified-severity, and Codex stdout protocol records.
 Resource identity comes from protected Docker labels or Kubernetes Pod metadata;
 request, work, Namespace, Agent, and revision IDs remain attributes.
 

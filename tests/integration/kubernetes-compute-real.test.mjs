@@ -22,6 +22,7 @@ import {
   kubernetesConfigurationName,
 } from "../../apps/controller/src/drivers/configuration/kubernetes/index.ts";
 import { KubernetesSecretDriver } from "../../apps/controller/src/drivers/secret/kubernetes/index.ts";
+import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { createGatewayNodeEnrollment } from "../../apps/controller/src/gateway/node-enrollment-client.ts";
 import { authenticatedHeaders, signInToControllerApp } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
@@ -107,7 +108,7 @@ async function waitFor(description, operation, timeoutMs = 120_000) {
   assert.fail(`Timed out waiting for ${description}.`);
 }
 
-function provisioningRequestBody({ modelSecretRef, slackBotSecretRef }) {
+function provisioningRequestBody({ modelSecretRef, slackBotSecretRef, authMethod = "api_key" }) {
   const model = "codex/gpt-6-astra";
   return {
     requestId: `req_${randomUUID()}`,
@@ -123,7 +124,13 @@ function provisioningRequestBody({ modelSecretRef, slackBotSecretRef }) {
             models: { [model]: { agentRuntime: { id: "codex" } } },
           },
         },
-        channels: { slack: { enabled: true, botTokenEnv: "SLACK_BOT_TOKEN" } },
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+          },
+        },
       },
       secretBindings: {
         SLACK_BOT_TOKEN: {
@@ -133,7 +140,7 @@ function provisioningRequestBody({ modelSecretRef, slackBotSecretRef }) {
       },
     },
     harnessAuth: {
-      method: "api_key",
+      method: authMethod,
       source: modelSecretRef,
     },
   };
@@ -180,6 +187,15 @@ async function privateBootstrapDirectory(context) {
 }
 
 async function createProvisioningApiFixture(context, computeDriver, authentication) {
+  // Exercise real admission with Kubernetes Secrets; fixture credentials never reach Slack.
+  const originalFetch = globalThis.fetch;
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    if (String(url) === "https://slack.com/api/auth.test") {
+      assert.match(init.headers.authorization, /^Bearer xoxb-/);
+      return Response.json({ ok: true, bot_id: "B0123456789", team_id: "T0123456789" });
+    }
+    return originalFetch(url, init);
+  });
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
   let workerPool;
   const state = new PostgresPlatformState(pool);
@@ -214,7 +230,10 @@ async function createProvisioningApiFixture(context, computeDriver, authenticati
     { id: "secret-kubernetes-provisioning" },
   );
   let worker;
-  const drivers = runtimeDrivers({ computeDriver, configurationDriver, secretDriver });
+  const drivers = {
+    ...runtimeDrivers({ computeDriver, configurationDriver, secretDriver }),
+    pluginDriver: new CodexPluginDriver(),
+  };
   const app = await composePostgresDevelopment(
     {
       mode: "development",
@@ -673,6 +692,104 @@ async function assertDeniedTraffic(description, namespaceName, podName, operatio
       throw error;
     }
     assert.equal(error.code, 1, `${description} must be denied by enforced NetworkPolicies`);
+  }
+}
+
+async function assertExplicitNetworkProfile(context, namespaceName, sourcePod) {
+  const profileLabel = "openclaw.dev/network-profile";
+  assert.equal(sourcePod.metadata.labels[profileLabel], "broad-egress-v1");
+  const name = `network-profile-${randomUUID()}`;
+  const directory = await mkdtemp(join(tmpdir(), "oce-network-profile-"));
+  const manifestPath = join(directory, "pod.json");
+  // Preserve the rendered role/Agent labels and security settings. A unique app
+  // name keeps this probe outside the workload's ReplicaSet and Service selectors.
+  const spec = structuredClone(sourcePod.spec);
+  delete spec.nodeName;
+  await writeFile(
+    manifestPath,
+    JSON.stringify({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: {
+        name,
+        namespace: namespaceName,
+        labels: { ...sourcePod.metadata.labels, "app.kubernetes.io/name": name },
+      },
+      spec,
+    }),
+  );
+  context.after(async () => {
+    await kubectl("delete", "pod", name, "--namespace", namespaceName, "--ignore-not-found=true");
+    await rm(directory, { recursive: true, force: true });
+  });
+  try {
+    await kubectl("create", "-f", manifestPath);
+    await kubectl(
+      "wait",
+      "--namespace",
+      namespaceName,
+      "--for=condition=Ready",
+      `pod/${name}`,
+      "--timeout=120s",
+    );
+    const dnsOutcome = async () =>
+      JSON.parse(
+        await kubectl(
+          "exec",
+          name,
+          "--namespace",
+          namespaceName,
+          "--",
+          "node",
+          "-e",
+          `
+        const dns = require("node:dns");
+        const timer = setTimeout(() => { console.log(JSON.stringify({ resolved: false, reason: "timeout" })); process.exit(0); }, 2000);
+        dns.resolve4("kubernetes.default.svc.cluster.local", (error, addresses) => {
+          clearTimeout(timer);
+          if (error) { console.log(JSON.stringify({ resolved: false, reason: error.code })); }
+          else { console.log(JSON.stringify({ resolved: true, addresses })); }
+        });
+      `,
+        ),
+      );
+    const assertAllowed = () =>
+      waitFor("explicit broad profile DNS access", async () => (await dnsOutcome()).resolved);
+    await assertAllowed();
+    for (const profile of [undefined, "", "unrecognized-v1"]) {
+      await kubectl(
+        "label",
+        "pod",
+        name,
+        "--namespace",
+        namespaceName,
+        profile === undefined ? `${profileLabel}-` : `${profileLabel}=${profile}`,
+        "--overwrite",
+      );
+      // Policy reconciliation is asynchronous. Require a real DNS denial between
+      // successful controls on the same Pod so unavailable DNS cannot satisfy it.
+      const denied = await waitFor(`DNS denial for profile ${String(profile)}`, async () => {
+        const outcome = await dnsOutcome();
+        return outcome.resolved ? undefined : outcome;
+      });
+      assert.ok(
+        ["timeout", "ETIMEOUT", "ECONNREFUSED", "EAI_AGAIN"].includes(denied.reason),
+        JSON.stringify(denied),
+      );
+      await kubectl(
+        "label",
+        "pod",
+        name,
+        "--namespace",
+        namespaceName,
+        `${profileLabel}=broad-egress-v1`,
+        "--overwrite",
+      );
+      await assertAllowed();
+    }
+  } finally {
+    await kubectl("delete", "pod", name, "--namespace", namespaceName, "--ignore-not-found=true");
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
@@ -1227,6 +1344,7 @@ test(
     );
     const platformProbe = await resource("pod", "platform-probe", platformNamespace);
     assert.ok(firstPod && siblingPod && foreignPod && gatewayPod);
+    await assertExplicitNetworkProfile(context, owned[0], firstPod);
 
     const gatewayUrl = `http://${gatewayName(primaryAgent)}.${gatewayTargets[0]}.svc.cluster.local:8080/readyz`;
     let lastApprovedGatewayError;
@@ -2014,9 +2132,11 @@ test(
     });
     await fixture.stopWorker();
 
+    const discoveryPat = `at-kubernetes-fixture-${randomUUID()}`;
+    const rotatedPat = `at-kubernetes-rotated-${randomUUID()}`;
     const modelSecret = await fixture.request("POST", `/namespaces/${namespaceOwner.id}/secrets`, {
       name: `Provisioning model key ${randomUUID().slice(0, 8)}`,
-      value: `model-key-${randomUUID()}`,
+      value: discoveryPat,
     });
     assert.equal(modelSecret.status, 201, JSON.stringify(modelSecret.body));
     const slackBotSecret = await fixture.request(
@@ -2029,12 +2149,95 @@ test(
     );
     assert.equal(slackBotSecret.status, 201, JSON.stringify(slackBotSecret.body));
 
+    // Before creating the Agent, use the actual Kubernetes-backed PAT through the
+    // real discovery Driver; only the external provider responses are controlled.
+    const originalFetch = globalThis.fetch;
+    const observedTokens = [];
+    const provider = context.mock.method(globalThis, "fetch", async (url, init) => {
+      const address = String(url);
+      if (
+        !address.startsWith("https://auth.openai.com/") &&
+        !address.startsWith("https://chatgpt.com/backend-api/ps/")
+      ) {
+        return originalFetch(url, init);
+      }
+      observedTokens.push(init.headers.Authorization.slice("Bearer ".length));
+      if (address.includes("/whoami")) {
+        return Response.json({
+          chatgpt_account_id: "fixture-account",
+          chatgpt_account_is_fedramp: false,
+        });
+      }
+      assert.equal(init.headers["ChatGPT-Account-ID"], "fixture-account");
+      const plugin = {
+        id: "fixture-plugin",
+        name: "fixture",
+        scope: "GLOBAL",
+        status: "ENABLED",
+        installation_policy: "AVAILABLE",
+        release: {
+          display_name: "Fixture",
+          interface: {},
+          requires_local_executor: false,
+          app_ids: ["fixture-app"],
+          app_manifest: null,
+          skills: [],
+          mcp_servers: [],
+        },
+      };
+      if (address.includes("plugins/list")) {
+        return Response.json({ plugins: [plugin], pagination: { next_page_token: null } });
+      }
+      if (address.includes("plugins/fixture-plugin")) {
+        return Response.json(plugin);
+      }
+      assert.ok(address.endsWith("apps/batch"));
+      return Response.json({
+        apps: [{ id: "fixture-app", status: "ENABLED", tools: [{ name: "search" }] }],
+      });
+    });
+    const discoveryPath = `/namespaces/${namespaceOwner.id}/agents/plugins`;
+    const catalog = await fixture.request("POST", discoveryPath, {
+      secretRef: modelSecret.data.ref,
+    });
+    assert.equal(catalog.status, 200);
+    assert.equal(catalog.data.plugins[0].remoteId, "fixture-plugin");
+    const detail = await fixture.request("POST", `${discoveryPath}/details`, {
+      secretRef: modelSecret.data.ref,
+      pluginId: "fixture-plugin",
+    });
+    assert.equal(detail.status, 200);
+    assert.equal(detail.data.tools[0].id, "fixture-app/search");
+    assert.ok(observedTokens.length > 0 && observedTokens.every((token) => token === discoveryPat));
+    assert.equal(
+      (
+        await fixture.request(
+          "PATCH",
+          `/namespaces/${namespaceOwner.id}/secrets/${modelSecret.data.id}`,
+          { value: rotatedPat },
+        )
+      ).status,
+      200,
+    );
+    observedTokens.length = 0;
+    assert.equal(
+      (await fixture.request("POST", discoveryPath, { secretRef: modelSecret.data.ref })).status,
+      200,
+    );
+    assert.ok(observedTokens.length > 0 && observedTokens.every((token) => token === rotatedPat));
+    assert.doesNotMatch(
+      JSON.stringify([catalog.body, detail.body]),
+      /at-kubernetes-(fixture|rotated)-/,
+    );
+    provider.mock.restore();
+
     const body = provisioningRequestBody({
       modelSecretRef: modelSecret.data.ref,
       slackBotSecretRef: slackBotSecret.data.ref,
+      authMethod: "codex_pat",
     });
     assert.equal(
-      JSON.stringify(body).includes("model-key-"),
+      JSON.stringify(body).includes(rotatedPat),
       false,
       "provisioning must carry only saved Secret references, not Secret values",
     );
@@ -2213,6 +2416,14 @@ test(
             },
           },
     );
+    const proxyCidrs = process.env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS?.split(",")
+      .map((cidr) => cidr.trim())
+      .filter(Boolean);
+    assert.ok(
+      proxyCidrs?.length,
+      "the real diagnostics route requires the k3d API server Pod proxy source CIDR",
+    );
+    configuration.drivers.compute.configuration.network.pluginStatusProxySourceCidrs = proxyCidrs;
     for (const capability of ["configuration", "secret"]) {
       configuration.drivers[capability].configuration.authentication = {
         mode: "kubeconfig",
@@ -2525,7 +2736,7 @@ test(
       };
       const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
         kind: "agent",
-        values: boundSecret === undefined ? baseValues : missingChannelBindingValues,
+        values: baseValues,
       });
       assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
       const created = await request("POST", `/namespaces/${namespaceId}/agents`, {
@@ -2562,15 +2773,23 @@ test(
       await assertDeployDenied(namespaceId, created.data.id, `${label} before model Secret grant`);
       await grantSecretOperate(namespaceId, created.data.servicePrincipalId, secret.data.id, label);
       if (boundSecret !== undefined) {
+        // Isolate missing channel credentials from the model permission denial above.
+        const missingConfiguration = await request(
+          "PATCH",
+          `/namespaces/${namespaceId}/configurations/${configuration.data.id}`,
+          { values: missingChannelBindingValues },
+        );
+        assert.equal(missingConfiguration.status, 200, JSON.stringify(missingConfiguration.error));
         const missingBindings = await request(
           "POST",
           `/namespaces/${namespaceId}/agents/${created.data.id}/deploy`,
         );
         assert.equal(
           missingBindings.status,
-          409,
+          400,
           `${label} before channel Secret bindings: ${JSON.stringify(missingBindings.error)}`,
         );
+        assert.equal(missingBindings.error.code, "CHANNEL_CREDENTIAL_BINDING_REQUIRED");
         // This k3d fixture has no runtime.channels proxy and uses the fixture image,
         // so successful deployment proves generic API/IAM/admission/gateway Secret
         // projection. Real Slack channel runtime proof belongs to the real-runtime suite.
@@ -2642,9 +2861,11 @@ test(
     });
     const adoptedTenant = await createAgent(namespaceIds[2], "adopted-tenant");
     if (runtimeImage !== undefined) {
-      // Real runtime integration fails closed when any Agent-owned credential is absent.
+      const firstCredentialsPath = `/namespaces/${namespaceIds[0]}/agents/${first.id}/runtime-credentials`;
+      const beforeDeploy = await request("GET", firstCredentialsPath);
+      assert.equal(beforeDeploy.status, 200, JSON.stringify(beforeDeploy.error));
+      assert.deepEqual(beforeDeploy.data, { transportConfigured: false });
       for (const [namespaceId, agent] of [
-        [namespaceIds[0], first],
         [namespaceIds[0], second],
         [namespaceIds[0], boundSecretAgent],
         [namespaceIds[1], separateTenant],
@@ -2684,6 +2905,19 @@ test(
       deploy(namespaceIds[2], adoptedTenant.id),
       deploy(namespaceIds[0], boundSecretAgent.id),
     ]);
+    if (runtimeImage !== undefined) {
+      const afterDeploy = await request(
+        "GET",
+        `/namespaces/${namespaceIds[0]}/agents/${first.id}/runtime-credentials`,
+      );
+      assert.equal(afterDeploy.status, 200, JSON.stringify(afterDeploy.error));
+      assert.deepEqual(afterDeploy.data, { transportConfigured: true });
+      await resource(
+        "secret",
+        `transport-${hash(first.id)}`,
+        kubernetesGatewayNamespaceName(namespaceIds[0]),
+      );
+    }
 
     await Promise.all(
       [
@@ -2834,6 +3068,48 @@ test(
         }
       }),
     );
+
+    const deploymentPath = `/namespaces/${namespaceIds[0]}/agents/${first.id}/deployments/${admitted[0].id}`;
+    const persistedBefore = await waitFor("first revision deployment to settle", async () => {
+      const observed = await request("GET", deploymentPath);
+      assert.equal(observed.status, 200, JSON.stringify(observed.error));
+      return observed.data.status === "succeeded" ? observed.data : undefined;
+    });
+    const diagnosticsPath = `${deploymentPath}/diagnostics`;
+    const diagnostics = await request("POST", diagnosticsPath);
+    assert.equal(diagnostics.status, 200, JSON.stringify(diagnostics.error));
+    assert.equal(diagnostics.data.revisionId, admitted[0].id);
+    assert.equal(new Date(diagnostics.data.observedAt).toISOString(), diagnostics.data.observedAt);
+    assert.ok(diagnostics.data.checks.length <= 32);
+    if (runtimeImage === undefined) {
+      assert.deepEqual(
+        diagnostics.data.checks,
+        ["agent", "gateway"].map((component) => ({
+          component,
+          check: "runtime-status",
+          state: "unknown",
+          checkedAt: null,
+          code: "UNAVAILABLE",
+        })),
+        "the fixture image cannot provide current runtime checks",
+      );
+    } else {
+      const gatewayConfiguration = diagnostics.data.checks.find(
+        ({ component, check }) => component === "gateway" && check === "configuration",
+      );
+      assert.ok(gatewayConfiguration, "the real Gateway must answer its native Slack check");
+      assert.equal(
+        new Date(gatewayConfiguration.checkedAt).toISOString(),
+        gatewayConfiguration.checkedAt,
+      );
+    }
+    assert.equal(
+      (await request("POST", diagnosticsPath, undefined, { session: false })).status,
+      401,
+    );
+    const persistedAfter = await request("GET", deploymentPath);
+    assert.equal(persistedAfter.status, 200, JSON.stringify(persistedAfter.error));
+    assert.deepEqual(persistedAfter.data, persistedBefore);
 
     if (runtimeImage !== undefined) {
       const gatewayTarget = kubernetesGatewayNamespaceName(namespaceIds[0]);

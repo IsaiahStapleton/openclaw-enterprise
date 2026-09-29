@@ -7,10 +7,19 @@ import {
 import {
   createPostgresPool,
   OpenClawController,
+  PostgresHumanAuthentication,
   PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { createPostgresControllerAuth } from "../auth/index.ts";
+import {
+  betterAuthIssuer,
+  createPostgresControllerAuth,
+  type ClientAddressConfiguration,
+  type GitHubLoginConfiguration,
+  type GoogleSignInConfiguration,
+  type PreparedAuthAccount,
+} from "../auth/index.ts";
 import { createFastifyApp } from "../index.ts";
+import { SlackChannelDriver } from "../drivers/channel/slack.ts";
 import type {
   InstallationRuntimeDrivers,
   ServiceAccountDriverFactory,
@@ -19,7 +28,7 @@ import {
   initializeInstallationPresets,
   backendSummariesFromDefinitions,
 } from "./installation-config.ts";
-import { emitOccLogEvent, type OccLogger } from "../logging.ts";
+import { emitOccLogEvent, skippedUserLogFields, type OccLogger } from "../logging.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import type { NativeAdminAccessConfig } from "../gateway/native-admin.ts";
@@ -36,12 +45,17 @@ export interface ProductionConfig {
   readonly databaseUrl: string;
   readonly authSecret: string;
   readonly authBaseURL: string;
+  readonly github?: GitHubLoginConfiguration;
+  readonly google?: GoogleSignInConfiguration;
+  readonly clientAddress?: ClientAddressConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly logger?: OccLogger;
   readonly serviceAccountDriverFactory?: ServiceAccountDriverFactory;
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
   readonly gatewayApiKeyPath?: string;
+  readonly channelDirectoryProxyUrl?: string;
+  readonly channelDirectoryManagedProxyHost?: string;
   readonly nativeAdmin?: NativeAdminAccessConfig;
 }
 
@@ -55,6 +69,7 @@ export async function composeProduction(config: ProductionConfig) {
     configurationDriver,
     secretDriver,
     sandboxDriver,
+    credentialGatewayDriver,
     pluginDriver,
     repoDriver,
     createIAMDriver,
@@ -69,6 +84,13 @@ export async function composeProduction(config: ProductionConfig) {
   }
 
   const driverId = installation.drivers.iam.id;
+  if (config.github !== undefined && config.nativeAdmin?.enabled === true) {
+    throw new Error("GitHub sign-in does not support native administration.");
+  }
+  if (config.google !== undefined && config.nativeAdmin?.enabled === true) {
+    throw new Error("Google sign-in does not support native administration.");
+  }
+
   const pool = await createPostgresPool(config.databaseUrl, {
     ...(config.poolMax === undefined ? {} : { max: config.poolMax }),
   });
@@ -79,6 +101,10 @@ export async function composeProduction(config: ProductionConfig) {
     if (persistedInstallation === undefined) {
       throw new Error("The singleton Installation must be bootstrapped before production startup.");
     }
+
+    const iamState = await state.loadNativeIAMState(persistedInstallation.id);
+    validatePersistedNativeIAMState(iamState);
+    const iamDriver = createIAMDriver(state);
     const auth = await createPostgresControllerAuth({
       mode: config.mode,
       installationId: persistedInstallation.id,
@@ -88,15 +114,50 @@ export async function composeProduction(config: ProductionConfig) {
         ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
         : {}),
       pool,
+      state,
+      iamDriver,
+      ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.google === undefined ? {} : { google: config.google }),
+      ...(config.logger === undefined
+        ? {}
+        : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
+      ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
     });
-
-    const iamState = await state.loadNativeIAMState(persistedInstallation.id);
-    validatePersistedNativeIAMState(iamState);
-    const iamDriver = createIAMDriver(state);
-    const provisionAuthAccount = async (seed: AuthPrincipalSeed, auditEvent: AuditEvent) => {
+    if (
+      config.github === undefined &&
+      config.google === undefined &&
+      config.clientAddress === undefined &&
+      config.logger !== undefined
+    ) {
+      // No trusted proxy: failed password sign-ins are limited per email only, because every
+      // browser behind the ingress shares its address. api.trustedProxy adds the address lane.
+      emitOccLogEvent(config.logger, {
+        event: "authentication.sign-in-limit-warning",
+        code: "TRUSTED_PROXY_NOT_CONFIGURED",
+      });
+    }
+    if (auth.activationSkipped !== undefined && config.logger !== undefined) {
+      emitOccLogEvent(config.logger, {
+        event: "authentication.activation-warning",
+        reason: "Accounts without a Principal or exactly one password were not enrolled.",
+        ...skippedUserLogFields(auth.activationSkipped),
+      });
+    }
+    const humanAuthentication = new PostgresHumanAuthentication(
+      state,
+      persistedInstallation.id,
+      betterAuthIssuer(persistedInstallation.id),
+    );
+    const provisionAuthAccount = async (
+      seed: AuthPrincipalSeed,
+      auditEvent: AuditEvent,
+      prepared: PreparedAuthAccount,
+      external?: { readonly providerId: string; readonly subject: string },
+    ) => {
       const current = await state.loadNativeIAMState(persistedInstallation.id);
       validateAuthAccountPrincipalSeed(seed, current, persistedInstallation.id);
-      await state.appendNativeIAMPrincipal(seed, auditEvent);
+      // The account, its Principal and bindings, and its enrolment commit together.
+      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent, external);
     };
 
     const principal = iamState.identities.find((identity) => identity.kind === "principal");
@@ -153,9 +214,27 @@ export async function composeProduction(config: ProductionConfig) {
     controller.selectDriver("compute", computeDriver.id);
     controller.registerDriver(secretDriver);
     controller.selectDriver("secret", secretDriver.id);
+    {
+      const channelDriver = new SlackChannelDriver(
+        globalThis.fetch,
+        config.channelDirectoryProxyUrl,
+        {
+          managedProxyHosts:
+            config.channelDirectoryManagedProxyHost === undefined
+              ? []
+              : [config.channelDirectoryManagedProxyHost],
+        },
+      );
+      controller.registerDriver(channelDriver);
+      controller.selectDriver("channel", channelDriver.id);
+    }
     if (sandboxDriver !== undefined) {
       controller.registerDriver(sandboxDriver);
       controller.selectDriver("sandbox", sandboxDriver.id);
+    }
+    if (credentialGatewayDriver !== undefined) {
+      controller.registerDriver(credentialGatewayDriver);
+      controller.selectDriver("credential_gateway", credentialGatewayDriver.id);
     }
     controller.registerDriver(configurationDriver);
     controller.selectDriver("configuration", configurationDriver.id);
@@ -202,6 +281,9 @@ export async function composeProduction(config: ProductionConfig) {
       resolveHarness: resolveApprovedProductionHarness,
       auditSink: state.auditSink,
       backendSummaries: backendSummariesFromDefinitions(installation.backend),
+      ...(installation.observability === undefined
+        ? {}
+        : { observabilityUrl: installation.observability.url }),
       auth,
       ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,
@@ -210,6 +292,7 @@ export async function composeProduction(config: ProductionConfig) {
         installationId: persistedInstallation.id,
       },
       maxBodyBytes: 64 * 1024,
+      ...(config.clientAddress === undefined ? {} : { trustedProxies: config.clientAddress }),
       ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));

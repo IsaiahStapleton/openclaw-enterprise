@@ -1048,7 +1048,7 @@ export function createRepositoryFields(context, onChange, initial = {}) {
             },
             "Set up repository access",
           ),
-          ". You can save a draft without repositories.",
+          ". You can continue without repository access.",
         );
       } else {
         status.className = "error";
@@ -1088,6 +1088,5 @@ export function createRepositoryFields(context, onChange, initial = {}) {
     isDirty,
     isSettled,
     blocksCreate,
-    draftOnly: () => state.discovery === "draft-only",
   };
 }

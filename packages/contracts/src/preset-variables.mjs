@@ -233,6 +233,7 @@ export function validatePresetTemplate(template) {
         "backendId",
         "harnessAuth",
         "plugins",
+        "pluginApprovers",
         "repositoryAccess",
         "repositoryBindings",
         "initialWorkspaceFiles",

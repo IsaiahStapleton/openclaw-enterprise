@@ -6,6 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 import pg from "pg";
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
+import { OpenShellGateway } from "../../apps/controller/src/backends/openshell.ts";
+import { OpenShellCredentialGatewayDriver } from "../../apps/controller/src/drivers/credential-gateway/openshell.ts";
 import { OpenShellSandboxDriver } from "../../apps/controller/src/drivers/sandbox/openshell.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
@@ -25,13 +27,27 @@ async function fixture(t, configuration) {
 
 function sandboxInstallation() {
   const configuration = installation();
+  configuration.backend = [
+    {
+      id: "openshell",
+      type: "openshell",
+      configuration: {
+        serviceName: "openshell-gateway",
+        port: 50051,
+        insecureTransport: "network-policy",
+      },
+      drivers: { sandbox: "openshell-sandbox", credential_gateway: "openshell-credentials" },
+    },
+  ];
+  configuration.drivers.credential_gateway = {
+    id: "openshell-credentials",
+    configuration: { binaries: ["/app/bin/model-client"] },
+  };
   configuration.drivers.sandbox = {
     id: "openshell-sandbox",
     configuration: {
       gateway: {
         workspaceMode: "operator",
-        serviceName: "openshell-gateway",
-        port: 50051,
       },
       kubernetes: {
         runtimeClassName: "openshell-sandbox",
@@ -55,6 +71,14 @@ function sandboxInstallation() {
     },
   };
   return configuration;
+}
+
+function backendFor(gatewayClient) {
+  return {
+    id: "openshell",
+    drivers: { sandbox: "openshell-sandbox", credential_gateway: "openshell-credentials" },
+    client: new OpenShellGateway({ serviceName: "openshell-gateway" }, { gatewayClient }),
+  };
 }
 
 function workspaceGatewayClient(seed = [], events = []) {
@@ -153,12 +177,204 @@ test("startup constructs the bundled OpenShell SandboxDriver before constructing
   );
 });
 
+test("startup composes both OpenShell members from one Backend", async (t) => {
+  const createdDriver = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: await fixture(t, sandboxInstallation()) },
+  });
+
+  assert.ok(createdDriver.credentialGatewayDriver instanceof OpenShellCredentialGatewayDriver);
+  assert.equal(createdDriver.credentialGatewayDriver.id, "openshell-credentials");
+  assert.equal(createdDriver.installation.drivers.credential_gateway.implementation, "openshell");
+  assert.deepEqual(createdDriver.installation.backend[0].drivers, {
+    sandbox: createdDriver.sandboxDriver.id,
+    credential_gateway: createdDriver.credentialGatewayDriver.id,
+  });
+});
+
+test("startup rejects an OpenShell Backend whose members are not both selected", async (t) => {
+  const missingGateway = sandboxInstallation();
+  delete missingGateway.drivers.credential_gateway;
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, missingGateway) },
+    }),
+    /drivers\.credential_gateway must match the selected drivers\.credential_gateway\.id/,
+  );
+
+  const foreignSandbox = sandboxInstallation();
+  foreignSandbox.backend[0].drivers.sandbox = "another-sandbox";
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, foreignSandbox) },
+    }),
+    /drivers\.sandbox must match the selected bundled OpenShell drivers\.sandbox\.id/,
+  );
+
+  // Connection settings belong to the Backend; the Sandbox rejects them instead of ignoring them.
+  const legacyEndpoint = sandboxInstallation();
+  legacyEndpoint.drivers.sandbox.configuration.gateway.endpoint = "http://127.0.0.1:1";
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, legacyEndpoint) },
+    }),
+    /OpenShell gateway option endpoint belongs to the openshell Backend/,
+  );
+});
+
+test("startup requires protected OpenShell transport or an explicit NetworkPolicy boundary", async (t) => {
+  const load = async (configuration) =>
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+    });
+  // Credential registration sends resolved values, so plain or unauthenticated transport
+  // must be declared rather than accepted by default.
+  const undeclared = sandboxInstallation();
+  delete undeclared.backend[0].configuration.insecureTransport;
+  await assert.rejects(
+    load(undeclared),
+    /requires TLS with bearerTokenFile authentication, or insecureTransport: network-policy/,
+  );
+  // TLS alone is not enough; the gateway must also authenticate OCC.
+  const tlsOnly = sandboxInstallation();
+  tlsOnly.backend[0].configuration = { endpoint: "https://openshell-gateway.openshell.svc:8080" };
+  await assert.rejects(load(tlsOnly), /requires TLS with bearerTokenFile authentication/);
+
+  const protectedTransport = sandboxInstallation();
+  protectedTransport.backend[0].configuration = {
+    endpoint: "https://openshell-gateway.openshell.svc:8080",
+    auth: { mode: "bearerTokenFile", path: "/etc/openclaw/openshell/token" },
+  };
+  await load(protectedTransport);
+  // The declaration is only for unprotected transport, so it cannot mask a protected setup.
+  protectedTransport.backend[0].configuration.insecureTransport = "network-policy";
+  await assert.rejects(load(protectedTransport), /insecureTransport is only for unprotected/);
+
+  // Every gateway call's deadline stays within the registration fence.
+  const slow = sandboxInstallation();
+  slow.backend[0].configuration.requestTimeoutMs = 60_000;
+  await assert.rejects(load(slow), /requestTimeoutMs must be between 1000 and 30000 ms/);
+});
+
+test("OpenShell configures only the selected dedicated Harness runtime", () => {
+  const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
+    id: "openshell-sandbox",
+    implementation: "openshell",
+    backend: backendFor(workspaceGatewayClient()),
+  });
+  const configuration = {
+    agents: { defaults: { model: "openai/gpt-5" } },
+  };
+  assert.deepEqual(
+    driver.configureAgent(configuration, {
+      id: "openclaw",
+      version: "1.0.0",
+      mode: "dedicated",
+    }),
+    configuration,
+  );
+
+  const codex = driver.configureAgent(configuration, {
+    id: "codex",
+    version: "1.0.0",
+    mode: "dedicated",
+  });
+  assert.equal(codex.plugins.entries.codex.config.appServer.sandbox, "danger-full-access");
+  assert.throws(
+    () =>
+      driver.configureAgent(configuration, {
+        id: "openclaw",
+        version: "1.0.0",
+        mode: "embedded",
+      }),
+    /supports only dedicated Harness revisions/,
+  );
+});
+
+test("OpenShell provisions native OpenClaw without exposing an inbound Harness service", async () => {
+  const requests = [];
+  const gatewayClient = workspaceGatewayClient();
+  gatewayClient.createSandbox = async (request) => {
+    requests.push(request);
+    return {
+      name: request.name,
+      labels: request.labels,
+      serviceUrls: {},
+    };
+  };
+  const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
+    id: "openshell-sandbox",
+    implementation: "openshell",
+    backend: backendFor(gatewayClient),
+  });
+  const context = namespaceContext();
+  const revisionId = "rev_00000000-0000-4000-8000-000000000001";
+  const revision = {
+    id: revisionId,
+    namespaceId: context.namespace.id,
+    agentId: "agt_00000000-0000-4000-8000-000000000001",
+    harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+    sandboxDriverId: driver.id,
+  };
+  const labels = {
+    "app.kubernetes.io/managed-by": "openclaw-enterprise",
+    "openclaw.dev/agent": revision.agentId,
+    "openclaw.dev/revision": revision.id,
+    "openclaw.dev/workload-role": "agent",
+  };
+  const command = ["/usr/bin/tini", "-s", "--", "node", "-e", "worker-entrypoint"];
+  const sandbox = await driver.provisionHarness({
+    ...context,
+    revision,
+    requirements: {
+      loginMode: "api_key",
+      image: "openclaw-runtime@sha256:synthetic",
+      command,
+      serviceAccountName: "agent-native-openclaw",
+      serviceAccountToken: {
+        audience: "openclaw-enterprise",
+        expirationSeconds: 900,
+        mountPath: "/var/run/secrets/openclaw-enterprise",
+        path: "token",
+        readOnly: true,
+      },
+      workspaceMounts: [
+        {
+          claimName: "harness-workspace-native-openclaw",
+          subPath: "workspace",
+          mountPath: "/home/node/workspace",
+          readOnly: false,
+        },
+        {
+          claimName: "harness-workspace-native-openclaw",
+          subPath: "workspace-node-native-openclaw",
+          mountPath: "/home/node/.openclaw-node",
+          readOnly: false,
+        },
+      ],
+      credentialAttachments: [],
+      environment: [{ name: "TMPDIR", value: "/tmp/openclaw-native-worker" }],
+      labels,
+    },
+  });
+
+  assert.equal(sandbox.revisionId, revisionId);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].serviceExposures, []);
+  assert.deepEqual(requests[0].spec.command, command);
+  assert.deepEqual(requests[0].labels, labels);
+});
+
 test("OpenShell Namespace lifecycle creates, adopts, and deletes its exact operator Workspace", async () => {
   const gatewayClient = workspaceGatewayClient();
   const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
     id: "openshell-sandbox",
     implementation: "openshell",
-    gatewayClient,
+    backend: backendFor(gatewayClient),
   });
   const context = namespaceContext();
 
@@ -199,7 +415,7 @@ test("OpenShell operator mode owns workspace chart resources around the Workspac
   const driver = new OpenShellSandboxDriver(configuration, {
     id: "openshell-sandbox",
     implementation: "openshell",
-    gatewayClient,
+    backend: backendFor(gatewayClient),
   });
   const context = namespaceContext();
   context.kubernetes = kubernetesObjectClient(events);
@@ -238,7 +454,7 @@ test("OpenShell managed mode fails before mutating Kubernetes or the Gateway", a
   const driver = new OpenShellSandboxDriver(configuration, {
     id: "openshell-sandbox",
     implementation: "openshell",
-    gatewayClient,
+    backend: backendFor(gatewayClient),
   });
   const context = namespaceContext();
   context.kubernetes = kubernetesObjectClient(events);
@@ -266,7 +482,7 @@ test("OpenShell Namespace cleanup refuses a same-name foreign Workspace", async 
   const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
     id: "openshell-sandbox",
     implementation: "openshell",
-    gatewayClient,
+    backend: backendFor(gatewayClient),
   });
 
   await assert.rejects(driver.cleanup(context), /without exact OCC Namespace ownership/);

@@ -4,6 +4,7 @@ import type {
   InitialWorkspaceFiles,
   OpenClawConfigurationDocument,
   PluginDesiredState,
+  PluginApprovers,
   RepositoryBindingRequest,
   RepositoryAccess,
   SecretBindings,
@@ -39,6 +40,7 @@ export interface ProvisionAgentInput {
   readonly harnessAuth?: HarnessAuthBinding | null;
   readonly executionMode?: HarnessExecutionMode;
   readonly plugins?: PluginDesiredState;
+  readonly pluginApprovers?: PluginApprovers;
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
   readonly repositoryAccess?: RepositoryAccess;
 }

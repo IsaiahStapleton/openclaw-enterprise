@@ -11,27 +11,34 @@ ChatGPT service account), without a Sandbox Driver. Other combinations reject
 repository-bearing revisions. Helm's `Recreate` strategy prevents overlapping
 worker/credential-service owners.
 
-Only the repository consumer receives repository and model credentials. Dedicated
+Only the consumer receives repository and model credentials. Dedicated
 Slack tokens stay in the gateway. Repository profiles and model authentication
 are independent. [Kubernetes policies](drivers/kubernetes-compute/networking-and-isolation.md#networking)
 allow consumer access to the credential sidecar.
 
-Trusted startup loads protected configuration into the separate service process;
-backend construction and sender callbacks remain private. Session controls are
-`open`, `status`, `close`, and `shutdown`. Separate service and Git/gh artifacts
-keep signing and service modules out of the client. `SIGTERM` or `SIGINT` starts
-bounded cleanup and disposal.
+For repository-bound Codex consumers, Compute permits the exact broker hostname
+with `allow_local_binding = true` and `mode = "full"`. This disables Codex's
+additional private-address guard and permits every HTTP method at otherwise
+allowed destinations. Explicit denies, NetworkPolicy, TLS and broker authorization
+still apply. Unbound Agents retain their policy; see the
+[networking contract](drivers/kubernetes-compute/networking-and-isolation.md#networking).
+
+The separate service owns protected configuration and private sender callbacks.
+Its controls are `open`, `status`, `close`, and `shutdown`. Separate Git/gh artifacts
+exclude signing and service modules. `SIGTERM` and `SIGINT` start bounded cleanup.
 
 ## Repo Driver contract
 
 The optional `repo` capability uses `RepoDriver extends Driver`, with the bundled
 `GitHubRepoDriver`. Trusted Installation `drivers.repo` and GitHub Backend
 `drivers.repo` select the same configured Driver ID. The
-[shared contract](../../packages/contracts/src/repo.ts) exposes five operations:
+[shared contract](../../packages/contracts/src/repo.ts) exposes these operations:
 
 - `listOptions` returns Namespace-approved opaque references, names, profiles
   and optional descriptions.
 - `resolve` checks Namespace policy and returns admitted bindings and duration.
+- `checkAdmissionReady`, when provided, verifies that fresh admissions can be
+  attempted; unavailable dependencies block new attempts and worker readiness.
 - `open` returns `created` with private runtime files, `recovered` with status
   only, or `missing`. `recoverOnly` cannot create authority.
 - `status` returns the current observation or authoritative absence.
@@ -43,38 +50,36 @@ Public status contains only `sessionId`, `state`, `deadlineWallMs` and `binding`
 snapshot after complete private validation. Cleanup counters and configuration
 decoding remain private. Status cannot regenerate the closed-schema Git/gh files.
 
-`maintenanceIntervalMs` schedules worker reconciliation; it is not a measured
-withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
+`maintenanceIntervalMs` schedules worker reconciliation and retries of incomplete
+repository cleanup; it is not a measured withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
 persisted `admitted_spec.repository_credentials` retain their meaning.
 
 State derives immutable Driver, Backend, profile and grant context from the
 admitted revision. It retains original Namespace, Agent, revision, admission and
 session identities and deadlines after Agent deletion, without bearers or tokens.
 
-Agent deletion closes sessions and retires Compute. Physical deletion and live
-revision detachment require every attempt to be `disposed`. `CLOSED`, missing
-inventory and `invalidated` attempts retain cleanup Work and the deleting Agent.
-Deadlines do not settle provider cleanup. Evidence pruning and durable token
-recovery are unimplemented.
+Agent deletion retires Compute without waiting for repository-session cleanup.
+Pending, missing, unknown and `invalidated` sessions block neither deletion
+admission nor completion. Retained attempts and cleanup Work survive deletion;
+cleanup continues independently. New requests share Work by revision and purpose.
+Deletion, invalidation and elapsed deadlines do not prove disposal or provider
+revocation. Evidence pruning and durable token recovery are unimplemented.
 
-Worker restart can retain sessions and Compute material. Known closing sessions
-block same-revision replacement, including Compute repair, with retryable
-`REPOSITORY_CLEANUP_PENDING` until `DISPOSED`; Work bounds and the original
-revision deadline still apply. Missing exposed sessions are irrecoverable:
-`REPOSITORY_SESSION_RECOVERY_UNSAFE` fails the revision, queues runtime retirement
-and retains cleanup. Never-delivered openings without a recorded session ID can
-recover; known sessions require disposal before replacement. A new authorized
-revision does not settle old cleanup or replay mutations; disposal does not
-establish their outcomes.
+Worker restart can retain surviving sessions and Compute material. A broker can
+recover the original broker's committed `DISPOSED` observation; active or uncertain
+sessions without one remain unknown. Missing exposed sessions fail the revision
+and retain cleanup; closing sessions block replacement until disposal. A new
+authorized revision neither settles old cleanup nor replays Git/API mutations.
 
 ## Configuration
 
 ### Canonical platform registry
 
-The GitHub Backend selects a registry through `configuration.registryPath`;
-`drivers.repo` names its Driver. API, worker and service load the same immutable
-ConfigMap with nonsecret identity and Namespace policy for one App installation
-and multiple repositories:
+The GitHub Backend selects `configuration.registryPath` and names its Driver
+in `drivers.repo`. API, worker and
+service load the same immutable, versioned ConfigMap. The registry contains
+nonsecret identity and Namespace policy for one App installation and multiple
+repositories:
 
 ```json
 {
@@ -101,12 +106,10 @@ The registry admits at most 1,000 repositories, 128 Namespace policies per
 repository and 4,096 overall. References, numeric IDs and canonical names must be
 unique.
 
-The resolved grant fingerprint covers provider/App/installation identity,
-repository identity, maximum duration, Namespace, its complete allowed-profile
-set, optional push-ref policy, selected profile and exact permission contract.
-The service independently resolves and compares
-that fingerprint before admission. A changed policy cannot preserve an older
-grant merely by keeping the same reference.
+The grant fingerprint covers provider, App, installation, repository, maximum
+duration, Namespace, allowed profiles, optional push-ref policy, selected profile
+and permission contract. The service independently compares it before admission;
+a retained reference cannot preserve a grant after policy changes.
 
 Each Namespace policy may set an optional
 [`pushRefAllowlist`](repository-credentials/push-ref-guardrail.md) to prevent
@@ -120,31 +123,28 @@ the [installation procedure](../guides/deploy/production-installation.md).
 ### Repository options
 
 `GET /namespaces/:namespaceId/agents/repository-options` requires Agent `create`;
-the exact-Agent editing route requires `update`. Both return Namespace-approved
+the exact-Agent editing route requires `update`. Both return approved
 `repositoryRef`, `displayName`, `allowedProfiles` and optional `description`.
-`descriptionRefs` accepts at most 20 unique, comma-separated refs; the initial
-catalog requires no GitHub call. Missing descriptions or provider errors do not
-block selection. `meta.descriptionsPending` signals background work. Authorized
-discovery failure yields `503 REPOSITORY_OPTIONS_UNAVAILABLE`; no approvals yields
-`[]`; a closed Namespace yields 409. Only successful discovery
-or that explicit outage permits a fresh ordinary draft. Other failures block
-creation; editing requires successful discovery. Writes reauthorize and resolve.
+`descriptionRefs` accepts up to 20 unique, comma-separated refs;
+`meta.descriptionsPending` signals background work, and missing descriptions never
+block selection. Authorized discovery failure yields
+`503 REPOSITORY_OPTIONS_UNAVAILABLE`; no approvals yields `[]`; a closed Namespace
+yields 409. Only success or that outage permits a fresh ordinary draft; editing
+requires success. Writes reauthorize and resolve.
 
 The service rechecks approved refs and fetches metadata with a private,
-repository-scoped Metadata-read token. It validates GitHub's numeric repository ID;
-the Driver checks provider, App, installation and repository IDs before attaching it.
-Lookup shares provider capacity and token cleanup with Agent sessions. Successful
-lookups are cached for five minutes; an open picker retains text until its refs
-are requested again or it reloads. Descriptions never grant access: admission
-reauthorizes selections.
+repository-scoped Metadata-read token, validating GitHub's numeric repository ID;
+the Driver checks provider, App, installation and repository IDs. Lookups share
+provider capacity and token cleanup with sessions and are cached for five minutes.
+Descriptions never grant access.
 
 ### Profiles
 
 The Console offers **Read-only** (`git-read`) and **Contributor** (`git-full`).
-Contributor includes pushes, PRs and issue management by default.
-**Customize access** can disable issue management (`git-write`) when approved. Push and PR
-access remain bundled. Direct binding requests default to `git-write`; inherited
-access is recorded in `repositoryAccess`. All profiles include GitHub API access.
+Contributor includes pushes, PRs and issue management; **Customize access** can
+disable issue management (`git-write`). Push and PR access stay bundled. Direct
+bindings default to `git-write`; `repositoryAccess` records inheritance. All
+profiles include GitHub API access.
 
 The [access-level reference](repository-credentials/access-levels.md) defines the
 exact permissions, supported commands and GraphQL boundary. Every session selects
@@ -223,6 +223,7 @@ The trusted worker or local operator uses HTTP over a private mode-0600 Unix soc
 
 | Request                                                           | Response                                                    |
 | ----------------------------------------------------------------- | ----------------------------------------------------------- |
+| `GET /v1/capabilities`                                            | Durable admission version for the registry-backed service   |
 | `POST /v1/sessions` with `durationSeconds` and optional `profile` | Private status, client configuration and bearer once        |
 | `GET /v1/sessions/{id}`                                           | Private session and cleanup status                          |
 | `POST /v1/sessions/{id}/close`                                    | Immediate local closure status; cleanup reported separately |
@@ -235,28 +236,32 @@ no admission or close endpoint.
 lowercase UUIDv4. The CLI prints this nonsecret ID before dispatch. HTTP 201
 returns the bearer once; matching ID/duration/profile returns HTTP 200 with
 status only. Conflicts fail. Follow
-[lost-response recovery](../guides/repository-credentials.md#recover-an-admission)
+[lost-response recovery](../guides/repository-credentials/standalone-service.md#recover-an-admission)
 before explicitly requesting replacement material.
 
-Platform admission additionally requires `namespaceId`, `repositoryRef`,
-normalized `profile`, `expectedBinding` and `deadlineWallMs`. Replays must match
-all original fields. `recoverOnly: true` may return status or
-`admission-missing`, never create a session. A missing lookup fences a delayed
-first-open using that still-fresh ID. Capacity or transport failure remains an
-error, not evidence of absence.
+Registry-backed brokers advertise `durableAdmissionVersion: 1` privately. The
+worker checks it before new attempts and readiness; an unavailable or older broker
+blocks both. This does not prove journal availability, absence or disposal.
+Recovery, closure and runtime retirement do not depend on the check.
 
-Unseen IDs must be less than 60 seconds old, never future-dated. Process-local
-correlations, including tombstones, are bounded to twice the session limit;
-churn can return `overloaded`. Existing correlations retain status beyond that
-window and session deadline while cleanup is unresolved. Disposal or authoritative
-absence permits reclamation. Unknown stale IDs cannot create sessions:
-lookup returns `admission-missing`; absent-session status returns `not-found`.
-Correlations retain no recoverable bearer and do not survive restart.
+Platform admission binds `namespaceId`, `repositoryRef`, normalized `profile`,
+`expectedBinding` and `deadlineWallMs` to the persisted attempt. The worker's
+private receipt socket commits a reservation before the broker releases a bearer.
+A recovery-only lookup can durably fence a missing admission; a reservation or
+active session without a confirmed terminal receipt remains unknown. Only the
+original broker can record its exact `DISPOSED` result. Receipts contain no
+credentials and remain with attempt history. Journal failure prevents new bound
+admission and cannot establish absence or disposal.
 
-Session duration is independent of token lifetime. On-demand replacement uses
-the original grant and requires validity through the remaining exchange budget
-plus safety margin. Idle sessions need no periodic mint. The original bearer
-works throughout the session while its process and upstream authorization survive.
+Unseen IDs must be less than 60 seconds old and never future-dated. Process-local
+correlations are bounded to twice the session limit and can return `overloaded`;
+unresolved cleanup survives that window. Standalone correlations do not survive
+restart. No correlation recovers a bearer.
+
+Session duration is independent of token lifetime. Replacement uses the original
+grant and must cover the remaining exchange budget plus safety margin. Idle
+sessions need no periodic mint. The bearer works while its session process and
+upstream authorization survive.
 
 Authentication eligibility and terminal cleanup expiry are separate deadlines.
 Both use elapsed monotonic time from the original capture; delayed acquisition
@@ -291,9 +296,7 @@ other informational links remain data.
 
 Ordinary Git uses `/usr/bin/git` and native configuration. Git owns commands,
 identity, hooks, aliases, remotes, push URLs, worktrees, and user settings.
-The client does not parse Git arguments or create a temporary HOME. The operator's
-single-session launcher remains available and adds the same scoped defaults to
-stock Git.
+The client does not parse Git arguments or create a temporary HOME.
 
 For each generation, native preparation validates public manifest/session metadata,
 identities, paths and file custody, then writes private aggregate `gitconfig`.
@@ -325,12 +328,10 @@ bearer; gateway closure can deny use earlier. Local commands continue after
 expiry or with stale pins because they do not consult the helper. Generation
 pinning does not promise a command-wide snapshot across arbitrary subprocesses.
 
-Native user configuration can override these defaults, and caller-added helpers
-or credential stores can retain credentials. The feature installs no cache/store
-helper; its `store` and `erase` operations are inert. There is no whole-command
-preflight or guarantee that every request in a multi-request command fails before
-any allowed request executes. An uncertain mutation is never retried by the
-client to obtain a successful result.
+Native configuration can override these defaults, and additional helpers or
+stores can retain credentials. The installed helper's `store` and `erase` are
+inert. There is no whole-command preflight, and the client never retries an
+uncertain mutation to obtain success.
 
 The API launcher requires GitHub CLI **2.100.0**, `GH_HOST=github.com`, a gateway
 hostname with verified TLS, and HTTPS port 443. Its private `hosts.yml` uses the
