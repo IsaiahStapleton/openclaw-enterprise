@@ -58,7 +58,7 @@ const pluginCapabilities = {
 };
 const pluginSetup = {
   message:
-    "App connection status is not verified. Catalog availability does not confirm linked credentials. In ChatGPT admin, select the same workspace as this PAT and enable plugin and app access for its user or service account. For service-account plugin credentials, open Service accounts, choose the account, and configure its app connections. Workspace administrator access is required. OCE policies do not grant access or configure credentials. Reload plugins after changes.",
+    "App connection status is not verified. Catalog availability does not confirm linked credentials. In ChatGPT admin, select the same workspace as this credential and enable plugin and app access for its user or service account. For service-account plugin credentials, open Service accounts, choose the account, and configure its app connections. Workspace administrator access is required. OCE policies do not grant access or configure credentials. Reload plugins after changes.",
   links: [
     { label: "Manage workspace plugins", url: "https://chatgpt.com/admin/plugins?catalog=GLOBAL" },
     { label: "Service account credentials", url: "https://admin.openai.com/" },
@@ -1709,6 +1709,109 @@ export const scenarios = {
     ],
     description:
       "Service Accounts authentication is available with the Codex harness and uses the same fixed OpenAI model list. Switching to OpenClaw selects API-key authentication and clears the credential and model selection.",
+  },
+  createOAuth: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT OAuth before sign-in (Experimental)",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: [...form, { selector: "#agent-auth-method", value: "oauth" }],
+    description:
+      "Experimental first-deploy login for a dedicated Codex Agent. The limitations notice stays visible throughout login and recovery. The model picker remains available; credentials never enter the browser.",
+  },
+  createOAuthPending: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT device login pending (Experimental)",
+    path: create,
+    oauthPending: true,
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "oauth" },
+      click("Sign in with ChatGPT"),
+    ],
+    description:
+      "The user code and provider link are visible while authorization is pending. Cancel login removes this staged login locally.",
+  },
+  createOAuthReady: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login ready for plugin discovery (Experimental)",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "oauth" },
+      click("Sign in with ChatGPT"),
+    ],
+    description:
+      "The fixture completes login after one poll. Configure plugins uses the server-owned login reference. No access or refresh token appears in this preview.",
+    steps: [
+      "Wait for ChatGPT login ready, then open Configure plugins and add Calendar.",
+      "Choose a model and create the Agent. Deployment is simulated; the runtime token handoff is not proved here.",
+    ],
+  },
+  createOAuthDenied: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login permission denied (Experimental)",
+    path: create,
+    rules: [{ suffix: "/device-authorizations", method: "POST", status: 403 }],
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "oauth" },
+      click("Sign in with ChatGPT"),
+    ],
+    description:
+      "A denied authorization request leaves the form usable and does not create a browser credential.",
+  },
+  createOAuthError: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login exchange failed (Experimental)",
+    path: create,
+    rules: [{ suffix: "/poll", method: "POST", status: 503 }],
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "oauth" },
+      click("Sign in with ChatGPT"),
+    ],
+    description:
+      "A failed poll stops polling. Cancel the staged login and connect again; the console does not retry an uncertain exchange.",
+  },
+  createOAuthExpired: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT device login expired (Experimental)",
+    path: create,
+    oauthExpired: true,
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "oauth" },
+      click("Sign in with ChatGPT"),
+    ],
+    description:
+      "An expired device code cannot be used to create the Agent. Cancel it and sign in again.",
+  },
+  pluginsOAuthRevision: {
+    group: "Pages/Agent detail",
+    name: "Separate ChatGPT login for plugin editing (Experimental)",
+    path: `${draft}&tab=plugins`,
+    deployed: true,
+    auth: "oauth",
+    agentPlugins: JSON.parse(pluginSelections),
+    pluginCapabilities,
+    pluginDiscovery,
+    actions: [click("Sign in with ChatGPT")],
+    description:
+      "A separate configuration login enables plugin browsing while the deployed Agent retains its own credential. Saving plugin selections never replaces authentication.",
+  },
+  authOAuthReconnect: {
+    group: "Components/Credentials",
+    name: "Explicit ChatGPT credential replacement (Experimental)",
+    path: `${draft}&tab=credentials`,
+    deployed: true,
+    auth: "oauth",
+    actions: [click("Sign in with ChatGPT")],
+    description:
+      "The current Agent login is preserved by default. A completed new login only replaces the saved source when Save authentication source is chosen; deployment remains separate.",
   },
   createPatToOpenClaw: {
     group: "Pages/Create Agent",

@@ -112,6 +112,12 @@ export const CreateAnthropic = {
   name: "Anthropic with OpenClaw harness",
 };
 export const CreateCodexPat = { ...story("createCodexPat"), name: "Service Accounts" };
+export const CreateOAuth = story("createOAuth");
+export const CreateOAuthPending = story("createOAuthPending");
+export const CreateOAuthReady = story("createOAuthReady");
+export const CreateOAuthDenied = story("createOAuthDenied");
+export const CreateOAuthError = story("createOAuthError");
+export const CreateOAuthExpired = story("createOAuthExpired");
 export const CreatePatToOpenClaw = {
   ...story("createPatToOpenClaw"),
   name: "Switch from Service Accounts to OpenClaw",

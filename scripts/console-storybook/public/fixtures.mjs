@@ -64,6 +64,7 @@ export function installFixture(scenario, evidence) {
   const deployments = new Map();
   const provisioning = new Map();
   const credentials = new Map();
+  const deviceLogins = new Map();
   const files = new Map();
   const secrets = new Map();
   const stagedWorkspaceFiles = new Map();
@@ -149,7 +150,9 @@ export function installFixture(scenario, evidence) {
           ? { method: "chatgpt_service_account", serviceAccountId: "sa_demo" }
           : scenario.auth === "codex_pat"
             ? { method: "codex_pat", source: secretRef("sec_demo_service_account") }
-            : auth;
+            : scenario.auth === "oauth"
+              ? { method: "oauth", source: secretRef("sec_demo_oauth_deployed") }
+              : auth;
   let selectedRevisionId = null;
   if (scenario.candidateDeploymentStatus) {
     selectedRevisionId =
@@ -450,6 +453,44 @@ export function installFixture(scenario, evidence) {
       const [, ns, resource] = match;
       if (ns !== namespaceId) {
         return response([]);
+      }
+      const deviceLogin = resource.match(
+        /^agents(?:\/[^/]+)?\/device-authorizations(?:\/([^/]+)(\/poll)?)?$/,
+      );
+      if (deviceLogin) {
+        const [, id, poll] = deviceLogin;
+        if (!id && method === "POST") {
+          const source = secretRef(nextId("sec"));
+          const login = {
+            source,
+            status: "pending",
+            verificationUrl: "https://auth.openai.com/codex/device",
+            userCode: "DEMO-1234",
+            expiresAt: new Date(Date.now() + (scenario.oauthExpired ? -1 : 600_000)).toISOString(),
+            intervalSeconds: 1,
+          };
+          deviceLogins.set(source.id, login);
+          secrets.set(
+            source.id,
+            secretMetadata(source.id, "Codex OAuth login (Experimental, simulated)"),
+          );
+          return response(login);
+        }
+        const login = deviceLogins.get(id);
+        if (!login) {
+          return error(404);
+        }
+        if (poll && method === "POST") {
+          if (!scenario.oauthPending) {
+            login.status = "ready";
+          }
+          return response(login);
+        }
+        if (!poll && method === "DELETE") {
+          deviceLogins.delete(id);
+          secrets.delete(id);
+          return new Response(null, { status: 204 });
+        }
       }
       if (resource === "service-accounts" && method === "GET") {
         return response(accounts);

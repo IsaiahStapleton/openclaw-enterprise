@@ -30,8 +30,8 @@ Presets and edited Configuration JSON retain their settings.
    **Codex** and also offers **OpenClaw**; Anthropic currently offers only
    **OpenClaw**. **Execution mode** follows the harness: Dedicated for Codex,
    Embedded for OpenClaw.
-   With OpenAI and Codex, choose **OpenAI API key** or **Service Accounts** under
-   **Authentication method**. OpenClaw uses the selected provider's API key.
+   For Codex, choose **OpenAI API key**, **Service Accounts**, or
+   **ChatGPT OAuth (Experimental)** under **Authentication method** ([limits](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)). OpenClaw uses the selected provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
    Service Accounts, open [OpenAI admin](https://admin.openai.com/), choose your
    workspace, open **Service accounts**, and create a token with Codex scope.

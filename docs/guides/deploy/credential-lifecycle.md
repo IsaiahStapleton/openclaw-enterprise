@@ -97,12 +97,8 @@ fresh private credential storage. The normal deployment prerequisites still
 apply: configured runtime images, provisionable storage, provider connectivity,
 and access to the selected model. Readiness requires a successful native model probe.
 
-Start `POST /namespaces/:namespaceId/agents/device-authorizations` with
-`{ "harnessId": "codex" }`. Open the returned verification link, enter the
-displayed code, and complete sign-in. Poll the returned Secret ID through
-`POST /namespaces/:namespaceId/agents/device-authorizations/:secretId/poll`
-until the status is `ready`. Bind the returned `source` with `method: "oauth"`
-for dedicated Codex without a Sandbox Driver.
+Choose **ChatGPT OAuth (Experimental)** with dedicated Codex when creating an Agent. Open the
+provided verification link, enter the displayed code, and complete sign-in.
 Device authorization must be enabled for the upstream account or workspace.
 OCE stores the resulting native bundle in its Secret backend; the browser receives
 only a source reference. Use that login to search and select plugins, then create
@@ -115,10 +111,9 @@ then owns refresh. Later revisions preserve the selected source and reuse the
 current bundle on that disk. Do not edit or restore the consumed Secret's value.
 Its retained metadata identifies the owning Agent and storage.
 
-For plugin changes on an existing Agent, start another login beneath
-`/namespaces/:namespaceId/agents/:agentId/device-authorizations`. Use its
-reference as `oauthLogin` in that Agent's plugin discovery requests. This login
-requires Agent `read`/`update` plus Secret permissions. It supplies discovery without changing the deployed source. Saving
+For plugin changes on an existing Agent, connect again in the plugin editor.
+This login is scoped to that Agent and requires Agent `read`/`update` plus Secret
+permissions. It supplies discovery without changing the deployed source. Saving
 plugin selections preserves the running Agent's credential. Cancelling a login
 only discards OCE's local copy; OCE does not revoke the upstream session.
 
@@ -130,8 +125,13 @@ logins, then delete their unreferenced Secrets through the normal Secret API.
 An interrupted token exchange requires a fresh login; a controller crash during
 polling can leave the old login pending until expiry.
 
-If private storage or its credential file is lost, start a new Agent-scoped login,
-update its `harnessAuth` to the new source, and deploy. An explicit replacement
+Wait for **Discard staged login** to finish before choosing **Create Agent** or
+**Save authentication source**. Those controls currently remain available during
+cancellation; submitting immediately can save a cancelled source that fails
+at deployment. Coordinating these controls is deferred beyond the first-deploy MVP.
+
+If private storage or its credential file is lost, use the Agent credential
+editor to connect again, save the new source, and deploy. An explicit replacement
 source installs a new bundle after the previous workload stops. An unchanged
 source can never reseed a missing bundle. Provider revocation also requires
 reconnecting. Ordinary revision changes do not need another runtime login.
