@@ -5332,7 +5332,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Begin deletion of an empty Installation-owned Namespace",
+        "summary": "Begin or retry deletion of an empty Installation-owned Namespace",
         "tags": ["Namespaces"],
         "x-openclaw-permissions": [
           { "action": "delete", "resourceKind": "namespace", "scope": "requested" }

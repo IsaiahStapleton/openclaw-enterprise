@@ -3529,6 +3529,103 @@ test(
 );
 
 test(
+  "repeating Namespace deletion recovers a teardown that exceeded its convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const namespace = {
+      id: `ns_${randomUUID()}`,
+      name: `delete-exhausted-${randomUUID()}`,
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    await fixture.state.transact((unit) => unit.namespaces.createNamespace(namespace));
+    // A stuck finalizer keeps the Namespace terminating past the deadline.
+    let terminating = true;
+    let deleteAttempts = 0;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async deleteNamespace(target) {
+          assert.equal(target.id, namespace.id);
+          deleteAttempts += 1;
+          return { namespaceId: target.id, namespaceDeleted: !terminating };
+        },
+      },
+      () => {},
+      1,
+    );
+    const deletion = {
+      id: namespace.id,
+      idempotencyKey: `namespace:${namespace.id}:reconcile:deleted`,
+    };
+    const observe = () =>
+      fixture.state.read((view) => view.operations.findWork(deletion.idempotencyKey));
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(deletion, "failed_permanent");
+    const exhausted = await observe();
+    assert.equal(exhausted.reasonCode, "CONVERGENCE_DEADLINE_EXCEEDED");
+    assert.equal(deleteAttempts, 1);
+    const stranded = await fixture.state.read((view) =>
+      view.namespaces.findNamespace(namespace.id),
+    );
+    assert.equal(stranded.status, "deleting");
+
+    // A rejected caller cannot replenish the worker's attempt budget.
+    await assert.rejects(
+      fixture.controller.deleteNamespace(`unprivileged-${randomUUID()}`, namespace.id),
+    );
+    assert.deepEqual(await observe(), exhausted);
+
+    // Retrying before the teardown is repaired keeps the original deadline and
+    // fails again after one pass instead of looping.
+    const repeated = await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    assert.equal(repeated.status, "deleting");
+    const retried = await observe();
+    assert.ok(
+      ["queued", "claimed"].includes(retried.state),
+      "authorized repeated DELETE must requeue the failed Namespace teardown",
+    );
+    assert.equal(retried.idempotencyKey, exhausted.idempotencyKey);
+    assert.equal(retried.actorId, exhausted.actorId);
+    assert.equal(retried.reasonCode, undefined);
+    await waitFor("unrepaired retry to fail again", async () => {
+      const work = await observe();
+      return deleteAttempts === 2 && work.state === "failed_permanent" ? work : undefined;
+    });
+
+    terminating = false;
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(deletion, "succeeded");
+    assert.equal(deleteAttempts, 3);
+    assert.equal(
+      await fixture.state.read((view) => view.namespaces.findNamespace(namespace.id)),
+      undefined,
+    );
+    const { rows: retryAudit } = await fixture.observerPool.query(
+      `SELECT actor_id AS "actorId", outcome, details FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.namespaces.delete.retry'
+       ORDER BY occurred_at, id`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      retryAudit.map(({ actorId, outcome, details }) => ({
+        actorId,
+        outcome,
+        workId: details.workId,
+        previousReasonCode: details.previousReasonCode,
+      })),
+      Array.from({ length: 2 }, () => ({
+        actorId: fixture.actor.id,
+        outcome: "success",
+        workId: deletion.idempotencyKey,
+        previousReasonCode: "CONVERGENCE_DEADLINE_EXCEEDED",
+      })),
+    );
+  },
+);
+
+test(
   "Agent deletion fails closed when a credential-provisioning Driver cannot delete credentials",
   requiresPostgres,
   async (context) => {

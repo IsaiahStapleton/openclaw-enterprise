@@ -335,7 +335,8 @@ Teardown retries are bounded. After permanent failure or exhaustion, the Agent
 stays `deleting`. Once the cause is corrected, the initiating caller can repeat
 DELETE to replenish the attempt budget. OCC and the worker recheck permission;
 another actor cannot take over. Work identity and prior failure audits remain,
-and the retry adds an audit event. This recovery covers Agent deletion only.
+and the retry adds an audit event. Namespace deletion has the same
+[recovery](namespaces.md#failure-semantics-and-limitations).
 
 ## Editable configuration
 

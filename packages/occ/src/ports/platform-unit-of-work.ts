@@ -140,6 +140,7 @@ export function bindPlatformUnitOfWork(
       "findWork",
       "findWorkAttempt",
       "retryFailedAgentDeletion",
+      "retryFailedNamespaceDeletion",
     ]),
   });
 }
