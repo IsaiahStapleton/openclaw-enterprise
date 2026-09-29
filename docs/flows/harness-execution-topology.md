@@ -210,8 +210,8 @@ Kubernetes gateways in both modes mount their own persistent SQLite and media
 directories. Embedded gateways also retain their attested default workspace on
 the same private claim so continued turns survive Pod replacement. Dedicated
 Codex and dedicated OpenClaw receive the Harness-only workspace claim. The
-OpenClaw node identity uses a revision-specific subdirectory on that claim, so
-Pod replacement reuses its paired identity and workspace. The gateway's nested Codex home remains
+OpenClaw node identity uses an Agent-scoped subdirectory on that claim, so
+Pod and revision replacement reuse its paired device. The gateway's nested Codex home remains
 ephemeral. The driver creates separate Harness and gateway claims before
 their consuming Pods and relies on workload readiness instead of waiting for
 `Bound`, which would deadlock `WaitForFirstConsumer` storage classes. A nonroot

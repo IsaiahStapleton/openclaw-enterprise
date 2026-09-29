@@ -2139,6 +2139,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       // stop, when no gateway remains to distinguish it from final teardown.
       await this.deleteGatewayPrivateStateClaim(context.ownership, context.namespace);
       await this.deleteHarnessWorkspaceClaim(context.ownership, context.namespace);
+      await this.deleteWorkspaceNodes(agentId, context.ownership, context.namespace);
       const setupName = this.workspaceSetupSecretName(binding.agent.id);
       const setup = await this.getOwned("Secret", setupName, context.namespace, context.ownership);
       if (setup !== undefined) {
@@ -3860,7 +3861,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     await this.lifecycle.beforeWorkloadStop(revision);
     await this.shutdownRevisionRuntime(revision, namespace);
-    await this.retireWorkspaceNode(revision, namespace);
     await this.removeRetiredGateway(revision, namespace);
     if (revision.repositoryCredentials !== undefined) {
       await this.waitForRevisionPodsToTerminate(
@@ -5894,38 +5894,32 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
-  private workspaceNodeName(revision: AgentRevision): string {
-    return `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(revision.id, 12)}`;
+  // Node identity belongs to the Agent and its Harness kind, not the revision.
+  // OpenClaw never rewrites a session's recorded device, so a replacement must
+  // reconnect as the same device. Dedicated predecessors are stopped, and their
+  // Pods gone, before a successor is prepared, so one Harness holds it at a time.
+  private workspaceNodeName(revision: {
+    readonly agentId: string;
+    readonly harness: { readonly id: string };
+  }): string {
+    return `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(`harness:${revision.harness.id}`, 12)}`;
   }
 
-  private async retireWorkspaceNode(
-    revision: AgentRevision,
+  private workspaceNodeOwnership(revision: AgentRevision): Ownership {
+    return { namespaceId: revision.namespaceId, agentId: revision.agentId };
+  }
+
+  private async deleteWorkspaceNodes(
+    agentId: string,
+    ownership: Ownership,
     namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
-    if (
-      this.nodeEnrollment === undefined ||
-      this.options.runtime === undefined ||
-      this.options.gatewayRouting === undefined ||
-      revision.harness.mode !== "dedicated"
-    ) {
-      return;
-    }
-    const ownership = this.pluginRuntimeOwnership(revision);
-    const name = this.workspaceNodeName(revision);
-    const secret = await this.getOwned("Secret", name, namespace, ownership);
-    // The node's saved identity stays on the Harness claim until Agent deletion.
-    // Each revision mounts only its own subdirectory.
-    if (secret !== undefined) {
-      const uid = required(secret.metadata.uid, "Workspace node Secret UID");
-      const clients = await this.clients(namespace.plane);
-      await this.request(
-        () =>
-          clients.core.deleteNamespacedSecret({
-            name,
-            namespace: namespace.name,
-            body: { preconditions: { uid } },
-          }),
-        { mutating: true },
+    for (const id of ["codex", "openclaw"] as const) {
+      await this.deleteOwnedNamespacedResource(
+        "Secret",
+        this.workspaceNodeName({ agentId, harness: { id } }),
+        ownership,
+        namespace,
       );
     }
   }
@@ -5940,14 +5934,24 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return undefined;
     }
     const name = this.workspaceNodeName(revision);
-    const ownership = this.pluginRuntimeOwnership(revision);
+    const ownership = this.workspaceNodeOwnership(revision);
     const namespaceOwnership = { namespaceId: revision.namespaceId };
     await this.reconcile(
       this.workspaceNodeNetworkPolicy(namespaceOwnership, namespace),
       namespaceOwnership,
       namespace,
     );
-    const existing = await this.getOwned("Secret", name, namespace, ownership);
+    let existing = await this.getOwned("Secret", name, namespace, ownership);
+    if (
+      existing !== undefined &&
+      !existing.data?.deviceId &&
+      Number(Buffer.from(existing.data?.expiresAtMs ?? "", "base64").toString("utf8")) <= Date.now()
+    ) {
+      // An identity outlives revisions, so replace a setup that expired unredeemed.
+      // The predecessor that received it is already stopped.
+      await this.deleteOwnedNamespacedResource("Secret", name, ownership, namespace);
+      existing = undefined;
+    }
     if (existing === undefined) {
       const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
       const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
@@ -5965,7 +5969,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       const setup = await enrollment.createSetup(url, `${url}/node`, this.operationSignal());
       const clients = await this.clients(namespace.plane);
       // Persist before launching. An uncertain create is not replayed here; the
-      // next reconciliation reads the exact revision-owned Secret first.
+      // next reconciliation reads the exact Agent-owned Secret first.
       await this.request(
         () =>
           clients.core.createNamespacedSecret({
@@ -6065,8 +6069,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
     (initialization.args as string[])[0] += `
 mkdirSync(${JSON.stringify(nodeStatePath)}, { recursive: true, mode: 0o700 });
 chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
-    // Reuse Harness storage outside the project directory. Revision-specific
-    // subpaths preserve restart identity without sharing another node's token.
+    // Reuse Harness storage outside the project directory. The Agent-scoped
+    // subpath preserves node identity across Pod and AgentRevision replacement.
     (container.volumeMounts as V1VolumeMount[]).push({
       name: NODE_STATE_VOLUME,
       mountPath: NODE_STATE_PATH,
@@ -6092,7 +6096,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       "Secret",
       this.workspaceNodeName(revision),
       namespace,
-      this.pluginRuntimeOwnership(revision),
+      this.workspaceNodeOwnership(revision),
     );
     const deviceId = Buffer.from(secret?.data?.deviceId ?? "", "base64").toString("utf8");
     return deviceId || undefined;
@@ -6112,7 +6116,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       "Secret",
       name,
       namespace,
-      this.pluginRuntimeOwnership(revision),
+      this.workspaceNodeOwnership(revision),
     );
     if (secret === undefined) {
       return false;
@@ -6303,7 +6307,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         mount.readOnly !== false
       ) {
         throw new ConfigurationFailure(
-          "Harness node state must preserve its revision directory on the Harness claim.",
+          "Harness node state must preserve its Agent node directory on the Harness claim.",
         );
       }
       workspaceMounts.push({

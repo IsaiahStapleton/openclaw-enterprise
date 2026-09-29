@@ -105,13 +105,13 @@ node; runtime upgrades use the operator-selected image and ordinary redeployment
 Each dedicated Agent receives a `40Gi` `ReadWriteOnce` (RWO) filesystem claim
 from the default StorageClass, mounted only by its Harness:
 
-| Subpath                                       | Harness mount                        |
-| --------------------------------------------- | ------------------------------------ |
-| `workspace`                                   | `/home/node/workspace`               |
-| `generated-images`                            | `/home/node/.codex/generated_images` |
-| `workspace-node-<agent-hash>-<revision-hash>` | `/home/node/.openclaw-node`          |
+| Subpath                                      | Harness mount                        |
+| -------------------------------------------- | ------------------------------------ |
+| `workspace`                                  | `/home/node/workspace`               |
+| `generated-images`                           | `/home/node/.codex/generated_images` |
+| `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
 
-The revision-specific directory retains file-node identity across Pod replacement.
+This directory keeps node identity across Pod and revision replacement.
 Sessions stay on the private Gateway claim. Selected generated-image bytes return
 through the Codex remote-media reader; there is no shared image mount. Each image
 initializes its own bundled/plugin assets instead of mounting shared Skill trees.

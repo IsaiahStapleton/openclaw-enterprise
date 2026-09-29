@@ -331,7 +331,7 @@ test("Kubernetes namespace names are deterministic, DNS-safe, distinct, and Open
   assert.notEqual(kubernetesNamespaceName("Team A"), kubernetesNamespaceName("Team-A"));
 });
 
-test("retiring node enrollment deletes only its revision Secret and preserves Harness storage", async () => {
+test("workspace node identity is Agent-scoped and only Agent deletion removes it", async () => {
   const driver = new KubernetesComputeDriver(
     routedOptions({
       runtime: {
@@ -342,63 +342,150 @@ test("retiring node enrollment deletes only its revision Secret and preserves Ha
     { nodeEnrollment: {} },
   );
   const revision = routedRevision(driver);
+  const replacement = { ...revision, id: "revision-routed-2", revision: 2 };
+  // OpenClaw keeps each session on its recorded device, so a replacement
+  // AgentRevision must reconnect as the same node rather than enroll a new one.
+  assert.equal(driver.workspaceNodeName(replacement), driver.workspaceNodeName(revision));
+  assert.deepEqual(
+    driver.workspaceNodeOwnership(replacement),
+    driver.workspaceNodeOwnership(revision),
+  );
+  assert.equal(driver.workspaceNodeOwnership(revision).revisionId, undefined);
+  // A Harness change does not inherit another Harness kind's node.
+  assert.notEqual(
+    driver.workspaceNodeName({ ...revision, harness: { ...revision.harness, id: "codex" } }),
+    driver.workspaceNodeName({ ...revision, harness: { ...revision.harness, id: "openclaw" } }),
+  );
   const namespace = kubernetesNamespaceName(revision.namespaceId);
-  const secret = {
-    ...driver.manifest(
-      "v1",
-      "Secret",
-      driver.workspaceNodeName(revision),
-      driver.pluginRuntimeOwnership(revision),
-      { name: namespace, plane: "execution" },
-    ),
-    type: "Opaque",
-  };
-  secret.metadata.uid = "node-enrollment-uid";
-  let observedSecret = secret;
+  const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+  const secrets = new Map(
+    ["codex", "openclaw"].map((id, index) => {
+      const name = driver.workspaceNodeName({ ...revision, harness: { id } });
+      const secret = {
+        ...driver.manifest("v1", "Secret", name, ownership, {
+          name: namespace,
+          plane: "execution",
+        }),
+        type: "Opaque",
+      };
+      secret.metadata.uid = `node-enrollment-uid-${index}`;
+      return [name, secret];
+    }),
+  );
   const deleted = [];
-  // The transport exposes only Secret operations: retiring a revision must
-  // leave the Harness claim (including other revisions' files) intact.
   driver.apiClients = Promise.resolve({
     core: {
-      async readNamespacedSecret() {
-        return structuredClone(observedSecret);
+      async readNamespacedSecret({ name }) {
+        if (!secrets.has(name)) {
+          throw Object.assign(new Error("not found"), { statusCode: 404 });
+        }
+        return structuredClone(secrets.get(name));
       },
       async deleteNamespacedSecret(request) {
-        deleted.push(["secret", request]);
+        deleted.push(request);
       },
     },
   });
-  await driver.retireWorkspaceNode(revision, { name: namespace, plane: "execution" });
-  assert.deepEqual(deleted, [
-    [
-      "secret",
-      {
-        name: secret.metadata.name,
-        namespace,
-        body: { preconditions: { uid: "node-enrollment-uid" } },
-      },
-    ],
-  ]);
+  assert.equal(driver.retireWorkspaceNode, undefined);
+  await driver.deleteWorkspaceNodes(revision.agentId, ownership, {
+    name: namespace,
+    plane: "execution",
+  });
+  assert.deepEqual(
+    deleted,
+    [...secrets.values()].map((secret) => ({
+      name: secret.metadata.name,
+      namespace,
+      body: { preconditions: { uid: secret.metadata.uid } },
+    })),
+  );
   deleted.length = 0;
-  const other = { ...revision, id: "another-revision" };
-  observedSecret = {
-    ...secret,
-    metadata: {
-      ...secret.metadata,
-      ...driver.manifest(
-        "v1",
-        "Secret",
-        secret.metadata.name,
-        driver.pluginRuntimeOwnership(other),
-        { name: namespace, plane: "execution" },
-      ).metadata,
-    },
-  };
+  const foreign = { ...ownership, agentId: "another-agent" };
+  for (const [name, secret] of secrets) {
+    secrets.set(name, {
+      ...secret,
+      metadata: {
+        ...secret.metadata,
+        ...driver.manifest("v1", "Secret", name, foreign, { name: namespace, plane: "execution" })
+          .metadata,
+      },
+    });
+  }
   await assert.rejects(
-    driver.retireWorkspaceNode(revision, { name: namespace, plane: "execution" }),
-    /ownership|another|revision|Refusing/i,
+    driver.deleteWorkspaceNodes(revision.agentId, ownership, {
+      name: namespace,
+      plane: "execution",
+    }),
+    /Refusing unowned/,
   );
   assert.deepEqual(deleted, []);
+});
+
+test("an expired unredeemed workspace node setup is replaced; an enrolled identity is kept", async () => {
+  const setups = [];
+  const driver = new KubernetesComputeDriver(
+    routedOptions({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+    {
+      nodeEnrollment: {
+        async createSetup() {
+          setups.push("setup");
+          return { setupId: "setup-2", setupCode: "code-2", expiresAtMs: Date.now() + 60_000 };
+        },
+      },
+    },
+  );
+  const revision = routedRevision(driver);
+  const namespace = { name: kubernetesNamespaceName(revision.namespaceId), plane: "execution" };
+  const name = driver.workspaceNodeName(revision);
+  const encode = (value) => Buffer.from(value, "utf8").toString("base64");
+  let secret = {
+    ...driver.manifest("v1", "Secret", name, driver.workspaceNodeOwnership(revision), namespace),
+    type: "Opaque",
+    data: { setupId: encode("setup-1"), setupCode: encode("code-1"), expiresAtMs: encode("1") },
+  };
+  secret.metadata.uid = "expired-uid";
+  const writes = [];
+  driver.reconcile = async () => {};
+  driver.gatewayReady = async () => true;
+  driver.apiClients = Promise.resolve({
+    core: {
+      async readNamespacedSecret() {
+        if (secret === undefined) {
+          throw Object.assign(new Error("not found"), { statusCode: 404 });
+        }
+        return structuredClone(secret);
+      },
+      async deleteNamespacedSecret(request) {
+        writes.push(["delete", request.name, request.body.preconditions.uid]);
+        secret = undefined;
+      },
+      async createNamespacedSecret(request) {
+        writes.push(["create", request.body.metadata.name, request.body.stringData.setupId]);
+      },
+    },
+  });
+  assert.deepEqual(await driver.prepareWorkspaceNode(revision, namespace), { name });
+  assert.deepEqual(writes, [
+    ["delete", name, "expired-uid"],
+    ["create", name, "setup-2"],
+  ]);
+  assert.equal(setups.length, 1);
+  writes.length = 0;
+  secret = {
+    ...driver.manifest("v1", "Secret", name, driver.workspaceNodeOwnership(revision), namespace),
+    type: "Opaque",
+    data: { deviceId: encode("a".repeat(64)), expiresAtMs: encode("1") },
+  };
+  secret.metadata.uid = "enrolled-uid";
+  const replacement = { ...revision, id: "revision-routed-2", revision: 2 };
+  assert.deepEqual(await driver.prepareWorkspaceNode(replacement, namespace), { name });
+  assert.deepEqual(writes, []);
+  assert.equal(setups.length, 1);
 });
 
 test("dedicated runtime rejects missing workspace transport before cluster access", async () => {
@@ -509,7 +596,7 @@ test("activation refuses a missing or foreign workspace node before changing the
       "v1",
       "Secret",
       driver.workspaceNodeName(revision),
-      driver.pluginRuntimeOwnership({ ...revision, id: "previous-revision" }),
+      { namespaceId: revision.namespaceId, agentId: "another-agent" },
       { name: namespace, plane: "execution" },
     ),
     data: { deviceId: Buffer.from("previous-device").toString("base64") },
@@ -6483,9 +6570,14 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
   for (const directory of ["workspace", "generated-images"]) {
     assert.equal(initialState.args[0].includes(`/harness-workspace-state/${directory}`), true);
   }
-  // Pod replacement keeps node credentials; a new revision receives a different
+  // Pod and AgentRevision replacement keep node credentials in one Agent
   // directory on the same Harness claim, outside task files and Gateway state.
-  const revision = { agentId: ownership.agentId, id: "revision-node-state", configuration: {} };
+  const revision = {
+    agentId: ownership.agentId,
+    id: "revision-node-state",
+    harness: { id: "openclaw", mode: "dedicated" },
+    configuration: {},
+  };
   const withNode = (candidate) => {
     const workload = structuredClone(harness);
     driver.addWorkspaceNode(workload, driver.workspaceNodeName(candidate), undefined, candidate);
@@ -6511,9 +6603,10 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
   assert.equal(node.readOnly, false);
   assert.equal(node.subPath.includes("/"), false);
   assert.deepEqual(withNode(revision), mounts);
-  const replacement = withNode({ ...revision, id: "replacement-node-state" });
-  assert.notEqual(replacement.at(-1).subPath, node.subPath);
-  assert.deepEqual(replacement.slice(0, -1), mounts.slice(0, -1));
+  assert.deepEqual(withNode({ ...revision, id: "replacement-node-state" }), mounts);
+  const otherHarness = withNode({ ...revision, harness: { id: "codex", mode: "dedicated" } });
+  assert.notEqual(otherHarness.at(-1).subPath, node.subPath);
+  assert.deepEqual(otherHarness.slice(0, -1), mounts.slice(0, -1));
 });
 
 test("runtime node selector schedules gateways and their private-state initialization together", () => {

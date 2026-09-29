@@ -197,9 +197,9 @@ The next reconciliation attaches the node to the Harness; its Deployment uses
 - Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
   `dir.list`, `workspace.memory`, and `workspace.skills`. Gateway admits these
   commands before pairing, preserving explicit denies.
-- The Harness PVC stores revision-specific identity at `/home/node/.openclaw-node`.
-  The nonroot private-state initializer creates it at `0700`; Pod replacement
-  reuses it. Retirement deletes the enrollment Secret; PVC deletion removes identity.
+- The Harness PVC stores Agent-scoped identity at `/home/node/.openclaw-node`.
+  The nonroot private-state initializer creates it at `0700`; replacement
+  revisions reuse it. Agent deletion removes the enrollment Secret and identity.
 - `AGENT_WITH_NODE_ENTRYPOINT` runs native `setup --baseline` before supervising
   Codex and the node under `tini`. It passes admitted bootstrap options, preserves
   existing edits, and stops on setup failure. Only the node receives its setup
