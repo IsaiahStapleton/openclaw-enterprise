@@ -159,6 +159,7 @@ test(
     assert.doesNotMatch(sessionCookie, /; Domain=/i);
     plantedCookie = sessionCookie.split(";")[0];
     browser = await chromium.launch({
+      chromiumSandbox: true,
       ...(process.env.OCC_TEST_BROWSER_EXECUTABLE
         ? { executablePath: process.env.OCC_TEST_BROWSER_EXECUTABLE }
         : {}),

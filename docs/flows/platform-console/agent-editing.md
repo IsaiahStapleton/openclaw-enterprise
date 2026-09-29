@@ -1,16 +1,15 @@
 ---
 created: 2026-09-09
-updated: 2026-09-27
-last_updated_session: 01a0e4d1-c52a-7231-9d1f-d2ceadb556d1
+updated: 2026-09-29
+last_updated_session: 01a0eb0e-dbc1-78d1-91b0-ea91ee87c00f
 ---
 
 # Console Agent editing and runtime requests
 
 ## Overview
 
-Trace authorized Agent detail requests for draft edits, credentials, workspace
-files, stopping, and deletion. The trace starts with exact Agent selection and
-ends with the API response or Agents list after confirmed deletion. See the
+Trace authorized Agent detail edits, credentials, workspace, stopping, and deletion
+from exact Agent selection through API response or confirmed deletion. See the
 [parent flow](../platform-console.md).
 
 ## Entry Points
@@ -65,18 +64,15 @@ graph TD
 
 `apps/controller/src/console/agents/detail.mjs:renderAgentDetail`
 
-The detail page reads the Agent, readable revisions, and current Configuration
+The page reads Agent, readable revisions, and current Configuration
 (`revision=draft`) or immutable AgentRevision (`revision=<id>`).
-**Current version** uses `activeRevisionId` regardless of the viewed version.
-**View version vN** opens read-only details without changing selection.
-**Deployment activity** reads the most recent visible version's persisted status;
-milestones project `queued`, `running`, `succeeded`, or `failed`, not live
-health. The viewed version shows its own result. **Refresh deployment** rereads
-activity and Agent selection.
-**Current observations** runs exact-version diagnostics only on demand. Its
-timestamped `succeeded`, `failed`, or `unknown` checks do not change deployment
-status. The bodyless POST requires Agent `read` and `operate` plus exact
-AgentRevision `read`.
+**Current version** uses `activeRevisionId`; **View version vN** opens read-only
+details without activating it. **Deployment activity** shows the newest readable
+version's persisted `queued`, `running`, `succeeded`, or `failed` status, not live
+health. Viewed versions show their own results. **Refresh deployment** rereads
+activity and selection. **Current observations** requests timestamped
+`succeeded`, `failed`, or `unknown` diagnostics without changing deployment status.
+Its bodyless POST requires Agent `read`/`operate` and exact AgentRevision `read`.
 **Create new version** opens the saved draft; **Deploy new version** admits its
 Configuration and Agent plugin selections. **Edit current Configuration** does
 not copy historical values. Stop and deletion target the Agent.
@@ -86,24 +82,27 @@ object to the exact Namespace Configuration, preserving `secretBindings`.
 It rereads Agent and Configuration, rejecting changed ID or generation.
 Writes can race after these reads; the API owns authorization and generation.
 
+**Enable Gateway password access** stages `gateway.auth.password` referencing
+`OPENCLAW_GATEWAY_PASSWORD` through this editor. Other settings and Secret bindings
+remain unchanged; Cancel discards the edit. Saving leaves admitted versions
+unchanged. On deployment, Kubernetes `gatewayConfiguration` detects the reference;
+`deployment` delivers the generated password environment variable.
+
 Saving reloads the draft without changing admitted snapshots. Invalid input,
 denial, and stale drafts retain editor text. Uncertain saves require readback.
 Unsaved edits block deployment; pending saves block tab and version changes.
 
-The **Plugins** tab renders Agent selections with
-`apps/controller/src/console/agents/plugin-fields.mjs:createPluginFields`.
-**Save plugin selections** PATCHes the Agent map without changing Configuration
-or admitted revisions. The Driver validates policy; deployment freezes the map.
-Admitted revisions are read-only. See the
+`agents/plugin-fields.mjs:createPluginFields` renders **Plugins**.
+**Save plugin selections** PATCHes the Agent map, preserving Configuration and
+admitted revisions. Driver validation precedes deployment's immutable snapshot. See the
 [plugin deployment flow](../agent-plugins.md).
 
-Before deployment, the browser rereads the Agent and current Configuration. It
-requires harness authentication and Slack Secret bindings, and blocks Teams.
-Changed draft associations, generations, authentication, or plugin selections
-require refresh. A snapshot view still deploys current saved settings. Failed
-reads send no bodyless Agent deploy POST; success opens the returned revision.
-An uncertain POST requires revision-history readback before retry. OCC provisions
-first-time transport credentials below. Browser reads are not atomic with admission.
+Deployment rereads Agent and Configuration, requires harness authentication and
+Slack bindings, and blocks Teams. Changed association, generation, authentication,
+or plugins require refresh. Snapshot views deploy current settings. Failed reads
+send no bodyless deploy POST; success opens the revision. Uncertain POSTs require
+history readback before retry. OCC provisions initial transport credentials;
+browser reads are not atomic with admission.
 
 `apps/controller/src/console/drafts.mjs:createDraftStore` holds document-local drafts.
 `console.mjs:resetReads` and `detail.mjs:renderTab` capture fields before teardown,
@@ -113,10 +112,9 @@ or URLs. Configuration, authentication, and channel baselines prevent stale save
 channel snapshots include controls and staged Secret metadata. Save and Cancel
 clear captures; pending saves retain recovery guards.
 
-`apps/controller/src/console/dom.mjs:dismissOnBackdrop` requires both press and
-click outside the topmost editor. Its `cancel` event follows Escape's cleanup:
-discard channel drafts, clear Secret inputs, retain plugin selections. Pending
-channel saves and Secret creation prevent dismissal.
+`dom.mjs:dismissOnBackdrop` requires press and click outside the topmost editor.
+Like Escape, cancellation discards channel drafts, clears Secret inputs, and
+retains plugin selections. Pending channel saves and Secret creation prevent dismissal.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders Slack settings;
 only **Create new version** permits editing. Slack uses unresolved
@@ -337,6 +335,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 02:55: Trace Gateway password access staging through the existing Configuration editor and save path. (01a0eb0e-dbc1-78d1-91b0-ea91ee87c00f - fdccee5cab532bc7ef2085c5ec6f8f922663f5ce)
 
 - 2026-09-27 21:44: Trace backdrop dismissal through existing cancellation handlers. (01a0e4d1-c52a-7231-9d1f-d2ceadb556d1 - ab9527bb2615168649438f7f591bd098083b62cb)
 

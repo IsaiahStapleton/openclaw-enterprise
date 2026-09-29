@@ -1445,16 +1445,28 @@ async function readCodexToolStatuses() {
   throw new Error("Codex tool discovery exceeded its page limit.");
 }
 
+async function readCodexPluginDetails(readParamsList, read = (params) => codexAppServerRequest("plugin/read", params)) {
+  const details = [];
+  // Bound concurrent authenticated requests and drain each batch before a
+  // retry or any installation/configuration write can start.
+  for (let offset = 0; offset < readParamsList.length; offset += 4) {
+    const results = await Promise.allSettled(readParamsList.slice(offset, offset + 4).map(
+      async (params, index) => read(params, offset + index),
+    ));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure !== undefined) throw failure.reason;
+    details.push(...results.map((result) => result.value));
+  }
+  return details;
+}
+
 async function installCodexSelectionSet(selections, failures = []) {
   if (Object.keys(selections).length === 0) return { successfulPluginIds: [], failures: [] };
   const enabledPluginIds = enabledCodexSelectionIds(selections);
   const listed = await codexAppServerRequest("plugin/list", {});
   const readParamsList = pluginRuntimeTranslator.codexReadParamsForSelections(selections, listed);
   if (readParamsList.length === 0) return { successfulPluginIds: [], failures: [] };
-  const resolvedDetails = [];
-  for (const readParams of readParamsList) {
-    resolvedDetails.push(await codexAppServerRequest("plugin/read", readParams));
-  }
+  const resolvedDetails = await readCodexPluginDetails(readParamsList);
   const failed = [...failures];
   const failedIds = pluginFailureIds(failed);
   const successfulPluginIds = [];
@@ -1525,8 +1537,7 @@ async function installCodexSelectionSet(selections, failures = []) {
     : [];
   const effectiveResolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails, failed, toolStatuses);
   await writeCodexAppConfiguration(effectiveResolvedArtifact.configuration);
-  const installedDetails = [];
-  for (const readParams of readParamsList) {
+  const installedDetails = await readCodexPluginDetails(readParamsList, (readParams, index) => {
     const selectedPlugin = installs.find(
       (candidate) => candidate.remotePluginId === readParams.pluginName,
     );
@@ -1534,11 +1545,10 @@ async function installCodexSelectionSet(selections, failures = []) {
       selectedPlugin !== undefined &&
       (failedIds.has(selectedPlugin.pluginId) || !enabledPluginIds.has(selectedPlugin.pluginId))
     ) {
-      installedDetails.push(resolvedDetails[readParamsList.indexOf(readParams)]);
-    } else {
-      installedDetails.push(await codexAppServerRequest("plugin/read", readParams));
+      return resolvedDetails[index];
     }
-  }
+    return codexAppServerRequest("plugin/read", readParams);
+  });
   const installedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, installedDetails, failed, toolStatuses);
   if (JSON.stringify(installedArtifact.installs) !== JSON.stringify(effectiveResolvedArtifact.installs)) {
     throw new Error("Codex plugin installed release metadata does not match startup resolution.");
@@ -1633,7 +1643,7 @@ function probeOpenClawAuthenticationFailureCode() {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
     });
-    if (result.error?.code === "ETIMEDOUT" || result.signal === "SIGKILL") return "MODEL_PROBE_TIMEOUT";
+    if (result.error?.code === "ETIMEDOUT") return "MODEL_PROBE_TIMEOUT";
     if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const results = JSON.parse(result.stdout).auth?.probes?.results;
     return Array.isArray(results) && results.length === 1 &&
@@ -1859,6 +1869,7 @@ export const AGENT_RUNTIME_ENTRYPOINT = String.raw`
 const { createHash } = require("node:crypto");
 const { mkdirSync, mkdtempSync, rmSync } = require("node:fs");
 const { spawn, spawnSync } = require("node:child_process");
+const { performance } = require("node:perf_hooks");
 
 ${PLUGIN_RUNTIME_HELPERS}
 ${AUTH_PROBE_FAILURE_HELPER}
@@ -1915,7 +1926,7 @@ for (let attempt = 0; attempt < 3; attempt++) {
     timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
   });
   // Access-token login validates the same credential remotely before saving it.
-  // A cold-node network timeout may recover; refusals and model calls are not retried.
+  // A cold-node login timeout may recover; model probing has its own bounded retry.
   if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") break;
 }
 if (login.status !== 0 || login.error) {
@@ -1925,11 +1936,17 @@ delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
 
-function probeCodexAuthenticationFailureCode() {
+function probeCodexAuthentication(timeout) {
+  let result;
+  const finish = (code) => ({
+    code,
+    exitCode: Number.isInteger(result?.status) ? result.status : null,
+    signal: ["SIGKILL", "SIGTERM", "SIGINT"].includes(result?.signal) ? result.signal : null,
+  });
   const directory = mkdtempSync("/tmp/codex-auth-probe-");
   try {
     const selectedModel = process.env.OPENCLAW_HARNESS_MODEL;
-    if (typeof selectedModel !== "string" || !/^(openai|codex)\/.+/.test(selectedModel)) return "UNAVAILABLE";
+    if (typeof selectedModel !== "string" || !/^(openai|codex)\/.+/.test(selectedModel)) return finish("UNAVAILABLE");
     // Pinned native features suppress executable and external tools. Metadata may
     // still advertise apply_patch: read-only + never denies its writes. Any tool
     // event makes this probe unsuccessful, including harmless request_user_input.
@@ -1941,7 +1958,7 @@ function probeCodexAuthenticationFailureCode() {
       "sleep_tool", "goals", "workspace_dependencies", "skill_search",
       "skill_mcp_dependency_install", "tool_suggest", "recommended_plugins", "request_permissions_tool",
     ];
-    const result = spawnSync("codex", [
+    result = spawnSync("codex", [
       ...disabled.flatMap((feature) => ["--disable", feature]),
       "-a", "never", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
       "--skip-git-repo-check", "--json", "--sandbox", "read-only", "--cd", directory,
@@ -1969,35 +1986,59 @@ function probeCodexAuthenticationFailureCode() {
         ),
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+      timeout, killSignal: "SIGKILL", maxBuffer: 262144,
     });
-    if (result.error?.code === "ETIMEDOUT" || result.signal === "SIGKILL") return "MODEL_PROBE_TIMEOUT";
-    if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
-    const events = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
+    const output = result.stdout?.trim() ?? "";
+    const events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
     const allowed = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "item.updated", "item.completed"]);
     // Native item.error is an advisory (for example missing catalog metadata),
     // distinct from fatal top-level error/turn.failed. A completed model turn is
     // still required; no tool item can satisfy this authentication check.
     if (events.some((event) => !allowed.has(event.type) ||
-      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return "MODEL_PROBE_FAILED";
-    return events.filter((event) => event.type === "turn.completed").length === 1 &&
+      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return finish("MODEL_PROBE_FAILED");
+    // A timeout cannot make an observed tool call or protocol failure retryable.
+    if (result.error?.code === "ETIMEDOUT") return finish("MODEL_PROBE_TIMEOUT");
+    if (result.status !== 0 || result.error) return finish("MODEL_PROBE_FAILED");
+    return finish(events.filter((event) => event.type === "turn.completed").length === 1 &&
       events.filter((event) => event.type === "turn.started").length === 1 &&
       events.at(-1)?.type === "turn.completed" &&
       events.some((event) => event.type === "item.completed" && event.item?.type === "agent_message" &&
         typeof event.item.text === "string" && event.item.text.trim().length > 0)
         ? undefined
-        : "MODEL_PROBE_FAILED";
+        : "MODEL_PROBE_FAILED");
   } catch {
-    return "MODEL_PROBE_FAILED";
+    return finish("MODEL_PROBE_FAILED");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 }
 
-const codexAuthenticationFailureCode = probeCodexAuthenticationFailureCode();
-if (codexAuthenticationFailureCode !== undefined) {
-  holdFailedAuthentication("model-probe", codexAuthenticationFailureCode);
-} else {
+// A single startup budget includes both process attempts and the retry delay.
+// No signal handler is installed during backoff, so termination exits promptly.
+function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 61000) {
+  const startedAt = performance.now();
+  const timeout = Math.min(30000, Math.floor(deadline - startedAt));
+  if (timeout <= 0) {
+    holdFailedAuthentication("model-probe", "MODEL_PROBE_TIMEOUT");
+    return;
+  }
+  const result = probeCodexAuthentication(timeout);
+  console.error(JSON.stringify({
+    event: "codex.model_probe",
+    attempt,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    exitCode: result.exitCode,
+    signal: result.signal,
+    code: result.code ?? "READY",
+  }));
+  if (result.code === "MODEL_PROBE_TIMEOUT" && attempt === 1 && performance.now() + 1000 < deadline) {
+    setTimeout(() => startAuthenticatedCodex(2, deadline), 1000);
+    return;
+  }
+  if (result.code !== undefined) {
+    holdFailedAuthentication("model-probe", result.code);
+    return;
+  }
 
 function forwardTermination(child) {
   let terminating = false;
@@ -2059,6 +2100,7 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 
   }
 })();
 }
+startAuthenticatedCodex();
 }
 `;
 

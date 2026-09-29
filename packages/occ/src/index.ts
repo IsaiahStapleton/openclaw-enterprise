@@ -99,6 +99,7 @@ import {
   ModelDiscoveryError,
   PluginDiscoveryError,
   ChannelDirectoryError,
+  ChannelCredentialError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
@@ -124,6 +125,7 @@ import {
 import {
   controllerWorkDeploymentStatus,
   deploymentErrorForWork,
+  deploymentProgressForWork,
   deploymentWarningsForWork,
   type DeploymentStatusResult,
 } from "./state/controller-work.ts";
@@ -164,6 +166,7 @@ export {
   ModelDiscoveryError,
   PluginDiscoveryError,
   ChannelDirectoryError,
+  ChannelCredentialError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
@@ -232,6 +235,7 @@ export type {
 export { createPostgresPool } from "./state/postgres-pool.ts";
 export type {
   RepositoryRevisionOwner,
+  RepositoryBrokerReceipt,
   RepositorySessionAttempt,
   RepositorySessionPhase,
   RepositorySessionReadRepository,
@@ -249,6 +253,7 @@ export {
   PostgresWorkQueue,
   WorkClaimLostError,
   isRepositoryCleanupWork,
+  repositoryCleanupRevisionId,
   isRepositoryRuntimeRetirementWork,
   type ClaimedWork,
   type ClaimRequest,
@@ -599,7 +604,11 @@ function driverHasCapabilityContract(driver: Driver): boolean {
     return typeof candidate.listCatalog === "function";
   }
   if (driver.capability === "channel") {
-    return typeof candidate.lookupDirectory === "function";
+    return (
+      typeof candidate.lookupDirectory === "function" &&
+      (candidate.validateCredentials === undefined ||
+        typeof candidate.validateCredentials === "function")
+    );
   }
   if (driver.capability === "repo") {
     return (
@@ -1669,6 +1678,7 @@ export class OpenClawController {
   async provisionAgent(
     principalId: string,
     input: ProvisionAgentInput,
+    auditEvent?: (result: Readonly<ProvisionAgentResult>) => AuditEvent,
   ): Promise<Readonly<ProvisionAgentResult>> {
     const requestId = requireProvisioningRequestId(input.requestId);
     if (!validName(input.name)) {
@@ -1728,6 +1738,22 @@ export class OpenClawController {
     const requestFingerprintHex = createHash("sha256")
       .update(canonicalProvisioningJson(acceptedInput))
       .digest("hex");
+    const replay = await this.read((state) =>
+      state.provisioning.findByRequest(input.namespaceId, principalId, requestId),
+    );
+    if (replay === undefined) {
+      await this.authorize(principalId, "create", {
+        kind: "agent",
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
+      });
+      await this.authorize(principalId, "create", {
+        kind: "configuration",
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
+      });
+      await this.validateChannelCredentials(principalId, input.namespaceId, configurationInput);
+    }
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
@@ -1742,7 +1768,11 @@ export class OpenClawController {
         }
         await this.authorizeProvisioningRecord(state, principalId, replay);
         const work = await state.operations.findWork(replay.workId);
-        return Object.freeze({ provisioning: provisioningProgress(replay, work) });
+        const result = Object.freeze({ provisioning: provisioningProgress(replay, work) });
+        if (auditEvent) {
+          await state.audit.append(auditEvent(result));
+        }
+        return result;
       }
 
       const workId = `agent-provisioning:${createHash("sha256")
@@ -1825,7 +1855,11 @@ export class OpenClawController {
         outcome: "success",
         details: { workId },
       });
-      return Object.freeze({ provisioning: provisioningProgress(record.record) });
+      const result = Object.freeze({ provisioning: provisioningProgress(record.record) });
+      if (auditEvent) {
+        await state.audit.append(auditEvent(result));
+      }
+      return result;
     });
   }
 
@@ -2255,6 +2289,12 @@ export class OpenClawController {
         status: controllerWorkDeploymentStatus(work, this.clock()),
         error: deploymentErrorForWork(work),
         warnings: deploymentWarningsForWork(work),
+        progress: deploymentProgressForWork(
+          work,
+          work.state === "queued" || work.state === "claimed"
+            ? await state.operations.findWorkAttempt(idempotencyKey)
+            : undefined,
+        ),
       });
     });
   }
@@ -4011,14 +4051,108 @@ export class OpenClawController {
     return (await this.deployAgentWithAuthorization(principalId, input, resolveHarness)).revision;
   }
 
+  private async validateChannelCredentials(
+    principalId: string,
+    namespaceId: string,
+    configuration: Pick<Configuration, "values" | "secretBindings">,
+  ): Promise<void> {
+    const driver = this.selections.get("channel")?.driver as ChannelDriver | undefined;
+    if (driver?.validateCredentials === undefined) {
+      return undefined;
+    }
+    if (this.transactionContext.getStore() !== undefined) {
+      throw new ResourceConflictError(
+        "Channel validation must run outside a controller transaction.",
+      );
+    }
+    const bindings = this.bindings(configuration.secretBindings);
+    await driver.validateCredentials(configuration.values, async (binding, path, validate) => {
+      const source = bindings[binding]?.source;
+      if (source === undefined) {
+        throw new ChannelCredentialError("binding_required", path);
+      }
+      if (source.namespaceId !== namespaceId) {
+        throw new ScopeViolationError("Secret references cannot cross Namespaces.");
+      }
+      await this.authorize(principalId, "operate", source);
+      const secret = await this.read(async (state) => {
+        await this.exactNamespace(state, namespaceId);
+        return state.secrets.findSecret(namespaceId, source.id);
+      });
+      if (secret === undefined) {
+        throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
+      }
+      const storage = this.secretDriver(secret.driverId);
+      if (storage.withValue === undefined) {
+        throw new ChannelCredentialError("unavailable", path);
+      }
+      const outcome = await this.secretOperation(() =>
+        storage.withValue!(secret, async (value) => {
+          // Reauthorize after backend I/O and before sending a credential to its provider.
+          try {
+            await this.authorize(principalId, "operate", source);
+            await validate(value);
+            return undefined;
+          } catch (error) {
+            return {
+              error:
+                error instanceof ChannelCredentialError || error instanceof AuthorizationDeniedError
+                  ? error
+                  : new ChannelCredentialError("unavailable", path),
+            };
+          }
+        }),
+      );
+      if (outcome?.error !== undefined) {
+        throw outcome.error;
+      }
+    });
+  }
+
+  private async validateDeploymentChannels(
+    principalId: string,
+    input: DeployAgentInput,
+  ): Promise<void> {
+    if (this.selections.get("channel") === undefined) {
+      return undefined;
+    }
+    await this.authorize(principalId, "deploy", {
+      kind: "agent",
+      id: input.agentId,
+      namespaceId: input.namespaceId,
+    });
+    const metadata = await this.read(async (state) => {
+      const agent = await state.agents.findAgent(input.namespaceId, input.agentId);
+      if (agent === undefined) {
+        throw new ScopeViolationError("The Agent does not belong to the exact Namespace.");
+      }
+      await this.authorize(principalId, "read", {
+        kind: "configuration",
+        id: agent.configurationId,
+        namespaceId: input.namespaceId,
+      });
+      return state.configurations.findConfiguration(input.namespaceId, agent.configurationId);
+    });
+    if (metadata?.kind !== "agent") {
+      throw new ScopeViolationError("The Agent Configuration is unavailable.");
+    }
+    const configuration = this.exactConfiguration(
+      await this.driverOperation(() => this.configurationDriver().read(metadata)),
+      metadata,
+    );
+    return this.validateChannelCredentials(principalId, input.namespaceId, configuration);
+  }
+
   async deployAgentWithAuthorization(
     principalId: string,
     input: DeployAgentInput,
     resolveHarness: HarnessResolver,
+    auditEvent?: (result: Readonly<AuthorizedAgentDeployment>) => AuditEvent,
   ): Promise<Readonly<AuthorizedAgentDeployment>> {
     if (!isNonEmptyString(input.agentId)) {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
+    await this.validateDeploymentChannels(principalId, input);
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.findAgent(namespace.id, input.agentId);
@@ -4271,7 +4405,11 @@ export class OpenClawController {
         resourceId: revision.id,
         actorId: principalId,
       });
-      return Object.freeze({ revision, authorization });
+      const result = Object.freeze({ revision, authorization });
+      if (auditEvent) {
+        await state.audit.append(auditEvent(result));
+      }
+      return result;
     });
   }
 

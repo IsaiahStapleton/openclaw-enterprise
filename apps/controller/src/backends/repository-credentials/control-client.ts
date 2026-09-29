@@ -16,6 +16,7 @@ export type RepositoryCredentialControlOpenResult =
   | { readonly kind: "missing" };
 
 export interface RepositoryCredentialControlClient {
+  checkAdmissionReady(signal: AbortSignal): Promise<void>;
   open(
     input: RepositoryCredentialBoundSessionInput,
     admissionId: string,
@@ -225,6 +226,14 @@ export class UnixRepositoryCredentialControlClient implements RepositoryCredenti
       throw new Error("The repository credential control socket must be an absolute Unix path.");
     }
     this.#socket = options.controlSocket;
+  }
+
+  async checkAdmissionReady(signal: AbortSignal): Promise<void> {
+    const reply = await this.call("GET", "/v1/capabilities", signal);
+    const result = object(reply.body, ["durableAdmissionVersion"]);
+    if (reply.status !== 200 || result.durableAdmissionVersion !== 1) {
+      unavailable();
+    }
   }
 
   async open(

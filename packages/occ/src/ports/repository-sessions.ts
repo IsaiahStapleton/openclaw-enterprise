@@ -10,7 +10,7 @@ export type RepositorySessionPhase = "opening" | "open" | "closing" | "disposed"
 
 /** Safe recovery identifiers only; gateway bearer material never belongs in State. */
 export interface RepositorySessionAttempt extends RepositoryRevisionOwner {
-  /** Cleared only after disposal, when the live revision is physically deleted. */
+  /** Cleared when the live revision is physically deleted; phase retains disposal evidence. */
   readonly liveRevisionId: string | null;
   readonly cleanupContext: {
     readonly driver: NonNullable<AgentRevision["repositoryCredentials"]>["driver"];
@@ -21,13 +21,30 @@ export interface RepositorySessionAttempt extends RepositoryRevisionOwner {
   readonly durationSeconds: number;
   readonly deadlineWallMs: number;
   readonly phase: RepositorySessionPhase;
+  /** Zero denotes an attempt created before durable broker admission. */
+  readonly brokerProtocol: 0 | 1;
   readonly sessionId?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
+/** Nonsecret evidence owned by the exact persisted repository attempt. */
+export interface RepositoryBrokerReceipt {
+  readonly admissionId: string;
+  readonly state: "fenced" | "reserved" | "active" | "disposed";
+  readonly generation?: string;
+  readonly sessionId?: string;
+  readonly deadlineWallMs?: number;
+  readonly revoked?: number;
+  readonly expired?: number;
+}
+
 export interface RepositorySessionReadRepository {
   findAttempt(admissionId: string): Promise<Readonly<RepositorySessionAttempt> | undefined>;
+  findBrokerReceipt(admissionId: string): Promise<Readonly<RepositoryBrokerReceipt> | undefined>;
+  findBrokerReceiptBySession(
+    sessionId: string,
+  ): Promise<Readonly<RepositoryBrokerReceipt> | undefined>;
   listRevisionAttempts(
     owner: RepositoryRevisionOwner,
   ): Promise<readonly Readonly<RepositorySessionAttempt>[]>;
@@ -37,6 +54,23 @@ export interface RepositorySessionReadRepository {
 }
 
 export interface RepositorySessionRepository extends RepositorySessionReadRepository {
+  /** Serialize receipt changes with the exact attempt and its owner. */
+  lockAttempt(admissionId: string): Promise<Readonly<RepositorySessionAttempt> | undefined>;
+  createBrokerReceipt(input: {
+    readonly admissionId: string;
+    readonly state: "fenced" | "reserved";
+    readonly generation?: string;
+  }): Promise<Readonly<RepositoryBrokerReceipt>>;
+  advanceBrokerReceipt(input: {
+    readonly admissionId: string;
+    readonly expectedState: "reserved" | "active";
+    readonly generation: string;
+    readonly state: "active" | "disposed";
+    readonly sessionId: string;
+    readonly deadlineWallMs: number;
+    readonly revoked?: number;
+    readonly expired?: number;
+  }): Promise<Readonly<RepositoryBrokerReceipt> | undefined>;
   /** Persists the immutable request identity in the opening phase before external admission. */
   createAttempt(
     input: RepositoryRevisionOwner & {
@@ -45,6 +79,7 @@ export interface RepositorySessionRepository extends RepositorySessionReadReposi
       readonly durationSeconds: number;
       readonly deadlineWallMs: number;
       readonly createdAt: string;
+      readonly brokerProtocol?: 1;
     },
   ): Promise<Readonly<RepositorySessionAttempt>>;
   /** Compare-and-set phase changes preserve ownership, request fields, and any known session ID. */
