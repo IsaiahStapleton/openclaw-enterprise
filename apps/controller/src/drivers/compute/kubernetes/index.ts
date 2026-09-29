@@ -77,6 +77,7 @@ import {
   workspaceSetupVerifier,
 } from "../workspace-setup-runtime.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
+import { nodeProgramArguments } from "../node-program.ts";
 import { discoverHarnessModels } from "../model-discovery.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import { unsupportedNativeGatewayAuthFields } from "../../../gateway/auth-fields.ts";
@@ -6180,7 +6181,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     // Independent restarts can orphan descendants of a failed wrapper. Tini
     // reaps them, including when a Sandbox provider runs this below PID 1.
     container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
-    container.args = [AGENT_WITH_NODE_ENTRYPOINT];
+    container.args = nodeProgramArguments(AGENT_WITH_NODE_ENTRYPOINT);
   }
 
   private addNativeWorker(
@@ -6204,7 +6205,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
     );
     container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
-    container.args = [NATIVE_WORKER_ENTRYPOINT];
+    container.args = nodeProgramArguments(NATIVE_WORKER_ENTRYPOINT);
   }
 
   private addNodeEnrollmentState(
@@ -9445,7 +9446,7 @@ for (const path of ${JSON.stringify(
                   ? {}
                   : {
                       command: ["node", "-e"],
-                      args: [
+                      args: nodeProgramArguments(
                         (workspaceSetup === undefined || (!embedded && role === "gateway")
                           ? ""
                           : workspaceSetupVerifier(
@@ -9459,7 +9460,7 @@ for (const path of ${JSON.stringify(
                             : nativeRuntime === undefined
                               ? AGENT_RUNTIME_ENTRYPOINT
                               : NATIVE_WORKER_ENTRYPOINT),
-                      ],
+                      ),
                     }),
               },
             ],

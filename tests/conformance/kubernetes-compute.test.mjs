@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
+import { spawnSync } from "node:child_process";
+import { inflateRawSync } from "node:zlib";
 import test from "node:test";
-import { GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
+import {
+  AGENT_RUNTIME_ENTRYPOINT,
+  AGENT_WITH_NODE_ENTRYPOINT,
+  GATEWAY_RUNTIME_ENTRYPOINT,
+} from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
+import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import {
   createKubernetesComputeDriver,
@@ -218,6 +225,47 @@ const gatewayRouting = {
   gatewayNamespace: "openclaw-system",
   envoyNamespace: "envoy-gateway-system",
 };
+
+// Linux rejects any exec argument or environment string above 128 KiB with
+// E2BIG, so a workload that renders one never starts. Keep every rendered
+// string at half that, whatever the runtime programs grow to.
+const EXEC_STRING_BUDGET = 64 * 1024;
+
+function assertExecStringsWithinBudget(objects) {
+  for (const object of objects) {
+    const pod = object.kind === "Pod" ? object.spec : object.spec?.template?.spec;
+    for (const container of [...(pod?.initContainers ?? []), ...(pod?.containers ?? [])]) {
+      const strings = [
+        ...(container.command ?? []).map((value, index) => [`command[${index}]`, value]),
+        ...(container.args ?? []).map((value, index) => [`args[${index}]`, value]),
+        ...(container.env ?? [])
+          .filter(({ value }) => value !== undefined)
+          .map(({ name, value }) => [`env ${name}`, `${name}=${value}`]),
+        ...["readinessProbe", "livenessProbe", "startupProbe"].flatMap((probe) =>
+          (container[probe]?.exec?.command ?? []).map((value, index) => [
+            `${probe} command[${index}]`,
+            value,
+          ]),
+        ),
+      ];
+      for (const [field, value] of strings) {
+        const size = Buffer.byteLength(value);
+        assert.ok(
+          size <= EXEC_STRING_BUDGET,
+          `${object.kind} ${object.metadata.name} container ${container.name} ${field} is ` +
+            `${size} bytes; the per-string budget is ${EXEC_STRING_BUDGET}`,
+        );
+      }
+    }
+  }
+}
+
+// Controller-rendered programs reach `node -e` compressed behind a fixed loader.
+function containerProgram(container) {
+  const [loader, ...pieces] = container.args;
+  assert.equal(loader, nodeProgramArguments("")[0]);
+  return inflateRawSync(Buffer.from(pieces.join(""), "base64")).toString("utf8");
+}
 
 function routedOptions(overrides = {}) {
   const configured = options();
@@ -1046,6 +1094,13 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   connected = true;
   assert.equal((await prepare()).ready, true);
   assert.equal(setupCalls, 1);
+  // The node supervisor embeds Codex; neither it nor an OpenShell Sandbox, which
+  // carries the whole command in one environment variable, nears the exec limit.
+  assertExecStringsWithinBudget(objects.values());
+  const [harness] = read("Deployment", agentName).spec.template.spec.containers;
+  const command = [...harness.command, ...harness.args];
+  assert.equal(command[0], "/usr/bin/tini");
+  assert.ok(Buffer.byteLength(JSON.stringify(command)) <= EXEC_STRING_BUDGET);
 });
 
 test("dedicated replacement starts a candidate Gateway when the predecessor cannot enroll its workspace node", async () => {
@@ -3511,10 +3566,12 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
     { configuration: JSON.stringify(nativeInference) },
   );
   driver.addNativeWorker(workerDeployment, "workspace-node-native-worker", undefined, revision);
+  assertExecStringsWithinBudget([gatewayDeployment, workerDeployment]);
   const gateway = gatewayDeployment.spec.template.spec.containers[0];
   const worker = workerDeployment.spec.template.spec.containers[0];
   assert.ok(gateway);
   assert.ok(worker);
+  const workerProgram = containerProgram(worker);
   assert.equal(
     gateway.env.some(({ name }) => name === "OPENAI_API_KEY"),
     false,
@@ -3523,14 +3580,14 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
     worker.env.some(({ name }) => name === "OPENAI_API_KEY"),
     true,
   );
-  assert.equal(worker.args[0].includes('"runtime-server"'), false);
-  assert.equal(worker.args[0].includes('"connect"'), true);
-  assert.equal(worker.args[0].includes('"--ephemeral"'), true);
-  assert.equal(worker.args[0].includes('"--target-file"'), true);
-  assert.equal(worker.args[0].includes('"--pair-if-needed"'), false);
-  assert.equal(worker.args[0].includes('"--session-host"'), false);
+  assert.equal(workerProgram.includes('"runtime-server"'), false);
+  assert.equal(workerProgram.includes('"connect"'), true);
+  assert.equal(workerProgram.includes('"--ephemeral"'), true);
+  assert.equal(workerProgram.includes('"--target-file"'), true);
+  assert.equal(workerProgram.includes('"--pair-if-needed"'), false);
+  assert.equal(workerProgram.includes('"--session-host"'), false);
   assert.equal(
-    worker.args[0].includes("writeFileSync(connectTargetPath, setupCode, { mode: 0o600 })"),
+    workerProgram.includes("writeFileSync(connectTargetPath, setupCode, { mode: 0o600 })"),
     true,
   );
   assert.equal(
@@ -3541,16 +3598,16 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
     worker.env.find(({ name }) => name === "NODE_COMPILE_CACHE")?.value,
     "/home/node/.openclaw-node/.cache/node-compile",
   );
-  assert.equal(worker.args[0].includes("chmodSync(temporary, 0o700)"), true);
-  assert.equal(worker.args[0].includes("initializeRuntimeAssets();"), true);
+  assert.equal(workerProgram.includes("chmodSync(temporary, 0o700)"), true);
+  assert.equal(workerProgram.includes("initializeRuntimeAssets();"), true);
   assert.equal(
-    worker.args[0].includes("const { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync }"),
+    workerProgram.includes("const { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync }"),
     true,
   );
-  assert.equal(worker.args[0].includes("OPENCLAW_BUNDLED_SKILLS_DIR"), true);
-  assert.equal(worker.args[0].includes('publishImageTree("/app/custodian-skills"'), true);
+  assert.equal(workerProgram.includes("OPENCLAW_BUNDLED_SKILLS_DIR"), true);
+  assert.equal(workerProgram.includes('publishImageTree("/app/custodian-skills"'), true);
   assert.equal(
-    worker.args[0].includes('agents: { defaults: { workspace: "/home/node/workspace" } }'),
+    workerProgram.includes('agents: { defaults: { workspace: "/home/node/workspace" } }'),
     true,
   );
   assert.equal(
@@ -8878,7 +8935,7 @@ for (const embedded of [true, false]) {
         gatewayPod.volumes.some(({ name }) => name === "shared-workspace"),
         false,
       );
-      assert.equal(gatewayPod.containers[0].args[0].includes(setup.id), false);
+      assert.equal(containerProgram(gatewayPod.containers[0]).includes(setup.id), false);
     }
     if (!embedded) {
       assert.throws(
@@ -8890,7 +8947,7 @@ for (const embedded of [true, false]) {
     assert.equal(initializer.image, driver.options.images.gateway);
     assert.deepEqual(initializer.resources, driver.options.resources.gateway);
     // Container restarts do not rerun initContainers; the workspace owner checks its marker.
-    assert.equal(pod.containers[0].args[0].includes(setup.id), true);
+    assert.equal(containerProgram(pod.containers[0]).includes(setup.id), true);
     assert.equal(
       initializer.volumeMounts.find(({ name }) => name === "workspace-setup").readOnly,
       true,
@@ -8907,17 +8964,21 @@ for (const embedded of [true, false]) {
     assert.ok(pod.volumes.find(({ name }) => name === durable.name).persistentVolumeClaim);
     for (const object of records.filter(({ kind }) => kind !== "Secret")) {
       assert.equal(JSON.stringify(object).includes(setup.files["AGENTS.md"]), false);
+      // Compressed programs would hide document bytes from the plain-text check.
+      for (const container of object.spec?.template?.spec?.containers ?? []) {
+        if (container.args?.[0] === nodeProgramArguments("")[0]) {
+          assert.equal(containerProgram(container).includes(setup.files["AGENTS.md"]), false);
+        }
+      }
     }
     if (!embedded) {
       const harness = [...objects.values()].find(
         ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("agent-"),
       );
       // The actual command sent to either Kubernetes or an external Sandbox carries only identity.
-      assert.equal(harness.spec.template.spec.containers[0].args[0].includes(setup.id), true);
-      assert.equal(
-        harness.spec.template.spec.containers[0].args[0].includes(setup.files["AGENTS.md"]),
-        false,
-      );
+      const program = containerProgram(harness.spec.template.spec.containers[0]);
+      assert.equal(program.includes(setup.id), true);
+      assert.equal(program.includes(setup.files["AGENTS.md"]), false);
     }
     state.ready = true;
     assert.equal((await driver.prepareRevision(revision, context)).ready, true);
@@ -8943,6 +9004,63 @@ for (const embedded of [true, false]) {
     assert.equal(objects.has(`Secret:${secret.metadata.namespace}:${secret.metadata.name}`), false);
   });
 }
+
+test("rendered exec arguments and environment values stay within the per-string budget", async () => {
+  for (const embedded of [true, false]) {
+    const { driver, revision, objects, state, context } = workspaceSetupFixture(embedded);
+    await driver.prepareRevision(revision, context);
+    // Readiness admits the dedicated workspace node, whose supervisor embeds Codex.
+    state.ready = true;
+    await driver.prepareRevision(revision, context);
+    const workloads = [...objects.values()].filter(({ kind }) => kind === "Deployment");
+    assert.equal(
+      workloads.some(({ spec }) => spec.template.spec.containers[0].command[0] === "/usr/bin/tini"),
+      !embedded,
+    );
+    assertExecStringsWithinBudget(workloads);
+    for (const { spec } of workloads) {
+      // Runtime programs travel as bounded pieces and arrive intact.
+      const program = containerProgram(spec.template.spec.containers[0]);
+      assert.ok(
+        [GATEWAY_RUNTIME_ENTRYPOINT, AGENT_RUNTIME_ENTRYPOINT, AGENT_WITH_NODE_ENTRYPOINT].some(
+          (entrypoint) => program.endsWith(entrypoint),
+        ),
+      );
+    }
+  }
+  // The supervisor restarts Codex from the same bounded pieces.
+  assert.ok(
+    AGENT_WITH_NODE_ENTRYPOINT.includes(
+      JSON.stringify(["-e", ...nodeProgramArguments(AGENT_RUNTIME_ENTRYPOINT)]),
+    ),
+  );
+});
+
+test(
+  "the program loader runs a program above the exec argument limit as node -e would",
+  {
+    skip: process.platform !== "linux" && "MAX_ARG_STRLEN is a Linux limit.",
+  },
+  () => {
+    // Incompressible padding keeps several pieces after compression.
+    const padding = `// ${randomBytes(150 * 1024).toString("base64")}\n`;
+    const program = `${padding}const observed = { argv: process.argv.slice(1), file: __filename,
+    required: typeof require("node:fs").readFileSync };
+process.stdout.write(JSON.stringify(observed));
+process.exitCode = 3;`;
+    const pieces = nodeProgramArguments(program);
+    assert.ok(pieces.length > 2);
+    assert.equal(spawnSync(process.execPath, ["-e", program]).error?.code, "E2BIG");
+    const loaded = spawnSync(process.execPath, ["-e", ...pieces], { encoding: "utf8" });
+    const direct = spawnSync(process.execPath, ["-e", program.slice(padding.length)], {
+      encoding: "utf8",
+    });
+    assert.equal(loaded.stderr, "");
+    assert.deepEqual([loaded.status, loaded.stdout], [direct.status, direct.stdout]);
+    assert.deepEqual(JSON.parse(loaded.stdout), { argv: [], file: "[eval]", required: "function" });
+    assert.equal(loaded.status, 3);
+  },
+);
 
 test("Kubernetes workspace setup rejects foreign identities and unsupported storage before delivery", async () => {
   for (const mutate of [

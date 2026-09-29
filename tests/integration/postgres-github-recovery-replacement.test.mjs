@@ -204,7 +204,7 @@ test(
               },
             })
           ).statusCode,
-          404,
+          409,
           "the new holder is protected like the recovery account",
         );
       },

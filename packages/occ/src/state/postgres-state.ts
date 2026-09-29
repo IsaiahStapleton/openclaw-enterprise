@@ -658,6 +658,10 @@ function databaseError(error: unknown): Error {
   ) {
     return new ScopeViolationError("The resource violates its exact platform ownership or state.");
   }
+  if (code === "55P03") {
+    // A lock timeout is transient contention, retryable like a statement timeout (57014).
+    return new DependencyUnavailableError("The platform persistence lock timeout expired.");
+  }
   if (
     code?.startsWith("08") ||
     code?.startsWith("53") ||

@@ -1,4 +1,5 @@
 import { PLUGIN_RUNTIME_TRANSLATOR_SOURCE } from "../../plugin/runtime-translator.ts";
+import { nodeProgramArguments } from "../node-program.ts";
 
 // Match the pinned OpenClaw service stop budget: 315s drain, 10s cleanup,
 // and 5s supervisor margin. Idle Gateways exit as soon as their work settles.
@@ -2260,6 +2261,7 @@ startAuthenticatedCodex();
 // execution worker; its explicit command allowlist disables worker hosting.
 // It serves files while Codex restarts. Reuse Codex login/plugin initialization
 // for each Codex start; other Harnesses need their own execution composition.
+// Codex starts from bounded program pieces, like the container that runs this.
 export const AGENT_WITH_NODE_ENTRYPOINT = String.raw`
 const { mkdirSync, writeFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
@@ -2313,7 +2315,7 @@ const processes = [
       "--commands", "file.fetch,file.stat,file.write,file.create,dir.list,workspace.memory,workspace.skills"],
     env: nodeEnv,
   },
-  { name: "Codex", args: ["-e", ${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}], env: codexEnv },
+  { name: "Codex", args: ${JSON.stringify(["-e", ...nodeProgramArguments(AGENT_RUNTIME_ENTRYPOINT)])}, env: codexEnv },
 ];
 let stopping = false;
 function killGroup(child, signal) {

@@ -232,7 +232,7 @@ test(
             recoveryAccount.version,
           )
         ).statusCode,
-        404,
+        409,
         "the recovery account cannot be disabled",
       );
       const account = await readAccount(app, adminHeaders, second.id);
@@ -248,6 +248,24 @@ test(
 
       const disabledAccount = await readAccount(app, adminHeaders, second.id);
       assert.equal(disabledAccount.disabled, true);
+      // A disabled target is a conflict with its state, not an unknown account.
+      for (const refused of [
+        await attach(adminHeaders, second.id, "424242", disabledAccount.version),
+        await app.inject({
+          method: "POST",
+          url: "/api/auth/recovery",
+          headers: adminHeaders,
+          payload: {
+            userId: second.id,
+            expectedCurrentUserId: admin.id,
+            expectedVersion: disabledAccount.version,
+          },
+        }),
+      ]) {
+        assert.equal(refused.statusCode, 409, refused.body);
+        assert.equal(refused.json().error.code, "RESOURCE_CONFLICT");
+      }
+      assert.deepEqual(await readAccount(app, adminHeaders, second.id), disabledAccount);
       assert.equal(
         (
           await change(

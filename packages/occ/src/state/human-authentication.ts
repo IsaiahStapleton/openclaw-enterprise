@@ -741,7 +741,7 @@ export class PostgresHumanAuthentication {
     return this.state.transact(async (unit) => {
       const account = await this.guardAccounts(unit, userId, actor, expectedVersion);
       if (account.disabled !== false) {
-        throw new ScopeViolationError("The authentication account is disabled.");
+        throw new ResourceConflictError("The authentication account is disabled.");
       }
       const [existing] = await this.query(
         unit,
@@ -837,7 +837,7 @@ export class PostgresHumanAuthentication {
           [userId],
         );
         if (recovery !== undefined) {
-          throw new ScopeViolationError("The recovery account cannot be disabled.");
+          throw new ResourceConflictError("The recovery account cannot be disabled.");
         }
       }
       if (operation === "enable" && account.disabled !== true) {
@@ -910,8 +910,11 @@ export class PostgresHumanAuthentication {
       }
       await this.guardActor(unit, actor, [userId, designation.user_id as string]);
       const account = await this.guardAccounts(unit, userId, actor, expectedVersion);
-      if (account.principal_id !== principalId || account.disabled !== false) {
+      if (account.principal_id !== principalId) {
         throw new ScopeViolationError("The recovery account is unavailable.");
+      }
+      if (account.disabled !== false) {
+        throw new ResourceConflictError("The authentication account is disabled.");
       }
       // The database has no composite key tying method_id to user_id, so the method is only
       // ever derived here from the target's own credential rows, never taken from input.
