@@ -194,7 +194,7 @@ Disable a human account
 
 **Operation ID:** `disableAuthAccount`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -244,7 +244,7 @@ Re-enable a disabled human account
 
 **Operation ID:** `enableAuthAccount`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -337,7 +337,7 @@ Detach an external sign-in identity from an account
 
 **Operation ID:** `detachAuthMethod`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -388,7 +388,7 @@ Attach an exact GitHub identity to an existing account
 
 **Operation ID:** `attachGitHubIdentity`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -439,7 +439,7 @@ Attach an exact Google identity to an existing account
 
 **Operation ID:** `attachGoogleIdentity`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -490,7 +490,7 @@ Revoke all sessions for a human account
 
 **Operation ID:** `revokeAuthAccountSessions`
 
-**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
 
 | Action | Resource | Scope |
 | --- | --- | --- |

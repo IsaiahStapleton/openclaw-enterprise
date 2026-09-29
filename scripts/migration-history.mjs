@@ -133,6 +133,9 @@ function classifyReceipts(receipts, manifest) {
       if (receipts.length === 37) {
         return "preHumanAuthentication";
       }
+      if (receipts.length === 38) {
+        return "preAgentDeletionTakeover";
+      }
       return "providerCompleted";
     }
     if (!receiptsMatchEntries(receipts, manifest.entries)) {
@@ -185,6 +188,9 @@ function classifyReceipts(receipts, manifest) {
   }
   if (receipts.length === 37) {
     return "preHumanAuthentication";
+  }
+  if (receipts.length === 38) {
+    return "preAgentDeletionTakeover";
   }
   refuse("an incomplete or unsupported development history is installed");
 }
