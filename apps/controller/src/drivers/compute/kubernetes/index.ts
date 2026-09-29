@@ -119,6 +119,12 @@ import {
   type RepositoryMaterialOwner,
 } from "./repository-material-store.ts";
 import {
+  NETWORK_PROFILE_LABEL,
+  ORDINARY_NETWORK_PROFILE,
+  ordinaryNetworkPolicySelector,
+  withoutNetworkProfile,
+} from "./resources/network.ts";
+import {
   REPOSITORY_CLIENT_BIN,
   repositoryNativeConfiguration,
 } from "./repository-native-configuration.ts";
@@ -183,6 +189,11 @@ interface KubernetesApiClients {
 
 export const MINIMUM_KUBERNETES_VERSION = "1.35.0";
 const MINIMUM_KUBERNETES_VERSION_PARTS = [1, 35, 0] as const;
+/** The profile-free workspace-node selector written before explicit network
+ * profiles. Namespaces provisioned before the upgrade keep it. */
+const LEGACY_WORKSPACE_NODE_POLICY_SELECTOR: {
+  readonly matchLabels: Readonly<Record<string, string>>;
+} = { matchLabels: { "openclaw.dev/workload-role": "agent" } };
 
 interface LifecycleOwnerSelection {
   readonly driver: Driver;
@@ -3037,10 +3048,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayAccountOwnership,
       gatewayNamespace,
     );
+    // Preparation observes the serving Gateway of another revision and never
+    // re-renders it; activation replaces it and re-applies these policies
+    // strictly. Until then a Gateway from a pre-profile template keeps its
+    // Gateway-side grants (model and repository egress when embedded; Harness
+    // transport and plugin status when dedicated).
+    const unprofiledGateway =
+      existingGateway !== undefined &&
+      existingGatewayRevisionId !== revision.id &&
+      asRecord(asRecord(asRecord(existingGateway.spec?.template)?.metadata)?.labels)?.[
+        NETWORK_PROFILE_LABEL
+      ] !== ORDINARY_NETWORK_PROFILE;
     if (embedded) {
       for (const { resource: policy, namespace: target } of this.agentNetworkPolicies(
         revision,
         namespace,
+        unprofiledGateway,
       )) {
         await this.reconcile(policy, gatewayOwnership, target);
       }
@@ -3048,6 +3071,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
         revision,
         namespace,
+        unprofiledGateway,
       )) {
         await this.reconcile(policy, gatewayOwnership, target);
       }
@@ -3177,12 +3201,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayNamespace,
           gatewayOwnership,
         );
-        if (gateway === undefined || !this.deploymentReady(gateway)) {
+        if (
+          gateway === undefined ||
+          !this.deploymentReady(
+            gateway,
+            gateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id,
+          )
+        ) {
           return incomplete();
         }
       } else if (
         embedded &&
-        !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))
+        !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace, revision.id))
       ) {
         return incomplete();
       }
@@ -3214,7 +3244,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         );
       }
       if (this.options.runtime !== undefined) {
-        for (const policy of this.agentNetworkPolicies(revision, namespace)) {
+        for (const policy of this.agentNetworkPolicies(revision, namespace, unprofiledGateway)) {
           await this.reconcile(policy.resource, gatewayOwnership, policy.namespace);
         }
         await this.reconcile(
@@ -3336,6 +3366,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
         revision,
         namespace,
+        unprofiledGateway,
       )) {
         await this.reconcile(policy, gatewayOwnership, target);
       }
@@ -3352,7 +3383,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
           : incomplete();
       }
       if (existingGatewayRevisionId !== undefined && existingGatewayRevisionId !== revision.id) {
-        if (!(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))) {
+        // The serving predecessor is observed like the embedded one: only a
+        // genuinely unready Gateway is repaired with the successor's template.
+        if (
+          !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace, revision.id))
+        ) {
           await reconcileGatewayDeployment({});
           return incomplete();
         }
@@ -5983,6 +6018,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("Dedicated Harness labels must include exact revision scope.");
     }
+    if (harnessLabels[NETWORK_PROFILE_LABEL] !== ORDINARY_NETWORK_PROFILE) {
+      throw new ConfigurationFailure("Dedicated Harness requires the ordinary network profile.");
+    }
     return {
       image,
       command: command as readonly string[],
@@ -6066,8 +6104,33 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const name = this.workspaceNodeName(revision);
     const ownership = this.workspaceNodeOwnership(revision);
     const namespaceOwnership = { namespaceId: revision.namespaceId };
+    const nodePolicy = this.workspaceNodeNetworkPolicy(namespaceOwnership, namespace);
+    const existingNodePolicy = await this.getOwned(
+      "NetworkPolicy",
+      nodePolicy.metadata.name,
+      namespace,
+      namespaceOwnership,
+    );
+    // allow-node-gateway is namespace-wide but written while preparing one
+    // Agent. Narrowing a pre-profile policy here would strip workspace-node
+    // egress from every other Agent's unprofiled Pods, so it keeps its exact
+    // legacy selector until the namespace is recreated.
+    const legacy =
+      existingNodePolicy !== undefined &&
+      isDeepStrictEqual(
+        existingNodePolicy.spec?.podSelector,
+        LEGACY_WORKSPACE_NODE_POLICY_SELECTOR,
+      );
     await this.reconcile(
-      this.workspaceNodeNetworkPolicy(namespaceOwnership, namespace),
+      legacy
+        ? {
+            ...nodePolicy,
+            spec: {
+              ...nodePolicy.spec,
+              podSelector: structuredClone(LEGACY_WORKSPACE_NODE_POLICY_SELECTOR),
+            },
+          }
+        : nodePolicy,
       namespaceOwnership,
       namespace,
     );
@@ -6086,6 +6149,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayOwnership,
           gatewayName,
           this.gatewayNamespace(revision, namespace),
+          revision.id,
         ))
       ) {
         return undefined;
@@ -6493,10 +6557,18 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     return workspaceMounts;
   }
 
+  /**
+   * With `preparingRevisionId`, a Gateway Deployment annotated for another
+   * revision is the serving predecessor: preparation (embedded or dedicated)
+   * observes it but does not re-render it, and activation replaces it. It may predate the
+   * explicit network profile, so it is judged without the profile requirement.
+   * Every template rendered for the revision itself still needs the profile.
+   */
   private async gatewayReady(
     ownership: Ownership,
     gatewayName: string,
     namespace: KubernetesNamespaceAddress,
+    preparingRevisionId?: string,
   ): Promise<boolean> {
     const clients = await this.clients(namespace.plane);
     const deployment = await this.getOwned("Deployment", gatewayName, namespace, ownership);
@@ -6506,7 +6578,10 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     if (deployment.spec?.replicas !== 1) {
       return false;
     }
-    if (!this.deploymentReady(deployment)) {
+    const predecessor =
+      preparingRevisionId !== undefined &&
+      deployment.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== preparingRevisionId;
+    if (!this.deploymentReady(deployment, !predecessor)) {
       return false;
     }
     if (!this.deploymentRolledOut(deployment)) {
@@ -6556,12 +6631,15 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     });
   }
 
-  private deploymentReady(deployment: ManagedKubernetesObject): boolean {
+  private deploymentReady(deployment: ManagedKubernetesObject, requireProfile = true): boolean {
+    const template = asRecord(deployment.spec?.template);
+    const labels = asRecord(asRecord(template?.metadata)?.labels);
     const replicas = deployment.spec?.replicas;
     const generation = deployment.metadata.generation;
     const observed = deployment.status?.observedGeneration;
     const ready = deployment.status?.readyReplicas;
     return (
+      (!requireProfile || labels?.[NETWORK_PROFILE_LABEL] === ORDINARY_NETWORK_PROFILE) &&
       typeof replicas === "number" &&
       replicas > 0 &&
       typeof generation === "number" &&
@@ -6700,7 +6778,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     return [
       policy("default-deny", { podSelector: {}, policyTypes: ["Ingress", "Egress"] }),
       policy("allow-dns", {
-        podSelector: {},
+        podSelector: ordinaryNetworkPolicySelector(),
         policyTypes: ["Egress"],
         egress: [
           {
@@ -6719,7 +6797,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         ],
       }),
       policy("allow-gateway-ingress", {
-        podSelector: { matchLabels: { "openclaw.dev/workload-role": "gateway" } },
+        podSelector: ordinaryNetworkPolicySelector({ "openclaw.dev/workload-role": "gateway" }),
         policyTypes: ["Ingress"],
         ingress: [
           {
@@ -6745,7 +6823,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         namespace,
       ),
       spec: {
-        podSelector: { matchLabels: { "openclaw.dev/workload-role": "agent" } },
+        podSelector: ordinaryNetworkPolicySelector({ "openclaw.dev/workload-role": "agent" }),
         policyTypes: ["Egress"],
         egress: [
           {
@@ -7582,34 +7660,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         // Preview access belongs to the Agent lifecycle, including enabling it
         // after the tenant namespace has already been provisioned.
         await this.reconcile(
-          {
-            apiVersion: "networking.k8s.io/v1",
-            kind: "NetworkPolicy",
-            metadata: { ...publicRoute.metadata },
-            spec: {
-              podSelector: {
-                matchLabels: {
-                  "openclaw.dev/agent": revision.agentId,
-                  "openclaw.dev/workload-role": "gateway",
-                },
-              },
-              policyTypes: ["Ingress"],
-              ingress: [
-                {
-                  from: [
-                    this.peer({
-                      namespace: routing.envoyNamespace,
-                      podLabels: {
-                        "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
-                        "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
-                      },
-                    }),
-                  ],
-                  ports: [{ protocol: "TCP", port: this.options.network.gatewayPort + 1 }],
-                },
-              ],
-            },
-          },
+          this.gatewaySandboxNetworkPolicy(revision, publicRoute.metadata, routing, gateway),
           ownership,
           namespace,
         );
@@ -7617,6 +7668,48 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       await this.reconcile(policy, ownership, namespace);
       await this.reconcile(publicRoute, ownership, namespace);
     }
+  }
+
+  /** Admits public preview traffic to the serving Gateway's sandbox listener.
+   * A serving Gateway from a pre-profile template keeps the profile-free grant
+   * until activation replaces it and this route is reconciled again. */
+  private gatewaySandboxNetworkPolicy(
+    revision: AgentRevision,
+    metadata: ManagedKubernetesObject["metadata"],
+    routing: KubernetesGatewayRoutingOptions,
+    servingGateway: ManagedKubernetesObject,
+  ): ManagedKubernetesObject {
+    const selector = ordinaryNetworkPolicySelector({
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/workload-role": "gateway",
+    });
+    const unprofiled =
+      asRecord(asRecord(asRecord(servingGateway.spec?.template)?.metadata)?.labels)?.[
+        NETWORK_PROFILE_LABEL
+      ] !== ORDINARY_NETWORK_PROFILE;
+    return {
+      apiVersion: "networking.k8s.io/v1",
+      kind: "NetworkPolicy",
+      metadata: { ...metadata },
+      spec: {
+        podSelector: unprofiled ? withoutNetworkProfile(selector) : selector,
+        policyTypes: ["Ingress"],
+        ingress: [
+          {
+            from: [
+              this.peer({
+                namespace: routing.envoyNamespace,
+                podLabels: {
+                  "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
+                  "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
+                },
+              }),
+            ],
+            ports: [{ protocol: "TCP", port: this.options.network.gatewayPort + 1 }],
+          },
+        ],
+      },
+    };
   }
 
   private codexRepositoryBrokerNetworkPolicy(
@@ -8016,13 +8109,11 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         namespace,
       ),
       spec: {
-        podSelector: {
-          matchLabels: {
-            "openclaw.dev/workload-role": "agent",
-            "openclaw.dev/agent": revision.agentId,
-            "openclaw.dev/revision": revision.id,
-          },
-        },
+        podSelector: ordinaryNetworkPolicySelector({
+          "openclaw.dev/workload-role": "agent",
+          "openclaw.dev/agent": revision.agentId,
+          "openclaw.dev/revision": revision.id,
+        }),
         policyTypes: ["Egress"],
         egress,
       },
@@ -8178,12 +8269,10 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         namespace,
       ),
       spec: {
-        podSelector: {
-          matchLabels: {
-            "openclaw.dev/workload-role": "gateway",
-            "openclaw.dev/agent": revision.agentId,
-          },
-        },
+        podSelector: ordinaryNetworkPolicySelector({
+          "openclaw.dev/workload-role": "gateway",
+          "openclaw.dev/agent": revision.agentId,
+        }),
         policyTypes: ["Egress"],
         egress:
           proxy !== undefined
@@ -8227,28 +8316,29 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     await this.reconcile(policy, ownership, namespace);
   }
 
+  /** `unprofiledGateway` widens every Gateway-side selector to the Agent's
+   * Gateway Pods with or without the profile. Only preparation passes it, while
+   * a pre-profile Gateway of another revision serves. */
   private pluginStatusNetworkPolicies(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
+    unprofiledGateway = false,
   ): TargetedKubernetesResource[] {
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const agent = {
-      matchLabels: {
-        "openclaw.dev/namespace": revision.namespaceId,
-        "openclaw.dev/workload-role": "agent",
-        "openclaw.dev/agent": revision.agentId,
-        "openclaw.dev/revision": revision.id,
-      },
-    };
-    const gateway = {
-      matchLabels: {
-        "openclaw.dev/namespace": revision.namespaceId,
-        "openclaw.dev/workload-role": "gateway",
-        "openclaw.dev/agent": revision.agentId,
-      },
-    };
+    const agent = ordinaryNetworkPolicySelector({
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/workload-role": "agent",
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/revision": revision.id,
+    });
+    const profiledGateway = ordinaryNetworkPolicySelector({
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/workload-role": "gateway",
+      "openclaw.dev/agent": revision.agentId,
+    });
+    const gateway = unprofiledGateway ? withoutNetworkProfile(profiledGateway) : profiledGateway;
     const policy = (name: string, spec: KubernetesRecord): TargetedKubernetesResource => {
       const target =
         name === "allow-gateway-agent" || name === "allow-plugin-status-gateway"
@@ -8279,12 +8369,10 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       statusProxySourceCidrs.length > 0
         ? [
             policy("allow-plugin-status-proxy", {
-              podSelector: {
-                matchLabels: {
-                  "openclaw.dev/agent": revision.agentId,
-                  "openclaw.dev/revision": revision.id,
-                },
-              },
+              podSelector: ordinaryNetworkPolicySelector({
+                "openclaw.dev/agent": revision.agentId,
+                "openclaw.dev/revision": revision.id,
+              }),
               policyTypes: ["Ingress"],
               ingress: [
                 {
@@ -8373,25 +8461,23 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
   private agentNetworkPolicies(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
+    unprofiledGateway = false,
   ): TargetedKubernetesResource[] {
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const agent = {
-      matchLabels: {
-        "openclaw.dev/namespace": revision.namespaceId,
-        "openclaw.dev/workload-role": "agent",
-        "openclaw.dev/agent": revision.agentId,
-        "openclaw.dev/revision": revision.id,
-      },
-    };
-    const gateway = {
-      matchLabels: {
-        "openclaw.dev/namespace": revision.namespaceId,
-        "openclaw.dev/workload-role": "gateway",
-        "openclaw.dev/agent": revision.agentId,
-      },
-    };
+    const agent = ordinaryNetworkPolicySelector({
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/workload-role": "agent",
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/revision": revision.id,
+    });
+    const profiledGateway = ordinaryNetworkPolicySelector({
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/workload-role": "gateway",
+      "openclaw.dev/agent": revision.agentId,
+    });
+    const gateway = unprofiledGateway ? withoutNetworkProfile(profiledGateway) : profiledGateway;
     const policy = (name: string, spec: KubernetesRecord): TargetedKubernetesResource => {
       const target =
         name === "allow-gateway-agent" || name === "allow-plugin-status-gateway"
@@ -8411,7 +8497,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         },
       };
     };
-    const statusPolicies = this.pluginStatusNetworkPolicies(revision, namespace);
+    const statusPolicies = this.pluginStatusNetworkPolicies(revision, namespace, unprofiledGateway);
     const runtime = this.options.runtime;
     if (runtime === undefined) {
       return statusPolicies;
@@ -9377,6 +9463,7 @@ for (const path of ${JSON.stringify(
               ...revisionLabels,
               ...selector,
               "openclaw.dev/workload-role": role,
+              [NETWORK_PROFILE_LABEL]: ORDINARY_NETWORK_PROFILE,
             },
           },
           spec: {

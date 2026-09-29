@@ -2150,6 +2150,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/namespace": embedded.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": embedded.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(reconciled[runtimePolicyIndex].spec.egress[0].ports, [
     { protocol: "TCP", port: 443 },
@@ -2306,6 +2307,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/namespace": dedicated.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": dedicated.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].spec.egress[0].ports, [
     { protocol: "TCP", port: 18790 },
@@ -2320,6 +2322,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/workload-role": "agent",
     "openclaw.dev/agent": dedicated.agentId,
     "openclaw.dev/revision": dedicated.id,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(dedicatedReconciled[runtimeAgentPolicyIndex].spec.ingress[0].ports, [
     { protocol: "TCP", port: 18790 },
@@ -3156,9 +3159,15 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           loginCalls +
             (loginFailed ? 0 : scenario.probeTimeouts && !scenario.expiredBudget ? 2 : 1),
         );
-        const probeDiagnostics = diagnostics
+        const jsonDiagnostics = diagnostics
           .filter((message) => message.startsWith("{"))
           .map(JSON.parse);
+        const probeDiagnostics = jsonDiagnostics.filter(
+          ({ event }) => event !== "runtime.startup_phase",
+        );
+        const startupPhases = jsonDiagnostics.filter(
+          ({ event }) => event === "runtime.startup_phase",
+        );
         assert.equal(probeDiagnostics.length, probeCalls);
         for (const [index, diagnostic] of probeDiagnostics.entries()) {
           assert.equal(diagnostic.event, "codex.model_probe");
@@ -3167,6 +3176,29 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         }
         if (scenario.probeTimeouts) {
           assert.equal(probeDiagnostics[0].code, "MODEL_PROBE_TIMEOUT");
+        }
+        // Startup timing reports fixed phase names and outcomes only: no model,
+        // provider, credential or path value can appear in these lines.
+        assert.deepEqual(
+          startupPhases.map(({ phase, outcome }) => [phase, outcome]),
+          [
+            ["codex-login", loginFailed ? "failed" : "ok"],
+            ...(loginFailed ? [] : [["model-probe", scenario.ready ? "ok" : "failed"]]),
+            ...(scenario.ready ? [["native-spawn", "ok"]] : []),
+          ],
+        );
+        for (const phase of startupPhases) {
+          assert.deepEqual(Object.keys(phase), [
+            "event",
+            "container",
+            "phase",
+            "outcome",
+            "ms",
+            "sinceStartMs",
+          ]);
+          assert.equal(phase.container, "agent");
+          assert.ok(Number.isInteger(phase.ms) && phase.ms >= 0);
+          assert.ok(phase.sinceStartMs >= phase.ms);
         }
         const failureMessages = diagnostics.filter((message) => !message.startsWith("{"));
         assert.ok(statusHandler);

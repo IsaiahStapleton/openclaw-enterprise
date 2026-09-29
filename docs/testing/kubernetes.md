@@ -81,6 +81,8 @@ The suite checks tenant isolation, resource bounds, nonroot execution, seccomp,
 dropped capabilities, and a read-only root filesystem. Skipped cases prove no
 enforcement. API-plus-worker coverage uses synthetic Secrets for binding admission
 and gateway projection; genuine channel runtime needs the images and credentials below.
+The Driver lifecycle case clones a workload Pod; removing, emptying or
+changing its network profile must deny DNS between successful controls.
 
 Live Configuration ConfigMap CRUD and least-privilege RBAC cases require the
 selected disposable cluster and tenant credentials. Without those inputs, they
@@ -281,10 +283,8 @@ selected disposable resources; deployments need their own runtime verification.
 
 Real-cluster integration is opt-in for ordinary development and required when
 explicitly requested or validating the production-capable Kubernetes driver for
-release. Set all three Kubernetes variables to enable it; setting only some
-fails rather than silently skipping. The test harness requires a dedicated
-loopback-only k3d context, and all three HTTP fixture cases have been
-verified against a k3d-managed cluster. The driver itself also supports verified
+release. The test harness requires a dedicated
+loopback-only k3d context. The driver itself also supports verified
 remote HTTPS API servers and in-cluster ServiceAccount authentication. These
 variables do not configure `server.mjs`, `worker.mjs`, the normal controller, or
 its default Compute Driver.

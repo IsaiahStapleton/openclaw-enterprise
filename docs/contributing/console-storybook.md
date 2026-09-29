@@ -138,11 +138,11 @@ remain disabled in the example Installation YAML.
 Use the [DevDay storyboard](../../scripts/console-storybook/devday-storyboard.md)
 for presenter actions, expected visible states, and fallbacks.
 
-**Choose provider, harness, and authentication** covers OpenAI Codex,
-OpenClaw, Anthropic, and switching an unsaved service-account token to API-key
-authentication. Console model choices appear before credentials; **Enter another
-model ID** supports manual entry. These choices do not prove model access.
-Execution mode follows the harness; the saved-token Preset fixes it to Codex.
+**Choose provider, harness, and authentication** covers the supported
+combinations. Models appear before credentials; **Enter another model ID**
+supports manual entry but does not prove access. Execution mode follows the
+harness; saved tokens require Codex. **Experimental Dedicated OpenClaw** shows
+the runtime-build warning; Embedded OpenClaw does not.
 
 The fixture supplies a ready Namespace, Preset, and model Secret. Namespace
 provisioning, Preset CRUD, and service-account issuance have no dedicated console
