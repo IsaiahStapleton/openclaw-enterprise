@@ -1881,8 +1881,17 @@ test(
     // The foreground is already terminal and every session is disposed. Compute
     // must retain a separate durable obligation beyond its ordinary failure budget.
     await waitFor("retirement to retry beyond the foreground's five attempts", async () => {
-      await advanceCleanupRetries(fixture, candidate);
-      return stopped.length > 5 ? true : undefined;
+      if (stopped.length <= 5) {
+        await advanceCleanupRetries(fixture, candidate);
+        return undefined;
+      }
+      // Join the final failed pass before shutdown; aborting it mid-claim would
+      // leave a stale lease instead of the deferred work this restart exercises.
+      const deferred = await fixture.observerPool.query(
+        "SELECT state FROM occ.controller_work WHERE idempotency_key LIKE $1 AND state = 'queued'",
+        [`agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+      );
+      return deferred.rowCount === 1 ? true : undefined;
     });
     await fixture.stop();
     const retirement = await fixture.observerPool.query(
@@ -1905,8 +1914,11 @@ test(
     await fixture.work(newer, "succeeded");
     await fixture.work(siblingRevision, "succeeded");
     await waitFor("the restarted worker to resume exact retirement", async () => {
+      if (stopped.length > stopsBeforeRestart) {
+        return true;
+      }
       await advanceCleanupRetries(fixture, candidate);
-      return stopped.length > stopsBeforeRestart ? true : undefined;
+      return undefined;
     });
     await fixture.work(
       { id: candidate.id, idempotencyKey: retirement.rows[0].idempotency_key },
