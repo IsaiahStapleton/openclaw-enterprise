@@ -182,6 +182,20 @@ api:
     # generic only; ingress-nginx and aws always read x-forwarded-for.
     clientAddressHeader: ""
 
+slackProxy:
+  # Optional chart-managed HTTP CONNECT proxy for Slack channel traffic. It is
+  # inert until enabled. HTTPS egress excludes private and reserved IPv4 ranges.
+  enabled: false
+  serviceName: openclaw-enterprise-slack-proxy
+  port: 3128
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
 cluster:
   cidrs: []
   port: 443

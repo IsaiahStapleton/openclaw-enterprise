@@ -1941,6 +1941,56 @@ export const scenarios = {
     description:
       "Edit native JSON on the current draft. Save Configuration persists values; deployment remains a separate action.",
   },
+  gatewayPasswordAccess: {
+    group: "Pages/Agent detail",
+    name: "Enable Gateway password access",
+    path: draft,
+    deployed: true,
+    description: "Configure the generated Gateway password without typing native JSON.",
+    steps: [
+      "Select Enable Gateway password access. The draft receives a password reference; no password value is displayed.",
+      "Cancel to discard the edit, or Save Configuration to persist it.",
+      "Confirm the saved-access message, then Deploy new version to apply the reference.",
+    ],
+    gap: "Simulated UI proof; does not verify credential generation, delivery, or a real Gateway login.",
+  },
+  gatewayPasswordEnabled: {
+    group: "Pages/Agent detail",
+    name: "Gateway password access configured",
+    path: draft,
+    gatewayPassword: true,
+    description:
+      "The saved Configuration uses the generated password; deployment is still required to apply edits.",
+  },
+  gatewayPasswordSaveDenied: {
+    group: "Pages/Agent detail",
+    name: "Gateway password save denied",
+    path: draft,
+    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    rules: [
+      {
+        method: "PATCH",
+        suffix: "/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        status: 403,
+      },
+    ],
+    description: "A denied save retains the draft and does not change the saved Configuration.",
+  },
+  gatewayPasswordSaving: {
+    group: "Pages/Agent detail",
+    name: "Gateway password save in progress",
+    path: draft,
+    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    rules: [
+      {
+        method: "PATCH",
+        suffix: "/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        hold: true,
+      },
+    ],
+    description:
+      "A pending save blocks further Configuration edits and deployment; a timed-out write requires draft readback.",
+  },
   pluginsDraft: {
     group: "Pages/Agent detail",
     name: "Edit plugins in new version",
@@ -2133,6 +2183,40 @@ export const scenarios = {
     candidateDeploymentStatus: "running",
     description:
       "A worker holds the v7 deployment claim while v6 remains selected. The API does not expose finer runtime stages.",
+  },
+  deploymentDeferred: {
+    group: "Pages/Agent detail",
+    name: "Deployment waiting for runtime",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "queued",
+    deploymentLastAttempt: {
+      at: "2026-09-26T22:53:00.000Z",
+      code: "REVISION_INCOMPLETE",
+      message: "Waiting for the runtime to become ready.",
+    },
+    description:
+      "v7 has already been checked and is waiting for another reconciliation. Its last result and timestamp remain distinct from current runtime health.",
+    steps: [
+      "Read the pending reason and Last checked time in Deployment activity.",
+      "Click Refresh deployment; the simulated pending result remains visible.",
+      "View v6 and confirm the latest deployment still describes v7.",
+    ],
+    gap: "Simulated API results demonstrate presentation only. PostgreSQL integration covers durable work attribution.",
+  },
+  deploymentRetrying: {
+    group: "Pages/Agent detail",
+    name: "Deployment retry after dependency failure",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "running",
+    deploymentLastAttempt: {
+      at: "2026-09-26T22:53:00.000Z",
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "A dependency was unavailable. The controller will retry.",
+    },
+    description:
+      "A worker is active again. The previous dependency failure is explicitly labeled as the last recorded result, not a current failure or a terminal outcome.",
   },
   currentVersionDuringDeployment: {
     group: "Pages/Agent detail",

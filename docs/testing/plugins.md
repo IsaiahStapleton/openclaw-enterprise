@@ -66,6 +66,35 @@ cross-node access. Fixture images may use a local tag; native proof
 still requires immutable image references. PostgreSQL cases use a dedicated
 migrated `openclaw_k8s_*` database via `OCC_TEST_DATABASE_URL`.
 
+## Native startup metadata reads
+
+`tests/integration/codex-plugin-startup-reads.test.mjs` normally runs controlled
+protocol cases that verify read batching, error draining, and ordered writes.
+The opt-in companion `codex-plugin-startup-reads-real.test.mjs`, registered in the
+credentialed `plugin-model` lane, launches a disposable Docker container with Codex 0.156.0,
+logs in using an authorized service-account token, and runs the generated
+production client against the real authenticated app-server. It checks six
+catalog reads in batches of at most four, ordered results, a native invalid-plugin
+error followed by successful reads, and the full installer with four disabled
+selections and effective app-policy readback.
+
+After obtaining credential authorization under [the contribution policy](../../CONTRIBUTING.md),
+inject `CODEX_ACCESS_TOKEN` without putting its value in a command or file, and
+set `OCC_TEST_KUBERNETES_AGENT_IMAGE` to a locally available immutable runtime
+image ID or digest containing Codex 0.156.0:
+
+```sh
+OCC_TEST_CODEX_STARTUP_READS_REAL=1 node --test \
+  --test-name-pattern='native Codex app-server' \
+  tests/integration/codex-plugin-startup-reads-real.test.mjs
+```
+
+The test passes the credential through stdin, creates no host mounts or published
+ports, and removes its container. It does not call a model or connector tool.
+This proves compatibility with the native metadata and configuration protocol;
+it does not measure production latency or replace the separate Kubernetes
+lifecycle and enabled-plugin install/auth proofs.
+
 ## Native runtime prerequisites
 
 `tests/integration/plugin-driver-real.test.mjs` is opt-in. Set one scenario flag:
