@@ -10,7 +10,7 @@ CREATE FUNCTION occ.retry_failed_agent_deletion(
 ) RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, occ
+SET search_path = pg_catalog, occ, pg_temp
 AS $$
 BEGIN
   IF p_actor_id IS NULL OR p_actor_id = '' THEN

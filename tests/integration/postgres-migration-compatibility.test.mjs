@@ -1037,6 +1037,7 @@ async function assertCompletedHistory(db, previous = []) {
     ).rows,
     [
       ["occ.finalize_agent_deletion(text,text,text,uuid)", true],
+      ["occ.retry_failed_agent_deletion(text,text,text,text)", true],
       ["occ.validate_access_binding_scope()", false],
       ["occ.validate_group_membership()", false],
       ["occ.validate_restriction_scope()", false],
