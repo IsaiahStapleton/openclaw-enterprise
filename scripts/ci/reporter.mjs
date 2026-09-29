@@ -352,6 +352,12 @@ function failureDiagnostic(error) {
       lastHttpStatus: safeStatus(diagnostic.lastHttpStatus),
     };
   }
+  if (diagnostic.kind === "observability-log-export") {
+    // Which attributed source never reached the OTLP receiver; no record content.
+    return typeof diagnostic.api === "boolean" && typeof diagnostic.worker === "boolean"
+      ? { kind: "observability-log-export", api: diagnostic.api, worker: diagnostic.worker }
+      : undefined;
+  }
   if (diagnostic.kind !== "controller-http") {
     return undefined;
   }
