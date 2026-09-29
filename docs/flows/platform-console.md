@@ -1,16 +1,16 @@
 ---
 created: 2026-09-01
-updated: 2026-09-27
-last_updated_session: 01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-09-29
+last_updated_session: authoring-run/1ca6a40a-a247-465f-9a83-182dbcb6ff4e
 ---
 
 # Platform console request flow
 
 ## Overview
 
-`/console/` resolves a session and renders authorized resources.
+`/console/` renders session-authorized resources.
 The [console reference](../reference/console.md) owns user-visible behavior;
-API and IAM authorize resources.
+API and IAM authorize access.
 
 ## Entry Points
 
@@ -25,9 +25,9 @@ API and IAM authorize resources.
 - HTTP: `apps/controller/src/index.ts:createFastifyApp`.
 - Startup: `apps/controller/src/composition/production.ts:composeProduction`
   and `development-postgres.ts:composePostgresDevelopment`.
-- Assumptions: a bootstrapped Installation, provisioned account, selected IAM
-  Driver, and the configured same-origin controller URL. Reads and mutations
-  require the exact permissions in the [API reference](../reference/api.md).
+- Requires a bootstrapped Installation, provisioned account, selected IAM Driver,
+  same-origin controller, and the [API permissions](../reference/api.md)
+  for each read or mutation.
 
 ## Flow
 
@@ -137,14 +137,15 @@ Origin before sign-in/out, including SDK calls that bypass Better Auth middlewar
 Headerless CLI requests remain supported. Better Auth owns session cookies and
 password verification; the browser stores no credentials or tokens.
 
-After authentication, `loadPage` reads `GET /namespaces`, preserving explicit URL
+After authentication, `loadPage` reads `GET /namespaces`, preserving URL
 selection or choosing the first ready/readable Namespace. Unreadable IDs stay
 unavailable; selection never becomes an API query selector.
 
-`shell.mjs:namespaceSelector` lists readable choices in headers except Namespaces,
-disabled while loading or empty; Namespaces embeds it only for
-unavailable-selection recovery. Selection calls `navigation.mjs:navigate`: Agent
-detail/creation return to Agents; global pages stay open.
+`shell.mjs:namespaceSelector` disables and hides choices through session and
+Namespace checks for loads, Refresh, and admission-starting navigation;
+retained-view validation can extend this.
+Empty lists show access guidance. `navigation.mjs:navigate` returns Agent detail/creation
+to Agents; global pages remain open; recovered warnings disappear.
 
 ### 3. Authorize the selected page resource
 
@@ -152,13 +153,12 @@ detail/creation return to Agents; global pages stay open.
 
 `packages/occ/src/index.ts:OpenClawController.listNamespaces`, `listAgents`
 
-Agents use the selected Namespace's route. OCC requires Namespace read authority
-and filters Agents by exact read permission; Namespace listing similarly filters
-its Installation-wide collection. With no readable selection, the browser makes
-no Agent request. Backends use `GET /backends` independently of selection:
-Installation `administer` precedes the safe startup-summary response. Explicit
-empty configuration is a successful empty list; absent wiring and dependency
-failure return errors.
+Agents use the selected Namespace's route. OCC authorizes Namespace reads and
+filters Agents by exact read permission; Namespace listing filters its
+Installation-wide collection. No readable selection means no Agent request.
+`GET /backends` ignores selection and requires Installation `administer` before
+returning safe startup summaries. Empty configuration returns an empty list;
+missing wiring or failed dependencies return errors.
 
 `apps/controller/src/console/agents/create.mjs:renderCreateAgent` composes Provider,
 Harness, Preset, Configuration, and workspace inputs. Provider/Harness changes
@@ -214,9 +214,9 @@ rereads grants without duplication. Failed Agent writes retain Configuration ID
 and lock JSON/Harness for explicit reuse. Writes never retry automatically; drafts
 admit no revision and start no runtime.
 
-`agents/harness-auth.mjs` edits bindings and renders
-[Secret identity summaries](platform-console/agent-editing.md#4-render-draft-revision-or-channels)
-without fetching values.
+`agents/harness-auth.mjs` edits bindings and shows
+[Secret identities](platform-console/agent-editing.md#4-render-draft-revision-or-channels),
+never values.
 
 ### 4–6. Edit the Agent and access runtime files
 
@@ -319,6 +319,8 @@ refresh and inspection.
 
 ## Changelog
 
+- 2026-09-29 07:19: Guard recovery until session and Namespace reads finish. (authoring-run/1ca6a40a-a247-465f-9a83-182dbcb6ff4e - 90326e6fab11f84fc11b8990b6c8e197a2752c60)
+
 - 2026-09-27 19:38: Preserve validated page and tab DOM in accompanying changes. (01a0b1f2-e696-7232-a439-5b668154bcd9 - 0663fa97)
 
 - 2026-09-27 05:05: Keep supported Dedicated provisioning available without optional repository discovery. (01a0cf72-6985-7712-ba92-d8cc32470f24 - c0f792d5b92e2dee596711654784759d327e0817)
@@ -336,7 +338,6 @@ refresh and inspection.
 - 2026-09-25 00:00: Retain repository draft bindings through failed rediscovery. (01a0d557-f6e3-7da2-af52-993d05735554 - 2e0604a2)
 
 - 2026-09-24 22:03: Link shared editor draft capture before tab teardown. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)
-
 - 2026-09-24 20:03: Recover unavailable Namespace selection inline. (authoring-run/bb42c16a-c6e1-4900-adf5-9ba37629e491 - 09a392cbda669a99e69d5f6a905921b9f10b43d9)
 
 - 2026-09-24 17:13: Trace the header Namespace selector and preserved navigation scope. (authoring-run/fdba83e7-9f34-4b8b-8af2-625214851f27 - 1a458b227585c572ec0ac70fd10efc3834165075)

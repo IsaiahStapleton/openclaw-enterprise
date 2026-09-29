@@ -289,6 +289,8 @@ test("console browser flow keeps Namespace URL state across global pages and log
   assert.match(page.url(), new RegExp(`/console/backends\\?namespace=${alpha.id}$`));
   await page.goBack();
   await page.getByText("openai-primary").waitFor();
+  // Retained text appears before the selector has fresh session and Namespace admission.
+  await page.locator("#namespace-selector:not(:disabled)").waitFor();
   assert.equal(
     await page.getByRole("combobox", { name: "Namespace", exact: true }).inputValue(),
     beta.id,
@@ -818,6 +820,81 @@ test("header Namespace selection leaves Agent detail and creation for the select
     alpha.id,
   );
 });
+
+for (const trigger of ["Refresh", "Back with a replacement session"]) {
+  test(`inline Namespace recovery waits for current admission during ${trigger}`, async (t) => {
+    const fixture = await createConsoleAppFixture(t);
+    await fixture.bootstrap();
+    const alpha = await fixture.createNamespace("Previously readable", { ready: true });
+    const beta = await fixture.createNamespace("Still readable", { ready: true });
+    const missingId = "ns_00000000-0000-4000-8000-000000000099";
+    const { page } = await newMobilePage(t, fixture);
+    await login(page, fixture, `/console/namespaces?namespace=${missingId}`);
+    const selector = page.getByRole("combobox", { name: "Choose a valid namespace", exact: true });
+    await page.locator("#namespace-selector:not(:disabled)").waitFor();
+    assert.equal(await selector.locator(`option[value="${alpha.id}"]`).count(), 1);
+
+    if (trigger !== "Refresh") {
+      await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+      await page.getByRole("link", { name: "Agents", exact: true }).click();
+      await page.getByRole("button", { name: "Refresh", exact: true }).waitFor();
+      await page.locator(".page-actions button:not(:disabled)").waitFor();
+      // A real login in another tab changes the session while sharing the cookie jar.
+      const response = await page
+        .context()
+        .request.post(`${fixture.origin}/api/auth/sign-in/email`, {
+          headers: { origin: fixture.origin },
+          data: { email: fixture.credentials.email, password: fixture.credentials.password },
+        });
+      assert.equal(response.status(), 200);
+    }
+
+    // Revoke through the actual IAM Driver before capturing the fresh Namespace read.
+    fixture.policy.restrictions.push({
+      id: "deny-previously-readable-namespace",
+      namespaceId: alpha.id,
+      resourceKind: "namespace",
+      action: "read",
+      effect: "deny",
+    });
+    const sessionHold = await holdRoute(t, page, "**/api/auth/session", (route, response) =>
+      response ? route.fulfill({ response }) : route.continue(),
+    );
+    const namespaceHold = await holdRoute(t, page, "**/namespaces", (route, response) =>
+      response ? route.fulfill({ response }) : route.continue(),
+    );
+    t.after(() => {
+      sessionHold.release();
+      namespaceHold.release();
+    });
+    if (trigger === "Refresh") {
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    } else {
+      await page.goBack();
+    }
+    await sessionHold.waitForRelease();
+    assert.equal(await selector.isDisabled(), true);
+    assert.equal(await selector.locator('option:not([value=""])').count(), 0);
+    assert.equal(new URL(page.url()).searchParams.get("namespace"), missingId);
+
+    await releaseHeldRoute(page, "**/api/auth/session", sessionHold);
+    await namespaceHold.waitForRelease();
+    // A changed session can discard a retained shell or leave the first-load shell.
+    // Any remaining selector must still await the fresh readable-Namespace response.
+    if (await selector.count()) {
+      assert.equal(await selector.isDisabled(), true);
+      assert.equal(await selector.locator('option:not([value=""])').count(), 0);
+    }
+    assert.equal(new URL(page.url()).searchParams.get("namespace"), missingId);
+    await releaseHeldRoute(page, "**/namespaces", namespaceHold);
+    await page.locator("#namespace-selector:not(:disabled)").waitFor();
+    assert.equal(await selector.locator(`option[value="${alpha.id}"]`).count(), 0);
+    await selector.selectOption(beta.id);
+    await page.waitForURL(`**/console/namespaces?namespace=${beta.id}`);
+    await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
+    assert.equal(await page.locator(".namespace-recovery").count(), 0);
+  });
+}
 
 test("Namespaces recovers stale selection inline and handles losing all readable scopes", async (t) => {
   const fixture = await createConsoleAppFixture(t);

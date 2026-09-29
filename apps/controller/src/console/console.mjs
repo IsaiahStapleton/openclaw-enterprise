@@ -141,7 +141,7 @@ function restoreRetainedView(current) {
     return null;
   }
   retainedViews.delete(key);
-  const shell = renderShell(current.feature);
+  const shell = renderShell(current.feature, true);
   if (retained.title) {
     app.querySelector(".content h1").textContent = retained.title;
   }
@@ -197,8 +197,13 @@ function resetReads({ retainView = false } = {}) {
   return lifetime.reset();
 }
 
-function renderShell(feature) {
-  return shellUI.renderShell(feature, { session, namespaces, namespaceId });
+function renderShell(feature, namespaceAdmissionPending = false) {
+  return shellUI.renderShell(feature, {
+    session,
+    namespaces,
+    namespaceId,
+    namespaceAdmissionPending,
+  });
 }
 
 function clearPrivate() {
@@ -348,7 +353,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     return;
   }
   if (current.feature !== "login" && !retained) {
-    shell = renderShell(current.feature);
+    shell = renderShell(current.feature, true);
     panel(shell.view, "Loading…", "Checking your session and Namespace access.");
   }
   let sessionResolved = false;
@@ -494,7 +499,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
         return;
       }
     }
-    shell = renderShell(current.feature);
+    shell = renderShell(current.feature, false);
     const viewState = {
       active,
       pending: 0,
