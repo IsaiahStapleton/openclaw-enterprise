@@ -281,8 +281,8 @@ not prove those application paths.
 
 ## Recover from a partial failure
 
-Keep the original private evidence directory and the maintenance restrictions.
-Do not start a fresh upgrade to recover an interrupted one: its frozen Agent
+Keep the evidence directory and maintenance restrictions.
+Do not start another upgrade to recover: its frozen Agent
 inventory and dispatch records are needed to avoid duplicate deployments. If
 preparation did not finish, the helper stopped before mutation; use a new
 evidence directory after resolving the failure. Otherwise, repeat the original
