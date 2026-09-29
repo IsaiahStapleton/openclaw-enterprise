@@ -220,6 +220,9 @@ export async function createConsoleAppFixture(t, options = {}) {
         recordOperations: options.recordOperations ?? false,
         backends,
         defaultPresets: options.defaultPresets ?? [],
+        ...(options.nativeWorkerSupport === undefined
+          ? {}
+          : { nativeWorkerSupport: options.nativeWorkerSupport }),
       });
       const modelBackends = backends.filter((backend) => backend.type === "chatgpt");
       if (modelBackends.length > 0) {

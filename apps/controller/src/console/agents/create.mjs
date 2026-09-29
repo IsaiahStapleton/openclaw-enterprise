@@ -361,6 +361,12 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     { className: "notice", role: "status", hidden: true },
     "Experimental: Dedicated OpenClaw requires a runtime build with native worker-inference support. Released OpenClaw images may not include it yet.",
   );
+  // Admission refuses dedicated OpenClaw unless the Installation reports native worker support.
+  const nativeWorkersUnavailable = element(
+    "p",
+    { className: "error", role: "alert", hidden: true },
+    "Dedicated OpenClaw is unavailable: this installation's OpenClaw runtime lacks native worker support. Choose Embedded execution or the Codex harness.",
+  );
   const configuration = element("textarea", {
     id: "configuration-json",
     name: "configuration",
@@ -510,6 +516,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     field("Harness", harness),
     harnessHint,
     nativeHarnessWarning,
+    nativeWorkersUnavailable,
     binding
       ? element("p", {}, `Preset authentication: ${harnessAuthDescription(binding)}`)
       : authMethodField,
@@ -849,6 +856,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   let capabilityDiscoveryDone = false;
   let capabilityDiscoveryFailed = false;
   const provisionableExecutionModes = new Set();
+  let nativeWorkersAvailable = false;
   const provisioningRequestId = createClientRequestId();
   let provisioningAttempt = null;
   const capabilityStatus = element(
@@ -1244,7 +1252,12 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       binding?.method === "runtime";
     harness.disabled ||=
       binding?.method === "runtime" || (usesPat && Boolean(binding || savedSecret));
-    nativeHarnessWarning.hidden = harness.value !== "openclaw" || mode.value !== "dedicated";
+    const nativeRefused =
+      capabilityDiscoveryDone && !nativeWorkersAvailable && harness.value === "openclaw";
+    mode.querySelector('[value="dedicated"]').disabled = nativeRefused;
+    nativeWorkersUnavailable.hidden = !nativeRefused || mode.value !== "dedicated";
+    nativeHarnessWarning.hidden =
+      harness.value !== "openclaw" || mode.value !== "dedicated" || nativeRefused;
     const codexOption = harness.querySelector('[value="codex"]');
     codexOption.hidden = nativeProvider.value === "anthropic";
     codexOption.disabled = nativeProvider.value === "anthropic";
@@ -1344,6 +1357,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       pending ||
       outcomeUnknown ||
       !capabilityDiscoveryDone ||
+      !nativeWorkersUnavailable.hidden ||
       Boolean(provisioningAttempt);
     retryProvisioning.hidden = !provisioningAttempt;
     retryProvisioning.disabled = pending || !provisioningAttempt;
@@ -1386,6 +1400,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       if (!defaultApprovers.hidden) {
         defaultApprovers.refreshNames();
       }
+      nativeWorkersAvailable = installation.capabilities?.nativeWorkers !== undefined;
       provisionableExecutionModes.clear();
       for (const executionMode of installation.capabilities?.agentProvisioning?.executionModes ??
         []) {

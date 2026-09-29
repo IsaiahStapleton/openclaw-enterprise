@@ -290,13 +290,18 @@ its admitted configuration. The upstream gateway must still
 support the app-server token Secret reference and projected workload identity
 required by the admitted workload. Stock OpenShell incompatibilities
 fail explicitly; test bridges do not establish turnkey production support.
-The pinned OpenClaw runtime image cannot run dedicated native OpenClaw yet. It
-rejects the required worker placement and native worker inference settings, so
-the Gateway and Harness refuse to start rather than run sessions on the Gateway.
-See the [runtime image recipe](../../deploy/runtime/README.md).
 There is no current command-level `exec` facet or per-tool sandbox admission.
 See [SandboxDriver](drivers/sandbox.md) and [OpenShell](drivers/openshell-sandbox.md)
 for the complete capability and upstream compatibility boundaries.
+
+### Native worker support
+
+The pinned OpenClaw [runtime image](../../deploy/runtime/README.md) lacks required
+worker placement (`cloudWorkers.requiredProfile`) and native worker inference.
+Deploy and provisioning therefore refuse dedicated native OpenClaw with
+`400 INVALID_REQUEST`, and the console withholds that choice. An operator whose
+runtime image is built from an OpenClaw source with both features can declare
+[`runtime.nativeWorkerSupport`](configuration.md#installation-startup-configuration).
 
 ## Related
 

@@ -22,6 +22,7 @@ import {
   REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT,
 } from "../../apps/controller/src/drivers/compute/kubernetes/repository-material-init.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
+import { PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS } from "../../packages/occ/src/index.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { createNativeClientMaterial } from "../fixtures/repository-credentials/clients.mjs";
 import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
@@ -1470,13 +1471,18 @@ test(
 // The pinned OpenClaw lacks required worker placement and native worker
 // inference (upstream openclaw/openclaw#154390). Its strict schema rejects the
 // keys dedicated native OpenClaw writes, so both workloads refuse to start rather
-// than run sessions on the Gateway. Empty these lists, and update the dedicated
-// native OpenClaw notes in docs/reference/harness-execution.md and
-// deploy/runtime/README.md, when the pin accepts them.
-const pinnedNativeOpenClawSchemaGaps = {
-  gateway: [{ path: "cloudWorkers", message: 'Unrecognized key: "requiredProfile"' }],
-  harness: [{ path: "nodeHost.workerRuns", message: 'Unrecognized key: "nativeInferenceConfig"' }],
-};
+// than run sessions on the Gateway, and admission refuses the Agent first. When
+// the pin accepts them, flip PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS and
+// update the native worker notes in docs/reference/harness-execution.md and
+// deploy/runtime/README.md.
+const pinnedNativeOpenClawSchemaGaps = PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS
+  ? { gateway: [], harness: [] }
+  : {
+      gateway: [{ path: "cloudWorkers", message: 'Unrecognized key: "requiredProfile"' }],
+      harness: [
+        { path: "nodeHost.workerRuns", message: 'Unrecognized key: "nativeInferenceConfig"' },
+      ],
+    };
 
 test(
   "runtime image validates the configuration dedicated native OpenClaw renders",
@@ -1604,9 +1610,11 @@ function run(args, env) {
       gateway,
       harness,
     })) {
-      assert.equal(validation.valid, false, name);
-      assert.ok(code !== 0 && signal === null, `${name} must refuse to start:\n${output}`);
-      assert.match(output, /Unrecognized key/, name);
+      assert.equal(validation.valid, PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS, name);
+      if (!PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS) {
+        assert.ok(code !== 0 && signal === null, `${name} must refuse to start:\n${output}`);
+        assert.match(output, /Unrecognized key/, name);
+      }
     }
   },
 );
