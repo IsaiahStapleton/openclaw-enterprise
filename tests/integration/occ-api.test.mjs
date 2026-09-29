@@ -4104,7 +4104,7 @@ test("runtime auth admits SSH revisions without source permissions but retains d
   assert.equal((await controller.request("POST", `${path}/deploy`)).status, 403);
 });
 
-test("Slack admission rejects swapped credentials, preserves authorization, and fences changed Secrets", async () => {
+test("Slack validation rejects swapped credentials and preserves authorization", async () => {
   const controller = await configuredController({
     computeDriver: createProvisioningCapableComputeDriver(),
     configurationDriver: createProvisioningCapableConfigurationDriver(),
@@ -4124,15 +4124,11 @@ test("Slack admission rejects swapped credentials, preserves authorization, and 
   const model = await makeSecret("model", "synthetic-model");
   let calls = 0;
   let response = { ok: true, bot_id: "B123", team_id: "T123" };
-  let duringProbe;
   const channel = new SlackChannelDriver(async (url, options) => {
     calls++;
     assert.equal(new URL(url).pathname, "/api/auth.test");
     assert.equal(options.method, "POST");
     assert.equal(options.headers.authorization, "Bearer xoxb-synthetic-bot");
-    if (duringProbe) {
-      await duringProbe();
-    }
     if (response instanceof Error) {
       throw response;
     }
@@ -4200,18 +4196,6 @@ test("Slack admission rejects swapped credentials, preserves authorization, and 
   response = { ok: false, error: "invalid_auth" };
   assert.equal((await provision()).body.error.code, "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED");
   response = { ok: true, bot_id: "B123", team_id: "T123" };
-  duringProbe = async () => {
-    // A real concurrent API update completes while the provider request is outstanding.
-    // This also proves the external probe is outside the controller write transaction.
-    const changed = await controller.request("PATCH", `${base}/secrets/${app.id}`, {
-      body: { value: "xapp-synthetic-app" },
-    });
-    assert.equal(changed.status, 200, JSON.stringify(changed.body));
-  };
-  const changed = await provision();
-  assert.equal(changed.status, 409, JSON.stringify(changed.body));
-  assert.equal(changed.body.error.code, "CHANNEL_CREDENTIAL_CHANGED");
-  duringProbe = undefined;
   // The in-memory fixture deliberately has no durable work queue. Reaching its
   // error proves credentials passed without substituting for the durable worker test.
   assert.equal((await provision()).body.error.code, "DEPENDENCY_UNAVAILABLE");
@@ -4240,21 +4224,6 @@ test("Slack admission rejects swapped credentials, preserves authorization, and 
   assert.equal(deploy.status, 400, JSON.stringify(deploy.body));
   assert.equal(deploy.body.error.details[0].path, "/channels/slack/botToken");
   response = { ok: true, bot_id: "B123", team_id: "T123" };
-  duringProbe = async () => {
-    const changedConfig = await controller.request(
-      "PATCH",
-      `${base}/configurations/${config.data.id}`,
-      {
-        body: {
-          values: { ...configuration.values, identity: { name: "Changed during validation" } },
-        },
-      },
-    );
-    assert.equal(changedConfig.status, 200, JSON.stringify(changedConfig.body));
-  };
-  const changedConfig = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
-  assert.equal(changedConfig.status, 409, JSON.stringify(changedConfig.body));
-  duringProbe = undefined;
   const good = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
   assert.equal(good.status, 202, JSON.stringify(good.body));
   const beforeDisabled = calls;

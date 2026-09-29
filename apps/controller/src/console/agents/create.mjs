@@ -1,4 +1,3 @@
-import { channelCredentialMessage } from "./channel-credential-errors.mjs";
 import { element, button } from "../dom.mjs";
 import { WORKSPACE_DEFAULTS, WORKSPACE_DEFAULTS_ID } from "../workspace-defaults.mjs";
 import { harnessAuthDescription } from "./harness-auth.mjs";
@@ -927,7 +926,6 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     retryProvisioning,
     submit,
   );
-  let channelCredentialError = null;
   const channelEditor = element("div", { className: "create-channels" });
   let repositories;
   const form = element(
@@ -1125,7 +1123,6 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         request,
         agentName: () => name.value,
         creating: true,
-        channelCredentialError,
         secretBindings: configurationSecretBindings,
         isCurrent: context.isCurrent,
         onExpired: context.onExpired,
@@ -1147,7 +1144,6 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
           throw new Error("This view has changed. Reopen Agent creation before applying channels.");
         }
         context.drafts.forget("channels");
-        channelCredentialError = null;
         edited = true;
         configuration.value = JSON.stringify(updatedValues, null, 2);
         if (options.secretBindings !== undefined) {
@@ -1403,13 +1399,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         context.onExpired();
         return;
       }
-      if (channelCredentialMessage(error)) {
-        channelCredentialError = error;
-        renderChannelEditor();
-      }
       outcomeUnknown =
         mutationStarted &&
-        !channelCredentialMessage(error) &&
         !error.provisioningTerminal &&
         ![400, 403, 404, 409, 429].includes(error.status);
       const detail =

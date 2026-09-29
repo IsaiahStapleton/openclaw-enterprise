@@ -154,8 +154,7 @@ export class PluginPolicyValidationError extends Error {
 
 /** Sanitized admission outcome. The path identifies configuration, never Secret contents. */
 export class ChannelCredentialError extends Error {
-  readonly reason:
-    "role_mismatch" | "credentials_rejected" | "unavailable" | "changed" | "binding_required";
+  readonly reason: "role_mismatch" | "credentials_rejected" | "unavailable" | "binding_required";
   readonly path: string;
 
   constructor(reason: ChannelCredentialError["reason"], path: string) {

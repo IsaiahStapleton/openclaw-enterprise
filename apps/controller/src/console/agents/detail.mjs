@@ -1,4 +1,3 @@
-import { channelCredentialMessage } from "./channel-credential-errors.mjs";
 import { element, button } from "../dom.mjs";
 import { createHarnessAuthFields, renderHarnessAuthSummary } from "./harness-auth.mjs";
 import { renderNativeAdminAccess } from "./native-admin.mjs";
@@ -556,7 +555,6 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     element("h2", {}, "Deployment activity"),
     element("p", { className: "muted" }, "Loading the most recent visible deployment…"),
   );
-  let channelCredentialError = context.drafts.get("channel-validation") ?? null;
   const tabControls = new Map();
   const revisionControls = new Map();
   let draftEditorNavigationBlock = null;
@@ -996,17 +994,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             context,
             agent,
             configuration: snapshot,
-            channelCredentialError:
-              channelCredentialError?.configurationId === snapshot.id &&
-              channelCredentialError?.generation === snapshot.generation
-                ? channelCredentialError
-                : null,
             values,
             revisionsLoaded: revisionResult.status === "fulfilled",
             onChange: updateDeployControls,
             onConfigurationChange(configuration) {
-              channelCredentialError = null;
-              context.drafts.forget("channel-validation");
               snapshot = configuration;
               values = configuration.values;
               viewedSnapshot = configuration;
@@ -1081,8 +1072,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           deployStatus.textContent =
             "Configured on the runtime host; not validated by OCC. Gateway readiness does not confirm model access.";
         } else {
-          deployStatus.textContent =
-            channelCredentialMessage(channelCredentialError) ?? credentials.deployGateMessage();
+          deployStatus.textContent = credentials.deployGateMessage();
         }
       }
     }
@@ -1138,8 +1128,6 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           submitted = true;
           deployStatus.textContent = "Requesting deployment…";
           const revision = await request(`${path}/deploy`, { method: "POST" });
-          channelCredentialError = null;
-          context.drafts.forget("channel-validation");
           if (context.isCurrent()) {
             change(revision.id, "configuration");
           }
@@ -1149,19 +1137,6 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           }
           if (error.status === 401) {
             context.onExpired();
-            return;
-          }
-          if (channelCredentialMessage(error)) {
-            channelCredentialError = {
-              code: error.code,
-              details: error.details,
-              configurationId: snapshot.id,
-              generation: snapshot.generation,
-            };
-            context.drafts.track("channel-validation", () => channelCredentialError);
-            credentials?.setValidationError(channelCredentialError);
-            deployPending = false;
-            change("draft", "credentials");
             return;
           }
           deployFeedback.textContent =

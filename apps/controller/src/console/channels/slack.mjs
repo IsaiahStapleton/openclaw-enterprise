@@ -1,7 +1,3 @@
-import {
-  showChannelCredentialError,
-  clearChannelCredentialError,
-} from "../agents/channel-credential-errors.mjs";
 import { element } from "../dom.mjs";
 import { SLACK_SECRET_BINDINGS, secretIdForBinding } from "../agents/credentials.mjs";
 import { createSlackDirectoryField, isSlackConfigTarget } from "../agents/slack-directory.mjs";
@@ -261,7 +257,6 @@ function credentialReferenceField(binding, context = {}, onSelected) {
     getCurrentSource: () => activeSecretBinding(binding, context)?.source,
     onSecretSelected: async (secret) => {
       await bindSecret(binding, context, secret);
-      clearChannelCredentialError(picker.field);
       onSelected?.(binding.key);
     },
     createSecretName: () => modalSecretName(binding, context),
@@ -275,7 +270,6 @@ function credentialReferenceField(binding, context = {}, onSelected) {
     fieldClassName: "channel-field channel-reference",
     selectClassName: "channel-select",
   });
-  showChannelCredentialError(picker.field, binding, context.channelCredentialError);
   return picker.field;
 }
 

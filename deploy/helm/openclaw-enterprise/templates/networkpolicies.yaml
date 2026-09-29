@@ -126,18 +126,17 @@ spec:
 {{- if gt $proxyPort 65535 }}
 {{- fail "api.channelDirectoryProxyUrl must contain a TCP port from 1 to 65535" }}
 {{- end }}
-{{- range $component := list "api" "worker" }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: openclaw-enterprise-{{ $component }}-channel-directory-egress
+  name: openclaw-enterprise-api-channel-directory-egress
 spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: openclaw-enterprise
-      app.kubernetes.io/instance: {{ $.Release.Name }}
-      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
   policyTypes: [Egress]
   egress:
     - to:
@@ -146,7 +145,6 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $proxyPort }}
-{{- end }}
 {{- end }}
 {{- if .Values.backend.chatgpt.enabled }}
 {{- $providerCidr := .Values.backend.chatgpt.providerCidr }}

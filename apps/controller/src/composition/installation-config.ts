@@ -1,4 +1,3 @@
-import { SlackChannelDriver } from "../drivers/channel/slack.ts";
 import { asRecord, isNonEmptyString } from "@openclaw-enterprise/utils";
 import { readFile, realpath } from "node:fs/promises";
 import { createRequire, findPackageJSON } from "node:module";
@@ -9,7 +8,6 @@ import { loadYaml } from "@kubernetes/client-node";
 import type {
   Backend,
   ComputeDriver,
-  ChannelDriver,
   ConfigurationDriver,
   CredentialGatewayDriver,
   DriverImplementation,
@@ -102,7 +100,6 @@ export interface InstallationRuntimeDrivers {
   readonly computeDriver: ComputeDriver;
   readonly configurationDriver: ConfigurationDriver;
   readonly secretDriver: SecretDriver;
-  readonly channelDriver?: ChannelDriver;
   readonly sandboxDriver?: SandboxDriver;
   readonly credentialGatewayDriver?: CredentialGatewayDriver;
   readonly pluginDriver?: PluginDriver;
@@ -1043,10 +1040,6 @@ export async function loadInstallationConfiguration(options: {
     computeDriver,
     configurationDriver,
     secretDriver,
-    channelDriver: new SlackChannelDriver(
-      globalThis.fetch,
-      environment.OCC_CHANNEL_DIRECTORY_PROXY_URL,
-    ),
     ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
     ...(credentialGatewayDriver === undefined ? {} : { credentialGatewayDriver }),
     createIAMDriver,

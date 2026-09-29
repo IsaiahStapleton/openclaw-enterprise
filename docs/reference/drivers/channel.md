@@ -2,12 +2,12 @@
 
 ## Overview
 
-`ChannelDriver` validates channel credentials for admission and looks up provider identities for an authorized Namespace edit.
+`ChannelDriver` validates configured credentials and looks up provider identities for an authorized Namespace edit.
 OpenClaw Control Plane (OCC) owns caller authorization, Secret access, and the
 saved Agent or Configuration. The Driver owns the provider request and returns
 bounded display candidates with stable provider IDs. It does not send messages
 or grant channel access. The current controller selects the bundled Slack
-implementation for admission and directory lookup; see [Driver selection](selection.md).
+implementation for directory lookup; see [Driver selection](selection.md).
 
 ## Interface
 
@@ -18,13 +18,11 @@ combined with a search query or cursor. The method returns workspace identity, c
 an optional next cursor, and `complete`. A returned name is a display hint;
 callers save IDs. A missing selected Driver makes lookup unavailable.
 
-The optional `validateCredentials(values, withSecret)` hook interprets native
-channel fields. It requests each binding and field path through OCC's callback,
-then validates the value inside the Secret Driver's transient callback. OCC owns
-exact-source authorization and version checks; the adapter owns provider rules.
-The bundled API and worker both select this implementation. Admission calls run
-outside database transactions, with Configuration and Secret rechecks inside
-the final admission transaction.
+The optional `validateCredentials(values, withSecret)` method checks configured
+channel credentials before API provisioning or deployment. `withSecret(binding,
+path, validate)` authorizes the exact same-Namespace Secret and supplies its value
+only inside the SecretDriver callback. Provider calls run before the write
+transaction. Validation does not pin Secret versions or revalidate queued work.
 
 ## IAM
 
@@ -46,7 +44,7 @@ change the provider workspace. The interface has no cleanup hook.
 
 ## Limits
 
-The interface does not deliver messages or open channel consumers. Provider pagination can
+Validation does not establish runtime connectivity. Provider pagination can
 leave a search incomplete; callers must use `nextCursor` before concluding a
 name is missing or unique. Exact-ID lookup can leave inaccessible IDs without
 a label. `complete` describes provider pagination, not the credential's

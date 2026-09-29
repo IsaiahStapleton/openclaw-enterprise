@@ -1,7 +1,3 @@
-import {
-  showChannelCredentialError,
-  clearChannelCredentialError,
-} from "./channel-credential-errors.mjs";
 import { element } from "../dom.mjs";
 import { namespacePath } from "./list.mjs";
 import { ensureSecretOperateBinding } from "./secret-access.mjs";
@@ -113,7 +109,6 @@ export function createChannelSecretsPanel({
   values,
   revisionsLoaded,
   onConfigurationChange,
-  channelCredentialError,
   onChange,
 }) {
   const state = {
@@ -240,8 +235,6 @@ export function createChannelSecretsPanel({
             [binding.key]: secretBinding(secret),
           };
           draft.changedSecrets = { ...draft.changedSecrets, [binding.key]: secret };
-          channelCredentialError = null;
-          clearChannelCredentialError(picker.field);
           state.saveError = null;
           state.saveMessage = "";
           updateGrantWarning();
@@ -260,7 +253,6 @@ export function createChannelSecretsPanel({
         required: true,
         disabled: !canEnterChannelCredentials(),
       });
-      showChannelCredentialError(picker.field, binding, channelCredentialError);
       pickers.push({ binding, picker });
       return picker.field;
     }
@@ -412,9 +404,5 @@ export function createChannelSecretsPanel({
     section: slackEnabled(values) ? section : null,
     canDeploy,
     deployGateMessage,
-    setValidationError(error) {
-      channelCredentialError = error;
-      render();
-    },
   };
 }

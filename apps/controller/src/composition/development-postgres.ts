@@ -154,7 +154,7 @@ export async function composePostgresDevelopment(
     controller.selectDriver("iam", driverId);
     controller.registerDriver(computeDriver);
     controller.selectDriver("compute", computeDriver.id);
-    const channelDriver = drivers?.channelDriver ?? new SlackChannelDriver();
+    const channelDriver = new SlackChannelDriver();
     controller.registerDriver(channelDriver);
     controller.selectDriver("channel", channelDriver.id);
     if (sandboxDriver !== undefined) {

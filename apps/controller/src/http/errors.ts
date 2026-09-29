@@ -145,12 +145,10 @@ export function requestFailure(error: unknown): RequestFailure {
         "The channel provider rejected this credential. Check the selected Secret.",
       unavailable:
         "Channel credential validation is temporarily unavailable. Retry before deploying.",
-      changed:
-        "The channel credential changed during validation. Retry to validate the current Secret.",
       binding_required: "Select an environment-backed Secret for this channel credential.",
     };
     return failure(
-      error.reason === "unavailable" ? 503 : error.reason === "changed" ? 409 : 400,
+      error.reason === "unavailable" ? 503 : 400,
       `CHANNEL_CREDENTIAL_${error.reason.toUpperCase()}`,
       messages[error.reason],
       [{ path: error.path, code: "INVALID_VALUE" }],

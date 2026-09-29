@@ -208,10 +208,7 @@ test("kubernetes-secret-driver stores, verifies, updates, resolves, and deletes 
     backendRef,
     createdAt: new Date().toISOString(),
   };
-  assert.deepEqual(await driver.withValue(secret, async (value, version) => ({ value, version })), {
-    value: "rotated-value",
-    version: "2",
-  });
+  assert.equal(await driver.withValue(secret, async (value) => value), "rotated-value");
   await assert.rejects(
     driver.withValue({ ...secret, backendRef: { ...backendRef, uid: "foreign" } }, async () =>
       assert.fail("foreign Secret must not be used"),

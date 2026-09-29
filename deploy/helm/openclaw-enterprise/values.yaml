@@ -145,8 +145,8 @@ database:
 api:
   port: 8080
   clients: []
-  # Exact HTTP(S) proxy for API/worker Slack validation and API directory lookup.
-  # Allow CONNECT to slack.com:443. Required for Slack with default-deny egress.
+  # Optional exact HTTP(S) proxy endpoint for API-side Slack directory lookup.
+  # The proxy must allow CONNECT to slack.com:443; empty disables lookup in production.
   channelDirectoryProxyUrl: ""
   # Optional model-list discovery: API Pod HTTPS egress to provider IPv4 /32 hosts.
   # Operators maintain these addresses; Console model selection does not require it.

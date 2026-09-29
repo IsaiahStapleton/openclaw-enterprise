@@ -341,7 +341,6 @@
                   { "const": "CHANNEL_CREDENTIAL_ROLE_MISMATCH", "type": "string" },
                   { "const": "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED", "type": "string" },
                   { "const": "CHANNEL_CREDENTIAL_UNAVAILABLE", "type": "string" },
-                  { "const": "CHANNEL_CREDENTIAL_CHANGED", "type": "string" },
                   { "const": "CHANNEL_CREDENTIAL_BINDING_REQUIRED", "type": "string" }
                 ]
               },

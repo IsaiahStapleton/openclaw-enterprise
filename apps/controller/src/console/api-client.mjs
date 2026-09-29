@@ -36,16 +36,6 @@ export function createApiClient({ lifetime, hasSession, onExpired }) {
       if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
         error.code = code;
       }
-      if (error.code?.startsWith("CHANNEL_CREDENTIAL_") && Array.isArray(payload?.error?.details)) {
-        error.details = payload.error.details
-          .slice(0, 32)
-          .filter(
-            (detail) =>
-              typeof detail?.path === "string" &&
-              /^\/channels\/slack\/(?:appToken|botToken)$/.test(detail.path),
-          )
-          .map(({ path }) => ({ path }));
-      }
       const requestId = payload?.meta?.requestId;
       if (
         typeof requestId === "string" &&

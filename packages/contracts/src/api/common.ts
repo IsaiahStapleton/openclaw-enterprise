@@ -672,7 +672,6 @@ export const ERROR_CODES = Object.freeze([
   "CHANNEL_CREDENTIAL_ROLE_MISMATCH",
   "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED",
   "CHANNEL_CREDENTIAL_UNAVAILABLE",
-  "CHANNEL_CREDENTIAL_CHANGED",
   "CHANNEL_CREDENTIAL_BINDING_REQUIRED",
 ] as const);
 
@@ -736,7 +735,6 @@ export const ErrorResponse = Type.Object(
           Type.Literal("CHANNEL_CREDENTIAL_ROLE_MISMATCH"),
           Type.Literal("CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED"),
           Type.Literal("CHANNEL_CREDENTIAL_UNAVAILABLE"),
-          Type.Literal("CHANNEL_CREDENTIAL_CHANGED"),
           Type.Literal("CHANNEL_CREDENTIAL_BINDING_REQUIRED"),
         ]),
         message: Type.String({ minLength: 1, maxLength: 256 }),
