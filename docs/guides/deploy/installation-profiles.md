@@ -196,9 +196,12 @@ renderer:
   every node selected by `runtime.nodeSelector`.
 - For Slack, separate runtime and Console directory proxies. Rendering proxy
   wiring does not enable a Slack consumer. The default profile input uses the
-  chart-managed restricted proxy Service; if you use an external proxy instead,
-  provide the literal IPv4 `runtimeProxyUrl` and `directoryProxyUrl` inputs and
-  omit `slackProxyUpstreamCidrs`.
+  chart-managed restricted proxy Service. Set `slackProxyUpstreamCidrs` to the
+  reviewed Slack DNS answers as resolved from the proxy workload network, not
+  from an operator workstation; refresh those CIDRs under the operator
+  NetworkPolicy process when Slack DNS rotates. If you use an external proxy
+  instead, provide the literal IPv4 `runtimeProxyUrl` and `directoryProxyUrl`
+  inputs and omit `slackProxyUpstreamCidrs`.
 - For hosted plugin discovery and Codex runtime authentication, a
   same-Namespace `codex_pat` token Secret or entered PAT during Agent creation.
   Rendering the Codex profile does not create or verify that credential.

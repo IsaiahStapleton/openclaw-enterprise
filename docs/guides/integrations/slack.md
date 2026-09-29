@@ -50,6 +50,13 @@ TCP 443. If you use an external proxy instead, use a literal IPv4 address and
 explicit port with no URL credentials or path. Setting one proxy path does not
 configure the other consumer path.
 
+Choose upstream CIDRs from Slack DNS answers as resolved by the proxy workload's
+network path. Do not assume an operator workstation resolves the same Slack
+addresses as the in-cluster proxy. Treat the CIDR list as time-bound
+NetworkPolicy input: refresh it through the operator's review process when
+Slack DNS rotates, and keep using explicit reviewed CIDRs for the current
+answers rather than broad internet CIDRs.
+
 The directory path needs `CONNECT slack.com:443`. The gateway path also needs
 the Slack Socket Mode endpoints returned for the app; review the required
 `slack.com`, `slack-edge.com`, and `slack-msgs.com` domains and their subdomains.
