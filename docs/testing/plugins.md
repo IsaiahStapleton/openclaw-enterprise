@@ -70,7 +70,8 @@ migrated `openclaw_k8s_*` database via `OCC_TEST_DATABASE_URL`.
 
 `tests/integration/codex-plugin-startup-reads.test.mjs` normally runs controlled
 protocol cases that verify read batching, error draining, and ordered writes.
-Its opt-in native case launches a disposable Docker container with Codex 0.156.0,
+The opt-in companion `codex-plugin-startup-reads-real.test.mjs`, registered in the
+credentialed `plugin-model` lane, launches a disposable Docker container with Codex 0.156.0,
 logs in using an authorized service-account token, and runs the generated
 production client against the real authenticated app-server. It checks six
 catalog reads in batches of at most four, ordered results, a native invalid-plugin
@@ -85,7 +86,7 @@ image ID or digest containing Codex 0.156.0:
 ```sh
 OCC_TEST_CODEX_STARTUP_READS_REAL=1 node --test \
   --test-name-pattern='native Codex app-server' \
-  tests/integration/codex-plugin-startup-reads.test.mjs
+  tests/integration/codex-plugin-startup-reads-real.test.mjs
 ```
 
 The test passes the credential through stdin, creates no host mounts or published
