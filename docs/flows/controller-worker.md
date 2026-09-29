@@ -272,15 +272,15 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.defer`,
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
-Pending convergence requeues with backoff and refunds the attempt. Dependency
-failures consume attempts; permanent failure, exhaustion or deadline terminates
-work. See [outcomes](../reference/controller.md) and
+Pending convergence refunds the attempt, requeuing unready revisions after 500 ms
+and other work with backoff. Dependency failures consume attempts; permanent
+failure, exhaustion or deadline terminates work. See [outcomes](../reference/controller.md) and
 [timing controls](../reference/settings/operations.md#controller-worker-environment).
 
 `ControllerWorker.processRepositoryCleanup` defers every incomplete pass at the
-Driver interval, including closing sessions and failed runtime retirement.
-It releases the claim without consuming retries, freeing the worker between
-attempts. Obligations survive; lease loss aborts the pass.
+Driver interval, including closing sessions and failed runtime retirement,
+releasing the claim without consuming retries. Obligations survive; lease loss
+aborts the pass.
 
 Terminal rows store `reason_code` and optional `result_data`: `{ warnings: [...] }`
 for success; required `timeoutMs` and optional `runtimeFailure` for convergence

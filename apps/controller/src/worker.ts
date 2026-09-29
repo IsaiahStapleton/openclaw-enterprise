@@ -87,6 +87,11 @@ export interface ControllerWorkerOptions {
 type Observation = NamespaceEnsureResult | NamespaceDeleteResult;
 type Outcome = "success" | "pending" | "retry" | "permanent";
 
+// A revision whose runtime is not ready yet is progress, not a failure. Recheck
+// it on a short fixed cadence so earlier transient failures on the same Work do
+// not stretch readiness waits through the queue's exponential retry backoff.
+const REVISION_READINESS_RECHECK_MS = 500;
+
 interface DispatchResult {
   readonly outcome: Outcome;
   readonly code: string;
@@ -2544,7 +2549,11 @@ export class ControllerWorker {
           ...(resolved.resultData === undefined ? {} : { resultData: resolved.resultData }),
         });
       } else if (resolved.outcome === "pending") {
-        await queue.defer(claim, { code: resolved.code });
+        await queue.defer(
+          claim,
+          { code: resolved.code },
+          resolved.code === "REVISION_INCOMPLETE" ? { delayMs: REVISION_READINESS_RECHECK_MS } : {},
+        );
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
         await queue.fail(claim, {
           code: resolved.code,
