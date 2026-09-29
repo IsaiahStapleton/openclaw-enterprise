@@ -1064,33 +1064,21 @@ async function revalidateMountedAgent(current) {
   }
 }
 
-// A pristine sharing form is always mounted on Agent detail; it must not disable
-// the access recheck. Any other form, or a sharing form with input, still does.
-function hasUnfinishedForm() {
-  if (app.querySelector("dialog[open]")) {
-    return true;
-  }
-  return Array.from(app.querySelectorAll("form")).some(
-    (form) =>
-      !form.classList.contains("agent-access-form") ||
-      Array.from(form.elements).some((field) =>
-        field.type === "checkbox" ? field.checked : Boolean(field.value),
-      ),
-  );
-}
-
 function resumePage() {
-  if (document.hidden || !session || loggingOut || hasUnfinishedForm()) {
+  if (document.hidden || !session || loggingOut || app.querySelector("dialog[open]")) {
     return;
   }
   if (resumePending) {
     return;
   }
   const current = route();
-  const pending =
-    current.agentId && mountedRouteKey === routeKey(current)
-      ? revalidateMountedAgent(current)
-      : loadPage({ reuseView: true });
+  // Agent detail rechecks in place and keeps its forms, so their input must not skip the
+  // check. Other pages reload the view, which would discard an unfinished form.
+  const inPlace = current.agentId && mountedRouteKey === routeKey(current);
+  if (!inPlace && app.querySelector("form")) {
+    return;
+  }
+  const pending = inPlace ? revalidateMountedAgent(current) : loadPage({ reuseView: true });
   resumePending = pending;
   void pending.finally(() => {
     if (resumePending === pending) {
