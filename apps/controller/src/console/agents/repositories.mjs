@@ -6,7 +6,7 @@ import {
   repositoryWriteAccessHelp,
 } from "./repository-profiles.mjs";
 
-export function createRepositoryFields(context, onChange) {
+export function createRepositoryFields(context, onChange, initialBindings = []) {
   const status = element(
     "p",
     { className: "hint", role: "status", "aria-live": "polite" },
@@ -19,17 +19,45 @@ export function createRepositoryFields(context, onChange) {
     { className: "hint repository-write-access", hidden: true, "aria-live": "polite" },
     repositoryWriteAccessHelp,
   );
-  const profileGroup = element(
-    "fieldset",
-    { className: "repository-profile-group", hidden: true },
-    element("legend", {}, "Authorization level"),
+  const issueAccess = element("input", { id: "repository-issue-access", type: "checkbox" });
+  const issueHelp = element("p", { className: "hint", id: "repository-issue-help" });
+  issueAccess.setAttribute("aria-describedby", issueHelp.id);
+  const accessSummary = element("p", { className: "hint", role: "status" });
+  const customize = element(
+    "details",
+    { className: "repository-customize", hidden: true },
+    element("summary", {}, "Customize access"),
     element(
       "p",
       { className: "hint" },
-      "Choose one level for all selected repositories. Only levels they share are available.",
+      "Push code and pull request access are included together. Issue management is optional.",
+    ),
+    element(
+      "label",
+      { className: "repository-option", for: issueAccess.id },
+      issueAccess,
+      element("span", {}, element("strong", {}, "Create and manage issues"), issueHelp),
+    ),
+    writeAccess,
+  );
+  issueAccess.addEventListener("change", () => {
+    state.profile = issueAccess.checked ? "git-full" : "git-write";
+    updateAccessDetails();
+    validation.hidden = true;
+    onChange(true);
+  });
+  const profileGroup = element(
+    "fieldset",
+    { className: "repository-profile-group", hidden: true },
+    element("legend", {}, "Access level"),
+    element(
+      "p",
+      { className: "hint" },
+      "Applies to every selected repository. Choose what this Agent can do.",
     ),
     profileChoices,
-    writeAccess,
+    accessSummary,
+    customize,
   );
   const validation = element("p", { className: "error", role: "alert", hidden: true });
   const retry = button("Retry repository choices", async () => {
@@ -52,7 +80,7 @@ export function createRepositoryFields(context, onChange) {
     element(
       "p",
       { className: "muted" },
-      "Optional. Select up to 16 repositories approved for this Namespace, then choose their access level.",
+      "Choose the repositories this Agent can work with, or skip to continue without repository access.",
     ),
     status,
     retry,
@@ -85,10 +113,9 @@ export function createRepositoryFields(context, onChange) {
   );
   const state = {
     options: [],
-    selected: new Set(),
-    profile: "",
+    selected: new Set(initialBindings.map((binding) => binding.repositoryRef)),
+    profile: initialBindings[0]?.profile ?? "",
     settled: false,
-    draftOnly: false,
     blockingFailure: undefined,
     disabled: false,
   };
@@ -106,6 +133,36 @@ export function createRepositoryFields(context, onChange) {
         );
   }
 
+  function updateAccessDetails() {
+    const available = commonProfiles();
+    const writable = repositoryProfile(state.profile)?.writes;
+    customize.hidden = !writable;
+    writeAccess.hidden = !writable;
+    issueAccess.checked = state.profile === "git-full";
+    issueAccess.disabled =
+      state.disabled ||
+      !available.some((p) => p.id === "git-full") ||
+      !available.some((p) => p.id === "git-write");
+    if (!available.some((p) => p.id === "git-full")) {
+      issueHelp.textContent = "Issue management is not approved for every selected repository.";
+    } else if (!available.some((p) => p.id === "git-write")) {
+      issueHelp.textContent =
+        "Required by the approved Contributor profile for these repositories.";
+    } else {
+      issueHelp.textContent =
+        "Turn off to keep code and pull request access without issue management.";
+    }
+    accessSummary.textContent = "";
+    if (state.profile === "git-write") {
+      accessSummary.textContent =
+        "Contributor · push code and work with pull requests. Issue management is off.";
+    } else if (state.profile === "git-full") {
+      accessSummary.textContent =
+        "Contributor · push code, work with pull requests, and manage issues.";
+    }
+    accessSummary.hidden = !writable;
+  }
+
   function renderProfiles() {
     const selected = selectedOptions();
     const available = commonProfiles();
@@ -113,22 +170,30 @@ export function createRepositoryFields(context, onChange) {
       state.profile = "";
     }
     profileGroup.hidden = selected.length === 0;
-    writeAccess.hidden = !repositoryProfile(state.profile)?.writes;
+    // Keep the enforced profile IDs; only the Console's two choices are grouped.
+    const reader = available.find((profile) => profile.id === "git-read");
+    const contributor =
+      available.find((profile) => profile.id === "git-full") ??
+      available.find((profile) => profile.id === "git-write");
     profileChoices.replaceChildren(
-      ...available.map((profile) => {
+      ...[reader, contributor].filter(Boolean).map((profile) => {
+        const writable = profile.writes;
         const id = `repository-profile-${profile.id}`;
         const input = element("input", {
           id,
           type: "radio",
           name: "repository-profile",
           value: profile.id,
-          checked: state.profile === profile.id,
+          checked: writable
+            ? !!repositoryProfile(state.profile)?.writes
+            : state.profile === profile.id,
           required: true,
           disabled: state.disabled,
         });
         input.addEventListener("change", () => {
           state.profile = profile.id;
-          writeAccess.hidden = !profile.writes;
+          customize.open = false;
+          updateAccessDetails();
           validation.hidden = true;
           onChange(true);
         });
@@ -139,12 +204,13 @@ export function createRepositoryFields(context, onChange) {
           element(
             "span",
             {},
-            element("strong", {}, profile.label),
+            element("strong", {}, writable ? "Contributor" : "Read-only"),
             element("span", { className: "hint" }, profile.help),
           ),
         );
       }),
     );
+    updateAccessDetails();
     if (selected.length > 0 && available.length === 0) {
       validation.textContent =
         "These repositories have no authorization level in common. Remove a repository to continue.";
@@ -253,16 +319,23 @@ export function createRepositoryFields(context, onChange) {
     }));
   }
 
+  function draftBindings() {
+    return [...state.selected].map((repositoryRef) => ({
+      repositoryRef,
+      profile: state.profile,
+    }));
+  }
+
   function setDisabled(disabled) {
     state.disabled = disabled;
     retry.disabled = disabled || !state.settled;
     updateChoiceControls();
     updateProfileControls();
+    updateAccessDetails();
   }
 
   async function load(clearSelections = false) {
     state.settled = false;
-    state.draftOnly = false;
     state.blockingFailure = undefined;
     retry.hidden = true;
     choices.setAttribute("aria-busy", "true");
@@ -329,19 +402,17 @@ export function createRepositoryFields(context, onChange) {
       if (!context.isCurrent()) {
         return { kind: "obsolete" };
       }
+      // A failed read cannot establish which retained choices are still approved.
       state.options = [];
-      state.selected.clear();
-      state.profile = "";
       choices.setAttribute("aria-busy", "false");
       state.settled = true;
       const optionalOutage =
         error.status === 503 && error.code === "REPOSITORY_OPTIONS_UNAVAILABLE";
-      state.draftOnly = optionalOutage && !clearSelections;
       if (error.status === 403) {
         state.blockingFailure = "denied";
       } else if (error.status === 409) {
         state.blockingFailure = "conflict";
-      } else if (clearSelections || !optionalOutage) {
+      } else if (clearSelections || !optionalOutage || state.selected.size > 0) {
         state.blockingFailure = "unavailable";
       }
       if (state.blockingFailure === "denied") {
@@ -354,16 +425,33 @@ export function createRepositoryFields(context, onChange) {
       } else if (clearSelections) {
         status.className = "error";
         status.textContent = `Repository choices could not be reloaded. ${message(error)} Retry the reload or start a new draft.`;
+      } else if (state.selected.size > 0) {
+        status.className = "error";
+        status.textContent = `Repository choices could not be loaded. ${message(error)} Your selections are retained. Retry repository choices before creating an Agent.`;
       } else if (optionalOutage) {
         status.className = "hint";
-        status.textContent = `Repository choices are unavailable. ${message(error)} You can save a draft without repository access; provisioning is unavailable until discovery succeeds.`;
+        status.replaceChildren(
+          "Repository choices are unavailable. ",
+          element(
+            "a",
+            {
+              href: "https://github.com/openclaw/openclaw-enterprise/blob/main/docs/guides/repository-credentials/team-runbook.md",
+              target: "_blank",
+              rel: "noopener noreferrer",
+            },
+            "Set up repository access",
+          ),
+          ". You can continue without repository access.",
+        );
       } else {
         status.className = "error";
         status.textContent = `Repository choices could not be loaded. ${message(error)} Retry repository choices before creating an Agent.`;
       }
       retry.hidden = clearSelections;
       renderChoices();
-      renderProfiles();
+      profileGroup.hidden = true;
+      profileChoices.replaceChildren();
+      validation.hidden = true;
       onChange(false);
       return { kind: state.blockingFailure ?? "unavailable" };
     }
@@ -374,12 +462,12 @@ export function createRepositoryFields(context, onChange) {
   return {
     section,
     bindings,
+    draftBindings,
     validate,
     hasValidSelection,
     setDisabled,
     reload: () => load(true),
     isSettled: () => state.settled,
     blocksCreate: () => state.blockingFailure !== undefined,
-    draftOnly: () => state.draftOnly,
   };
 }

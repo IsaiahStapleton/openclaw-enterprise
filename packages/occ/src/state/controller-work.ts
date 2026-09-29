@@ -24,6 +24,60 @@ export interface DeploymentStatusResult {
   readonly status: DeploymentStatus;
   readonly error: DeploymentStatusError | null;
   readonly warnings: readonly PluginDeploymentWarning[];
+  readonly progress: {
+    readonly lastAttempt: {
+      readonly at: string;
+      readonly code: string;
+      readonly message: string;
+    } | null;
+    readonly nextAttemptAt: string | null;
+  } | null;
+}
+
+export interface ControllerWorkAttempt {
+  readonly at: Date;
+  readonly code: string;
+}
+
+/** Public pending explanations never include arbitrary Driver or provider text. */
+export function deploymentProgressForWork(
+  work: Readonly<ControllerWork>,
+  attempt: ControllerWorkAttempt | undefined,
+): DeploymentStatusResult["progress"] {
+  if (work.state === "succeeded" || work.state === "failed_permanent") {
+    return null;
+  }
+  let code = "RECONCILIATION_PENDING";
+  let message = "Deployment has not completed. Another reconciliation is pending.";
+  switch (attempt?.code) {
+    case "REVISION_INCOMPLETE":
+      code = attempt.code;
+      message = "Waiting for the runtime to become ready.";
+      break;
+    case "DEPENDENCY_UNAVAILABLE":
+      code = attempt.code;
+      message = "A dependency was unavailable. The controller will retry.";
+      break;
+    case "ACTIVE_REVISION_CHANGED":
+      code = attempt.code;
+      message = "The selected version changed. The controller will reconcile again.";
+      break;
+    case "LEASE_EXPIRED":
+      code = attempt.code;
+      message = "The previous worker claim expired. Reconciliation will resume.";
+      break;
+  }
+  return Object.freeze({
+    lastAttempt:
+      attempt === undefined
+        ? null
+        : Object.freeze({
+            at: attempt.at.toISOString(),
+            code,
+            message,
+          }),
+    nextAttemptAt: work.state === "queued" ? work.availableAt.toISOString() : null,
+  });
 }
 
 export interface PluginDeploymentWarning {

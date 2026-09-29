@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-09-23
-last_updated_session: codex/01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-09-28
+last_updated_session: authoring-run/3b7cc615-9e7b-416a-aec7-fe13c38cace1
 ---
 
 # Harness Authentication Binding Flow
@@ -44,7 +44,11 @@ graph TD
   G -->|embedded API key| H["Create or replace shared gateway with projected key"]
   G -->|dedicated key or account| I["Only Codex receives model credential"]
   I --> J{"Login and primary model turn succeed?"}
-  J -->|no| K["Candidate remains unready"]
+  J -->|first model subprocess timeout| P["Wait one second within startup budget"]
+  P --> Q{"Second model probe succeeds?"}
+  Q -->|yes| L
+  Q -->|no| K["Candidate remains unready"]
+  J -->|login or nonretryable failure| K
   J -->|yes| L["Runtime readiness and guarded activation"]
   H --> M{"Native primary model probe succeeds?"}
   M -->|no| N["Gateway stays unready; replacement may interrupt service"]
@@ -71,12 +75,12 @@ Creation omission stores `null`; PATCH omission preserves the binding and explic
 `null` clears it. API-key and `codex_pat` sources use stable OCC Secret references; the method remains distinct even for the same Secret. The actor
 needs exact Secret `operate`; a ChatGPT binding needs exact account `read`.
 Namespace locks serialize source reference changes against deletion. Missing or
-foreign sources fail closed. Binding never selects a different model, Provider,
+foreign sources fail closed. Binding never selects a different model, Backend,
 Harness, or execution mode and cannot issue an account credential.
 
 The [Secret storage flow](secret-storage-and-delivery.md) owns value storage;
 [account issuance](service-account-driver-credential-delivery.md) owns upstream
-credentials and their private Provider binding. Initial runtime provisioning
+credentials and their private Backend binding. Initial runtime provisioning
 creates only transport/channel groups and cannot supply model authentication.
 
 ### 2. Freeze the admitted source and compatibility
@@ -87,7 +91,7 @@ Deployment requires a nonnull binding, exact Agent `deploy`, and Configuration
 `read`. For a key or service account token, OCC checks the actor and Agent principal's Secret `operate`,
 resolves the backend through the selected Secret Driver, and freezes the stable
 reference and Driver identity. For a ChatGPT account, it verifies the issued
-access-token reference and private Provider, member Driver, and workspace
+access-token reference and private Backend, member Driver, and workspace
 ownership. `runtime` needs no source grant, lookup, or delivery metadata. The
 selected Compute validates the combination: SSH accepts only embedded OpenClaw
 with `runtime`; Kubernetes continues to require managed authentication.
@@ -103,12 +107,12 @@ the admitted reference; changing the draft affects the next explicit deployment.
 
 ### 3. Reauthorize the immutable revision before effects
 
-`apps/controller/src/worker.ts:ControllerWorker.resolveRevisionProvider`,
+`apps/controller/src/worker.ts:ControllerWorker.resolveRevisionBackend`,
 `resolveRevisionSecretContext`
 
 The worker authorizes the original deploying actor and required Agent Secret
 grants against the admitted revision. It verifies current source ownership and
-matches managed-account credential and Provider metadata against the frozen
+matches managed-account credential and Backend metadata against the frozen
 snapshot. Revocation or a changed source rejects work before provisioning.
 For `runtime`, worker Agent/Configuration authorization still runs but credential
 source authorization and lookup do not. The dispatch context carries only the
@@ -160,6 +164,14 @@ and configuration, disables execution and external tools, and applies read-only
 filesystem policy without approval grants. Tool events fail the probe. Login
 state remains in the bounded ephemeral home.
 
+`startAuthenticatedCodex` gives `probeCodexAuthentication` a maximum of two
+attempts within one monotonic 61-second budget. Only the subprocess's
+`ETIMEDOUT` result schedules the second attempt after a one-second timer; an
+unexplained `SIGKILL` is a nonretryable failure. The next process timeout is the
+smaller of 30 seconds and the remaining budget. No termination handler is
+installed during the delay, so stopping the launcher prevents the second call.
+Only successful validation starts the app-server and publishes readiness.
+
 Embedded OpenClaw consumes the selected provider's native API key and runs one bounded native
 primary-model probe in the actual gateway startup, with tools and fallback
 disabled. Its 16-token output limit meets the provider's minimum request size.
@@ -170,9 +182,11 @@ credentials or provider failure hold the replacement unready, leaving the Agent
 unavailable until repair and restart or a new deployment. No automatic rollback
 restores the predecessor.
 
-Both runtimes capture native output and hold failed probes unready with a fixed
-message. Readiness polling does not repeat provider calls; restart or deployment
-starts another attempt. These requests may incur usage charges and check only the
+Both runtimes capture native output and hold final failures unready with a fixed
+message. Codex additionally logs allowlisted per-attempt timing, exit classification,
+and outcome, without raw output. It publishes the existing runtime failure only
+after retry exhaustion or a nonretryable result. Readiness polling does not repeat
+provider calls; restart or deployment starts a new bounded startup check. These requests may incur usage charges and check only the
 primary model. See [probe limitations](../reference/harness-execution.md#harness-authentication).
 
 The [existing activation and recovery flow](harness-execution-topology.md#3-publish-safely-and-complete-activation-once)
@@ -184,6 +198,11 @@ consumer, verify a real turn, then revoke the previous key upstream. Revision
 history cannot restore historical Secret values.
 
 ## Debugging and Verification
+
+- [Container launcher tests](../testing/docker.md#verify-codex-startup-probe-recovery)
+  execute the generated launcher with a fixture CLI, real process timeouts,
+  termination, and status reads. They prove recovery control flow, not provider
+  acceptance. Inspect `codex.model_probe` logs for attempt and final-code evidence.
 
 - `node --test tests/integration/harness-topology-k3d-real.test.mjs` with
   `OCC_TEST_HARNESS_K3D_REAL=1` exercises the regular API binding/deploy path with
@@ -213,6 +232,8 @@ history cannot restore historical Secret values.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 18:45: Document bounded Codex model-probe recovery and sanitized attempt evidence in the accompanying change. (authoring-run/3b7cc615-9e7b-416a-aec7-fe13c38cace1 - a14435c81e0d4020dd24568babddf95aba533da7)
 
 - 2026-09-23 12:22: Move canonical credential sources to CP and describe revision-scoped Harness delivery in the accompanying change. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 623d56dec26a8ef0f72b562254687cabecdbbf82)
 

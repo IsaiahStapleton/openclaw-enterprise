@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   KubernetesComputeDriver,
-  kubernetesGatewayNamespaceName,
   kubernetesNamespaceName,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
 import { KubernetesSecretDriver } from "../../apps/controller/src/drivers/secret/kubernetes/index.ts";
 import { validateGitHubRepositoryRegistry } from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
-import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
+import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/backends/repository-credentials/control-client.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture } from "./console-app.mjs";
@@ -146,7 +145,7 @@ export async function createConsoleRepositoryLaunchFixture(t) {
   };
   const fixture = await createConsoleAppFixture(t, {
     state: storage,
-    providers: [provider],
+    backends: [provider],
     computeDriver: compute,
     secretDriver,
     recordOperations: true,
@@ -165,13 +164,10 @@ export async function createConsoleRepositoryLaunchFixture(t) {
     ...compute.manifest("v1", "Namespace", namespaceName, { namespaceId: namespace.id }),
     status: { phase: "Active" },
   });
-  const controlNamespaceName = kubernetesGatewayNamespaceName(namespace.id);
-  const controlNamespace = compute.manifest("v1", "Namespace", controlNamespaceName, {
-    namespaceId: namespace.id,
-  });
-  delete controlNamespace.metadata.labels["openclaw.dev/namespace"];
-  controlNamespace.metadata.labels["openclaw.dev/gateway-namespace"] = namespace.id;
-  namespaces.set(controlNamespaceName, {
+  // Canonical Secrets live in the control-plane tenant, separate from workloads.
+  // Seed completed Namespace provisioning with the real Driver's ownership labels.
+  const controlNamespace = compute.gatewayNamespaceManifest({ namespaceId: namespace.id });
+  namespaces.set(controlNamespace.metadata.name, {
     ...controlNamespace,
     status: { phase: "Active" },
   });
@@ -186,7 +182,7 @@ export async function createConsoleRepositoryLaunchFixture(t) {
     validateGitHubRepositoryRegistry(
       {
         version: 1,
-        providerId: provider.id,
+        backendId: provider.id,
         providerInstanceId: "console-repository-provider",
         appId: "123",
         githubInstallationId: "456",
