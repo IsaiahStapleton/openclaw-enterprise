@@ -12,7 +12,7 @@ Enterprise repository root:
 ```
 
 The helper requires Python 3 and an installed, authenticated reviewer CLI (Codex
-by default). Pass `--model codex=gpt-6-astra` to select the Enterprise standard;
+by default). Image review and the helper test suite also require Pillow. Pass `--model codex=gpt-6-astra` to select the Enterprise standard;
 the unchanged upstream helper has its own default when the option is omitted. It
 needs no Enterprise runtime or pnpm dependencies. For a committed branch, use `--mode branch --base origin/main`; fetch the intended base first.
 Local mode includes untracked files and staged and unstaged changes. The default
@@ -28,13 +28,11 @@ See the skill for engines, context inputs, exit codes, and result interpretation
 ## Upstream provenance
 
 The complete `.agents/skills/autoreview` directory is copied without modification
-from [openclaw/agent-skills, `skills/autoreview`](https://github.com/openclaw/agent-skills/tree/bd9b7cc2c37e7af0915f9becee8f8107aaab27b5/skills/autoreview)
-at commit `bd9b7cc2c37e7af0915f9becee8f8107aaab27b5`.
-This matches OpenClaw's vendored directory at commit
-`0d3f4501fd8e9349ef6651b9d73ff99a11cda074`.
+from [openclaw/agent-skills, `skills/autoreview`](https://github.com/openclaw/agent-skills/tree/6480f6ab50a2a54dce1cfbd33e93b35a7fcd0b81/skills/autoreview)
+at commit `6480f6ab50a2a54dce1cfbd33e93b35a7fcd0b81`.
+The selected commit is on the canonical `agent-skills` main branch.
 The upstream [MIT license](../../.agents/skills/LICENSE.agent-skills) is retained
-beside the copy. Preserve scripts, tests, fixtures, executable modes, and the
-`CLAUDE.md` symlink together.
+beside the copy. Preserve scripts, tests, fixtures, and executable modes together.
 
 ## Sync the skill
 
@@ -47,14 +45,17 @@ From the Enterprise root, export the selected committed directory into a tempora
 directory, using an absolute path to the canonical checkout:
 
 ```sh
+(
+set -eu
 upstream_checkout=/absolute/path/to/agent-skills
 upstream_commit=$(git -C "$upstream_checkout" rev-parse HEAD)
 sync_dir=$(mktemp -d)
-git -C "$upstream_checkout" archive "$upstream_commit" skills/autoreview LICENSE |
-  tar -x -C "$sync_dir"
+git -C "$upstream_checkout" archive "$upstream_commit" skills/autoreview LICENSE > "$sync_dir/archive.tar"
+tar -xf "$sync_dir/archive.tar" -C "$sync_dir"
 rsync -a --delete "$sync_dir/skills/autoreview/" .agents/skills/autoreview/
 cp "$sync_dir/LICENSE" .agents/skills/LICENSE.agent-skills
 diff -r "$sync_dir/skills/autoreview" .agents/skills/autoreview
+)
 ```
 
 `rsync --delete` removes downstream-only files inside the vendored skill. Check
@@ -62,17 +63,37 @@ for local changes before running it. Update the provenance commit and link above
 then validate from the Enterprise root:
 
 ```sh
+(
+set -eu
 PYTHONDONTWRITEBYTECODE=1 python3 .agents/skills/autoreview/scripts/autoreview_test.py
 (
   cd .agents/skills/autoreview
-  PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
-    tests.test_autoreview_hardening tests.test_codex_inference_route \
-    tests.test_codex_sandbox
+  PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYTEST'
+import sys
+import types
+import unittest
+from pathlib import Path
+
+# Load the checked-in namespace even if site-packages contains another tests package.
+package = types.ModuleType("tests")
+package.__path__ = [str(Path("tests").resolve())]
+sys.modules["tests"] = package
+modules = [f"tests.{path.stem}" for path in sorted(Path("tests").glob("test_*.py"))]
+if not modules:
+    raise SystemExit("No autoreview test modules found")
+result = unittest.TextTestRunner(verbosity=2).run(
+    unittest.defaultTestLoader.loadTestsFromNames(modules)
+)
+if result.testsRun <= len(result.skipped):
+    raise SystemExit("No autoreview tests completed without being skipped")
+raise SystemExit(not result.wasSuccessful())
+PYTEST
 )
 pnpm check:workspace
 pnpm docs:check-length
 pnpm format:check
 git diff --check
+)
 ```
 
 Run documentation and formatting checks with their existing installed dependencies;
