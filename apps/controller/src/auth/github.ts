@@ -52,13 +52,13 @@ function githubProviderInstance(config: GitHubLoginConfiguration): string {
   return `github:${digest(config.clientId)}`;
 }
 
-function digest(value: string): string {
+export function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 function secret(): string {
   return randomBytes(32).toString("base64url");
 }
-function rejected(): APIError {
+export function rejected(): APIError {
   return APIError.fromStatus("UNAUTHORIZED", { message: "Authentication was not accepted." });
 }
 
@@ -66,9 +66,16 @@ const tokenEndpoint = "https://github.com/login/oauth/access_token";
 const profileEndpoint = "https://api.github.com/user";
 const providerResponseLimit = 64 * 1024;
 
-// The two fixed provider requests share a deadline, including streaming body reads.
-async function providerJSON(
-  endpoint: typeof tokenEndpoint | typeof profileEndpoint,
+// Every fixed provider endpoint the controller may call. Nothing else is fetchable.
+export type ProviderEndpoint =
+  | typeof tokenEndpoint
+  | typeof profileEndpoint
+  | "https://oauth2.googleapis.com/token"
+  | "https://www.googleapis.com/oauth2/v3/certs";
+
+// A provider's fixed requests share a deadline, including streaming body reads.
+export async function providerJSON(
+  endpoint: ProviderEndpoint,
   init: RequestInit,
   signal: AbortSignal,
 ): Promise<Record<string, unknown>> {
