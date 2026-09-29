@@ -177,6 +177,13 @@ If you opt in to repositories, add the broker inputs:
 }
 ```
 
+`serviceName` is optional. When omitted, the renderer leaves it out of
+`values.yaml`: a new installation gets the chart's `git` Service, and a Helm
+upgrade fails until you set it. When upgrading an installation whose broker
+Service has another name, set `serviceName` to that current name so TLS and
+active repository sessions keep working, then switch it deliberately after
+sessions drain.
+
 ## Render files
 
 Run the renderer from the repository root with Node.js 24 or newer:

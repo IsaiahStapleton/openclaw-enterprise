@@ -110,7 +110,9 @@ chart-managed Slack proxy Service. The chart allows that proxy public IPv4 HTTPS
 egress, excluding private and reserved ranges, and the proxy authorizes Slack
 hostnames. Repository values render only when the input explicitly sets
 `repository.enabled: true`. Repository provider CIDRs pass through unchanged,
-so operators can keep their existing GitHub ranges without DNS snapshots.
+so operators can keep their existing GitHub ranges without DNS snapshots. The
+renderer copies `repository.serviceName` only when the input sets it, so the
+chart's upgrade guard still requires an explicit current broker Service name.
 
 ### 5. Build Installation startup YAML
 
@@ -188,6 +190,8 @@ activation, and repository registry creation need separate evidence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 20:30: Stop defaulting the repository broker Service name so the chart upgrade guard applies.
 
 - 2026-09-29 18:00: Carry external sign-in, the recovery user ID, and trusted proxies through profile rerenders.
 
