@@ -81,18 +81,20 @@ function deploymentFailure(error) {
   );
 }
 
-function deploymentProgress(status) {
+function deploymentProgress(status, progress) {
+  const workDescriptions = {
+    queued: progress?.lastAttempt
+      ? "Waiting to continue deployment."
+      : "Waiting for a worker claim.",
+    running: "A worker claim is active.",
+    failed: "Deployment work failed; check the recorded error and current version.",
+    succeeded: "Work completed or the version was already active.",
+  };
   const stages = [
     ["Admitted", "An immutable version was created.", "complete"],
     [
       "Deployment work",
-      status === "queued"
-        ? "Waiting for a worker claim."
-        : status === "running"
-          ? "A worker claim is active."
-          : status === "failed"
-            ? "Deployment work failed; check the recorded error and current version."
-            : "Work completed or the version was already active.",
+      workDescriptions[status],
       status === "queued"
         ? "waiting"
         : status === "running"
@@ -196,7 +198,32 @@ function createDeploymentStatusPanel(context, path, revision, onAgentChange, onS
     return element(
       "div",
       {},
-      deploymentProgress(state.status.status),
+      deploymentProgress(state.status.status, state.status.progress),
+      state.status.progress
+        ? element(
+            "div",
+            { className: "deployment-pending-progress" },
+            state.status.progress.lastAttempt
+              ? element(
+                  "dl",
+                  { className: "credential-status-list" },
+                  element("dt", {}, "Last recorded result"),
+                  element("dd", {}, state.status.progress.lastAttempt.message),
+                  element("dt", {}, "Reason"),
+                  element("dd", {}, state.status.progress.lastAttempt.code),
+                  element("dt", {}, "Last checked"),
+                  element("dd", {}, displayDate(state.status.progress.lastAttempt.at)),
+                )
+              : element("p", { className: "muted" }, "No reconciliation result is available yet."),
+            state.status.progress.nextAttemptAt
+              ? element(
+                  "p",
+                  { className: "muted" },
+                  `Eligible for next attempt: ${displayDate(state.status.progress.nextAttemptAt)}. Start time depends on worker availability.`,
+                )
+              : null,
+          )
+        : null,
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
       deploymentFailure(state.status.error),
       state.status.warnings?.length

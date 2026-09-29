@@ -134,6 +134,7 @@ export function bindPlatformUnitOfWork(
       "append",
       "list",
       "findWork",
+      "findWorkAttempt",
       "retryFailedAgentDeletion",
     ]),
   });

@@ -1263,6 +1263,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       "fail",
       "recoverStale",
       "findWork",
+      "findWorkAttempt",
     ]);
   }
 
@@ -3775,6 +3776,10 @@ export class PostgresPlatformState implements PlatformStateStore {
         findWork: async (idempotencyKey) => {
           await this.requireInitialized(context);
           return queue.findWork(idempotencyKey);
+        },
+        findWorkAttempt: async (idempotencyKey) => {
+          await this.requireInitialized(context);
+          return queue.findWorkAttempt(idempotencyKey);
         },
       },
     };

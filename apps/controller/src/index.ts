@@ -893,6 +893,7 @@ function clientDeploymentStatus(status: Readonly<DeploymentStatusResult>): Recor
     status: status.status,
     error: status.error,
     warnings: status.warnings,
+    progress: status.progress,
   };
 }
 

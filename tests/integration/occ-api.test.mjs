@@ -1400,6 +1400,7 @@ test("Agent deployment status polls the admitted revision work with exact read a
     status: "queued",
     error: null,
     warnings: [],
+    progress: { lastAttempt: null, nextAttemptAt: new Date(0).toISOString() },
   });
   const runtimeFailure = {
     component: "gateway",
@@ -1435,6 +1436,7 @@ test("Agent deployment status polls the admitted revision work with exact read a
       data: { timeoutMs: 900_000, runtimeFailure },
     },
     warnings: [],
+    progress: null,
   });
 
   const missing = await controller.request(

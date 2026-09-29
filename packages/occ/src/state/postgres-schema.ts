@@ -930,6 +930,11 @@ export const auditEvents = occSchema.table(
     details: jsonb("details").$type<Record<string, unknown>>(),
   },
   (table) => [
+    index("audit_events_work_attempt_idx")
+      .on(sql`(${table.details}->>'workId')`, table.occurredAt.desc(), table.id.desc())
+      .where(
+        sql`${table.kind} = 'mutation' AND ${table.action} = 'reconcile' AND ${table.resourceKind} = 'agent_revision'`,
+      ),
     check("audit_events_id_format", sql`${table.id} ~ ${identifierPatterns.audit}`),
     check("audit_events_outcome_valid", sql`${table.outcome} IN ('success', 'denied', 'failure')`),
     check(

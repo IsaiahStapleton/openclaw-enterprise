@@ -124,6 +124,7 @@ import {
 import {
   controllerWorkDeploymentStatus,
   deploymentErrorForWork,
+  deploymentProgressForWork,
   deploymentWarningsForWork,
   type DeploymentStatusResult,
 } from "./state/controller-work.ts";
@@ -2237,6 +2238,12 @@ export class OpenClawController {
         status: controllerWorkDeploymentStatus(work, this.clock()),
         error: deploymentErrorForWork(work),
         warnings: deploymentWarningsForWork(work),
+        progress: deploymentProgressForWork(
+          work,
+          work.state === "queued" || work.state === "claimed"
+            ? await state.operations.findWorkAttempt(idempotencyKey)
+            : undefined,
+        ),
       });
     });
   }

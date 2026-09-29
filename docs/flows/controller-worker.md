@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
 updated: 2026-09-28
-last_updated_session: authoring-run/c43b309b-ac83-4ece-ba43-85dc673d5342
+last_updated_session: 01a0eb85-73a8-7572-92a9-a6a06fbdf0a5
 ---
 
 # Controller Worker Flow
@@ -272,12 +272,10 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.defer`,
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
-Pending convergence requeues work with backoff and restores the consumed attempt.
-Dependency failures consume attempts within the retry budget. Permanent failures,
-exhausted attempts, and the convergence deadline terminate work. See the
-[controller reference](../reference/controller.md) for the supported outcomes
-and the [settings reference](../reference/settings/operations.md#controller-worker-environment)
-for their timing controls.
+Pending convergence requeues with backoff and restores the attempt. Dependency
+failures consume attempts; permanent failures, exhausted attempts, and the
+convergence deadline terminate work. See [outcomes](../reference/controller.md)
+and [timing controls](../reference/settings/operations.md#controller-worker-environment).
 
 Terminal rows store the overall `reason_code` and optional `result_data` for
 success or failure details. Successful revision work stores
@@ -294,11 +292,15 @@ Other failure reasons still reject data.
 `PostgresWorkQueue.complete` and `PostgresWorkQueue.fail` publish only under the
 live claim; deployment status derives `error` and `warnings` from that result.
 Completion needs no runtime receipt acknowledgment or post-commit cleanup.
-Maintenance cannot rewrite the completed deployment's historical startup warnings.
+Maintenance cannot rewrite deployment warnings.
 
-Deployment GET requires exact revision `read` and uses durable state that survives
-Pod deletion and controller restart. Queued, running, and successful deployments
-have no failure error. See [deployment status](../reference/agents.md#deployment-status).
+See [deployment status](../reference/agents.md#deployment-status) for authorization
+and persisted result semantics.
+
+Indexed `workId` scopes progress to work; maintenance and unbound history cannot
+supply it. `getDeploymentStatus` reads
+`findWorkAttempt` with the work row in one State snapshot and projects fixed
+public explanations. Memory State has no attempt.
 
 Legacy terminal rows derive `reason_code` from matching activation or terminal
 reconcile audit evidence, otherwise `LEGACY_OUTCOME_UNKNOWN`. Their
@@ -362,6 +364,8 @@ final-attempt crashes from stranding provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 22:10: Expose exact-work pending reconciliation results through deployment status and the Console. (01a0eb85-73a8-7572-92a9-a6a06fbdf0a5 - 0aedecfd)
 
 - 2026-09-28 12:53: Document deployment audit attribution and its transaction boundary. (authoring-run/c43b309b-ac83-4ece-ba43-85dc673d5342 - da62a0368fa4f3ab0a2fa6cca40d9952bf93cdb2)
 

@@ -33,16 +33,21 @@ it does not offer configurable settings. Logout ends your console session.
 **Deployment activity** follows the latest readable version, even while viewing
 another version or the draft. Its milestones use the persisted record:
 
-| Milestone               | Evidence                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| **Admitted**            | OCC saved an immutable AgentRevision and queued its work.                       |
-| **Deployment work**     | `queued` awaits a claim; `running` records a worker claim.                      |
-| **Completion recorded** | `succeeded` means the original work completed activation or was already active. |
+| Milestone               | Evidence                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| **Admitted**            | OCC saved an immutable AgentRevision and queued its work.                         |
+| **Deployment work**     | `queued` awaits an initial or subsequent claim; `running` records a worker claim. |
+| **Completion recorded** | `succeeded` means the original work completed activation or was already active.   |
 
 A `failed` result shows the stored error. Startup evidence may identify the
 runtime component, failed check, code, and check time. Plugin warnings describe
 that attempt. An unavailable record has unknown status. **Refresh deployment**
 rereads it and the selected version without retrying work.
+
+Pending work shows its **Last recorded result** and **Last checked** time,
+including deferred readiness checks and a running worker's previous result.
+Next eligibility does not promise a start time; missing evidence does not mean
+work never started.
 
 **Current version** is OCC's selection, not live health. Deployment may still
 be in progress; a successful historical record does not confirm a response.

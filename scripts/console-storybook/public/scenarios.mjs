@@ -2137,6 +2137,40 @@ export const scenarios = {
     description:
       "A worker holds the v7 deployment claim while v6 remains selected. The API does not expose finer runtime stages.",
   },
+  deploymentDeferred: {
+    group: "Pages/Agent detail",
+    name: "Deployment waiting for runtime",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "queued",
+    deploymentLastAttempt: {
+      at: "2026-09-26T22:53:00.000Z",
+      code: "REVISION_INCOMPLETE",
+      message: "Waiting for the runtime to become ready.",
+    },
+    description:
+      "v7 has already been checked and is waiting for another reconciliation. Its last result and timestamp remain distinct from current runtime health.",
+    steps: [
+      "Read the pending reason and Last checked time in Deployment activity.",
+      "Click Refresh deployment; the simulated pending result remains visible.",
+      "View v6 and confirm the latest deployment still describes v7.",
+    ],
+    gap: "Simulated API results demonstrate presentation only. PostgreSQL integration covers durable work attribution.",
+  },
+  deploymentRetrying: {
+    group: "Pages/Agent detail",
+    name: "Deployment retry after dependency failure",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "running",
+    deploymentLastAttempt: {
+      at: "2026-09-26T22:53:00.000Z",
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "A dependency was unavailable. The controller will retry.",
+    },
+    description:
+      "A worker is active again. The previous dependency failure is explicitly labeled as the last recorded result, not a current failure or a terminal outcome.",
+  },
   currentVersionDuringDeployment: {
     group: "Pages/Agent detail",
     name: "Current version during deployment",

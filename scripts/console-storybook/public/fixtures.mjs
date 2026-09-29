@@ -262,6 +262,13 @@ export function installFixture(scenario, evidence) {
         namespaceId,
         agentId: agent.id,
         status: scenario.candidateDeploymentStatus,
+        progress: ["queued", "running"].includes(scenario.candidateDeploymentStatus)
+          ? {
+              lastAttempt: scenario.deploymentLastAttempt ?? null,
+              nextAttemptAt:
+                scenario.candidateDeploymentStatus === "queued" ? "2026-09-26T22:53:01.000Z" : null,
+            }
+          : null,
         error:
           scenario.candidateDeploymentStatus === "failed"
             ? scenario.candidateSelected

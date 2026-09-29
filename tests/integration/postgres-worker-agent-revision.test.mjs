@@ -4573,6 +4573,87 @@ test(
 );
 
 test(
+  "deployment progress distinguishes deferred work and isolates each work item's evidence",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("deployment-progress");
+    const candidate = await fixture.revision(owner, 1);
+    const queue = new fixture.PostgresWorkQueue(fixture.observerPool);
+    const readStatus = () =>
+      fixture.controller.getDeploymentStatus(
+        fixture.actor.id,
+        fixture.namespace.id,
+        owner.id,
+        candidate.id,
+      );
+
+    const initial = await readStatus();
+    assert.equal(initial.status, "queued");
+    assert.equal(initial.progress.lastAttempt, null);
+
+    // A normal pending observation restores the failure budget to zero. It must
+    // still be distinguishable from a deployment that has never been checked.
+    const claim = await queue.claim();
+    assert.equal(claim.idempotencyKey, candidate.idempotencyKey);
+    await queue.defer(claim, { code: "REVISION_INCOMPLETE" }, { delayMs: 60_000 });
+    const deferred = await readStatus();
+    assert.equal(deferred.status, "queued");
+    assert.equal((await queue.findWork(candidate.idempotencyKey)).attemptCount, 0);
+    assert.equal(deferred.progress.lastAttempt.code, "REVISION_INCOMPLETE");
+    assert.equal(deferred.progress.lastAttempt.message, "Waiting for the runtime to become ready.");
+    assert.ok(Number.isFinite(Date.parse(deferred.progress.lastAttempt.at)));
+    assert.equal(
+      deferred.progress.nextAttemptAt,
+      (await queue.findWork(candidate.idempotencyKey)).availableAt.toISOString(),
+    );
+
+    // Maintenance shares the revision and actor, but cannot overwrite the
+    // original deployment's progress. Both transitions use the real queue.
+    const maintenanceKey = `agent_revision:${candidate.id}:maintenance:0`;
+    await queue.enqueue({
+      idempotencyKey: maintenanceKey,
+      namespaceId: fixture.namespace.id,
+      agentId: owner.id,
+      revisionId: candidate.id,
+      actorId: fixture.actor.id,
+    });
+    const maintenance = await queue.claim();
+    assert.equal(maintenance.idempotencyKey, maintenanceKey);
+    await queue.defer(maintenance, { code: "DEPENDENCY_UNAVAILABLE" }, { delayMs: 60_000 });
+    assert.deepEqual((await readStatus()).progress, deferred.progress);
+
+    // Rescheduling only our fixture work lets a new claim exercise retry output.
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    const retry = await queue.claim();
+    assert.equal(retry.idempotencyKey, candidate.idempotencyKey);
+    const running = await readStatus();
+    assert.equal(running.status, "running");
+    assert.equal(running.progress.nextAttemptAt, null);
+    assert.deepEqual(running.progress.lastAttempt, deferred.progress.lastAttempt);
+    await queue.retry(retry, { code: "PRIVATE_PROVIDER_DETAIL_DO_NOT_EXPOSE" });
+    const retrying = await readStatus();
+    assert.equal(retrying.progress.lastAttempt.code, "RECONCILIATION_PENDING");
+    assert.doesNotMatch(JSON.stringify(retrying), /PRIVATE_PROVIDER/);
+
+    // Let the real worker finish this admitted revision; completion must remove
+    // the pending explanation rather than retain an obsolete readiness warning.
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    await fixture.start(fixture.compute);
+    await fixture.work(candidate, "succeeded");
+    const completed = await readStatus();
+    assert.equal(completed.status, "succeeded");
+    assert.equal(completed.progress, null);
+  },
+);
+
+test(
   "real PostgreSQL preserves the failure budget while an Agent runtime converges",
   requiresPostgres,
   async (context) => {
@@ -4747,6 +4828,7 @@ test(
         status: "succeeded",
         error: null,
         warnings,
+        progress: null,
       },
     );
   },
