@@ -25,6 +25,12 @@ function logStartupPhase(phase, startedAt, outcome = "ok") {
     sinceStartMs: now - startupPhaseOrigin,
   }));
 }
+async function timeStartupPhase(phase, run) {
+  const startedAt = Date.now();
+  const result = await run();
+  logStartupPhase(phase, startedAt);
+  return result;
+}
 `;
 }
 
@@ -1750,13 +1756,13 @@ function forwardTermination(child) {
   process.on("SIGINT", () => forward("SIGINT"));
 }
 
-const modelProbeStartedAt = Date.now();
 const openClawAuthenticationFailureCode =
   process.env.OPENCLAW_HARNESS_PROBE_CONFIG === undefined
     ? undefined
     : probeOpenClawAuthenticationFailureCode();
 if (process.env.OPENCLAW_HARNESS_PROBE_CONFIG !== undefined) {
-  logStartupPhase("model-probe", modelProbeStartedAt, openClawAuthenticationFailureCode === undefined ? "ok" : "failed");
+  // The probe is the first startup step, so wrapper start marks its beginning.
+  logStartupPhase("model-probe", startupPhaseOrigin, openClawAuthenticationFailureCode === undefined ? "ok" : "failed");
 }
 if (openClawAuthenticationFailureCode !== undefined) {
   holdFailedAuthentication("model-probe", openClawAuthenticationFailureCode);
@@ -1772,14 +1778,10 @@ if (process.env.OPENCLAW_WORKSPACE_DIR !== undefined) {
 delete process.env.OPENCLAW_LOG_LEVEL;
 const pluginRuntime = readGatewayPluginRuntime();
 (async () => {
-const peerStatusStartedAt = Date.now();
 const peerStatus =
   pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)
-    ? await waitForPeerPluginRuntimeStatus()
+    ? await timeStartupPhase("peer-plugin-status", waitForPeerPluginRuntimeStatus)
     : undefined;
-if (peerStatus !== undefined) {
-  logStartupPhase("peer-plugin-status", peerStatusStartedAt);
-}
 const peerFailures = peerStatus?.failures ?? readPluginFailuresFromEnvironment();
 if (peerStatus !== undefined) {
   process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(peerStatus.startupId);

@@ -696,7 +696,6 @@ function dedicatedFirstDeployFixture() {
       name,
       name === gatewayName ? kubernetesGatewayNamespaceName(tenant.id) : namespace,
     );
-    // A finished rollout: the one updated replica is also the one ready replica.
     object.status = {
       observedGeneration: object.metadata.generation,
       replicas: 1,
