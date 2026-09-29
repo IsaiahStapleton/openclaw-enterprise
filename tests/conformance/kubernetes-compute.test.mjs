@@ -9481,7 +9481,10 @@ for (const embedded of [true, false]) {
     assert.equal(activated.metadata.annotations["openclaw.dev/agent-revision-id"], successor.id);
     assert.equal(activated.spec.template.metadata.labels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
     if (!embedded) {
-      assert.equal(objects.get(agentServiceKey).spec.selector["openclaw.dev/revision"], successor.id);
+      assert.equal(
+        objects.get(agentServiceKey).spec.selector["openclaw.dev/revision"],
+        successor.id,
+      );
       assert.equal(
         objects.get(gatewayAgentKey).spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL],
         ORDINARY_PROFILE,
