@@ -143,6 +143,8 @@ OpenClaw, Anthropic, and switching an unsaved service-account token to API-key
 authentication. Console model choices appear before credentials; **Enter another
 model ID** supports manual entry. These choices do not prove model access.
 Execution mode follows the harness; the saved-token Preset fixes it to Codex.
+Use **Experimental Dedicated OpenClaw** to check that the runtime-build warning
+appears for Dedicated OpenClaw and not for the Embedded selection.
 
 The fixture supplies a ready Namespace, Preset, and model Secret. Namespace
 provisioning, Preset CRUD, and service-account issuance have no dedicated console

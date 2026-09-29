@@ -30,6 +30,9 @@ Presets and edited Configuration JSON retain their settings.
    **Codex** and also offers **OpenClaw**; Anthropic currently offers only
    **OpenClaw**. **Execution mode** is Dedicated for Codex, Embedded for
    Anthropic OpenClaw, and either for OpenAI OpenClaw.
+   Dedicated OpenClaw is experimental and requires a runtime build with native
+   worker-inference support. Released OpenClaw images may not include it yet;
+   verify the selected image before deployment.
    With OpenAI and Codex, choose **OpenAI API key** or **Service Accounts** under
    **Authentication method**. OpenClaw uses the selected provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
