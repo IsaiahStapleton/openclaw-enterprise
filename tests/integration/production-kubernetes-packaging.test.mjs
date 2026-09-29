@@ -1703,23 +1703,44 @@ test(
         ports: [{ protocol: "TCP", port: 3128 }],
       },
     ]);
+    const apiProxyPeer = {
+      namespaceSelector: {
+        matchLabels: { "kubernetes.io/metadata.name": "openclaw-system" },
+      },
+      podSelector: {
+        matchLabels: {
+          "app.kubernetes.io/name": "openclaw-enterprise",
+          "app.kubernetes.io/instance": "oce",
+          "app.kubernetes.io/component": "api",
+        },
+      },
+    };
     assert.deepEqual(proxyPolicy.spec.ingress, [
       {
+        from: [apiProxyPeer],
+        ports: [{ protocol: "TCP", port: 3128 }],
+      },
+    ]);
+    const gatewayObjects = await resources(
+      (await render({ ...slackProxyValues, ...gatewayRoutingValues })).stdout,
+    );
+    const gatewayProxyPolicy = gatewayObjects.find(
+      (object) =>
+        object.kind === "NetworkPolicy" &&
+        object.metadata.name === "openclaw-enterprise-slack-proxy",
+    );
+    assert.deepEqual(gatewayProxyPolicy.spec.ingress, [
+      {
         from: [
+          apiProxyPeer,
           {
             namespaceSelector: {
-              matchLabels: { "kubernetes.io/metadata.name": "openclaw-system" },
-            },
-            podSelector: {
               matchLabels: {
-                "app.kubernetes.io/name": "openclaw-enterprise",
-                "app.kubernetes.io/instance": "oce",
-                "app.kubernetes.io/component": "api",
+                "openclaw-enterprise.io/gateway": routeNamespaceLabel(
+                  "openclaw-system",
+                  "oce-agent-gateways",
+                ),
               },
-            },
-          },
-          {
-            namespaceSelector: {
               matchExpressions: [{ key: "openclaw.dev/gateway-namespace", operator: "Exists" }],
             },
             podSelector: {
