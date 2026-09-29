@@ -1,6 +1,6 @@
 ---
 created: 2026-09-28
-updated: 2026-09-28
+updated: 2026-09-29
 last_updated_session: authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a
 ---
 
@@ -124,7 +124,8 @@ managed ServiceAccount inputs are supplied, it emits the ChatGPT Backend and a
 matching ServiceAccount Driver; otherwise Codex Agents use the existing
 `codex_pat` token path configured at Agent creation. If the chart-managed Slack
 proxy is enabled, Compute receives the generated Service DNS URL and selector
-for API-to-proxy egress. Repository opt-in adds the GitHub Backend, Repo Driver,
+for gateway-to-proxy egress; the chart grants API-to-proxy egress. Repository
+opt-in adds the GitHub Backend, Repo Driver,
 and worker peer expected by the broker sidecar.
 
 The renderer derives the Compute Gateway name the same way Helm does: it

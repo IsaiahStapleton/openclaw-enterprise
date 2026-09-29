@@ -197,8 +197,10 @@ the install as ready:
   `runtime.gatewayStorageClassName` for gateway state.
 - For Codex, the configured localhost seccomp profile installed and verified on
   every node selected by `runtime.nodeSelector`.
-- For Slack, separate runtime and Console directory proxies. Rendering proxy
-  wiring does not enable a Slack consumer. Either profile can install the managed
+- For Slack, a proxy route for both gateway runtime traffic and Console
+  directory lookup. The managed proxy serves both; external proxies need both
+  URLs. Rendering proxy wiring does not enable a Slack consumer. Either profile
+  can install the managed
   proxy for API directory lookup and dedicated gateway use, but Slack-enabled
   Agents require dedicated Codex execution. The example input sets
   `managedSlackProxy: true` to use the chart-managed proxy Service. Its network

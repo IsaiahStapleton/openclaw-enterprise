@@ -231,18 +231,22 @@ before running the checks:
   GatewayClass and Secret names.
 - `installation.yaml`: set cluster name, log level, DNS selectors,
   service-principal token settings, Secret prefixes, runtime storage class,
-  immutable runtime image digests, and PluginDriver catalog.
+  immutable runtime image digests, and PluginDriver catalog. Set
+  `runtime.gatewayNodeSelector` and `runtime.nodeSelector` to
+  [disjoint Ready pools](../../reference/drivers/kubernetes-compute.md#images-and-resources);
+  Helm does not place runtimes. Omit `network.gatewayClients` with
+  [routing](../../reference/gateway-routing.md#routing-configuration) enabled.
+  `presets.includeDefaults: false` disables the
+  [bundled Presets](../../reference/presets.md#installation-defaults).
 
-For every install, set the name, namespace, size, and protected
-`storageClassName` in `bootstrap-pvc.yaml`.
+For every install, set `bootstrap-pvc.yaml` name, namespace, size, and
+protected `storageClassName`.
 
 For `logging.level`, see [Choose the log level](../observability.md#1-choose-the-log-level).
 Configure native admin domains through [native admin setup](native-admin.md#steps).
 For Slack Agents, configure both proxy paths in the
 [Slack guide](../integrations/slack.md#configure-both-slack-proxies). For Codex
-sandboxing, follow [Codex sandbox setup](codex-sandbox.md): install a reviewed
-profile on every eligible node, set `runtime.codexSeccompProfile`, and verify
-enforcement.
+sandboxing, follow [Codex sandbox setup](codex-sandbox.md).
 
 Run every check below before provisioning:
 
@@ -282,7 +286,7 @@ without quotes or a variable assignment.
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Obtain it from your database administrator or provider. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`.                   |
 | `occ-migration-url`   | Connection URL for a separate role allowed to apply schema migrations. It targets the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker. |
-| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set; the example mount path is `/etc/openclaw/database-ca/ca.pem`.                                                                |
+| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set.                                                                                                                              |
 | `occ-auth-secret`     | A random secret used to sign and verify user sessions. Generate it once for this Installation with the command below, then retain it across redeployments. It is separate from the administrator password, service API key, and model-provider key.                             |
 
 Save both database URLs in protected files, replacing placeholders and preserving
@@ -358,21 +362,23 @@ read-only into migration, bootstrap, API, and worker containers at
 
 Enable repository credentials only after preparing the
 [repository service inputs](../repository-credentials/installation.md) and
-[GitHub Backend selection](../../reference/backends.md#github-repository-credentials).
-Keep the feature disabled until you have the immutable service image, registry
-ConfigMap, private service configuration, App key, internal-Service TLS Secret,
-and public CA Secret. Mount one registry version into the API, worker, and
+[GitHub Backend selection](../../reference/backends.md#github-repository-credentials):
+the immutable service image, registry ConfigMap, private service configuration,
+App key, internal-Service TLS Secret, and public CA Secret. Mount one registry
+version into the API, worker, and
 service. The Compute network peer must select the worker Pod on port `8443`; the
 Service serves HTTPS on `443`.
 
 The chart runs one `Recreate` worker Pod with a credential sidecar. Only the
 sidecar mounts the App and TLS private inputs, and it has no Kubernetes API token;
-only the worker container's token has tenant Secret access.
+only the worker container's token has tenant Secret access, and the worker stays
+[trusted per tenant namespace](../../reference/security/runtime-isolation.md#temporary-runtime-credential-exceptions).
 NetworkPolicies let managed gateways reach the service and the worker reach
-approved provider CIDRs; registry and session checks enforce exact scope. Keep
-`limits.shutdownGraceMs` at or below `60000`. Restart the API and worker together
-after registry or service input changes; readiness does not prove token minting
-or Agent Git workflows.
+approved provider CIDRs; registry and session checks enforce exact scope. Startup
+rejects `limits.shutdownGraceMs` above `60000` to finish cleanup within the
+Pod's 75-second grace. Restart the API and worker together after registry
+or service input changes; readiness does not prove token minting or Agent Git
+workflows.
 
 ### Azure PostgreSQL workload identity
 
