@@ -361,7 +361,7 @@ function buildInput(rawInput, diagnostics) {
   closed(
     input,
     "input",
-    ["controlPlane", "runtime", "channels", "codex", "repository"],
+    ["controlPlane", "runtime", "channels", "codex", "repository", "presets"],
     diagnostics,
   );
   const controlPlane = section(input, "controlPlane", diagnostics);
@@ -369,6 +369,8 @@ function buildInput(rawInput, diagnostics) {
   const channels = section(input, "channels", diagnostics, false);
   const codex = section(input, "codex", diagnostics, false);
   const repository = section(input, "repository", diagnostics, false);
+  const presets = section(input, "presets", diagnostics, false);
+  closed(presets, "presets", ["files"], diagnostics);
   closed(
     controlPlane,
     "controlPlane",
@@ -414,7 +416,7 @@ function buildInput(rawInput, diagnostics) {
   closed(
     channels,
     "channels",
-    ["runtimeProxyUrl", "directoryProxyUrl", "slackProxyUpstreamCidrs"],
+    ["runtimeProxyUrl", "directoryProxyUrl", "managedSlackProxy"],
     diagnostics,
   );
   closed(codex, "codex", ["managedServiceAccounts", "modelDiscoveryCidrs"], diagnostics);
@@ -468,6 +470,7 @@ function buildInput(rawInput, diagnostics) {
     databaseCa,
     loggingCollector,
     managedServiceAccounts,
+    presets,
   };
 }
 
@@ -483,6 +486,7 @@ function buildRendered(profile, parsed, diagnostics) {
     databaseCa,
     loggingCollector,
     managedServiceAccounts,
+    presets,
   } = parsed;
   const releaseName = asString(controlPlane, ["controlPlane", "releaseName"], diagnostics);
   const namespace = asString(controlPlane, ["controlPlane", "namespace"], diagnostics);
@@ -510,7 +514,11 @@ function buildRendered(profile, parsed, diagnostics) {
     optionalString(controlPlane, ["controlPlane", "envoyNamespace"], diagnostics) ??
     "envoy-gateway-system";
   const repositoryEnabled = asBoolean(repository, ["repository", "enabled"], diagnostics, false);
-  const managedSlackProxyEnabled = channels.slackProxyUpstreamCidrs !== undefined;
+  const managedSlackProxyEnabled = asBoolean(
+    channels,
+    ["channels", "managedSlackProxy"],
+    diagnostics,
+  );
   const managedSlackProxyHost = `openclaw-enterprise-slack-proxy.${namespace}.svc`;
   if (profile.name === "openclaw" && Object.keys(codex).length > 0) {
     diagnostics.errors.push("codex inputs are only consumed by the codex profile.");
@@ -525,12 +533,12 @@ function buildRendered(profile, parsed, diagnostics) {
   }
   if (managedSlackProxyEnabled && channels.directoryProxyUrl !== undefined) {
     diagnostics.errors.push(
-      "channels.directoryProxyUrl is not consumed when channels.slackProxyUpstreamCidrs enables the chart-managed Slack proxy.",
+      "channels.directoryProxyUrl is not consumed when channels.managedSlackProxy enables the chart-managed Slack proxy.",
     );
   }
   if (managedSlackProxyEnabled && channels.runtimeProxyUrl !== undefined) {
     diagnostics.errors.push(
-      "channels.runtimeProxyUrl is not consumed when channels.slackProxyUpstreamCidrs enables the chart-managed Slack proxy.",
+      "channels.runtimeProxyUrl is not consumed when channels.managedSlackProxy enables the chart-managed Slack proxy.",
     );
   }
   if (
@@ -683,12 +691,6 @@ function buildRendered(profile, parsed, diagnostics) {
       ? {
           slackProxy: {
             enabled: true,
-            upstreamCidrs: stringArray(
-              channels,
-              ["channels", "slackProxyUpstreamCidrs"],
-              diagnostics,
-              { validate: isIpv4Cidr, description: "an IPv4 CIDR" },
-            ),
           },
         }
       : {}),
@@ -701,6 +703,9 @@ function buildRendered(profile, parsed, diagnostics) {
     backend: [],
     presets: {
       includeDefaults: true,
+      ...(presets.files === undefined
+        ? {}
+        : { files: stringArray(presets, ["presets", "files"], diagnostics, { nonempty: false }) }),
     },
     drivers: {
       plugin: clone(profile.installation.drivers.plugin),
@@ -973,7 +978,7 @@ function buildRendered(profile, parsed, diagnostics) {
   }
   if (managedSlackProxyEnabled) {
     diagnostics.prerequisites.push(
-      "Slack proxy upstream CIDRs must match the current Slack egress ranges admitted by the cluster NetworkPolicy.",
+      "The managed Slack proxy permits Slack hostnames on HTTPS and public IPv4 egress, excluding private and reserved ranges.",
     );
     diagnostics.nextSteps.push(
       `The managed Slack proxy Service is openclaw-enterprise-slack-proxy.${namespace}.svc:3128; keep Agent Slack channel consumers disabled until credentials and channel policy are configured.`,

@@ -47,12 +47,12 @@ startup, which remains a separate connectivity check.
 ## Enable lookup in production
 
 The production API selects the Slack Driver. With default-deny egress, configure
-a proxy for Slack lookup and credential validation. The recommended Helm path is `slackProxy.enabled: true` with
-reviewed `slackProxy.upstreamCidrs`. The chart creates a private
+a proxy for Slack lookup and credential validation. The recommended Helm path is
+`slackProxy.enabled: true`. The chart creates a private
 `openclaw-enterprise-slack-proxy` Service, points
 `OCC_CHANNEL_DIRECTORY_PROXY_URL` at that Service DNS name, allows API Pod egress
-only to the proxy Pod selector, and restricts the proxy's upstream egress to the
-supplied CIDRs on TCP 443. The bundled proxy accepts HTTP `CONNECT` only for
+only to the proxy Pod selector, and allows the proxy's public IPv4
+egress on TCP 443 while excluding private and reserved ranges. The bundled proxy accepts HTTP `CONNECT` only for
 Slack hostnames on port 443. The API accepts that DNS proxy only when Helm also
 sets the matching `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST`; arbitrary DNS
 proxy URLs remain invalid.

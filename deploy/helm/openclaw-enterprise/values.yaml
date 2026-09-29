@@ -154,11 +154,10 @@ api:
 
 slackProxy:
   # Optional chart-managed HTTP CONNECT proxy for Slack channel traffic. It is
-  # inert until enabled; enabling requires reviewed upstream Slack CIDRs below.
+  # inert until enabled. HTTPS egress excludes private and reserved IPv4 ranges.
   enabled: false
   serviceName: openclaw-enterprise-slack-proxy
   port: 3128
-  upstreamCidrs: []
   resources:
     requests:
       cpu: 25m

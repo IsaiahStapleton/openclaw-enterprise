@@ -37,8 +37,6 @@ const chatgptValues = {
 };
 const slackProxyValues = {
   "slackProxy.enabled": "true",
-  "slackProxy.upstreamCidrs[0]": "203.0.113.10/32",
-  "slackProxy.upstreamCidrs[1]": "203.0.113.11/32",
 };
 const repositoryCredentialValues = {
   "repositoryCredentials.enabled": "true",
@@ -1756,14 +1754,36 @@ test(
       },
     ]);
     assert.deepEqual(proxyPolicy.spec.egress.at(-1), {
-      to: [{ ipBlock: { cidr: "203.0.113.10/32" } }, { ipBlock: { cidr: "203.0.113.11/32" } }],
+      // Preserve the original proxy's public HTTPS destinations as DNS rotates.
+      to: [
+        {
+          ipBlock: {
+            cidr: "0.0.0.0/0",
+            except: [
+              "0.0.0.0/8",
+              "10.0.0.0/8",
+              "100.64.0.0/10",
+              "127.0.0.0/8",
+              "169.254.0.0/16",
+              "172.16.0.0/12",
+              "192.0.0.0/24",
+              "192.0.2.0/24",
+              "192.168.0.0/16",
+              "198.18.0.0/15",
+              "198.51.100.0/24",
+              "203.0.113.0/24",
+              "224.0.0.0/4",
+              "240.0.0.0/4",
+            ],
+          },
+        },
+      ],
       ports: [{ protocol: "TCP", port: 443 }],
     });
     assert.equal(
       named("ServiceAccount", "openclaw-enterprise-slack-proxy").automountServiceAccountToken,
       false,
     );
-    await assert.rejects(render({ "slackProxy.enabled": "true" }), /slackProxy.upstreamCidrs/);
     await assert.rejects(
       render({ ...slackProxyValues, "api.channelDirectoryProxyUrl": "http://198.51.100.25:3128" }),
       /api.channelDirectoryProxyUrl/,
@@ -1771,8 +1791,6 @@ test(
     for (const override of [
       { "slackProxy.serviceName": "1proxy" },
       { "slackProxy.port": "65536" },
-      { "slackProxy.upstreamCidrs[0]": "0.0.0.0/0" },
-      { "slackProxy.upstreamCidrs[0]": "999.1.1.1/32" },
     ]) {
       await assert.rejects(render({ ...slackProxyValues, ...override }), /slackProxy/);
     }

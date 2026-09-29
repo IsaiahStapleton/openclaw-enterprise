@@ -34,6 +34,13 @@ Preset seeding does not switch the Installation PluginDriver selected by the
 profile. Creating an Agent from the other preset still needs a compatible
 driver, runtime, harness mode, credentials, and channel support.
 
+To seed additional Presets, add `"presets": { "files": ["/app/deploy/presets/devday.json"] }`
+to the input JSON and rerender. This example adds **SWE Agent** alongside the
+standard Presets. Files must be readable by both controller processes at startup;
+the renderer validates the list but does not read container files. See
+[Preset initialization](../../reference/presets.md#installation-defaults) for path
+resolution and startup validation.
+
 Repository support is optional. When enabled, the renderer wires the broker
 container, GitHub Backend, Repo Driver, and Compute peer. The repository registry
 still needs Namespace IDs from the first bootstrap pass, so most installs render
@@ -76,7 +83,7 @@ fields fail preflight.
     "transportSecretPrefix": "openclaw-agent-transport"
   },
   "channels": {
-    "slackProxyUpstreamCidrs": ["198.51.100.0/24"]
+    "managedSlackProxy": true
   }
 }
 ```
@@ -198,13 +205,11 @@ renderer:
   either profile for API directory lookup and dedicated gateway use, but enabled
   Slack Agents require dedicated Codex execution. Standard OpenClaw embedded
   Agents must leave channels disabled. The default profile input uses the
-  chart-managed restricted proxy Service. Set `slackProxyUpstreamCidrs` to the
-  reviewed Slack DNS answers for Web API hosts and the Socket Mode WSS hosts
-  returned by `apps.connections.open`, resolved from the proxy workload network,
-  not from an operator workstation; refresh those CIDRs under the operator
-  NetworkPolicy process when Slack DNS rotates. If you use an external proxy
-  instead, provide the literal IPv4 `runtimeProxyUrl` and `directoryProxyUrl`
-  inputs and omit `slackProxyUpstreamCidrs`.
+  chart-managed proxy Service with `managedSlackProxy: true`. Its network policy
+  allows public IPv4 HTTPS while excluding private and reserved ranges; the proxy
+  authorizes Slack hostnames. This preserves connectivity when Slack DNS rotates.
+  If you use an external proxy instead, provide the literal IPv4 `runtimeProxyUrl`
+  and `directoryProxyUrl` inputs and omit `managedSlackProxy`.
 - For hosted plugin discovery and Codex runtime authentication, a
   same-Namespace `codex_pat` token Secret or entered PAT during Agent creation.
   Rendering the Codex profile does not create or verify that credential.
@@ -214,6 +219,12 @@ renderer:
   issuance as unverified until the admin credential flow is separately proven.
 - For repositories, the first bootstrap pass must create Namespace IDs before
   you create the registry ConfigMap and rerender with repository support enabled.
+  Preserve the existing installation's approved GitHub ranges in
+  `repository.upstreamCidrs`. For a new installation, obtain the current API and
+  Git IPv4 ranges from [GitHub Meta](https://api.github.com/meta), following the
+  [repository installation guide](../repository-credentials/installation.md).
+  Do not replace provider ranges with a snapshot of DNS answers: GitHub rotates
+  addresses within those ranges. Both profiles pass these CIDRs through unchanged.
 
 ## Related
 

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-28
 updated: 2026-09-28
-last_updated_session: authoring-run/c35ba3ae-a801-46fc-af68-f8f7a27d56ed
+last_updated_session: authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a
 ---
 
 # Installation Profile Rendering Flow
@@ -99,8 +99,11 @@ The Helm values output selects the control-plane image, Better Auth base URL,
 bootstrap administrator, database and cluster egress CIDRs, API client
 selectors, DNS peer, metrics, native admin, private gateway routing, optional
 ChatGPT Backend mounting, optional logging collector, and optional repository
-credential sidecar values. When `channels.slackProxyUpstreamCidrs` is supplied,
-it also enables the chart-managed restricted Slack proxy Service. Native admin
+credential sidecar values. When `channels.managedSlackProxy` is true,
+it also enables the chart-managed Slack proxy Service. The chart preserves public
+IPv4 HTTPS egress with private and reserved ranges excluded; the proxy enforces
+Slack hostname authorization. Repository provider CIDRs pass through unchanged,
+so operators can preserve the existing GitHub ranges without DNS snapshots. Native admin
 is always enabled by both profiles, so gateway routing is also always enabled.
 Repository values render only when the input explicitly sets
 `repository.enabled: true`.
@@ -124,6 +127,12 @@ and worker peer expected by the broker sidecar.
 The Compute Gateway name follows Helm's release-name derivation, including its
 63-character truncation and trailing-hyphen removal, so HTTPRoute parent
 references identify the Gateway actually rendered by the chart.
+
+Optional `presets.files` adds operator-selected Preset JSON paths while retaining
+both standard Presets. The renderer rejects non-list input and empty or non-string
+entries. It does not access these files locally: controller startup resolves the
+paths and validates their contents. Preset input changes participate in the same
+Installation checksum as other startup configuration.
 
 ### 6. Write outputs and preflight
 
@@ -171,6 +180,10 @@ repository registry creation are separate evidence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 22:45: Preserve original Slack public HTTPS egress and repository provider ranges in both profiles. (authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a - 1365d9b33eec2de2452bd3142f57a1729cccd559)
+
+- 2026-09-28 21:04: Added optional Preset file inputs to the renderer and paired startup output. (authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a - 1365d9b33eec2de2452bd3142f57a1729cccd559)
 
 - 2026-09-28 19:57: Match Helm Gateway names and invalidate prior generated files before rerendering. (authoring-run/c35ba3ae-a801-46fc-af68-f8f7a27d56ed - 15bab9571fa12a2192a4d5dbff70f3e263468ee7)
 

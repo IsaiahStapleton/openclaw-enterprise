@@ -38,31 +38,25 @@ For Slack-enabled k3d and EKS installations, configure both paths before
 creating a Slack-enabled dedicated Codex Agent. A working Socket Mode connection
 does not establish that Console user or channel search works.
 
-| Path                            | Required setting                                                       | Consumer          |
-| ------------------------------- | ---------------------------------------------------------------------- | ----------------- |
-| Slack messaging and Socket Mode | Installation `drivers.compute.configuration.runtime.channels.proxyUrl` | Dedicated gateway |
+| Path                                     | Required setting                                                       | Consumer          |
+| ---------------------------------------- | ---------------------------------------------------------------------- | ----------------- |
+| Slack messaging and Socket Mode          | Installation `drivers.compute.configuration.runtime.channels.proxyUrl` | Dedicated gateway |
 | Console lookup and credential validation | Helm `slackProxy.enabled` or `api.channelDirectoryProxyUrl`            | OCC API           |
 
 Provision a reviewed HTTP CONNECT proxy reachable from each consumer. The
-recommended production path is Helm `slackProxy.enabled: true` with reviewed
-`slackProxy.upstreamCidrs`; the chart creates a private Service, points the API
+recommended production path is Helm `slackProxy.enabled: true`; the chart creates a private Service, points the API
 directory proxy at that Service DNS name, admits API and managed gateway callers
-to the proxy, and allows the proxy to reach only the supplied upstream CIDRs on
-TCP 443. If you use an external proxy instead, use a literal IPv4 address and
+to the proxy, and allows the proxy to reach public IPv4 destinations on
+TCP 443 while excluding private and reserved ranges. If you use an external proxy instead, use a literal IPv4 address and
 explicit port with no URL credentials or path. Setting one proxy path does not
 configure the other consumer path. Installing the managed proxy does not make
 embedded OpenClaw Slack-capable; it only provides shared proxy infrastructure
 for API directory lookup and dedicated gateway channel traffic.
 
-Choose upstream CIDRs from Slack DNS answers as resolved by the proxy workload's
-network path. Include both Slack Web API hosts and the Socket Mode WSS hostnames
-returned by `apps.connections.open`; directory lookup success proves only the
-Web API path. Do not store signed WSS URLs or credentials in configuration or
-documentation. Do not assume an operator workstation resolves the same Slack
-addresses as the in-cluster proxy. Treat the CIDR list as time-bound
-NetworkPolicy input: refresh it through the operator's review process when
-Slack DNS rotates, and keep using explicit reviewed CIDRs for the current
-answers rather than broad internet CIDRs.
+The proxy authorizes Slack hostnames for every CONNECT request. Its public
+HTTPS network policy permits DNS rotation without maintaining individual Slack
+IP addresses. Do not store signed WSS URLs or credentials in configuration or
+documentation.
 
 The directory path needs `CONNECT slack.com:443`. The gateway path also needs
 the Slack Socket Mode endpoints returned for the app; review the required
@@ -95,14 +89,12 @@ drivers:
 # Helm values
 slackProxy:
   enabled: true
-  upstreamCidrs:
-    - 203.0.113.10/32
 ```
 
 Apply both inputs through the installation procedure and roll out the affected
 control-plane processes so they load the new configuration. With the managed
 proxy, Helm grants API egress to the proxy Pod selector and grants the proxy
-egress only to the configured upstream CIDRs. Kubernetes Compute grants gateway
+public HTTPS egress while excluding private and reserved ranges. Kubernetes Compute grants gateway
 egress to its channel proxy from the Installation runtime setting. Keep Slack
 tokens in Namespace Secrets; do not place them in these inputs or the proxy
 configuration.

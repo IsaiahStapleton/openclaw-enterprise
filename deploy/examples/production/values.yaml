@@ -72,10 +72,9 @@ repositoryCredentials:
   # upstreamCidrs: [198.51.100.0/24]
 
 # Optional chart-managed CONNECT proxy for Slack directory lookup and future
-# gateway channel traffic. Enabling it requires reviewed Slack upstream CIDRs.
+# gateway channel traffic. Public HTTPS egress excludes private/reserved ranges.
 slackProxy:
   enabled: false
-  # upstreamCidrs: [203.0.113.10/32]
 
 # Metrics listeners are enabled privately. Set both selectors to admit your scraper.
 metrics:

@@ -54,7 +54,7 @@ function baseInput(overrides = {}) {
       transportSecretPrefix: "openclaw-agent-transport",
     },
     channels: {
-      slackProxyUpstreamCidrs: ["203.0.113.10/32"],
+      managedSlackProxy: true,
     },
     ...overrides,
   };
@@ -193,10 +193,7 @@ test("renderer supports exactly the openclaw and codex profiles", () => {
   assert.doesNotMatch(openclaw.installation, /id: codex-plugin/);
   assert.match(openclaw.values, /agentNativeAdmin:\n {2}enabled: true/);
   assert.match(openclaw.values, /repositoryCredentials:\n {2}enabled: false/);
-  assert.match(
-    openclaw.values,
-    /slackProxy:\n {2}enabled: true\n {2}upstreamCidrs:\n {4}- 203.0.113.10\/32/,
-  );
+  assert.match(openclaw.values, /slackProxy:\n {2}enabled: true/);
   assert.match(
     openclaw.installation,
     /channels:\n\s+proxyUrl: http:\/\/openclaw-enterprise-slack-proxy\.openclaw-system\.svc:3128/,
@@ -213,10 +210,7 @@ test("renderer supports exactly the openclaw and codex profiles", () => {
   assert.match(codex.installation, /id: codex-plugin/);
   assert.match(codex.installation, /catalogSource: hosted/);
   assert.doesNotMatch(codex.installation, /service_account: chatgpt-service-accounts/);
-  assert.match(
-    codex.values,
-    /slackProxy:\n {2}enabled: true\n {2}upstreamCidrs:\n {4}- 203.0.113.10\/32/,
-  );
+  assert.match(codex.values, /slackProxy:\n {2}enabled: true/);
   assert.match(
     codex.installation,
     /channels:\n\s+proxyUrl: http:\/\/openclaw-enterprise-slack-proxy\.openclaw-system\.svc:3128/,
@@ -304,30 +298,37 @@ test("failed rerenders remove stale deployable artifacts from a reused directory
   }
 });
 
-test("rendered profile values pass Helm chart validation", { skip: helmSkip }, () => {
-  const openclaw = render("openclaw", baseInput());
-  assert.match(helmTemplate(openclaw), /kind: Deployment/);
-
-  const codex = render("codex", codexInput());
-  assert.match(helmTemplate(codex), /kind: Deployment/);
-
-  const repositoryOutput = render(
-    "codex",
-    codexInput({
-      repository: {
-        enabled: true,
-        image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-        backendId: "github-primary",
-        registryConfigMapName: "occ-repository-registry-v1",
-        serviceConfigSecretName: "occ-repository-service-config",
-        appKeySecretName: "occ-repository-app-key",
-        tlsSecretName: "occ-repository-tls",
-        publicCaSecretName: "occ-repository-public-ca",
-        upstreamCidrs: ["192.0.2.30/32"],
-      },
-    }),
-  );
-  assert.match(helmTemplate(repositoryOutput), /repository-credentials/);
+test("both profiles preserve provider ranges and public Slack egress", { skip: helmSkip }, () => {
+  for (const profile of ["openclaw", "codex"]) {
+    // Provider ranges must survive rendering; individual DNS answers are not stable.
+    const input = profile === "codex" ? codexInput() : baseInput();
+    input.repository = {
+      enabled: true,
+      image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
+      backendId: "github-primary",
+      registryConfigMapName: "occ-repository-registry-v1",
+      serviceConfigSecretName: "occ-repository-service-config",
+      appKeySecretName: "occ-repository-app-key",
+      tlsSecretName: "occ-repository-tls",
+      publicCaSecretName: "occ-repository-public-ca",
+      upstreamCidrs: ["140.82.112.0/20", "192.30.252.0/22"],
+    };
+    const output = render(profile, input);
+    const manifests = helmTemplate(output);
+    assert.match(manifests, /repository-credentials/);
+    assert.match(manifests, /cidr: "140\.82\.112\.0\/20"/);
+    assert.match(manifests, /cidr: "192\.30\.252\.0\/22"/);
+    const slackPolicy = manifests
+      .split(/\n---\n/)
+      .find(
+        (document) =>
+          document.includes("kind: NetworkPolicy") &&
+          document.includes("name: openclaw-enterprise-slack-proxy"),
+      );
+    assert.ok(slackPolicy);
+    assert.match(slackPolicy, /cidr: 0\.0\.0\.0\/0\s+except:/);
+    assert.doesNotMatch(output.values, /slackProxyUpstreamCidrs/);
+  }
 });
 
 test(
@@ -359,6 +360,37 @@ test(
     }
   },
 );
+
+test(
+  "profile preset files reach startup YAML and roll both controllers",
+  { skip: helmSkip },
+  () => {
+    const original = render("codex", codexInput());
+    const changed = render(
+      "codex",
+      codexInput({ presets: { files: ["/app/deploy/presets/devday.json"] } }),
+    );
+    assert.match(
+      changed.installation,
+      /presets:\n {2}includeDefaults: true\n {2}files:\n {4}- \/app\/deploy\/presets\/devday.json/,
+    );
+    const originalManifests = helmTemplate(original);
+    const changedManifests = helmTemplate(changed);
+    for (const component of ["api", "worker"]) {
+      assert.notEqual(
+        deploymentChecksum(originalManifests, component),
+        deploymentChecksum(changedManifests, component),
+      );
+    }
+  },
+);
+
+test("profile preset files reject malformed paths and unknown settings", () => {
+  for (const files of ["presets/custom.json", [""], [42]]) {
+    assertPreflightFailure("codex", codexInput({ presets: { files } }), /presets.files/);
+  }
+  assertPreflightFailure("codex", codexInput({ presets: { unknown: true } }), /presets.unknown/);
+});
 
 test("Helm catches generated profile Secret collisions", { skip: helmSkip }, () => {
   const repositoryOutput = render(
