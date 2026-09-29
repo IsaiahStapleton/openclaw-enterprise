@@ -66,14 +66,14 @@ project_yaml() {
   local path=$1
   local filter=$2
   local output=$3
-  yq -o=json '.' "$path" | jq -S "$filter" >"$output"
+  yq -p=yaml -o=json '.' "$path" | jq -S "$filter" >"$output"
 }
 
 matches_yaml() {
   local actual=$1
   local expected=$2
-  yq -o=json '.' "$actual" | jq -eS 'select(type == "object")' >"$evidence_dir/compare-actual.json" || return 1
-  yq -o=json '.' "$expected" | jq -eS 'select(type == "object")' >"$evidence_dir/compare-expected.json" || return 1
+  yq -p=yaml -o=json '.' "$actual" | jq -eS 'select(type == "object")' >"$evidence_dir/compare-actual.json" || return 1
+  yq -p=yaml -o=json '.' "$expected" | jq -eS 'select(type == "object")' >"$evidence_dir/compare-expected.json" || return 1
   [[ -s "$evidence_dir/compare-actual.json" && -s "$evidence_dir/compare-expected.json" ]] || return 1
   cmp -s "$evidence_dir/compare-actual.json" "$evidence_dir/compare-expected.json"
 }

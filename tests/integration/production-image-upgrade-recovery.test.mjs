@@ -47,8 +47,8 @@ if (tool === 'helm') {
     fs.copyFileSync(fileArg('--values'), path.join(root, 'live-values'));
     if (take('fail-migration')) { state.helmStatus = 'failed'; save(); process.exit(9); }
     state.helmStatus = 'deployed';
-    state.controller = execFileSync('yq', ['-r', '.images.controller', fileArg('--values')], {encoding: 'utf8'}).trim();
-    state.checksum = execFileSync('yq', ['-r', '.controlPlane.installationChecksum', fileArg('--values')], {encoding: 'utf8'}).trim();
+    state.controller = execFileSync('yq', ['-p=yaml', '-r', '.images.controller', fileArg('--values')], {encoding: 'utf8'}).trim();
+    state.checksum = execFileSync('yq', ['-p=yaml', '-r', '.controlPlane.installationChecksum', fileArg('--values')], {encoding: 'utf8'}).trim();
     state.api = 1;
     state.worker = 1;
     save();
@@ -273,8 +273,8 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
   for (const [name, content] of Object.entries({
     kubeconfig: "cluster-config",
     key: "key",
-    values,
-    installation,
+    "values.json": values,
+    "installation.json": installation,
   })) {
     await writeFile(join(directory, name), content, { mode: 0o600 });
   }
@@ -286,11 +286,11 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
       id: "codex-plugin",
       configuration: { catalogSource: "openai-curated" },
     };
-    await writeFile(join(directory, "candidate-values"), JSON.stringify(candidateValues), {
+    await writeFile(join(directory, "candidate-values.json"), JSON.stringify(candidateValues), {
       mode: 0o600,
     });
     await writeFile(
-      join(directory, "candidate-installation"),
+      join(directory, "candidate-installation.json"),
       JSON.stringify(candidateInstallation),
       { mode: 0o600 },
     );
@@ -306,18 +306,18 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
     "--release",
     "oce",
     "--values",
-    join(directory, "values"),
+    join(directory, "values.json"),
     "--installation",
-    join(directory, "installation"),
+    join(directory, "installation.json"),
     ...(controllerOnly ? ["--controller-image", newController] : ["--runtime-image", runtime]),
     ...(simulatePair && !controllerOnly ? ["--controller-image", newController] : []),
     ...(simulatePair ? ["--broker-image", newBroker] : []),
     ...(candidates
       ? [
           "--candidate-values",
-          join(directory, "candidate-values"),
+          join(directory, "candidate-values.json"),
           "--candidate-installation",
-          join(directory, "candidate-installation"),
+          join(directory, "candidate-installation.json"),
         ]
       : []),
     "--source-revision",
@@ -457,7 +457,7 @@ test("resume rejects malformed protected inputs before another mutation", async 
   const f = await fixture(t);
   await f.failNext("lost-secret-response");
   await assert.rejects(f.run());
-  await writeFile(join(f.directory, "values"), "");
+  await writeFile(join(f.directory, "values.json"), "");
   await assert.rejects(f.run("--resume"), /protected Helm values changed/);
   assert.equal((await f.events()).filter((event) => event === "migration").length, 0);
 });
@@ -510,7 +510,7 @@ test("stale baseline image fields stop before any writes", async (t) => {
   for (const file of ["values", "installation"]) {
     await t.test(file, async (subtest) => {
       const f = await fixture(subtest, { controllerOnly: file === "values" });
-      const path = join(f.directory, file);
+      const path = join(f.directory, `${file}.json`);
       const baseline = JSON.parse(await readFile(path, "utf8"));
       if (file === "values") {
         baseline.images.controller = `registry.example.invalid/controller@sha256:${"f".repeat(64)}`;
@@ -528,7 +528,7 @@ test("resume refuses altered reviewed candidates before another mutation", async
   const f = await fixture(t, { candidates: true });
   await f.failNext("lost-secret-response");
   await assert.rejects(f.run());
-  const path = join(f.directory, "candidate-values");
+  const path = join(f.directory, "candidate-values.json");
   const candidate = JSON.parse(await readFile(path, "utf8"));
   candidate.api.channelDirectoryProxyUrl = "http://198.51.100.26:3128";
   await writeFile(path, JSON.stringify(candidate));
@@ -557,7 +557,7 @@ test("candidate cannot redirect the Installation Secret or change an image outsi
       const f = await fixture(subtest, { candidates: true });
       const path = join(
         f.directory,
-        field === "secret" ? "candidate-values" : "candidate-installation",
+        field === "secret" ? "candidate-values.json" : "candidate-installation.json",
       );
       const candidate = JSON.parse(await readFile(path, "utf8"));
       if (field === "secret") {
@@ -587,7 +587,7 @@ test("candidate cannot change repository identity, grants, trust, or the Compute
         candidates: true,
         repositoryCredentials: change !== "add",
       });
-      const path = join(f.directory, "candidate-installation");
+      const path = join(f.directory, "candidate-installation.json");
       const candidate = JSON.parse(await readFile(path, "utf8"));
       // These inputs select a registry, grant authority, TLS trust, and the
       // credential service's network peer; no upgrade mutation may follow drift.
@@ -643,8 +643,8 @@ test("candidate cannot change cluster credentials or other protected trust setti
   ]) {
     await t.test(change, async (subtest) => {
       const f = await fixture(subtest, { candidates: true, controllerOnly: true });
-      const valuesPath = join(f.directory, "candidate-values");
-      const installationPath = join(f.directory, "candidate-installation");
+      const valuesPath = join(f.directory, "candidate-values.json");
+      const installationPath = join(f.directory, "candidate-installation.json");
       const values = JSON.parse(await readFile(valuesPath, "utf8"));
       const installation = JSON.parse(await readFile(installationPath, "utf8"));
       // Each candidate redirects an identity or trust boundary while retaining
