@@ -199,18 +199,26 @@ test("service API keys authenticate scoped automation without replacing sessions
       OCC_SERVICE_KEY_FILE: keyFile,
       OCC_NAMESPACE: namespaceId,
     };
+    // IAM policy management requires Installation administer. Grant only that,
+    // not the bootstrap administrator Role, so the key cannot reach other data.
     const installationPrincipal = { kind: "service_principal", id: `sp_${randomUUID()}` };
     policy.identities.push(installationPrincipal);
-    policy.roles.push({
-      id: "cli-installation-namespace-reader",
-      namespaceId,
-      permissions: [{ action: "read", resourceKind: "namespace" }],
-    });
+    policy.roles.push(
+      {
+        id: "cli-installation-iam-administrator",
+        permissions: [{ action: "administer", resourceKind: "installation" }],
+      },
+      {
+        id: "cli-installation-namespace-reader",
+        namespaceId,
+        permissions: [{ action: "read", resourceKind: "namespace" }],
+      },
+    );
     policy.bindings.push({
-      id: "cli-installation-admin",
+      id: "cli-installation-iam-administrator",
       subjectKind: "identity",
       subjectId: installationPrincipal.id,
-      roleId: seed.bindings[0].roleId,
+      roleId: "cli-installation-iam-administrator",
       resourceKind: "installation",
       resourceId: installationId,
     });
