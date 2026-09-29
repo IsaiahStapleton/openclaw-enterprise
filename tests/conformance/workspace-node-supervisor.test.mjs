@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { AGENT_WITH_NODE_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
+import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 
 // This proves process supervision with real child processes. It does not prove
 // native pairing, Codex startup or container integration.
@@ -54,7 +55,8 @@ test(
         "\n",
       ),
     ].join("\n");
-    const supervisor = spawn(process.execPath, ["-e", launch], {
+    // Launch through the same bounded program pieces the container receives.
+    const supervisor = spawn(process.execPath, ["-e", ...nodeProgramArguments(launch)], {
       env: {
         PATH: process.env.PATH,
         HOME: directory,

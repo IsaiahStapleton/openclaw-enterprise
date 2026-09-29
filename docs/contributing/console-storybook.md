@@ -25,9 +25,9 @@ python3 -m http.server 6006 --bind 127.0.0.1 \
   --directory scripts/console-storybook/dist/site
 ```
 
-Serve at the origin root for absolute `/console/` URLs. Build fingerprints prevent
-stale cached fixture pages and imports. CI uploads the static artifact without
-publishing the documentation site.
+Serve at the origin root for absolute `/console/` URLs. Build fingerprints version
+fixture pages and module imports against stale cached UI. CI uploads a static
+artifact without publishing the documentation site.
 
 ## Appearance review
 
@@ -55,19 +55,18 @@ OpenClaw's disconnected gateway screen at the revision above.
 
 ## Pages and components
 
-The sidebar contains these groups. Stories reach open-dialog and error states
-through real controls after loading fixture data.
+Stories reach error states through real controls after loading fixture data.
 
 | Group                   | Coverage                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sign in                 | Signed out, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                                                                            |
+| Sign in                 | Password and GitHub sign-in, discovery failure, GitHub errors, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                         |
 | Agents                  | Populated and empty collections, no search matches, inaccessible Namespace, no readable Namespaces, permission denial, read failure, loading.                                                                                                                                                                                                                              |
 | Backends                | Configured, empty, and discovery failure.                                                                                                                                                                                                                                                                                                                                  |
 | Namespaces              | Ready and provisioning, empty, permission denial.                                                                                                                                                                                                                                                                                                                          |
 | Settings and navigation | Signed-in account and unknown route.                                                                                                                                                                                                                                                                                                                                       |
 | Create Agent            | Preset variables, no Presets, fixed model choices before credential entry and manual model IDs, OpenAI Codex/OpenClaw and Anthropic OpenClaw harnesses, Service Accounts switching and bound Presets, seeded workspace files, storage/grant denial, repository selection/discovery and rejected-grant recovery, invalid JSON, partial save/conflict, unknown save outcome. |
 | Agent detail            | First and later drafts, version details, native JSON and plugin editors, immutable plugin snapshot, queued/running/succeeded/failed activity, exact-version diagnostics, error and permission states.                                                                                                                                                                      |
-| Navigation components   | Account menu, Namespace switcher, mobile drawer, OCE branding, simulated OCC revision, missing development metadata, debug runtime image identities and unavailable metadata.                                                                                                                                                                                              |
+| Navigation components   | Account menu, Namespace switcher, mobile drawer, admin link and denial, OCE branding, simulated OCC revision, missing development metadata, debug runtime image identities and unavailable metadata.                                                                                                                                                                       |
 | Channels                | Unconfigured cards, Slack editor with pairing/open/disabled policies, everyone and restricted channel sender access, incomplete sender access, unsupported mixed sender lists, unsupported wildcard channel maps, read-only snapshot, save conflict.                                                                                                                       |
 | Credentials             | Named Secret selection and creation, API-key and Slack Secret switching, denied metadata and grants, partially missing tokens, missing authentication, operator-managed credentials, issued ChatGPT account, model Secret replacement, pending grants, and unknown authentication saves.                                                                                   |
 | Native admin            | Available launch, stopped or unsupported runtime, denied panel hidden. The launch target is an explanatory fixture page.                                                                                                                                                                                                                                                   |
@@ -139,11 +138,11 @@ remain disabled in the example Installation YAML.
 Use the [DevDay storyboard](../../scripts/console-storybook/devday-storyboard.md)
 for presenter actions, expected visible states, and fallbacks.
 
-**Choose provider, harness, and authentication** covers OpenAI Codex,
-OpenClaw, Anthropic, and switching an unsaved service-account token to API-key
-authentication. Console model choices appear before credentials; **Enter another
-model ID** supports manual entry. These choices do not prove model access.
-Execution mode follows the harness; the saved-token Preset fixes it to Codex.
+**Choose provider, harness, and authentication** covers the supported
+combinations. Models appear before credentials; **Enter another model ID**
+supports manual entry but does not prove access. Execution mode follows the
+harness; saved tokens require Codex. **Experimental Dedicated OpenClaw** shows
+the runtime-build warning; Embedded OpenClaw does not.
 
 The fixture supplies a ready Namespace, Preset, and model Secret. Namespace
 provisioning, Preset CRUD, and service-account issuance have no dedicated console

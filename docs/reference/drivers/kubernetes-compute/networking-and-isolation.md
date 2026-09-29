@@ -124,6 +124,60 @@ approved HTTP(S) proxy in `runtime.channels`: a literal IP endpoint, or the exac
 Helm-managed proxy Service URL paired with `runtime.channels.managedProxy`.
 Direct public channel-provider access is denied.
 
+## Explicit network profiles
+
+Ordinary DNS, model, repository-credential, authentication, channel, workspace-node,
+plugin-status, sandbox-preview ingress and gateway/Harness allow policies require the reserved Pod label
+`openclaw.dev/network-profile=broad-egress-v1`, together with their existing
+role, Agent, namespace and revision selectors. Gateway/Harness peer selectors require the
+same profile. Missing, empty or unknown profiles receive no ordinary grant;
+the tenant and separate Gateway namespace default-deny policies still select every Pod.
+
+Compute assigns this profile when creating ordinary embedded and dedicated
+workload templates. Their existing routes and ports remain unchanged. It also
+passes the profile in provider-owned Harness requirements. Deployment readiness
+requires the expected template profile; provider Harness readiness and activation
+reject an otherwise matching Pod that omits or changes a required profile.
+
+Existing policy names remain stable, and the upgrade restarts no Pod. New
+namespaces receive the narrowed `allow-dns`, `allow-gateway-ingress` and
+`allow-node-gateway`. Earlier namespaces keep their previous versions, which
+ignore the profile, until recreated: Compute never narrows them in place.
+Running Pods keep their templates until Compute next prepares a revision of
+their Agent:
+
+- Preparing a revision re-renders that Agent's grants and templates with the
+  profile; other Agents are untouched. Re-preparing an active revision (as
+  repository-credential maintenance does) rolls its Pods once.
+- An unprofiled embedded or dedicated Gateway keeps serving, with its Gateway
+  grants, during the next preparation, which exempts that predecessor from the
+  profile check and leaves the stable Agent Service alone. Activation replaces it.
+
+Existing OpenShell Sandboxes are not relabeled because Sandbox names are per
+revision: redeploy the Agent revision. For development, follow the
+[development recovery procedure](../../../guides/deploy/local-operations.md#build-images-for-local-kubernetes).
+
+The separately installed OpenShell gateway needs its own scoped DNS/API and
+callback policies. Its caller is the OpenShell supervisor Pod
+(`openshell.ai/managed-by=openshell`, `openshell.ai/boundary-role=supervisor`),
+which carries no `openclaw.dev` labels; supervisor-labelled peers admit it, not
+the ordinary profile. Platform services retain their existing Helm policy selectors.
+
+Known limitation: OpenShell-provisioned Harness Pods carry the ordinary profile
+today, so Compute's DNS, model and authentication grants add to OpenShell's own
+egress fence rather than being replaced by it. A provider-fenced profile for
+SandboxDriver Harness Pods is the planned follow-up.
+
+Profile assignment is a trusted controller decision. The label qualifies a Pod
+for network grants; it does not supply workload identity or authorization to
+request those grants. Operators must control workload creation, profile-label
+mutation and NetworkPolicy writes. This component does not install admission
+controls for those privileges.
+
+Kubernetes combines grants from every matching policy, so stale or additional
+allow policies can bypass this restriction. Inspect installed policies and
+verify allowed and denied connections on a cluster with NetworkPolicy enforcement.
+
 ## Private Agent gateway routes
 
 See [gateway routing with Envoy](../../gateway-routing.md) for shared infrastructure,
@@ -149,6 +203,8 @@ the Gateway in its release namespace. These three settings are required when
 routing is enabled; `hostname` is optional. `envoyHttpsTargetPort` defaults to
 `10443` and must match Helm. Compute grants Harness egress only to this
 installation's Envoy Pods on that port, before waiting for node enrollment.
+`endpointPort` defaults to `443` and changes only the port in generated WSS URLs.
+When set, the external load balancer must forward that port to the HTTPS listener.
 
 When `hostname` is omitted or empty, Compute and Helm derive the same Service
 name: `occ-gateway-` followed by the first 12 hexadecimal characters of the

@@ -61,6 +61,47 @@ OCC_TEST_PRODUCTION_TUI_REAL=1 \
   node --env-file="$TEST_ENV_FILE" --test tests/integration/production-tui-k3d-real.test.mjs
 ```
 
+### Run an isolated upgrade qualification lane
+
+Use the `production-tui` lane from the reviewed source revision, including the
+upgrade implementation under test. In the private environment file, set
+`OPENAI_API_KEY`, `OCC_TEST_OPENAI_MODEL`, `OCC_TEST_PRODUCTION_POSTGRES_IMAGE`,
+and `OCC_TEST_PRODUCTION_NODE_IMAGE`. Select the compatible prior release in
+`OCC_TEST_PRODUCTION_CONTROLLER_IMAGE` and `OCC_TEST_KUBERNETES_RUNTIME_IMAGE`,
+and the reviewed candidate in both `OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE`
+and `OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE`. Each reference must use an
+immutable digest; each candidate must differ from its matching baseline. Verify
+image provenance separately. Supplying either candidate makes all four images
+mandatory and selects supplied images instead of building the current checkout.
+
+With Docker, k3d, kubectl, Helm, yq, and the built OCC CLI available, run:
+
+```sh
+run_dir="$(mktemp -d)"
+node --env-file="$TEST_ENV_FILE" scripts/ci/prepare.mjs \
+  --lane production-tui --state "$run_dir/state.json"
+node --env-file="$TEST_ENV_FILE" scripts/ci/run-tests.mjs run production-tui \
+  --state "$run_dir/state.json" --results "$run_dir/results.json"
+install -m 600 "$run_dir/state.json" "$run_dir/state-before-cleanup.json"
+node scripts/ci/cleanup.mjs --state "$run_dir/state.json"
+```
+
+Run cleanup even if preparation or the test fails; retain the private state if
+cleanup reports a surviving resource. The private copy preserves the image mapping
+after successful cleanup removes its working state. Use the same image selection
+for both commands. Preparation creates a loopback-only disposable cluster, an isolated
+PostgreSQL service, and a logging backend. The test also creates a separate
+PostgreSQL Pod with migration and application roles. It imports each approved
+source digest into the owned k3d nodes and supplies an immutable local platform
+manifest reference to the test. The private state records the original source,
+host image ID, and imported reference; the local alias can differ from a registry
+index digest, so this is not proof of exact registry-reference deployment. Do not
+print or publish the private state or environment file.
+
+Confirm the test's evidence includes both independent image upgrades and a fresh
+model reply. A passing TUI test with both candidate variables omitted does not
+prove upgrade behavior. The local cluster result is not live EKS proof.
+
 ## Related
 
 - [Choose another test suite](README.md).

@@ -107,6 +107,10 @@
                     "label": "Console Walkthrough"
                   },
                   {
+                    "page": "guides/console/agent-sharing",
+                    "label": "Share Agents"
+                  },
+                  {
                     "page": "reference/console/create-and-deploy",
                     "label": "Create and Deploy in the Console"
                   },
@@ -212,6 +216,7 @@
             ],
             "hidden": [
               "reference/console/debug-fields",
+              "reference/console/agent-sharing",
               "reference/configuration/secrets",
               "reference/security/runtime-isolation",
               "reference/agents",
@@ -387,7 +392,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "hidden": ["guides/repository-credentials/standalone-service"]
           },
           {
             "tab": "Operate",
@@ -427,6 +433,14 @@
                   {
                     "page": "guides/deploy/production-upgrade",
                     "label": "Image Upgrades"
+                  },
+                  {
+                    "page": "guides/deploy/auth-maintenance",
+                    "label": "Sign-in Maintenance"
+                  },
+                  {
+                    "page": "guides/deploy/google-sign-in",
+                    "label": "Google Sign-in"
                   },
                   {
                     "page": "guides/deploy/local-k3d-image-upgrade",
@@ -535,7 +549,9 @@
             "hidden": [
               "guides/deploy/service-keys",
               "guides/deploy/local-operations",
-              "flows/installation-profile-rendering"
+              "flows/installation-profile-rendering",
+              "guides/deploy/published-images",
+              "guides/deploy/production-tui"
             ]
           },
           {
@@ -797,7 +813,7 @@
                   },
                   {
                     "page": "documentation-inventory",
-                    "label": "Inventory"
+                    "label": "Historical Inventory"
                   }
                 ]
               }
@@ -824,6 +840,8 @@
               "flows/agent-deployment-diagnostics",
               "flows/platform-console",
               "flows/platform-console/agent-editing",
+              "flows/platform-console/agent-sharing",
+              "flows/platform-console/observability-link",
               "flows/configuration-driver",
               "flows/configuration-driver/persistence-and-revisions",
               "flows/local-password-authentication",

@@ -81,6 +81,8 @@ The suite checks tenant isolation, resource bounds, nonroot execution, seccomp,
 dropped capabilities, and a read-only root filesystem. Skipped cases prove no
 enforcement. API-plus-worker coverage uses synthetic Secrets for binding admission
 and gateway projection; genuine channel runtime needs the images and credentials below.
+The Driver lifecycle case clones a workload Pod; removing, emptying or
+changing its network profile must deny DNS between successful controls.
 
 Live Configuration ConfigMap CRUD and least-privilege RBAC cases require the
 selected disposable cluster and tenant credentials. Without those inputs, they
@@ -117,8 +119,7 @@ export OCC_TEST_OPENAI_MODEL=gpt-6-astra
 When `OPENAI_API_KEY` is not already set, the interactive `demo` command prompts
 for it without echoing the value. `test` requires the variable explicitly;
 `reset` does not require it. A prompted value exists only in the helper process
-and its children; the helper does not write it to preparation or demo state
-files.
+and its children; the helper never writes it to state files.
 
 The helper requires k3d, `kubectl`, Helm, OpenSSL, and Docker Compose or
 `podman-compose`. It prefers a running Podman API socket unless `DOCKER_HOST`
@@ -132,8 +133,7 @@ and the disposable private-routing CA. This helper has no image upgrade command;
 its demo resources are disposable. For a separate persistent Helm installation,
 see [local k3d image upgrades](../guides/deploy/local-k3d-image-upgrade.md). The helper builds the current checkout
 and ignores Kubernetes image selectors inherited from an earlier test shell.
-State prepared by an older version without workspace routing must be removed
-with `./scripts/k3d down` before starting the updated demo.
+Run `./scripts/k3d down` before reusing state prepared without workspace routing.
 
 To clear an interrupted test or rerun against a fresh database while preserving
 the PostgreSQL service, cluster, and imported images:
@@ -142,8 +142,8 @@ the PostgreSQL service, cluster, and imported images:
 ./scripts/k3d reset
 ```
 
-Reset deletes only `oce-production-*`, `oce-ns-*`, and
-`openclaw-ci-seccomp-*` Namespaces from the helper-owned cluster. It drops and
+Reset deletes only helper test Namespaces, such as `oce-production-*`,
+`oce-openshell-*`, and `oce-ns-*`, from the helper-owned cluster. It drops and
 recreates only the database recorded in the helper's private state.
 
 The default command starts the OCC API in Kubernetes, creates a dedicated Codex
@@ -151,6 +151,9 @@ Agent, and completes a model turn. It serves the OpenClaw Control UI at
 `http://127.0.0.1:18888` and the OCC console at `http://127.0.0.1:18889`.
 The command prints the temporary OCC username and a command to copy its password
 from the mode-`0600` `demo.json` file, without printing passwords.
+
+Pass `--harness openclaw` for the verification-only
+[native OpenClaw Harness](openshell.md#native-openclaw-with-k3d).
 
 The development login is `admin@openclaw.local` with
 `openclaw-development-password`. Override it with `OPENCLAW_DEV_EMAIL` or
@@ -280,10 +283,8 @@ selected disposable resources; deployments need their own runtime verification.
 
 Real-cluster integration is opt-in for ordinary development and required when
 explicitly requested or validating the production-capable Kubernetes driver for
-release. Set all three Kubernetes variables to enable it; setting only some
-fails rather than silently skipping. The test harness requires a dedicated
-loopback-only k3d context, and all three HTTP fixture cases have been
-verified against a k3d-managed cluster. The driver itself also supports verified
+release. The test harness requires a dedicated
+loopback-only k3d context. The driver itself also supports verified
 remote HTTPS API servers and in-cluster ServiceAccount authentication. These
 variables do not configure `server.mjs`, `worker.mjs`, the normal controller, or
 its default Compute Driver.
@@ -343,7 +344,7 @@ Codex custom tools.
 | `OCC_TEST_KUBERNETES_CODEX_IMAGE`           | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                                                                                                                      |
 | `OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE` | Optional CI-published kubelet Localhost seccomp profile path for dedicated Codex Agents; generated from each selected k3d node's effective `RuntimeDefault` profile and installed only on run-owned nodes. |
 | `OCC_TEST_KUBERNETES_OPENCLAW_VERSION`      | Optional exact OpenClaw version expectation for the selected real gateway image.                                                                                                                           |
-| `OCC_TEST_KUBERNETES_CODEX_VERSION`         | Optional Codex image version expectation; defaults to `0.158.0`.                                                                                                                                           |
+| `OCC_TEST_KUBERNETES_CODEX_VERSION`         | Expected Codex version; defaults to `OPENAI_CODEX_VERSION` in `deploy/runtime/Dockerfile`.                                                                                                                 |
 | `OCC_TEST_DATABASE_URL`                     | Migrated disposable loopback database named `openclaw_k8s_*`; the ordinary development database fails.                                                                                                     |
 | `OPENAI_API_KEY`                            | Existing authorized provider credential for real embedded and dedicated model turns.                                                                                                                       |
 | `OCC_TEST_OPENAI_MODEL`                     | Authorized provider model; defaults to `gpt-6-astra`.                                                                                                                                                      |

@@ -63,3 +63,9 @@ export const RevisionCredentialsMissing = {
   ...story("revisionCredentialsMissing"),
   name: "New version missing credentials",
 };
+
+export const Sharing = { ...story("agentSharing") };
+export const SharingGranted = { ...story("agentSharingGranted") };
+export const SharingRemoved = { ...story("agentSharingRemoved") };
+export const SharingDenied = { ...story("agentSharingDenied") };
+export const SharingUnknown = { ...story("agentSharingUnknown") };

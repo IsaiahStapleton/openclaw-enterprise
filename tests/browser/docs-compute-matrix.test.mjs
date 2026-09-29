@@ -10,6 +10,7 @@ import test from "node:test";
 import playwright from "playwright";
 
 import { renderMatrixMarkdown } from "../../scripts/generate-compute-matrix.mjs";
+import { watchBrowserContext } from "../helpers/browser-failure-diagnostics.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const { chromium } = playwright;
@@ -37,8 +38,10 @@ test("docs preview filters the ComputeDriver matrix in a browser", async (t) => 
   const fixture = await mkdtemp(join(tmpdir(), "enterprise-docs-compute-matrix-browser-"));
   let child;
   let browser;
+  let diagnostics;
   t.after(async () => {
     try {
+      await diagnostics?.capture();
       await browser?.close();
     } finally {
       try {
@@ -112,6 +115,7 @@ test("docs preview filters the ComputeDriver matrix in a browser", async (t) => 
       : {}),
   });
   const page = await browser.newPage();
+  diagnostics = await watchBrowserContext(t, page.context());
   await page.goto(origin);
   await assert.doesNotReject(
     page.getByRole("rowheader", { name: /Persist Agent state/ }).waitFor(),

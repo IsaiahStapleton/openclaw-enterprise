@@ -1,3 +1,4 @@
+import { clientAddressConfiguration, humanLoginConfiguration } from "./auth/index.ts";
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
@@ -200,11 +201,16 @@ function configuration() {
     throw new Error("Development OCC_AUTH_BASE_URL must identify a loopback host.");
   }
 
+  // { github?, google? }: each configured provider carries the recovery user ID.
+  const humanLogin = humanLoginConfiguration(process.env);
+  const clientAddress = clientAddressConfiguration(process.env);
   if (mode === "production") {
     return Object.freeze({
       ...settings,
       authSecret: requiredEnvironment("OCC_AUTH_SECRET"),
       authBaseURL,
+      ...humanLogin,
+      ...(clientAddress === undefined ? {} : { clientAddress }),
       ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
       ...(channelDirectoryProxyUrl === undefined ? {} : { channelDirectoryProxyUrl }),
       ...(channelDirectoryManagedProxyHost === undefined
@@ -214,6 +220,9 @@ function configuration() {
     });
   }
 
+  if (clientAddress !== undefined) {
+    throw new Error("OCC_AUTH_TRUSTED_PROXY_* settings are production-only.");
+  }
   const authSecret = optionalEnvironment(
     "OCC_AUTH_SECRET",
     "openclaw-development-auth-secret-minimum-32-bytes",
@@ -225,6 +234,7 @@ function configuration() {
     ...settings,
     authSecret,
     authBaseURL,
+    ...humanLogin,
     ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
@@ -249,6 +259,9 @@ async function start() {
     logger,
     logging,
     metrics,
+    ...(startupConfiguration.observability === undefined
+      ? {}
+      : { observabilityUrl: startupConfiguration.observability.url }),
   };
   const drivers = await loadInstallationConfiguration({
     mode: settings.mode,

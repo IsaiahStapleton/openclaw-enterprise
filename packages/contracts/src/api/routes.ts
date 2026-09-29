@@ -71,6 +71,7 @@ import {
   NamespaceListResponse,
   NamespaceResponse,
   BackendListResponse,
+  ObservabilityResponse,
   RepositoryOptionListResponse,
   SecretListResponse,
   CredentialSourceListResponse,
@@ -258,6 +259,21 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       response: { 200: BackendListResponse, ...readErrors },
+    },
+  },
+  {
+    operationId: "getObservability",
+    method: "GET",
+    path: "/observability",
+    action: "openclaw.observability.read",
+    iamAction: "administer",
+    resourceKind: "installation",
+    authorizationTarget: "installation",
+    summary: "Get the configured external observability destination",
+    tags: ["Installation"],
+    schema: {
+      querystring: EmptyQuery,
+      response: { 200: ObservabilityResponse, ...readErrors },
     },
   },
   {

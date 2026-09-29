@@ -28,7 +28,8 @@
         "runtime image starts an embedded OpenClaw gateway with the Docker driver entrypoint",
         "runtime image discovers the bundled Codex plugin from a fresh gateway home",
         "runtime image keeps Codex auth writable with a nested generated images mount",
-        "runtime image publishes dedicated assets with the Kubernetes gateway entrypoint"
+        "runtime image publishes dedicated assets with the Kubernetes gateway entrypoint",
+        "runtime image reconnects an ephemeral native worker from an expired replayed setup code"
       ]
     },
     {
@@ -57,6 +58,22 @@
         "the real Helm renderer rejects mutable images, broad dependencies, and shared credentials",
         "private Envoy Gateway routing renders automatic CA and deterministic default hostnames",
         "private Envoy Gateway routing preserves explicit hostnames and external CA trust"
+      ]
+    },
+    {
+      "path": "tests/integration/password-default-chart.test.mjs",
+      "expectedTests": [
+        "the example install renders password-only sign-in and GitHub only as an upgrade"
+      ]
+    },
+    {
+      "path": "tests/integration/sign-in-chart-parity.test.mjs",
+      "expectedTests": [
+        "the API accepts exactly the sign-in settings the chart renders for every proxy preset, with and without GitHub",
+        "the API accepts exactly the Google sign-in settings the chart renders, alone and with GitHub",
+        "values the chart refuses are settings the API also refuses",
+        "proxy CIDRs without a preset are refused by the chart and default to ingress-nginx in the API",
+        "the chart refuses Google Secret and egress settings the API cannot observe"
       ]
     },
     {

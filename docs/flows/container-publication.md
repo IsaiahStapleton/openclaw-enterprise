@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-28
-last_updated_session: codex/01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-09-29
+last_updated_session: authoring-run/5e3ebbae-97b8-4709-8c03-6a032657e102
 ---
 
 # Container publication flow
@@ -70,6 +70,8 @@ The defaults are `blacksmith-16vcpu-ubuntu-2404` and
 Each job checks its architecture and logs CPU, memory, and available disk.
 Jobs require at least four CPUs and 12 GiB RAM; the reported runner label alone
 is not evidence of allocated capacity.
+`scripts/ci/setup-tools.sh` installs checksum-pinned kubectl, k3d, Helm, and yq
+for both native Linux architectures before runtime smoke tests.
 The standard AMD64 override retains guarded toolchain cleanup: required roots
 are checked, unsafe optional paths are skipped, and 36 GiB free is required.
 Larger runners do not depend on deleting preinstalled SDKs.
@@ -89,10 +91,11 @@ Before Buildx runs, the workflow derives `SOURCE_DATE_EPOCH` from the exact
 source commit. BuildKit rewrites image and filesystem timestamps to that epoch,
 so wall-clock time does not change the image manifests on a cold-cache rebuild.
 
-`deploy/runtime/Dockerfile:openclaw-source` verifies the pinned source archive,
+`deploy/runtime/Dockerfile:openclaw-source` verifies the pinned OpenClaw main source archive,
 uses its stock Codex 0.158.0 dependency/lockfile selection, and applies the temporary
-OpenClaw read-only-paths compatibility patch. The build verifies the latter's
-hash and records it in runtime provenance. The OpenClaw bridge forwards the bound
+OpenClaw read-only-paths compatibility patch and the `connect --ephemeral`
+expired-setup patch. The build verifies both patch hashes and records them in
+runtime provenance. The OpenClaw bridge forwards the bound
 Agent's stock network settings without modifying the Codex binary. Both installs use
 frozen lockfiles and upstream's selected-plugin manifests, retaining required
 bundled plugins plus Codex and Slack. The standalone Codex command links to the
@@ -232,6 +235,12 @@ owns package-write access and coordination.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-29 08:03: Refresh the OpenClaw main pin, archive and bridge-patch checksums, and matching workspace-template version; bridge behavior is unchanged. (authoring-run/5e3ebbae-97b8-4709-8c03-6a032657e102 - 8f3fc12cca3cb2e2a387aefb2be4d1c1eb2b39b6)
+
+- 2026-09-29 12:00: Apply a verified OpenClaw bridge patch so a dedicated native worker reconnects with its saved device token after its replayed setup code expires; record its hash in runtime provenance. (fix/native-worker-restart-expired-setup)
+
+- 2026-09-29 10:00: Update the runtime source to OpenClaw `01d7131999ca4805242ed8b0d8037f4544a9d7b0` (release/2026.9.7 head) with its verified archive checksum; the read-only-paths bridge patch applies unchanged. (chore/openclaw-pin-01d7131999)
 
 - 2026-09-28 14:51: Use upstream Codex 0.158.0 dependencies and remove the old version override. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 6c56149f)
 

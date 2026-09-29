@@ -198,6 +198,10 @@ p {
   width: 100%;
   margin-top: 28px;
 }
+.auth-providers button {
+  width: 100%;
+  margin-top: 16px;
+}
 .error {
   color: var(--danger);
   margin-top: 18px;
@@ -283,6 +287,12 @@ p {
   font-size: 17px;
   width: 20px;
   text-align: center;
+}
+.external-link-icon {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  flex: none;
 }
 .account {
   margin-top: auto;
@@ -1112,6 +1122,40 @@ summary:focus-visible {
 }
 .credential-form {
   margin-top: 12px;
+}
+
+.agent-access-form {
+  display: grid;
+  gap: 0.65rem;
+  max-width: 44rem;
+}
+
+.agent-access-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.agent-access-consent input {
+  width: auto;
+}
+
+.agent-access-grant {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.agent-access-grant p {
+  margin-block: 0.25rem;
+}
+
+.agent-access-progress {
+  padding-left: 1.25rem;
+  line-height: 1.6;
 }
 
 .plugin-fields {

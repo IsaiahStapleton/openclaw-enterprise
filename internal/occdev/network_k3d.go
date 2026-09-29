@@ -12,7 +12,24 @@ import (
 	"time"
 )
 
-const developmentGatewayPort = 8080
+const (
+	developmentGatewayPort = 8080
+	// Compute's ordinary allow policies (allow-gateway-ingress included) only select Pods that
+	// carry the ordinary network profile; the probe target must look like a real Gateway Pod.
+	// Keep in sync with apps/controller/src/drivers/compute/kubernetes/resources/network.ts.
+	workloadRoleLabel          = "openclaw.dev/workload-role"
+	networkProfileLabel        = "openclaw.dev/network-profile"
+	ordinaryNetworkProfile     = "broad-egress-v1"
+	developmentGatewayWorkload = "gateway"
+)
+
+// developmentGatewayProbeLabels returns fresh labels for the synthetic Gateway probe target.
+func developmentGatewayProbeLabels() map[string]string {
+	return map[string]string{
+		workloadRoleLabel:   developmentGatewayWorkload,
+		networkProfileLabel: ordinaryNetworkProfile,
+	}
+}
 
 // prepareDevelopmentResolver only changes the resolver of the owned k3d node.
 // An explicit address is needed when k3d's host-gateway DNS forwarding is unavailable.
@@ -254,7 +271,7 @@ func (r *runner) verifyDevelopmentNetworkPolicy(ctx context.Context, state *deve
 			"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
 			"metadata": map[string]any{"namespace": targetNamespace, "name": "probe-ingress"},
 			"spec": map[string]any{
-				"podSelector": map[string]any{"matchLabels": map[string]string{"openclaw.dev/workload-role": "gateway"}},
+				"podSelector": map[string]any{"matchLabels": developmentGatewayProbeLabels()},
 				"policyTypes": []string{"Ingress"},
 				"ingress": []any{map[string]any{
 					"from": []any{map[string]any{
@@ -288,7 +305,7 @@ func (r *runner) verifyDevelopmentNetworkPolicy(ctx context.Context, state *deve
 		labels          map[string]string
 		server          bool
 	}{
-		{targetNamespace, target, map[string]string{"openclaw.dev/workload-role": "gateway"}, true},
+		{targetNamespace, target, developmentGatewayProbeLabels(), true},
 		{otherNamespace, control, map[string]string{}, true},
 	} {
 		if err := p.pod(ctx, pod.namespace, pod.name, pod.labels, pod.server); err != nil {

@@ -695,6 +695,104 @@ async function assertDeniedTraffic(description, namespaceName, podName, operatio
   }
 }
 
+async function assertExplicitNetworkProfile(context, namespaceName, sourcePod) {
+  const profileLabel = "openclaw.dev/network-profile";
+  assert.equal(sourcePod.metadata.labels[profileLabel], "broad-egress-v1");
+  const name = `network-profile-${randomUUID()}`;
+  const directory = await mkdtemp(join(tmpdir(), "oce-network-profile-"));
+  const manifestPath = join(directory, "pod.json");
+  // Preserve the rendered role/Agent labels and security settings. A unique app
+  // name keeps this probe outside the workload's ReplicaSet and Service selectors.
+  const spec = structuredClone(sourcePod.spec);
+  delete spec.nodeName;
+  await writeFile(
+    manifestPath,
+    JSON.stringify({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: {
+        name,
+        namespace: namespaceName,
+        labels: { ...sourcePod.metadata.labels, "app.kubernetes.io/name": name },
+      },
+      spec,
+    }),
+  );
+  context.after(async () => {
+    await kubectl("delete", "pod", name, "--namespace", namespaceName, "--ignore-not-found=true");
+    await rm(directory, { recursive: true, force: true });
+  });
+  try {
+    await kubectl("create", "-f", manifestPath);
+    await kubectl(
+      "wait",
+      "--namespace",
+      namespaceName,
+      "--for=condition=Ready",
+      `pod/${name}`,
+      "--timeout=120s",
+    );
+    const dnsOutcome = async () =>
+      JSON.parse(
+        await kubectl(
+          "exec",
+          name,
+          "--namespace",
+          namespaceName,
+          "--",
+          "node",
+          "-e",
+          `
+        const dns = require("node:dns");
+        const timer = setTimeout(() => { console.log(JSON.stringify({ resolved: false, reason: "timeout" })); process.exit(0); }, 2000);
+        dns.resolve4("kubernetes.default.svc.cluster.local", (error, addresses) => {
+          clearTimeout(timer);
+          if (error) { console.log(JSON.stringify({ resolved: false, reason: error.code })); }
+          else { console.log(JSON.stringify({ resolved: true, addresses })); }
+        });
+      `,
+        ),
+      );
+    const assertAllowed = () =>
+      waitFor("explicit broad profile DNS access", async () => (await dnsOutcome()).resolved);
+    await assertAllowed();
+    for (const profile of [undefined, "", "unrecognized-v1"]) {
+      await kubectl(
+        "label",
+        "pod",
+        name,
+        "--namespace",
+        namespaceName,
+        profile === undefined ? `${profileLabel}-` : `${profileLabel}=${profile}`,
+        "--overwrite",
+      );
+      // Policy reconciliation is asynchronous. Require a real DNS denial between
+      // successful controls on the same Pod so unavailable DNS cannot satisfy it.
+      const denied = await waitFor(`DNS denial for profile ${String(profile)}`, async () => {
+        const outcome = await dnsOutcome();
+        return outcome.resolved ? undefined : outcome;
+      });
+      assert.ok(
+        ["timeout", "ETIMEOUT", "ECONNREFUSED", "EAI_AGAIN"].includes(denied.reason),
+        JSON.stringify(denied),
+      );
+      await kubectl(
+        "label",
+        "pod",
+        name,
+        "--namespace",
+        namespaceName,
+        `${profileLabel}=broad-egress-v1`,
+        "--overwrite",
+      );
+      await assertAllowed();
+    }
+  } finally {
+    await kubectl("delete", "pod", name, "--namespace", namespaceName, "--ignore-not-found=true");
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function authorized(namespaceName, actor, verb, kind) {
   const output = await kubectl(
     "auth",
@@ -1246,6 +1344,7 @@ test(
     );
     const platformProbe = await resource("pod", "platform-probe", platformNamespace);
     assert.ok(firstPod && siblingPod && foreignPod && gatewayPod);
+    await assertExplicitNetworkProfile(context, owned[0], firstPod);
 
     const gatewayUrl = `http://${gatewayName(primaryAgent)}.${gatewayTargets[0]}.svc.cluster.local:8080/readyz`;
     let lastApprovedGatewayError;

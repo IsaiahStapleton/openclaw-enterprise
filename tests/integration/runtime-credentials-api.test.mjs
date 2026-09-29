@@ -138,7 +138,7 @@ async function createFixture(t, options = {}) {
     name: "Runtime Credential Administrator",
   };
   const account = await auth.createAccount(credentials);
-  const seed = auth.principalSeed(account);
+  const seed = auth.principalSeed(account, { grant: "administrator" });
   const policy = {
     identities: [seed.principal],
     groups: [],
@@ -290,7 +290,7 @@ async function createFixture(t, options = {}) {
       name: label,
     };
     const created = await auth.createAccount(principalCredentials);
-    const createdSeed = auth.principalSeed(created);
+    const createdSeed = auth.principalSeed(created, { grant: "none" });
     policy.identities.push(createdSeed.principal);
     configurePolicy(createdSeed.principal);
     return {

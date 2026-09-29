@@ -189,7 +189,9 @@ Actual dependency failures instead use `retry()`, which also returns work to
 exhausted, the operation becomes `failed_permanent`. Pending convergence has
 its own limit: `OCC_WORKER_CONVERGENCE_TIMEOUT_MS`, measured from the original
 operation creation time. Exceeding it fails the operation with
-`CONVERGENCE_DEADLINE_EXCEEDED`. See the
+`CONVERGENCE_DEADLINE_EXCEEDED`. A runtime that reports a deterministic
+credential rejection fails the deployment earlier with
+`RUNTIME_AUTHENTICATION_FAILED`. See the
 [worker configuration reference](../settings/operations.md#controller-worker-environment) for
 defaults and supported overrides.
 

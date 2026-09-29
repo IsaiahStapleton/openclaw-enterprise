@@ -87,6 +87,11 @@ export interface ControllerWorkerOptions {
 type Observation = NamespaceEnsureResult | NamespaceDeleteResult;
 type Outcome = "success" | "pending" | "retry" | "permanent";
 
+// A revision whose runtime is not ready yet is progress, not a failure. Recheck
+// it on a short fixed cadence so earlier transient failures on the same Work do
+// not stretch readiness waits through the queue's exponential retry backoff.
+const REVISION_READINESS_RECHECK_MS = 500;
+
 interface DispatchResult {
   readonly outcome: Outcome;
   readonly code: string;
@@ -369,6 +374,8 @@ function uniqueSecretRefs(bindings: SecretBindings): SecretReference[] {
   return [...refs.values()];
 }
 
+const MAX_STOPPED_PREDECESSOR_RECORDS = 4_096;
+
 export class ControllerWorker {
   private readonly metrics: OccMetrics | undefined;
   private passOutcome: WorkOutcome = "error";
@@ -406,6 +413,19 @@ export class ControllerWorker {
   private stopping = false;
   private lastHealthAt = 0;
   private pendingHealth: Promise<void> | undefined;
+  /**
+   * Predecessors this process stopped for an exclusive successor, by revision ID.
+   * The dispatch guard supersedes a predecessor's own work once an exclusive
+   * successor exists, so only a late effect from a lost claim (or an edit outside
+   * the worker) can recreate it. Compute reports such a predecessor as a
+   * not-ready successor rather than an error, so each record is stopped again
+   * after one lease, then after two, four and so on: a returned predecessor is
+   * always stopped again, at a cost that grows only logarithmically with time.
+   */
+  private readonly stoppedPredecessors = new Map<
+    string,
+    { readonly stoppedAt: number; readonly restopAfterMs: number }
+  >();
   private readonly deployTimings = new Map<string, DeployTiming>();
 
   constructor(options: ControllerWorkerOptions) {
@@ -753,6 +773,9 @@ export class ControllerWorker {
     if (typeof stage !== "function") {
       throw new Error(`The selected production Compute Driver requires ${operation}.`);
     }
+    if (operation === "activateRevision") {
+      this.stoppedPredecessors.delete(revision.id);
+    }
     await stage.call(this.compute, revision, context);
   }
 
@@ -929,17 +952,59 @@ export class ControllerWorker {
     revision: Readonly<AgentRevision>,
     context: ComputeRevisionContext,
   ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
+    // Preparing a revision can recreate its runtime, so it is no longer known stopped.
+    this.stoppedPredecessors.delete(revision.id);
+    let earlier: readonly Readonly<AgentRevision>[] = [];
     if (this.compute.requiresStoppedPredecessors?.(revision) === true) {
-      const earlier = await this.state.read(async (view) =>
+      earlier = await this.state.read(async (view) =>
         (await view.revisions.listRevisions(revision.namespaceId, revision.agentId)).filter(
           (candidate) => candidate.revision < revision.revision,
         ),
       );
+      await this.stopPredecessors(claim, earlier);
+    }
+    try {
+      return await this.prepareAfterPredecessors(claim, revision, context);
+    } catch (error) {
+      // A failed pass may stem from a predecessor that came back; sweep it again.
       for (const previous of earlier) {
-        await this.closeRevisionCredentials(claim, previous);
-        await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(previous));
+        this.stoppedPredecessors.delete(previous.id);
+      }
+      throw error;
+    }
+  }
+
+  private async stopPredecessors(
+    claim: ClaimedWork,
+    earlier: readonly Readonly<AgentRevision>[],
+  ): Promise<void> {
+    for (const previous of earlier) {
+      const record = this.stoppedPredecessors.get(previous.id);
+      if (record !== undefined && Date.now() - record.stoppedAt < record.restopAfterMs) {
+        continue;
+      }
+      await this.closeRevisionCredentials(claim, previous);
+      await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(previous));
+      this.stoppedPredecessors.delete(previous.id);
+      this.stoppedPredecessors.set(previous.id, {
+        stoppedAt: Date.now(),
+        restopAfterMs: record === undefined ? this.leaseDurationMs : record.restopAfterMs * 2,
+      });
+      if (this.stoppedPredecessors.size > MAX_STOPPED_PREDECESSOR_RECORDS) {
+        // Forgetting a record only costs one repeated idempotent stop.
+        const oldest = this.stoppedPredecessors.keys().next().value;
+        if (oldest !== undefined) {
+          this.stoppedPredecessors.delete(oldest);
+        }
       }
     }
+  }
+
+  private async prepareAfterPredecessors(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+    context: ComputeRevisionContext,
+  ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
     let prepared = context;
     if (revision.repositoryCredentials !== undefined) {
       const repositoryCredentials = await this.repositoryCredentials.prepare(claim, revision);
@@ -2548,20 +2613,27 @@ export class ControllerWorker {
     claim: ClaimedWork,
     result: RevisionDispatchResult,
   ): Promise<void> {
+    const runtimeFailure =
+      result.outcome === "pending"
+        ? safeRuntimeFailureEvidence(result.data?.runtimeFailure)
+        : undefined;
     const expired =
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
-    let resolved: RevisionDispatchResult = expired
-      ? {
-          ...result,
-          outcome: "permanent",
-          code: "CONVERGENCE_DEADLINE_EXCEEDED",
-          data: convergenceDeadlineResultData(
-            this.convergenceTimeoutMs,
-            safeRuntimeFailureEvidence(result.data?.runtimeFailure),
-          ),
-        }
-      : result;
+    // Runtime entrypoints publish AUTHENTICATION_FAILED only for provider 401/403
+    // or invalid-key rejections and then hold unready until restart, so waiting
+    // for the deadline cannot change the result. Other failures may recover.
+    let resolved: RevisionDispatchResult =
+      runtimeFailure?.code === "AUTHENTICATION_FAILED"
+        ? { outcome: "permanent", code: "RUNTIME_AUTHENTICATION_FAILED" }
+        : expired
+          ? {
+              ...result,
+              outcome: "permanent",
+              code: "CONVERGENCE_DEADLINE_EXCEEDED",
+              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+            }
+          : result;
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);
@@ -2642,7 +2714,11 @@ export class ControllerWorker {
           ...(resolved.resultData === undefined ? {} : { resultData: resolved.resultData }),
         });
       } else if (resolved.outcome === "pending") {
-        await queue.defer(claim, { code: resolved.code });
+        await queue.defer(
+          claim,
+          { code: resolved.code },
+          resolved.code === "REVISION_INCOMPLETE" ? { delayMs: REVISION_READINESS_RECHECK_MS } : {},
+        );
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
         await queue.fail(claim, {
           code: resolved.code,

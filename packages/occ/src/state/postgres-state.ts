@@ -93,6 +93,7 @@ import {
 import {
   assertHarnessAuthAvailable,
   harnessAuthMatches,
+  namespaceRoleGrantsBeyondRead,
   validHarnessAuthSnapshot,
 } from "./platform-state.ts";
 import {
@@ -658,6 +659,17 @@ function databaseError(error: unknown): Error {
   ) {
     return new ScopeViolationError("The resource violates its exact platform ownership or state.");
   }
+  if (code === "55P03") {
+    // A lock timeout is transient contention, retryable like a statement timeout (57014).
+    return new DependencyUnavailableError("The platform persistence lock timeout expired.");
+  }
+  if (code === "40001" || code === "40P01") {
+    // A serialization failure or deadlock aborts the whole transaction before
+    // COMMIT (see commitOutcomeUnknown), so the caller can safely retry it.
+    return new DependencyUnavailableError(
+      "The platform persistence transaction conflicted with a concurrent transaction.",
+    );
+  }
   if (
     code?.startsWith("08") ||
     code?.startsWith("53") ||
@@ -1144,65 +1156,73 @@ export class PostgresPlatformState implements PlatformStateStore {
   ): Promise<PersistedNativeIAMState> {
     let installationId: string | undefined;
     await this.transact(async (unit) => {
-      const context = this.contexts.get(unit);
-      if (context === undefined) {
-        throw new DependencyUnavailableError("The platform transaction is unavailable.");
-      }
-      const installation = await this.currentInstallation(context);
-      if (installation === undefined) {
-        throw new ScopeViolationError("IAM state requires an initialized Installation.");
-      }
-      installationId = installation.id;
-      if (seed.roles.length > 0) {
-        throw new ScopeViolationError("Account provisioning must bind an existing IAM Role.");
-      }
-      for (const binding of seed.bindings) {
-        if (
-          binding.subjectKind !== "identity" ||
-          binding.subjectId !== seed.principal.id ||
-          binding.resourceKind !== "installation" ||
-          binding.resourceId !== installation.id ||
-          binding.namespaceId !== undefined
-        ) {
-          throw new ScopeViolationError(
-            "Account provisioning requires an exact Installation binding.",
-          );
-        }
-      }
-      await context.client.query(
-        `INSERT INTO occ.iam_identities (id, namespace_id, agent_id, kind, issuer, subject)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          seed.principal.id,
-          null,
-          null,
-          seed.principal.kind,
-          seed.principal.issuer,
-          seed.principal.subject,
-        ],
-      );
-      for (const binding of seed.bindings) {
-        await context.client.query(
-          `INSERT INTO occ.iam_access_bindings
-           (id, namespace_id, identity_subject_id, group_subject_id, role_id,
-            resource_kind, resource_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [
-            binding.id,
-            null,
-            binding.subjectId,
-            null,
-            binding.roleId,
-            binding.resourceKind,
-            binding.resourceId,
-          ],
-        );
-      }
+      installationId = await this.insertNativeIAMPrincipal(unit, seed);
       if (auditEvent !== undefined) {
         await unit.audit.append(auditEvent);
       }
     });
     return this.loadNativeIAMState(installationId);
+  }
+
+  /** Inserts one account Principal and its exact Installation bindings in the caller's transaction. */
+  async insertNativeIAMPrincipal(
+    unit: PlatformUnitOfWork,
+    seed: PersistedNativeIAMPrincipalSeed,
+  ): Promise<string> {
+    const context = this.contexts.get(unit);
+    if (context === undefined) {
+      throw new DependencyUnavailableError("The platform transaction is unavailable.");
+    }
+    const installation = await this.currentInstallation(context);
+    if (installation === undefined) {
+      throw new ScopeViolationError("IAM state requires an initialized Installation.");
+    }
+    if (seed.roles.length > 0) {
+      throw new ScopeViolationError("Account provisioning must bind an existing IAM Role.");
+    }
+    for (const binding of seed.bindings) {
+      if (
+        binding.subjectKind !== "identity" ||
+        binding.subjectId !== seed.principal.id ||
+        binding.resourceKind !== "installation" ||
+        binding.resourceId !== installation.id ||
+        binding.namespaceId !== undefined
+      ) {
+        throw new ScopeViolationError(
+          "Account provisioning requires an exact Installation binding.",
+        );
+      }
+    }
+    await context.client.query(
+      `INSERT INTO occ.iam_identities (id, namespace_id, agent_id, kind, issuer, subject)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        seed.principal.id,
+        null,
+        null,
+        seed.principal.kind,
+        seed.principal.issuer,
+        seed.principal.subject,
+      ],
+    );
+    for (const binding of seed.bindings) {
+      await context.client.query(
+        `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, group_subject_id, role_id,
+          resource_kind, resource_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          binding.id,
+          null,
+          binding.subjectId,
+          null,
+          binding.roleId,
+          binding.resourceKind,
+          binding.resourceId,
+        ],
+      );
+    }
+    return installation.id;
   }
 
   async close(): Promise<void> {
@@ -1380,9 +1400,8 @@ export class PostgresPlatformState implements PlatformStateStore {
     // still receive the original query failure or the exact unknown-COMMIT outcome.
     let transportError: Error | undefined;
     const onTransportError = (error: Error) => {
-      transportError = error;
+      transportError ??= error;
     };
-    client.on?.("error", onTransportError);
     const lifetime = new RepositoryTransactionLifetime();
     let started = false;
     let committing = false;
@@ -1391,6 +1410,15 @@ export class PostgresPlatformState implements PlatformStateStore {
     let discard = false;
     let unit: PlatformUnitOfWork | undefined;
     try {
+      try {
+        client.on?.("error", onTransportError);
+      } catch (error) {
+        discard = true;
+        throw error;
+      }
+      if (transportError !== undefined) {
+        throw transportError;
+      }
       await client.query(
         readOnly
           ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
@@ -1399,13 +1427,22 @@ export class PostgresPlatformState implements PlatformStateStore {
             : "BEGIN",
       );
       started = true;
+      if (transportError !== undefined) {
+        throw transportError;
+      }
       const context: TransactionContext = {
         lifetime,
         client: {
           query: async (statement, parameters) => {
             lifetime.assertActive();
+            if (transportError !== undefined) {
+              throw transportError;
+            }
             const result = await client.query(statement, parameters);
             lifetime.assertActive();
+            if (transportError !== undefined) {
+              throw transportError;
+            }
             return result;
           },
           release: () => {
@@ -1434,6 +1471,9 @@ export class PostgresPlatformState implements PlatformStateStore {
         committing = false;
         throw error;
       }
+      if (transportError !== undefined) {
+        throw new PostgresCommitOutcomeUnknownError();
+      }
       // Inspect acknowledgment separately: a throwing projection is not a server
       // rejection, even if its exception happens to contain a SQLSTATE.
       const command = (completion as { command?: unknown } | null)?.command;
@@ -1451,7 +1491,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       return result;
     } catch (error) {
       failed = true;
-      discard = committing || transportError !== undefined;
+      discard ||= committing || transportError !== undefined;
       await lifetime.finish();
       // An uncertain COMMIT or broken transport must not be queried again.
       if (started && !committing && transportError === undefined) {
@@ -1466,6 +1506,11 @@ export class PostgresPlatformState implements PlatformStateStore {
           throw error;
         }
         throw new PostgresCommitOutcomeUnknownError();
+      }
+      // An observed client error means the connection is broken, whatever code it
+      // carries; classify it as unavailable rather than as a server verdict.
+      if (transportError !== undefined && error === transportError) {
+        throw new DependencyUnavailableError("The platform persistence repository is unavailable.");
       }
       throw databaseError(error);
     } finally {
@@ -1486,7 +1531,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       }
       // Preserve the original failure. A failure after acknowledged COMMIT can
       // never be reported as definite rollback or authorize an automatic replay.
-      if (!failed && cleanupFailed && acknowledged) {
+      if (!failed && (cleanupFailed || transportError !== undefined) && acknowledged) {
         throw new PostgresCommitOutcomeUnknownError();
       }
     }
@@ -2927,6 +2972,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       resourceId: string,
     ): Promise<boolean> => {
       const queryByKind: Record<string, string> = {
+        namespace: "SELECT 1 FROM occ.namespaces WHERE id = $1 AND id = $2 FOR KEY SHARE",
         // Status can change without changing a key. SHARE also fences the
         // active -> deleting transition until the policy transaction settles.
         agent:
@@ -2982,6 +3028,9 @@ export class PostgresPlatformState implements PlatformStateStore {
           role.permissions.length === 0
         ) {
           throw new ScopeViolationError("The IAM Role must belong to an available Namespace.");
+        }
+        if (namespaceRoleGrantsBeyondRead(role)) {
+          throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
         }
         await client.query(
           "INSERT INTO occ.iam_roles (id, namespace_id, name, permissions) VALUES ($1, $2, $3, $4::jsonb)",
@@ -3050,9 +3099,21 @@ export class PostgresPlatformState implements PlatformStateStore {
             "The IAM AccessBinding must belong to an available Namespace.",
           );
         }
+        // Same subject rule as the in-memory adapter: a human without a Namespace, a
+        // non-Agent ServicePrincipal of the exact Namespace, or the ServicePrincipal of a
+        // live Agent there. The Agent owner key is deferred, so it cannot vouch mid-unit.
         const identity = await client.query(
-          `SELECT 1 FROM occ.iam_identities
-           WHERE namespace_id = $1 AND id = $2 AND kind = 'service_principal'`,
+          `SELECT 1 FROM occ.iam_identities AS i
+           WHERE i.id = $2 AND (
+             (i.kind = 'principal' AND i.namespace_id IS NULL) OR
+             (i.kind = 'service_principal' AND i.namespace_id = $1 AND (
+               i.agent_id IS NULL OR EXISTS (
+                 SELECT 1 FROM occ.agents AS a
+                 WHERE a.namespace_id = $1 AND a.id = i.agent_id
+                   AND a.service_principal_id = i.id
+               )
+             ))
+           )`,
           [namespace.id, binding.subjectId],
         );
         if (identity.rowCount !== 1) {
@@ -3060,8 +3121,12 @@ export class PostgresPlatformState implements PlatformStateStore {
             "The IAM AccessBinding subject does not belong to the exact Namespace.",
           );
         }
-        if ((await iamPolicy.getRole(namespace.id, binding.roleId)) === undefined) {
+        const role = await iamPolicy.getRole(namespace.id, binding.roleId);
+        if (role === undefined) {
           throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+        }
+        if (binding.resourceKind === "namespace" && namespaceRoleGrantsBeyondRead(role)) {
+          throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
         }
         if (!(await lockTarget(namespace.id, binding.resourceKind, binding.resourceId))) {
           throw new ScopeViolationError(

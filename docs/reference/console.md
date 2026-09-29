@@ -37,19 +37,19 @@ The sidebar opens **Agents** or **Namespaces**; **Refresh** repeats the read.
 Set up models during Agent creation; the [experimental Backends](backends.md)
 tab is hidden. Namespace rows are read-only.
 
-| Page       | Scope and permission                                                     |
-| ---------- | ------------------------------------------------------------------------ |
-| Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |
-| Namespaces | Installation-wide collection filtered by exact Namespace `read`.         |
+| Page          | Scope and permission                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Agents        | Selected Namespace; Namespace `read`, then exact Agent `read` filtering.                                             |
+| Namespaces    | Installation-wide collection filtered by exact Namespace `read`.                                                     |
+| Observability | External [`observability.url`](configuration.md#installation-startup-configuration) link; Installation `administer`. |
 
-The console uses a light appearance and OCC-served fonts; no external font
-service is required.
+The console uses a light appearance and OCC-served fonts.
 
 When available, a retained view stays mounted and inert during eligible full-page
 return validation. Matching data reactivates it; changed data rebuilds it.
-Agent-detail refocus revalidates access without comparing or rebuilding it; the
-header selector stays enabled. Refresh rebuilds. Retained views preserve controls,
-panels, editors, and Slack searches. Scoped to account, session, route, and
+Agent-detail refocus revalidates access without rebuilding the view, preserving
+mounted editors, form input, open Slack searches, and the enabled header selector.
+Refresh rebuilds. Retained views preserve controls and panels. Scoped to account, session, route, and
 Namespace, they clear on sign-out, session changes, exit, or Backend denial;
 failed reads show recovery.
 
@@ -241,8 +241,8 @@ as deleting; select **Refresh deletion status** to check progress. When the API
 confirms that the Agent is gone, the console returns to the Agents list in the
 same Namespace. An access-denied response stays on the detail page and tells you
 that deletion requires permission. If the console cannot confirm the outcome,
-the request may have succeeded; refresh to read the Agent's current state before
-retrying. The console does not automatically send another delete request.
+the request may have succeeded; refresh before retrying. The console never
+resends a delete request automatically.
 
 ## Failures and logout
 
@@ -300,9 +300,10 @@ result. For unavailable gateways, follow the
 
 When [Agent native admin UI access](agent-native-admin.md) is enabled, the
 Agent detail tabs, including Configuration and Workspace files, include a
-**Native admin UI** panel for callers with exact Agent `administer` permission.
-The panel is hidden when the Installation disables the feature or when the
-caller lacks that grant. An Agent that is stopped reports that it must be started,
+**Native admin UI** panel for callers with exact Agent `administer` permission;
+otherwise, or when the Installation disables the feature, it is hidden.
+Installation administrators can [share an Agent](console/agent-sharing.md)
+with an existing person. An Agent that is stopped reports that it must be started,
 including before its first deployment or after stopping clears its active
 revision. If a desired-running Agent has no active revision yet, the panel asks
 you to check the Agent's deployment and refresh access. It also reports when

@@ -117,6 +117,7 @@ test(
     const paths = [
       "tests/conformance/workspace-node-supervisor.test.mjs",
       "apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts",
+      "apps/controller/src/drivers/compute/node-program.ts",
       "apps/controller/src/drivers/plugin/runtime-translator.ts",
     ];
     const files = await Promise.all(
@@ -1437,6 +1438,32 @@ test(
 );
 
 test(
+  "runtime image reconnects an ephemeral native worker from an expired replayed setup code",
+  imageTestOptions,
+  async (t) => {
+    // Pod restarts replay the enrollment Secret's setup code after its expiry.
+    const configurationPath = await temporaryGatewayConfiguration(t, "codex");
+    const { containerName } = await runGatewaySmoke(t, "codex", {
+      configurationPath: "/etc/openclaw/openclaw.json",
+      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+      volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
+    });
+    const source = await readFile(
+      new URL("../fixtures/runtime-native-worker-restart.mjs", import.meta.url),
+      "utf8",
+    );
+    const { stdout } = await runDocker(
+      ["exec", containerName, "node", "--input-type=module", "-e", source],
+      { timeout: 300_000 * imageSmokeTimeoutMultiplier },
+    );
+    const result = JSON.parse(stdout);
+    assert.equal(result.sameIdentityAfterExpiredReplay, true);
+    assert.equal(result.singleBootstrapCompletion, true);
+    assert.equal(result.unpairedExpiredRejected, true);
+  },
+);
+
+test(
   "runtime image routes sandboxed Git through stock Codex and the repository broker",
   imageTestOptions,
   async (t) => {
@@ -2016,9 +2043,10 @@ assert.equal(execFileSync("codex", ["--version"], {encoding: "utf8"}).trim(), "c
 assert.equal(execFileSync(process.execPath, [bundledCommand, "--version"], {encoding: "utf8"}).trim(), "codex-cli 0.158.0");
 const provenance = JSON.parse(readFileSync("/opt/oce/runtime/provenance.json", "utf8"));
 assert.equal(provenance.source, "https://github.com/openclaw/openclaw");
-assert.equal(provenance.commit, "9190ad7c12667af435734d4944060effd6ad0a71");
-assert.equal(provenance.sourceArchiveSha256, "5393d25ac73b98030609fa40b2c2bc3f44c62a455660b7cc3f28371fc92dc851");
-assert.equal(provenance.openclawBridgePatchSha256, "62328f7cc72ada024a97a5a7bf89e988db3f91b64b4c6d7fa6809c218fc8b72e");
+assert.equal(provenance.commit, "9d9c8568c51e340540f634f71bd7c7582a70debc");
+assert.equal(provenance.sourceArchiveSha256, "175260a3e26e6de4c1225ff27d8c2b17b01b700640db915a8bac9ee3d4cf903f");
+assert.equal(provenance.openclawBridgePatchSha256, "705b21a67f344de66a5468a07b35f6fec01635331d99cb85d9254c56bccc0c7d");
+assert.equal(provenance.openclawConnectPatchSha256, "c57722da9a88ec4295577ab9a9ba6e2ca37fceda11ce8b51b08ee1425e00851f");
 assert.equal(provenance.codex.version, "0.158.0");
 assert.equal(Object.hasOwn(provenance, "codexPatchSha256"), false);
 assert.equal(Object.hasOwn(provenance, "codexVersion"), false);

@@ -642,9 +642,13 @@ test("Gateway launch binds the enrolled node without expanding owner writes or c
     ...[
       "/home/node/.openclaw/skills",
       "/home/node/.openclaw/plugin-skills",
+      "/home/node/.openclaw/agents/*/agent/workshop-skills",
+      "/home/node/.openclaw/worktree-sources/empty/*/workspace",
       "/home/node/.agents/skills",
       "/home/node/openclaw-runtime-assets/bundled-skills",
+      "/home/node/openclaw-runtime-assets/custodian-skills",
       "/home/node/openclaw-runtime-assets/plugin-skills",
+      "/app/extensions/*/skills",
     ].flatMap((root) => [root, root + "/**"]),
   ]);
   assert.equal(transfer.nodes["enrolled-node"].followSymlinks, false);

@@ -232,6 +232,12 @@
       "path": "tests/browser/console-agents.test.mjs"
     },
     {
+      "path": "tests/browser/console-agent-detail.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-presets.test.mjs"
+    },
+    {
       "path": "tests/browser/console-agent-plugin-approvers.test.mjs"
     },
     {
@@ -440,6 +446,18 @@
         "repository source obeys its dependency policy with exact current exceptions",
         "repository policy allows a public root and rejects a new HTTP Driver import"
       ]
+    },
+    {
+      "path": "tests/integration/github-login-transport.test.mjs"
+    },
+    {
+      "path": "tests/integration/google-id-token.test.mjs"
+    },
+    {
+      "path": "tests/integration/google-login-transport.test.mjs"
+    },
+    {
+      "path": "tests/integration/client-address.test.mjs"
     }
   ]
 }
