@@ -163,6 +163,9 @@ preparation never publishes images or a chart regardless of `publish_chart`.
 
 Images and the optional chart have separate jobs. A chart failure leaves the
 verified images and their successful job intact, but fails the combined run.
+The workflow holds the shared publication lock from preparation through both
+publication jobs; preparation-only runs use independent groups. A queued run can
+be superseded before it starts, but an active release retains the lock.
 The final summary reports both outcomes. Chart publication produces its own
 `chart-publication-<run-id>-<attempt>` receipt.
 

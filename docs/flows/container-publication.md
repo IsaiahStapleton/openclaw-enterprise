@@ -188,8 +188,8 @@ must agree before a version tag is written. The staged chart carries the source
 SHA and both digest references in annotations; its default controller image is
 the verified controller digest. Operator values can override that default.
 
-Both publication jobs share the environment and concurrency group. Immutable
-receipt digests isolate chart inputs if another run publishes between jobs.
+Both jobs share the protected environment. Workflow-level concurrency retains
+the publication lock across preparation and both writes; jobs never reacquire it.
 The chart publisher checks image version tags and any existing chart before writing. Existing tags must resolve to the receipt's digests;
 an existing chart version must have identical packaged files. It rechecks the trusted
 source, CI, environment, and private chart package before each write. After

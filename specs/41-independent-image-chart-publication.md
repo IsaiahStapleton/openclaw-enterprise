@@ -48,11 +48,12 @@ validate source, CI, environment, package access, receipt identity, version tags
 and published chart contents. Image-only releases do not create OCE version tags;
 chart releases retain the existing shared-version policy.
 
-Both publication jobs use the protected `container-publish` environment and
-shared `enterprise-container-publish` concurrency group with cancellation
-disabled. The chart uses immutable receipt digests, so another run publishing
-between jobs cannot substitute newer images. Existing version conflicts remain
-errors; differing immutable content is never overwritten.
+Both publication jobs use the protected `container-publish` environment. The
+workflow holds `enterprise-container-publish` concurrency with cancellation
+disabled through preparation and both publications; jobs do not reacquire it.
+Queued runs can be superseded before starting, but an active release cannot lose
+a pending chart job to another run. Preparation-only runs use independent groups.
+Existing version conflicts remain errors; differing content is never overwritten.
 
 The run summary reports whether each publication was requested and its job
 result. The publishers retain their existing digest summaries and receipts.
@@ -72,7 +73,7 @@ Existing image recovery remains unchanged.
    [container-publish.yml](../.github/workflows/container-publish.yml) at the
    existing image receipt upload. Keep the image job ID and release scripts.
 2. Give the chart job its exact receipt download, existing publication tooling,
-   protected environment, and shared concurrency group. Add a final job that
+   protected environment, and workflow-level publication lock. Add a final job that
    reports both publication results even when a dependency fails.
 3. Update [image publication](../.github/containers.md),
    [chart publication](../.github/chart-publication.md),
@@ -82,17 +83,17 @@ Existing image recovery remains unchanged.
 
 ## Verification
 
-| Required outcome                                                    | Proof                                                                                       |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Workflow inputs, conditions, permissions and dependencies are valid | Run `actionlint` and inspect all three input combinations against the job graph.            |
-| Release validation and chart receipt binding remain intact          | Run existing container-release integration tests; report missing tools and skips.           |
-| Image-only releases need no chart package                           | Hosted image-only dispatch succeeds without chart access or chart publication.              |
-| Chart failure preserves image success                               | Hosted opt-in run reports chart failure separately while retaining verified image receipts. |
-| Optional chart uses the same release                                | Hosted opt-in success has chart annotations and version tags matching the image receipt.    |
+| Required outcome                                                    | Proof                                                                                           |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Workflow inputs, conditions, permissions and dependencies are valid | Run `actionlint` and inspect all three input combinations against the job graph.                |
+| Release validation and chart receipt binding remain intact          | Run container-release and container-publication-workflow tests; report missing tools and skips. |
+| Image-only releases need no chart package                           | Hosted image-only dispatch succeeds without chart access or chart publication.                  |
+| Chart failure preserves image success                               | Hosted opt-in run reports chart failure separately while retaining verified image receipts.     |
+| Optional chart uses the same release                                | Hosted opt-in success has chart annotations and version tags matching the image receipt.        |
 
 Hosted checks require reviewed main workflow code and authorized publishing
-resources. Local workflow validation and release tests do not prove GitHub job
-execution or GHCR writes. Record those gaps rather than claim live publication.
+resources. Workflow contract tests parse the real YAML and execute its summary shell step.
+They do not simulate GitHub scheduling or prove hosted execution or GHCR writes. Record those gaps rather than claim live publication.
 Run documentation formatting, link and length checks for the accompanying docs.
 
 ## Manual Notes

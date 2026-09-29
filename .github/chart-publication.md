@@ -27,8 +27,9 @@ Containers** on `main` with its full `source_sha`, matching `ci_run_id`, and
 
 The image job publishes and verifies images first. A separate chart job consumes
 that run/attempt's image receipt, checks version tags against its digests, then
-packages and pushes the chart. Both jobs use the protected publication environment
-and shared concurrency group. The chart job rejects an existing version whose
+packages and pushes the chart. Both jobs use the protected publication environment.
+The workflow holds the shared publication lock across both jobs, including
+preparation, so overlapping runs cannot replace a pending chart job. The chart job rejects an existing version whose
 packaged files differ. Its `chart-publication-<run-id>-<attempt>` artifact
 records the chart manifest digest, source SHA, and both image digests. The older
 `container-publication` receipt retains its image-only format. If a step fails,

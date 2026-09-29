@@ -35,6 +35,12 @@ env:
   NODE_BASE_IMAGE: ${{ vars.CONTAINER_NODE_BASE_IMAGE }}
   IMAGE_TAG: ${{ inputs.image_tag }}
 
+# Hold the shared publication lock until both image and optional chart jobs finish.
+# Preparation-only runs neither block publication nor cancel one another.
+concurrency:
+  group: ${{ inputs.publish && 'enterprise-container-publish' || format('enterprise-container-prepare-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
   validate:
     runs-on: ubuntu-24.04
@@ -117,9 +123,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: container-publish
-    concurrency:
-      group: enterprise-container-publish
-      cancel-in-progress: false
     permissions:
       actions: read
       contents: read
@@ -163,9 +166,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: container-publish
-    concurrency:
-      group: enterprise-container-publish
-      cancel-in-progress: false
     permissions:
       actions: read
       contents: read
