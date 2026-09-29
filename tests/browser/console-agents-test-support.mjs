@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
 import { validateGitHubRepositoryRegistry } from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
@@ -6,6 +7,10 @@ import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src
 import { createConsoleAppFixture, backendFixtures } from "../helpers/console-app.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 import { nativeValues, pathRequests } from "./console-agents-browser-helpers.mjs";
+
+const defaultCodexPreset = JSON.parse(
+  await readFile(new URL("../../deploy/presets/default-codex.json", import.meta.url), "utf8"),
+);
 
 export const STARTER_CONTROL_UI = {
   enabled: true,
@@ -187,6 +192,7 @@ export async function createRepositoryLaunchFixture(
   { reloadablePolicy = false } = {},
 ) {
   const fixture = await createConsoleAppFixture(t, {
+    defaultPresets: [defaultCodexPreset],
     backends: [...backendFixtures, repositoryProviderFixture],
     repositoryCredentials: true,
   });
