@@ -137,6 +137,8 @@ export async function createConsoleAppFixture(t, options = {}) {
   let controller;
   const appOptions = {
     metrics: options.metrics,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    workspaceFilesAccess: options.workspaceFilesAccess,
     auth,
     iamDriver,
     auditSink,
@@ -337,7 +339,10 @@ export async function createConsoleAppFixture(t, options = {}) {
 
   async function request(method, path, { session = adminSession, headers = {}, body } = {}) {
     const result = await rawRequest(method, path, {
-      headers: session === null ? headers : authenticatedHeaders(session, headers),
+      headers:
+        session === null
+          ? headers
+          : authenticatedHeaders(session, { origin: new URL(authBaseURL).origin, ...headers }),
       body,
     });
     const payload = parseJson(result);

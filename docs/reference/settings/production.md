@@ -17,17 +17,29 @@ procedure in [Deploy native admin UI access](../../guides/deploy/native-admin.md
 Envoy and Agent gateway Services remain private, and OCC strips the shared OCE
 session cookie before forwarding to the native gateway.
 
-| Variable                   | Required value or format                                        | Behavior                                                                                                                |
-| -------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                 | Exactly `production`.                                           | Enables durable production controller composition.                                                                      |
-| `OCC_HOST`                 | One explicit Pod interface IP address.                          | Wildcard addresses and implicit hostnames are rejected.                                                                 |
-| `OCC_PORT`                 | Decimal integer from `1` through `65535`.                       | Selects the internal listener port exposed by the operator's Service.                                                   |
-| `OCC_DATABASE_URL`         | Explicit PostgreSQL application-role URL.                       | Must connect to the already migrated controller database.                                                               |
-| `OCC_CONFIG_PATH`          | Absolute path to trusted Installation startup YAML.             | Selects Configuration, IAM, Compute, and optional account Drivers.                                                      |
-| `OCC_AUTH_SECRET`          | Mounted high-entropy Better Auth secret.                        | Signs and verifies session material without logging it.                                                                 |
-| `OCC_AUTH_BASE_URL`        | Absolute controller base URL.                                   | Defines the production Better Auth base URL and cookie origin.                                                          |
-| `OCC_GATEWAY_API_KEY_PATH` | Optional absolute path to the private gateway service-key file. | API only; validates at startup and reads each operation for rotation. Requires Compute endpoint resolution.             |
-| `NODE_EXTRA_CA_CERTS`      | Optional PEM bundle for a private gateway CA.                   | Node reads it at process startup. Normal leaf renewal under that CA does not require a restart; root-bundle changes do. |
+| Variable                                   | Required value or format                                                                                           | Behavior                                                                                                                |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                 | Exactly `production`.                                                                                              | Enables durable production controller composition.                                                                      |
+| `OCC_HOST`                                 | One explicit Pod interface IP address.                                                                             | Wildcard addresses and implicit hostnames are rejected.                                                                 |
+| `OCC_PORT`                                 | Decimal integer from `1` through `65535`.                                                                          | Selects the internal listener port exposed by the operator's Service.                                                   |
+| `OCC_DATABASE_URL`                         | Explicit PostgreSQL application-role URL.                                                                          | Must connect to the already migrated controller database.                                                               |
+| `OCC_CONFIG_PATH`                          | Absolute path to trusted Installation startup YAML.                                                                | Selects Configuration, IAM, Compute, and optional account Drivers.                                                      |
+| `OCC_AUTH_SECRET`                          | Mounted high-entropy Better Auth secret.                                                                           | Signs and verifies session material without logging it.                                                                 |
+| `OCC_AUTH_BASE_URL`                        | Absolute controller base URL.                                                                                      | Defines the production Better Auth base URL and cookie origin.                                                          |
+| `OCC_GATEWAY_API_KEY_PATH`                 | Optional absolute path to the private gateway service-key file.                                                    | API only; validates at startup and reads each operation for rotation. Requires Compute endpoint resolution.             |
+| `OCC_CHANNEL_DIRECTORY_PROXY_URL`          | Optional HTTP(S) proxy URL with one literal IPv4 address and explicit port, or the exact Helm-managed Service URL. | API only; routes Slack lookup and credential validation through an HTTP CONNECT tunnel. Invalid values fail startup.    |
+| `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST` | Optional exact Helm-managed proxy Service host.                                                                    | API only; pairs the managed Service URL with the one DNS host accepted by the Slack directory Driver.                   |
+| `NODE_EXTRA_CA_CERTS`                      | Optional PEM bundle for a private gateway CA.                                                                      | Node reads it at process startup. Normal leaf renewal under that CA does not require a restart; root-bundle changes do. |
+
+For the Helm deployment, prefer `slackProxy.enabled`. The chart passes the managed Service URL only to the API Pod, passes the
+matching managed host, and grants API egress only to the proxy Pod selector.
+For an external proxy, set `api.channelDirectoryProxyUrl` to the approved proxy
+IP and port; the chart grants egress only to that exact IPv4 `/32` and TCP port.
+The proxy must allow CONNECT to `slack.com:443`; restrict its other destinations
+at the proxy. An empty value
+renders no proxy egress rule; Slack lookup and credential validation require
+another approved network route. See the
+[Slack Channel Driver](../drivers/slack-channel.md#enable-lookup-in-production).
 
 When the native admin pilot is enabled, the API also requires:
 
@@ -144,10 +156,11 @@ replace, or regenerate output; see [recovery](../../guides/deploy/service-keys.m
 and delivery checks, use
 [Configure platform observability](../../guides/observability.md#kubernetes-and-helm).
 
-When enabled, the chart requires a digest-pinned image, one approved exporter or
-proxy IPv4 `/32`, and nonempty dedicated configuration and environment Secret
-names. Neither Secret may reuse the Installation, database, auth, or ChatGPT
-Backend Secret. The named Secrets must be in the control-plane namespace:
+When enabled, the chart requires a digest-pinned image, an exact exporter
+destination (IPv4 `/32` or paired namespace/Pod selectors), a TCP port, and
+nonempty dedicated configuration and environment Secret names. Neither Secret
+may reuse the Installation, database, auth, or ChatGPT Backend Secret. The named
+Secrets must be in the control-plane namespace:
 
 - `configSecretName` supplies `collector.yaml`, `kubernetes.yaml`, and
   `exporter.yaml` keys.
@@ -174,3 +187,19 @@ See [chart defaults](../../../deploy/helm/openclaw-enterprise/values.yaml) for
 `resources`, `state.sizeLimit`, and `tmp.sizeLimit`. The
 [security reference](../security.md#operational-log-collection-boundary) owns the
 credential, runtime-export, and workload isolation boundaries.
+
+### Private telemetry defaults
+
+`metrics.enabled` defaults to `true`, with API and worker listeners on their Pod
+IP at port `9464`. Both `metrics.scraperNamespaceLabels` and
+`metrics.scraperPodLabels` default to empty: no metrics ingress is granted until
+both are set. Partial selectors and invalid or API-colliding ports fail rendering.
+See [scraping and discovery](../../guides/observability/metrics.md).
+
+For an in-cluster log receiver, set both
+`logging.collector.exporter.namespaceLabels` and `podLabels`, set its `port`,
+and leave `cidr` empty. This alternative cannot be combined with a CIDR.
+Collector metrics use the same paired selector contract under
+`logging.collector.metrics`, on fixed port `8888`; metrics ingress is opt-in.
+The chart grants only the selected peer and port. Other NetworkPolicies remain
+additive, so review them when assessing effective access.

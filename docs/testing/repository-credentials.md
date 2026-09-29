@@ -58,6 +58,8 @@ whole-program dataflow analysis, prove that allowed owners handle secrets
 correctly, or sandbox malicious code. It does not replace capability design,
 runtime isolation, or the controlled and live tests below.
 
+For image-pair verification, use the [controller and broker compatibility probe](repository-credentials-platform.md#controller-and-broker-image-compatibility-probe).
+
 ## Run controlled tests
 
 ```sh
@@ -88,13 +90,10 @@ TLS switch or localhost `GH_HOST` substitute is used.
 node --test tests/integration/repository-credentials-service-loss.test.mjs
 ```
 
-These baseline cases run the production service, GitHub factory, custody and
-transports in a child process. A controlled provider survives its termination.
-They prove stale-bearer denial after actual `SIGKILL` and show that lost issuance
-responses remain charged while the service survives, without automatic remint.
-After process replacement, the provider can still hold an unexpired token while
-the service has lost its session and reservation. That observation documents the
-current limit; it does not establish durable cleanup or accounting.
+These cases run the service and GitHub factory in a child process against a
+controlled provider. They cover stale-bearer denial, uncertain issuance, a lost
+revocation response and monotonic cleanup time. Bound admission fails closed
+without the durable journal. These cases do not prove PostgreSQL recovery.
 
 The fixture joins each child death and removes only its verified stale socket
 before replacement. This setup does not prove automatic stale-socket recovery.
@@ -309,6 +308,7 @@ qualification image and rendered Compose check.
 | Rendered Compose              | Declared paths and mount separation.                                                                               |
 | Separate running containers   | Delivered image identity and observed client/service custody for the exercised commands.                           |
 | Authorized live smoke         | Real provider behavior and cleanup for the selected repository, grant and client version.                          |
+| Installed Agent turn          | The configured Agent executes Git through its own Harness, tool policy, network path and repository authorization. |
 
 Retain selectors, versions, source/artifact/image identities, pass/fail/skip counts
 and cleanup results. Missing selectors leave evidence unavailable; they do not
@@ -317,6 +317,17 @@ bound to their original artifacts. After changes, record justified equivalence
 for each affected assertion or rerun its owning check. These packaging checks do
 not establish OCC/worker/Compute integration, an installed ordinary-Agent model
 contribution, a real-time thirteen-hour soak or release readiness.
+
+For Codex consumers, do not substitute operator `kubectl exec`, direct container
+Git commands, or runtime-image smoke tests for the installed Agent turn. Those
+checks can prove material delivery, Git configuration and broker authorization
+outside Codex. Exercise stock Codex's generated broker allowance,
+`allow_local_binding = true`, and `mode = "full"` separately. Cover bound/unbound
+dedicated/embedded consumers, broker-host denies, and unallowed hosts. Otherwise allowed private
+addresses are permitted. Require real reads, an authorized temporary write, and
+an unauthorized operation denied by broker authorization.
+For Slack-enabled Agents, start the installed-Agent proof from Slack and verify
+the threaded Agent response instead of using a direct native UI prompt.
 
 ## Run an authorized live smoke
 

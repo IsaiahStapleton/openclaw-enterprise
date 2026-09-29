@@ -22,12 +22,19 @@ presets:
   # Relative paths resolve beside installation.yaml; mount files for API and worker.
   # files:
   #   - /app/deploy/presets/devday.json # SWE Agent
+  #   - /app/deploy/presets/devday-partners.json # Community Agent
   #   - /app/deploy/presets/devday-qa.json # Q&A Agent
   #   - /app/deploy/presets/devday-oncall.json # Oncall Agent
 
 # Bundled Drivers omit `package`; selection IDs and options are trusted startup inputs.
 # See [Driver selections](../../../docs/reference/drivers/selection.md#supported-selections).
 drivers:
+  # Enable the token-free curated Codex catalog. See Plugin Driver setup:
+  # https://github.com/openclaw/openclaw-enterprise/blob/main/docs/reference/drivers/plugin-bundled.md#selection-and-catalogs
+  plugin:
+    id: codex-plugin
+    configuration:
+      catalogSource: openai-curated
   # Stores each Namespace's native Agent Configuration in its Kubernetes ConfigMaps.
   # See [Kubernetes Configuration](../../../docs/reference/settings/programmatic.md#kubernetes-configuration-driver).
   configuration:
@@ -68,14 +75,14 @@ drivers:
             memory: 128Mi
           limits:
             cpu: 500m
-            memory: 256Mi
+            memory: 2Gi
         agent:
           requests:
             cpu: 100m
             memory: 128Mi
           limits:
             cpu: 500m
-            memory: 256Mi
+            memory: 2Gi
         # Each tenant namespace receives a Pod quota and default container bounds.
         # See [Namespace isolation](../../../docs/reference/drivers/kubernetes-compute/networking-and-isolation.md#namespaces-and-isolation).
         namespace:
@@ -87,7 +94,7 @@ drivers:
               memory: 128Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 2Gi
       network:
         # With repositoryCredentials.enabled, add this exact service endpoint peer.
         # The instance label must equal the Helm release name; this example uses oce.
@@ -125,6 +132,18 @@ drivers:
         audience: openclaw-enterprise
         expirationSeconds: 900
       runtime:
+        # For Slack, set the approved gateway proxy and configure the separate
+        # API directory proxy in Helm values. See docs/guides/integrations/slack.md.
+        # channels:
+        #   proxyUrl: http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128
+        #   managedProxy:
+        #     hostname: openclaw-enterprise-slack-proxy.openclaw-system.svc
+        #     namespace: openclaw-system
+        #     podLabels:
+        #       app.kubernetes.io/name: openclaw-enterprise
+        #       app.kubernetes.io/instance: oce
+        #       app.kubernetes.io/component: slack-proxy
+        #     port: 3128
         # Choose a private RWO block-backed filesystem with reliable SQLite locking.
         # See [Gateway storage](../../../docs/reference/drivers/kubernetes-compute/storage-and-credentials.md#gateway-storage).
         gatewayStorageClassName: occ-gateway-rwo
@@ -132,10 +151,12 @@ drivers:
         nodeSelector:
           oce-role: agents
         gatewayNodeSelector:
-          oce-role: control-plane
+          oce-role: control
         # Keep each Agent's transport tokens separate from its model API key.
         # See [Runtime credentials](../../../docs/reference/drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials).
         transportSecretPrefix: openclaw-agent-transport
+        # Required for repository-bound dedicated Codex Agents: the runtime image
+        # must understand the narrow broker private-endpoint policy contract.
   # Stores Namespace-owned Secret values and projects approved bindings to gateways.
   # See [Secret Driver](../../../docs/reference/drivers/kubernetes-secret.md#configure-the-driver).
   secret:

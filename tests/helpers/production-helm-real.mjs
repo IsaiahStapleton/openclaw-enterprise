@@ -16,12 +16,16 @@ export async function installProductionHelmControlPlane({
   apiClients,
   repositoryCredentials,
   gatewayRouting,
+  controlPlane,
+  executionCluster,
   metrics,
+  databaseName = "openclaw_enterprise",
   run,
   kubernetes,
   createSecretValue: secret,
   record,
 }) {
+  assert.match(databaseName, /^[a-z][a-z0-9_]+$/);
   const { kubectl, waitFor } = kubernetes;
   const apply = (object) =>
     run("kubectl", kubernetes.kubectlArguments(["apply", "-f", "-"]), {
@@ -66,7 +70,7 @@ export async function installProductionHelmControlPlane({
   const appPassword = secret();
   await createSecret("postgres-bootstrap", {
     password: postgresPassword,
-    "init.sql": `CREATE ROLE occ_migrator LOGIN PASSWORD '${migrationPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nCREATE ROLE occ_app LOGIN PASSWORD '${appPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nGRANT CREATE ON DATABASE openclaw_enterprise TO occ_migrator;\nCREATE SCHEMA occ AUTHORIZATION occ_migrator;\nCREATE SCHEMA drizzle AUTHORIZATION occ_migrator;\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
+    "init.sql": `CREATE ROLE occ_migrator LOGIN PASSWORD '${migrationPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nCREATE ROLE occ_app LOGIN PASSWORD '${appPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\nGRANT CREATE ON DATABASE ${databaseName} TO occ_migrator;\nCREATE SCHEMA occ AUTHORIZATION occ_migrator;\nCREATE SCHEMA drizzle AUTHORIZATION occ_migrator;\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
   });
   await createClaim("postgres-data");
   await createClaim("bootstrap-password");
@@ -76,6 +80,9 @@ export async function installProductionHelmControlPlane({
     metadata: metadata("bootstrap-password-prepare"),
     spec: {
       restartPolicy: "Never",
+      ...(controlPlane?.nodeSelector === undefined
+        ? {}
+        : { nodeSelector: controlPlane.nodeSelector }),
       automountServiceAccountToken: false,
       securityContext: {
         runAsUser: 0,
@@ -120,6 +127,9 @@ export async function installProductionHelmControlPlane({
     kind: "Pod",
     metadata: metadata("postgres", system, { app: "postgres" }),
     spec: {
+      ...(controlPlane?.nodeSelector === undefined
+        ? {}
+        : { nodeSelector: controlPlane.nodeSelector }),
       securityContext: { ...podSecurity, runAsUser: 999, runAsGroup: 999, fsGroup: 999 },
       containers: [
         {
@@ -129,7 +139,7 @@ export async function installProductionHelmControlPlane({
           securityContext,
           resources,
           env: [
-            { name: "POSTGRES_DB", value: "openclaw_enterprise" },
+            { name: "POSTGRES_DB", value: databaseName },
             {
               name: "POSTGRES_PASSWORD",
               valueFrom: { secretKeyRef: { name: "postgres-bootstrap", key: "password" } },
@@ -140,7 +150,7 @@ export async function installProductionHelmControlPlane({
             { name: "init", mountPath: "/docker-entrypoint-initdb.d", readOnly: true },
           ],
           readinessProbe: {
-            exec: { command: ["pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"] },
+            exec: { command: ["pg_isready", "-U", "postgres", "-d", databaseName] },
             initialDelaySeconds: 2,
             periodSeconds: 2,
           },
@@ -170,8 +180,8 @@ export async function installProductionHelmControlPlane({
     "installation.yaml": JSON.stringify(configuration),
   });
   await createSecret("occ-database", {
-    "application-url": `postgresql://occ_app:${appPassword}@postgres.${system}.svc.cluster.local:5432/openclaw_enterprise`,
-    "migration-url": `postgresql://occ_migrator:${migrationPassword}@postgres.${system}.svc.cluster.local:5432/openclaw_enterprise`,
+    "application-url": `postgresql://occ_app:${appPassword}@postgres.${system}.svc.cluster.local:5432/${databaseName}`,
+    "migration-url": `postgresql://occ_migrator:${migrationPassword}@postgres.${system}.svc.cluster.local:5432/${databaseName}`,
   });
   await createSecret("occ-auth", { secret: secret() });
   const endpoint = (await get("endpoints", "kubernetes", "default")).subsets[0];
@@ -191,6 +201,12 @@ export async function installProductionHelmControlPlane({
   }
   if (gatewayRouting !== undefined) {
     values.gatewayRouting = gatewayRouting;
+  }
+  if (controlPlane !== undefined) {
+    values.controlPlane = controlPlane;
+  }
+  if (executionCluster !== undefined) {
+    values.executionCluster = executionCluster;
   }
   if (metrics !== undefined) {
     values.metrics = metrics;

@@ -89,11 +89,13 @@ active revision, activates the Kubernetes route when applicable, and retires the
 prior revision. Its live claim remains unfinished until it atomically records
 one attributable activation audit and completes the durable operation.
 Already-active recovery repeats route activation and predecessor retirement
-before that audit and finalization. Idle dedicated app-servers can overlap,
-but normal reconciliation routes requests only to the active revision. This does
-not fence independent processes during Kubernetes node partitions or manual
-replacement. The single-replica gateway can also interrupt serving during
-replacement; see the [gateway rollout limitation](../drivers/kubernetes-compute.md#execution-modes).
+before that audit and finalization. Kubernetes dedicated replacement stops all
+earlier runtimes before preparing the candidate and reuses the Harness-only RWO
+claim. This interrupts serving, including the gateway; a failed candidate needs
+retry or a new revision, not automatic rollback. See the
+[exclusive replacement contract](../drivers/compute.md#production-revision-stages).
+Pod termination does not fence independent processes during node partitions or
+manual replacement.
 See the
 [Harness execution topology flow](../../flows/harness-execution-topology.md) for the
 full placement, runtime, and recovery sequence.
@@ -152,6 +154,7 @@ stateDiagram-v2
 - **`failed_permanent`:** Processing stopped because authorization failed, an
   unrecoverable error occurred, or the retry limit was exhausted. The failure
   is audited, and the terminal operation is never retried automatically.
+  The initiating caller can explicitly [retry Agent deletion](../agents.md#deletion).
 
 ### Terminal results
 
@@ -202,7 +205,11 @@ available or restore it automatically.
 If a worker exits or stops renewing its lease, stale-claim recovery either
 requeues the operation or marks it `failed_permanent` after its final attempt.
 Recovery can also terminalize an already queued operation whose attempts are
-exhausted.
+exhausted. When that work targets Namespace creation, recovery changes a still
+`provisioning` Namespace to `failed` in the same atomic statement as the terminal
+work state and audit evidence. Retryable recovery leaves it `provisioning`;
+Agent work, Namespace deletion work, and Namespaces already past provisioning
+do not change Namespace status through this recovery path.
 
 ## Authorization, retries, and scope
 

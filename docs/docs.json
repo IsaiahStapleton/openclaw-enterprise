@@ -165,6 +165,10 @@
                     "label": "Secrets"
                   },
                   {
+                    "page": "reference/credential-sources",
+                    "label": "Credential Sources"
+                  },
+                  {
                     "page": "guides/topics/audit-log",
                     "label": "Audit Log"
                   }
@@ -282,11 +286,29 @@
                     ]
                   },
                   {
+                    "group": "Credential Gateway",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/openshell-credential-gateway",
+                        "label": "OpenShell"
+                      }
+                    ]
+                  },
+                  {
                     "group": "Secrets",
                     "pages": [
                       {
                         "page": "reference/drivers/kubernetes-secret",
                         "label": "Kubernetes"
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Channels",
+                    "pages": [
+                      {
+                        "page": "reference/drivers/slack-channel",
+                        "label": "Slack Directory"
                       }
                     ]
                   },
@@ -391,12 +413,36 @@
                     "label": "Control Plane Setup"
                   },
                   {
+                    "page": "guides/deploy/private-registry-images",
+                    "label": "Private Images"
+                  },
+                  {
+                    "page": "guides/deploy/installation-profiles",
+                    "label": "Profiles"
+                  },
+                  {
+                    "page": "guides/deploy/upgrade-checklist",
+                    "label": "Upgrade Checklist"
+                  },
+                  {
+                    "page": "guides/deploy/production-upgrade",
+                    "label": "Image Upgrades"
+                  },
+                  {
+                    "page": "guides/deploy/local-k3d-image-upgrade",
+                    "label": "Local k3d Upgrades"
+                  },
+                  {
                     "page": "guides/deploy/kubernetes",
                     "label": "Kubernetes"
                   },
                   {
                     "page": "guides/deploy/eks",
                     "label": "Amazon EKS"
+                  },
+                  {
+                    "page": "guides/deploy/eks-private-access",
+                    "label": "Private EKS Access"
                   },
                   {
                     "page": "guides/deploy/codex-sandbox",
@@ -463,6 +509,10 @@
                     "label": "Metrics Scraping"
                   },
                   {
+                    "page": "guides/observability/demo",
+                    "label": "Demo Stack"
+                  },
+                  {
                     "page": "reference/metrics",
                     "label": "Metrics Reference"
                   },
@@ -482,7 +532,11 @@
                 ]
               }
             ],
-            "hidden": ["guides/deploy/service-keys", "guides/deploy/local-operations"]
+            "hidden": [
+              "guides/deploy/service-keys",
+              "guides/deploy/local-operations",
+              "flows/installation-profile-rendering"
+            ]
           },
           {
             "tab": "Reference",
@@ -565,6 +619,10 @@
                     "label": "Overview"
                   },
                   {
+                    "page": "contributing/rfcs",
+                    "label": "RFCs"
+                  },
+                  {
                     "page": "contributing/design-philosophy",
                     "label": "Design Philosophy"
                   },
@@ -600,12 +658,20 @@
                     "group": "Driver Contracts",
                     "pages": [
                       {
+                        "page": "reference/drivers/channel",
+                        "label": "Channel"
+                      },
+                      {
                         "page": "reference/drivers/compute",
                         "label": "Compute"
                       },
                       {
                         "page": "reference/drivers/configuration",
                         "label": "Configuration"
+                      },
+                      {
+                        "page": "reference/drivers/credential-gateway",
+                        "label": "Credential Gateway"
                       },
                       {
                         "page": "reference/drivers/iam",
@@ -678,6 +744,14 @@
                         "label": "Local Tests"
                       },
                       {
+                        "page": "testing/module-boundaries",
+                        "label": "Module Boundaries"
+                      },
+                      {
+                        "page": "testing/repository-boundaries",
+                        "label": "Repository Boundaries"
+                      },
+                      {
                         "page": "testing/fixtures-and-scenarios",
                         "label": "Fixtures and Scenarios"
                       },
@@ -714,6 +788,10 @@
                     "label": "Preview and Validate"
                   },
                   {
+                    "page": "contributing/documentation-hosting",
+                    "label": "Hosting and Launch"
+                  },
+                  {
                     "page": "base-driver-docs-template",
                     "label": "Driver Docs"
                   },
@@ -725,6 +803,9 @@
               }
             ],
             "hidden": [
+              "contributing/rfc-template",
+              "guides/deploy/local-repository-credentials",
+              "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
               "design/access",
@@ -734,10 +815,13 @@
               "reference/settings/programmatic",
               "flows/platform-startup",
               "flows/production-startup",
+              "flows/coordinated-production-upgrade",
               "flows/docker-compose-development/startup",
               "flows/docker-compose-development/agent-execution",
               "flows/common-logging",
+              "flows/audit-ledger",
               "flows/controller-worker",
+              "flows/agent-deployment-diagnostics",
               "flows/platform-console",
               "flows/platform-console/agent-editing",
               "flows/configuration-driver",
@@ -751,8 +835,11 @@
               "flows/harness-execution-topology",
               "flows/compute-driver-lifecycle-hooks",
               "flows/openshell-sandbox-provisioning",
+              "flows/credential-source-lifecycle",
               "flows/driver-plugin-loading",
               "flows/agent-plugins",
+              "flows/agent-channel-directory",
+              "flows/agent-plugin-approvals",
               "flows/agent-provisioning",
               "flows/agent-native-admin",
               "flows/kubernetes-existing-namespace-placement",
@@ -769,6 +856,7 @@
               "testing/docker",
               "testing/ssh",
               "testing/kubernetes",
+              "testing/two-cluster-local",
               "testing/gateway-routing",
               "testing/production-tui",
               "testing/slack",

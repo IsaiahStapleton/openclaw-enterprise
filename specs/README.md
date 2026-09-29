@@ -1,5 +1,10 @@
 # Implementation specifications
 
+[Default production observability](36-production-observability.md) — Implemented locally;
+production telemetry defaults, separate demo stack, and local k3d/CI acceptance.
+See the [implementation plan](36-production-observability-plan.md) and
+[qualification report](reports/36-production-observability-implementation.md).
+
 [First Enterprise container release](32-first-container-release.md) — Implementing;
 protected marker bootstrap and first private SHA-addressed controller/runtime publication.
 
@@ -43,11 +48,37 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Repository credential recovery](39-repository-credential-recovery.md) — Implementing;
+explore cleanup evidence across broker loss without retaining provider tokens.
+
+[Installation profiles](2026-09-28-installation-profiles-design.md) — Implementing;
+shared packaging for openclaw and codex, with isolated fresh-cluster qualification.
+
+[Two-cluster Gateway execution](37-two-cluster-gateway-execution-plan.md) — Experimental implementation;
+complete local OCE setup across separate CP and DP clusters, with explicit
+cluster access and TLS transport. Broader runtime and failure-path qualification
+remain pending; see the [validation profile](../docs/testing/two-cluster-local.md).
+
+[Agent access](36-agent-access.md) — Proposed; existing-person sharing for trusted
+full native administration, followed by atomic enrollment and granular permissions.
+
+[Credential Gateway Driver](39-sandbox-credential-injection.md) — Implementing; first slice in #461;
+Namespace credential sources attached to Agent revisions, with OpenShell
+injecting credentials outside the workload; static first (only the `openai` type
+ships), with OAuth2 refresh after real-path verification.
+
+[Dedicated Harness RWO workspace](38-harness-rwo-workspace-plan.md) — Implementing;
+exclusive revision preparation, durable RWO workspaces, and retained existing claims.
+
 [Plugin policy enforcement](37-plugin-policy-enforcement.md) — Proposed for alignment;
 revises the earlier plugin policy proposals with nested defaults and tool overrides,
 Driver extensions, and admission-to-runtime enforcement. Draft implementation
 exists; enforcement delivery awaits alignment. Catalog discovery proceeds in the
 separate Create Agent workstream.
+
+[Independent production image upgrades](36-coordinated-image-upgrade.md) — Proposed;
+release the controller without replacing Agents, or update the runtime image and
+redeploy the running fleet concurrently through OCC.
 
 [Native OpenClaw plugin tool policies](35-native-plugin-tool-policy.md) — Proposed;
 enforce Agent plugin policies through a managed native policy plugin and existing
@@ -58,6 +89,9 @@ create-only Console and API input, applied once before first runtime execution.
 
 [Agent presets](33-agent-presets.md) — Implementing; reusable, partial Agent launch
 templates with variables, CRUD APIs, and console selection.
+
+[Basic role-based access control](31-basic-rbac.md) — Direction; deferred past 0.x.
+Personal and team Agent access, exact grants, and withdrawal; see the current-source amendment.
 
 [Harness authentication bindings](30-harness-auth-binding.md) — Accepted for implementation;
 one Agent auth binding for supplied OpenAI keys and issued ChatGPT account credentials.

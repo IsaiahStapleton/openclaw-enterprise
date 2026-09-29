@@ -86,8 +86,9 @@ references rather than values.
 
 ## Connect alerts to a response
 
-Use [platform observability](../observability.md) to configure collection and
-prove backend receipt. Then assign alert thresholds and a response owner for the
+Verify each private API/worker metrics target using [Pod discovery](../observability/metrics.md),
+and use [platform observability](../observability.md) to connect operational logs
+and prove backend receipt. Default local output does not prove remote delivery. Then assign alert thresholds and a response owner for the
 workload. Keep an alert route that does not depend on the affected Agent replying.
 
 | Signal                                                          | First operator response                                                                                                                                                                              |
@@ -119,7 +120,7 @@ Record the protection and recovery owner for each required asset:
 - Startup, authentication, provider, and runtime Secrets; protected bootstrap
   output; and any private routing certificates and keys.
 - Each Agent's private gateway state claim and, for dedicated execution, its
-  shared workspace claim. Review the exact [persistent and ephemeral storage
+  Harness workspace claim. Review the exact [persistent and ephemeral storage
   boundary](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#gateway-storage).
 - External Configuration and Secret stores required by the selected Drivers.
 
