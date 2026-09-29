@@ -3,8 +3,9 @@
 Companion to the [profile proposal](../2026-09-28-installation-profiles-design.md)
 and [Helm inventory](helm-inventory.md). Baseline:
 `e06ff9625e72ff5ab3483a504a2f02a69a370cbb`, inspected 2026-09-28.
-“Implemented” below means source exists. Historical reports and inspected tests
-are explicitly distinguished from executed verification; this task ran no runtime tests.
+“Implemented” below means source exists. This inventory separates historical
+reports and inspected tests from executed verification; this task ran no runtime
+tests.
 
 > Historical baseline: this inventory records the pre-implementation discovery
 > phase at `e06ff962`. It does not describe the current installation profile
@@ -15,9 +16,10 @@ are explicitly distinguished from executed verification; this task ran no runtim
 ## Startup configuration
 
 The closed [startup contract](../../apps/controller/src/composition/installation-config.ts)
-accepts `occ`, `logging`, `presets`, `backend`, and `drivers`. Settings are supplied
-through the Helm-mounted startup Secret. There is no automatic empty-configuration
-production installation. Required selections and their configuration must be explicit.
+accepts `occ`, `logging`, `presets`, `backend`, and `drivers`. Operators supply
+settings through the Helm-mounted startup Secret. Production does not install
+from an empty configuration; required selections and their configuration must be
+explicit.
 
 | Capability              | Owner and current default                                                       | Inputs, dependencies, limits                                                                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -75,9 +77,9 @@ Provision both storage paths, including on EKS where a default class cannot be a
 
 Compute production preflight requires Kubernetes **1.35.0 or newer** for both
 control and execution clusters; older versions fail with
-`KUBERNETES_VERSION_BELOW_MINIMUM`. NetworkPolicy enforcement is essential on
-both local and EKS clusters. Current
-production runtime permits temporary public TCP/443 Agent egress; default deny
+`KUBERNETES_VERSION_BELOW_MINIMUM`. Both local and EKS clusters must enforce
+NetworkPolicies. Current production runtime permits temporary public TCP/443
+Agent egress; default deny
 does not mean destination-restricted internet access. Profiles must disclose
 this existing limit and must not widen networking to mask setup failures.
 
@@ -99,8 +101,8 @@ not delete saved presets. Startup requires an authorized Installation admin.
 execution; [Standard Codex](../../deploy/presets/standard-codex.json) uses dedicated
 execution. Both require user model/name/API-key inputs, have no selected Backend
 or platform plugins, and disable browser/elevated/web-fetch tools. Codex also
-sets cached web search and restricted native network proxy behavior. Thus the
-stock Codex preset alone does **not** exercise managed-account plugin loading.
+sets cached web search and restricted native network proxy behavior. The stock
+Codex preset alone therefore does **not** exercise managed-account plugin loading.
 For that acceptance case, explicitly configure the Agent's ServiceAccount binding
 and plugin selection without rewriting existing saved presets. Custom templates
 remain optional `presets.files` entries.
@@ -174,7 +176,7 @@ Curated discovery is credential-free for dedicated Codex. Hosted discovery needs
 an `at-` PAT or authorized same-Namespace Secret and API HTTPS access to
 `auth.openai.com` and `chatgpt.com`. Managed ServiceAccounts are **not** supported
 discovery credential sources. The existing `api.modelDiscoveryCidrs` allowance
-can carry those `/32` destinations; its name obscures this use. API egress alone
+can carry those `/32` destinations despite its model-specific name. API egress alone
 does not configure or authenticate discovery.
 
 Optional paired `codexExecutable`/`codexHome` configures a separate controller-side
@@ -209,7 +211,7 @@ Gateway startup waits for current Codex peer status. Worker validates private
 Supported scope: dedicated Codex with concrete hosted apps, optionally skills.
 Hooks, native MCP servers, scheduled tasks, skill-only/template-only bundles are
 unsupported. Embedded plus Codex-plugin has partial compute support but lacks
-consistent discovery/UI/proof, so is excluded from initial guarantees. Emitted
+consistent discovery/UI/proof, so it is excluded from initial guarantees. Emitted
 policy and permissive native sessions do not establish enforced human approval;
 [documented proof limits](../../docs/testing/plugins.md) remain material.
 

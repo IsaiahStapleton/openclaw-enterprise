@@ -4,6 +4,7 @@ import { once } from "node:events";
 import test from "node:test";
 import {
   adminEmail,
+  createConfiguredAgent,
   createDurableController,
   databaseUrl,
   parseJsonLines,
@@ -1696,6 +1697,188 @@ test(
     } finally {
       await client.query("ROLLBACK");
       client.release();
+    }
+  },
+);
+
+test(
+  "PostgreSQL browsing isolates unreadable saved Agent and revision configuration",
+  requiresPostgres,
+  async (context) => {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: databaseUrl });
+    context.after(() => pool.end());
+    const api = await startController(context);
+    const { state } = await createDurableController(pool);
+    const namespace = await request(api, "POST", "/namespaces", {
+      name: `unreadable-configuration-${randomUUID()}`,
+    });
+    assert.equal(namespace.status, 201);
+    const namespaceId = namespace.data.id;
+    const plugins = {
+      "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "provider_default" } },
+    };
+    const { agent, configuration } = await createConfiguredAgent(
+      api,
+      namespaceId,
+      "Unreadable saved configuration",
+      undefined,
+      { harnessAuth: { method: "runtime" } },
+    );
+    const { agent: healthyAgent } = await createConfiguredAgent(
+      api,
+      namespaceId,
+      "Healthy saved configuration",
+    );
+    const agentPath = `/namespaces/${namespaceId}/agents/${agent.id}`;
+    const revisionPath = `${agentPath}/revisions`;
+
+    // Seed an admitted snapshot through its persistence owner. This test proves
+    // browsing saved state, not Compute execution or runtime readiness.
+    const revision = await state.transact((unit) =>
+      unit.revisions.createRevision({
+        id: `rev_${randomUUID()}`,
+        namespaceId,
+        agentId: agent.id,
+        revision: 1,
+        backendId: null,
+        configurationId: configuration.id,
+        configurationKind: "agent",
+        configurationGeneration: 1,
+        configuration: configuration.values,
+        harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
+        compute: {
+          id: "compute-local-development",
+          implementation: "deterministic-local-development",
+        },
+        harnessAuth: { method: "runtime" },
+        servicePrincipalId: agent.servicePrincipalId,
+        plugins: { driver: { id: "occ-plugin", implementation: "occ/openclaw-plugin" }, plugins },
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    const healthyRevision = await request(api, "GET", `${revisionPath}/${revision.id}`);
+    assert.equal(healthyRevision.status, 200);
+
+    // A previously accepted approval enum survives in PostgreSQL after the
+    // application contract changes. Preserve the valid immutable snapshot.
+    const malformedPlugins = {
+      "occ-plugin:diffs": { enabled: true, toolDefaults: { approval: "prompt" } },
+    };
+    await pool.query("UPDATE occ.agents SET plugins = $2::jsonb WHERE id = $1", [
+      agent.id,
+      JSON.stringify(malformedPlugins),
+    ]);
+    const malformedRevisionId = `rev_${randomUUID()}`;
+    await pool.query(
+      `INSERT INTO occ.agent_revisions
+         (id, namespace_id, agent_id, revision_number, backend_id, admitted_spec, admitted_at)
+       SELECT $1, namespace_id, agent_id, revision_number + 1, backend_id,
+              jsonb_set(admitted_spec, '{plugins,plugins}', $2::jsonb, false), admitted_at
+       FROM occ.agent_revisions WHERE id = $3`,
+      [malformedRevisionId, JSON.stringify(malformedPlugins), revision.id],
+    );
+    const readError = { code: "SAVED_CONFIGURATION_UNREADABLE", field: "plugins" };
+    const { plugins: _plugins, harnessAuth: _harnessAuth, ...agentMetadata } = agent;
+    const degradedAgent = { ...agentMetadata, configurationReadError: readError };
+    const degradedRevision = {
+      id: malformedRevisionId,
+      namespaceId,
+      agentId: agent.id,
+      revision: 2,
+      backendId: null,
+      createdAt: healthyRevision.data.createdAt,
+      configurationReadError: readError,
+    };
+
+    const listed = await request(api, "GET", `/namespaces/${namespaceId}/agents`);
+    assert.equal(listed.status, 200);
+    assert.equal(listed.data.length, 2);
+    assert.deepEqual(
+      listed.data.find(({ id }) => id === agent.id),
+      degradedAgent,
+    );
+    assert.deepEqual(
+      listed.data.find(({ id }) => id === healthyAgent.id),
+      healthyAgent,
+    );
+    const detail = await request(api, "GET", agentPath);
+    assert.equal(detail.status, 200);
+    assert.deepEqual(detail.data, degradedAgent);
+
+    const revisions = await request(api, "GET", revisionPath);
+    assert.equal(revisions.status, 200);
+    assert.deepEqual(revisions.data, [healthyRevision.data, degradedRevision]);
+    const validDetail = await request(api, "GET", `${revisionPath}/${revision.id}`);
+    assert.equal(validDetail.status, 200);
+    assert.deepEqual(validDetail.data, healthyRevision.data);
+    const invalidDetail = await request(api, "GET", `${revisionPath}/${malformedRevisionId}`);
+    assert.equal(invalidDetail.status, 200);
+    assert.deepEqual(invalidDetail.data, degradedRevision);
+
+    // Browsing must not admit partially decoded records to mutation or runtime
+    // paths, and a failed edit must not turn unreadable plugin state into {}.
+    for (const read of [
+      (view) => view.agents.findAgent(namespaceId, agent.id),
+      (view) => view.agents.listAgents(namespaceId),
+      (view) => view.revisions.findRevision(namespaceId, agent.id, malformedRevisionId),
+      (view) => view.revisions.listRevisions(namespaceId, agent.id),
+    ]) {
+      await assert.rejects(state.read(read), { name: "DependencyUnavailableError" });
+    }
+    const beforeMutation = await pool.query(
+      `SELECT plugins,
+              (SELECT count(*)::integer FROM occ.agent_revisions WHERE agent_id = $1) AS revisions,
+              (SELECT count(*)::integer FROM occ.controller_work WHERE agent_id = $1) AS work
+       FROM occ.agents WHERE id = $1`,
+      [agent.id],
+    );
+    for (const [method, path, body] of [
+      ["PATCH", agentPath, { configurationId: configuration.id }],
+      ["POST", `${agentPath}/deploy`, undefined],
+    ]) {
+      const rejected = await request(api, method, path, body);
+      assert.equal(rejected.status, 503);
+      assert.equal(rejected.error.code, "DEPENDENCY_UNAVAILABLE");
+      assert.equal(rejected.data, undefined);
+    }
+    const afterMutation = await pool.query(
+      `SELECT plugins,
+              (SELECT count(*)::integer FROM occ.agent_revisions WHERE agent_id = $1) AS revisions,
+              (SELECT count(*)::integer FROM occ.controller_work WHERE agent_id = $1) AS work
+       FROM occ.agents WHERE id = $1`,
+      [agent.id],
+    );
+    assert.deepEqual(afterMutation.rows, beforeMutation.rows);
+
+    // The degraded response has the same exact-resource IAM boundary as a
+    // healthy response; neither metadata nor decode errors may leak on denial.
+    for (const [resourceKind, resourceId, listPath, detailPath, visible] of [
+      [
+        "agent_revision",
+        malformedRevisionId,
+        revisionPath,
+        `${revisionPath}/${malformedRevisionId}`,
+        [healthyRevision.data],
+      ],
+      ["agent", agent.id, `/namespaces/${namespaceId}/agents`, agentPath, [healthyAgent]],
+    ]) {
+      await pool.query(
+        `INSERT INTO occ.iam_restrictions
+           (id, namespace_id, action, resource_kind, resource_id, effect)
+         VALUES ($1, $2, 'read', $3, $4, 'deny')`,
+        [`restriction-${randomUUID()}`, namespaceId, resourceKind, resourceId],
+      );
+      const filtered = await request(api, "GET", listPath);
+      assert.equal(filtered.status, 200);
+      assert.deepEqual(filtered.data, visible);
+      const denied = await request(api, "GET", detailPath);
+      assert.equal(denied.status, 403);
+      assert.deepEqual(denied.error, {
+        code: "FORBIDDEN",
+        message: "The exact platform operation was not authorized.",
+      });
+      assert.equal(denied.data, undefined);
     }
   },
 );

@@ -147,6 +147,19 @@ function workOperation(claim: ClaimedWork): string {
   return "work.reconcile";
 }
 
+// Worker-local phase timing for one deployment work item. It spans the passes
+// this process observes; a restart or eviction starts a new record.
+interface DeployTiming {
+  passes: number;
+  passStartedAt: number;
+  prepareMs: number;
+  firstUnreadyAt: number | undefined;
+  readinessWaitMs: number | undefined;
+  readyAt: number | undefined;
+}
+
+const MAX_DEPLOY_TIMINGS = 256;
+
 function workLogFields(claim: ClaimedWork): {
   readonly workId: string;
   readonly attempt: number;
@@ -398,6 +411,7 @@ export class ControllerWorker {
   private stopping = false;
   private lastHealthAt = 0;
   private pendingHealth: Promise<void> | undefined;
+  private readonly deployTimings = new Map<string, DeployTiming>();
 
   constructor(options: ControllerWorkerOptions) {
     this.metrics = options.metrics;
@@ -888,6 +902,34 @@ export class ControllerWorker {
   }
 
   private async prepareRevision(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+    context: ComputeRevisionContext,
+  ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
+    const timing = this.deployTimings.get(claim.idempotencyKey);
+    const started = Date.now();
+    try {
+      const prepared = await this.prepareRevisionPass(claim, revision, context);
+      if (timing !== undefined) {
+        const now = Date.now();
+        if (!prepared.observation.ready) {
+          timing.firstUnreadyAt ??= now;
+        } else {
+          timing.readyAt = now;
+          if (timing.readinessWaitMs === undefined && timing.firstUnreadyAt !== undefined) {
+            timing.readinessWaitMs = now - timing.firstUnreadyAt;
+          }
+        }
+      }
+      return prepared;
+    } finally {
+      if (timing !== undefined) {
+        timing.prepareMs += Date.now() - started;
+      }
+    }
+  }
+
+  private async prepareRevisionPass(
     claim: ClaimedWork,
     revision: Readonly<AgentRevision>,
     context: ComputeRevisionContext,
@@ -1708,7 +1750,63 @@ export class ControllerWorker {
     });
   }
 
+  private beginDeployPass(claim: ClaimedWork): void {
+    // Maintenance, cleanup and stop work are not deployments.
+    if (claim.idempotencyKey !== `agent_revision:${claim.revisionId}:reconcile`) {
+      return;
+    }
+    let timing = this.deployTimings.get(claim.idempotencyKey);
+    if (timing === undefined) {
+      if (this.deployTimings.size >= MAX_DEPLOY_TIMINGS) {
+        this.deployTimings.delete(this.deployTimings.keys().next().value!);
+      }
+      timing = {
+        passes: 0,
+        passStartedAt: 0,
+        prepareMs: 0,
+        firstUnreadyAt: undefined,
+        readinessWaitMs: undefined,
+        readyAt: undefined,
+      };
+      this.deployTimings.set(claim.idempotencyKey, timing);
+    }
+    timing.passes += 1;
+    timing.passStartedAt = Date.now();
+    timing.readyAt = undefined;
+  }
+
+  /**
+   * Phase timing for the deployment pass that is finishing. Milliseconds are
+   * worker wall clock: `durationMs` is this pass, `prepareMs` sums Compute
+   * preparation across passes, `readinessWaitMs` runs from the first unready
+   * observation to the first ready one (or now), `activationMs` runs from this
+   * pass's ready observation to completion, and `elapsedMs` is since admission.
+   */
+  private deployTimingFields(claim: ClaimedWork): Readonly<Record<string, number>> {
+    const timing = this.deployTimings.get(claim.idempotencyKey);
+    if (timing === undefined) {
+      return {};
+    }
+    const now = Date.now();
+    if (this.passOutcome === "success" || this.passOutcome === "permanent") {
+      this.deployTimings.delete(claim.idempotencyKey);
+    }
+    let readinessWaitMs = timing.readinessWaitMs ?? 0;
+    if (timing.readinessWaitMs === undefined && timing.firstUnreadyAt !== undefined) {
+      readinessWaitMs = now - timing.firstUnreadyAt;
+    }
+    return {
+      durationMs: now - timing.passStartedAt,
+      deployPasses: timing.passes,
+      prepareMs: timing.prepareMs,
+      readinessWaitMs,
+      ...(timing.readyAt === undefined ? {} : { activationMs: now - timing.readyAt }),
+      elapsedMs: Math.max(0, now - claim.createdAt.getTime()),
+    };
+  }
+
   private async processRevision(claim: ClaimedWork): Promise<void> {
+    this.beginDeployPass(claim);
     let result: RevisionDispatchResult;
     try {
       if (
@@ -2455,20 +2553,27 @@ export class ControllerWorker {
     claim: ClaimedWork,
     result: RevisionDispatchResult,
   ): Promise<void> {
+    const runtimeFailure =
+      result.outcome === "pending"
+        ? safeRuntimeFailureEvidence(result.data?.runtimeFailure)
+        : undefined;
     const expired =
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
-    let resolved: RevisionDispatchResult = expired
-      ? {
-          ...result,
-          outcome: "permanent",
-          code: "CONVERGENCE_DEADLINE_EXCEEDED",
-          data: convergenceDeadlineResultData(
-            this.convergenceTimeoutMs,
-            safeRuntimeFailureEvidence(result.data?.runtimeFailure),
-          ),
-        }
-      : result;
+    // Runtime entrypoints publish AUTHENTICATION_FAILED only for provider 401/403
+    // or invalid-key rejections and then hold unready until restart, so waiting
+    // for the deadline cannot change the result. Other failures may recover.
+    let resolved: RevisionDispatchResult =
+      runtimeFailure?.code === "AUTHENTICATION_FAILED"
+        ? { outcome: "permanent", code: "RUNTIME_AUTHENTICATION_FAILED" }
+        : expired
+          ? {
+              ...result,
+              outcome: "permanent",
+              code: "CONVERGENCE_DEADLINE_EXCEEDED",
+              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+            }
+          : result;
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);
@@ -2621,6 +2726,7 @@ export class ControllerWorker {
       result: resolved.outcome,
       outcome: resolved.outcome,
       code: resolved.code,
+      ...this.deployTimingFields(claim),
     });
   }
 
@@ -2646,6 +2752,7 @@ export class ControllerWorker {
       result: "success",
       outcome: "success",
       code,
+      ...this.deployTimingFields(claim),
     });
   }
 
@@ -2723,6 +2830,7 @@ export class ControllerWorker {
       result: result.outcome,
       outcome: result.outcome,
       code: result.code,
+      ...this.deployTimingFields(claim),
     });
   }
 
