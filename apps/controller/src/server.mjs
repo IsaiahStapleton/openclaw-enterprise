@@ -258,6 +258,9 @@ async function start() {
     logger,
     logging,
     metrics,
+    ...(startupConfiguration.observability === undefined
+      ? {}
+      : { observabilityUrl: startupConfiguration.observability.url }),
   };
   const drivers = await loadInstallationConfiguration({
     mode: settings.mode,

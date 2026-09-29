@@ -62,6 +62,7 @@ export interface StartupConfigurationSnapshot {
   readonly configuration?: ConfigurationRecord;
   readonly configurationPath?: string;
   readonly logging: LoggingConfiguration;
+  readonly observability?: { readonly url: string };
 }
 
 export interface SelectedDriverConfiguration<T = ConfigurationRecord> {
@@ -75,6 +76,7 @@ export interface InstallationStartupConfiguration {
   readonly occ: { readonly cluster: string };
   readonly logging: LoggingConfiguration;
   readonly presets?: { readonly includeDefaults: boolean; readonly files?: readonly string[] };
+  readonly observability?: { readonly url: string };
   readonly backend: readonly BackendDefinition[];
   readonly drivers: {
     readonly configuration: SelectedDriverConfiguration;
@@ -191,7 +193,7 @@ async function startupConfiguration(
   }
   closed(
     configuration,
-    ["occ", "drivers", "backend", "logging", "presets"],
+    ["occ", "drivers", "backend", "logging", "presets", "observability"],
     "Installation startup configuration",
   );
   return { configuration, path };
@@ -204,10 +206,12 @@ export async function loadStartupConfigurationSnapshot(options: {
   const startup = await startupConfiguration(options, options.mode === "production");
   const { configuration } = startup;
   const logging = operationalLoggingConfiguration(configuration?.logging);
+  const observability = observabilityConfiguration(configuration?.observability);
   return Object.freeze({
     ...(configuration === undefined ? {} : { configuration }),
     ...(startup.path === undefined ? {} : { configurationPath: startup.path }),
     logging,
+    ...(observability === undefined ? {} : { observability }),
   });
 }
 
@@ -264,6 +268,33 @@ function nonempty(value: unknown, path: string): string {
     throw new Error(`${path} must be a nonempty string.`);
   }
   return value;
+}
+
+function observabilityConfiguration(value: unknown): { readonly url: string } | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const configuration = object(value, "observability");
+  closed(configuration, ["url"], "observability");
+  const raw = nonempty(configuration.url, "observability.url");
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("observability.url must be an absolute HTTP or HTTPS URL.");
+  }
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.hash
+  ) {
+    throw new Error(
+      "observability.url must be an absolute HTTP or HTTPS URL without credentials or a fragment.",
+    );
+  }
+  return Object.freeze({ url: url.href });
 }
 
 function safe(value: unknown, path: string): void {
@@ -674,6 +705,7 @@ export async function loadInstallationConfiguration(options: {
   const occ = object(configuration.occ, "occ");
   closed(occ, ["cluster"], "occ");
   const cluster = nonempty(occ.cluster, "occ.cluster");
+  const observability = observabilityConfiguration(configuration.observability);
   const drivers = object(configuration.drivers, "drivers");
   closed(
     drivers,
@@ -902,6 +934,7 @@ export async function loadInstallationConfiguration(options: {
     occ: Object.freeze({ cluster }),
     presets: Object.freeze({ includeDefaults }),
     logging,
+    ...(observability === undefined ? {} : { observability }),
     backend: backends,
     drivers: Object.freeze({
       configuration: configured,

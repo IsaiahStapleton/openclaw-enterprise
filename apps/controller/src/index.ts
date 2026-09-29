@@ -149,6 +149,7 @@ export interface ControllerAppOptions {
   readonly resolveHarness: HarnessResolver;
   readonly auditSink: AuditSink;
   readonly backendSummaries?: readonly BackendSummary[];
+  readonly observabilityUrl?: string;
   readonly development: DevelopmentAdmission;
   readonly maxBodyBytes?: number;
   readonly auth: ControllerAuth;
@@ -2057,6 +2058,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       }
       reply.send({
         data: backends.map((backend) => ({ id: backend.id, type: backend.type })),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "getObservability") {
+      await requireInstallationAdmin(request, operation, context);
+      reply.send({
+        data: { url: options.observabilityUrl ?? null },
         meta: { requestId: request.id },
       });
       return;
