@@ -46,13 +46,13 @@ selected provider; see [Agent setup](../console/create-and-deploy.md).
 
 ### Core lifecycle operations
 
-| Required method                       | What it does                                                                                                                                                                                                                                                        |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ensureNamespace(namespace)`          | Prepares or checks infrastructure for the specified Namespace. Returns `namespaceReady`. Runs before an Agent exists; do not require or guess its ID.                                                                                                               |
-| `deleteNamespace(namespace)`          | Returns `namespaceDeleted` after supported teardown. OCC permits deletion only for an empty Namespace. If the backend has no approved deletion path, fail without deleting the physical namespace or Agent resources.                                               |
-| `prepareRevision(revision, context?)` | Creates or reuses the Agent gateway and prepares the configured embedded OpenClaw or dedicated Codex workload. Returns `ready` for that Namespace, Agent, and revision, plus optional plugin warnings. `ready: false` stays pending; OCC rejects an invalid result. |
-| `stopRevision(revision)`              | Removes inbound routing and stops execution for this revision, including applicable hooks and Sandbox cleanup. Safe to repeat; retains snapshots, runtime credentials, workspace data, and other persistent Agent state.                                            |
-| `retireRevision(revision)`            | Revokes workload access, then stops the workload and requests applicable Sandbox cleanup. Preserves an Agent gateway already owned by its replacement.                                                                                                              |
+| Required method                       | What it does                                                                                                                                                                                                                           |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ensureNamespace(namespace)`          | Prepares or checks infrastructure for the specified Namespace. Returns `namespaceReady`. Runs before an Agent exists; do not require or guess its ID.                                                                                  |
+| `deleteNamespace(namespace)`          | Returns `namespaceDeleted` after supported teardown. OCC permits deletion only for an empty Namespace. If the backend has no approved deletion path, fail without deleting the physical namespace or Agent resources.                  |
+| `prepareRevision(revision, context?)` | Creates or reuses the Agent gateway and prepares the configured Harness workload. Returns `ready` for that Namespace, Agent, and revision, plus optional plugin warnings. `ready: false` stays pending; OCC rejects an invalid result. |
+| `stopRevision(revision)`              | Removes inbound routing and stops execution for this revision, including applicable hooks and Sandbox cleanup. Safe to repeat; retains snapshots, runtime credentials, workspace data, and other persistent Agent state.               |
+| `retireRevision(revision)`            | Revokes workload access, then stops the workload and requests applicable Sandbox cleanup. Preserves an Agent gateway already owned by its replacement.                                                                                 |
 
 Namespace results identify the Namespace and can mark a failure `retryable` or
 `permanent`. Success requires a true flag and no failure.
@@ -229,15 +229,16 @@ deactivation. If a required stage becomes unavailable, the worker cannot proceed
 A Driver may implement `requiresStoppedPredecessors(revision)` to return `true`
 for workloads needing exclusive preparation. Before preparing that revision,
 the worker closes earlier credential sessions and calls `stopRevision` for every
-earlier snapshot, including failed candidates. Stop must wait for resource
-release, preserve durable data, and be safe to repeat. A stop failure prevents
+earlier snapshot, including failed candidates. Later passes re-stop after
+failures and doubling lease intervals. Stop must wait for resource release,
+preserve durable data, and be safe to repeat. A stop failure prevents
 preparation. The Driver owns backend-specific termination and Sandbox cleanup.
 
 A newer admitted exclusive revision supersedes older reconciliation and
 maintenance, even while the old revision remains the last committed active
-pointer. This prevents an old pass from recreating a competing runtime. This
-mode accepts downtime and has no automatic rollback: restore a configuration by
-deploying a new higher revision. Other Drivers keep the default ordering.
+pointer, so no old pass recreates a competing runtime. This mode accepts
+downtime without automatic rollback: deploy a higher revision instead. Other
+Drivers keep the default ordering.
 
 ### SandboxDriver coordination
 

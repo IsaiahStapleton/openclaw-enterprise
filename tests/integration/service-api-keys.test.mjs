@@ -38,7 +38,7 @@ test("service API keys authenticate scoped automation without replacing sessions
   const auth = createControllerAuth(authOptions);
   const credentials = { email: "admin@example.invalid", password: `test-password-${randomUUID()}` };
   const account = await auth.createAccount(credentials);
-  const seed = auth.principalSeed(account);
+  const seed = auth.principalSeed(account, { grant: "administrator" });
   const policy = {
     identities: [seed.principal],
     roles: [...seed.roles],

@@ -71,9 +71,10 @@ a revision. There is no separate periodic repair.
 
 ### Native node endpoint
 
-Runtime-enabled dedicated revisions also receive an exact `/node` route under
-the same Agent URL, hostname and `https` listener. It uses the same backend
-Service and path rewrite. The route removes `x-occ-identity`, `x-api-key`,
+Runtime-enabled dedicated revisions also receive an exact `/node` route and an
+exact `/node/__openclaw__/worker` route under the same Agent URL, hostname and
+`https` listener. Both use the same backend Service; the worker route rewrites
+to OpenClaw's `/__openclaw__/worker` ingress. The route removes `x-occ-identity`, `x-api-key`,
 forwarded identity and scope headers, and Tailscale identity headers while
 setting `x-real-ip` from Envoy's downstream socket. This preserves trusted
 proxy attribution without granting the OCC administrative identity.
@@ -83,7 +84,9 @@ to this node HTTPRoute. Envoy Gateway v1.6.7 replaces the entire inherited
 Gateway policy at this more specific scope, so the node route does not require
 the OCC service key. Native OpenClaw verifies the signed device identity and
 node-only bootstrap or device token. Invalid credentials and attempts to use
-node credentials as an operator fail at the native Gateway.
+node credentials as an operator fail at the native Gateway. Worker callbacks
+authenticate their first WebSocket frame with the Gateway-minted, session-bound
+worker admission credential; the Harness never receives the OCC service key.
 
 Preparation creates or repairs these resources under the serving Gateway's
 revision. Preparing a replacement preserves that ownership until activation
@@ -188,7 +191,9 @@ Helm's `gatewayRouting` settings configure shared infrastructure:
 
 The Installation's `drivers.compute.configuration.gatewayRouting` separately
 requires `gatewayName`, `gatewayNamespace`, and `envoyNamespace`; `hostname` is
-optional. `envoyHttpsTargetPort` defaults to `10443` and must match Helm's value,
+optional. `endpointPort` defaults to `443`. Set it only when the external load
+balancer exposes the Gateway listener on another port; Helm does not configure
+that external mapping. `envoyHttpsTargetPort` defaults to `10443` and must match Helm's value,
 so the Harness egress rule permits the listener's actual Pod port.
 Match the Helm values and use the release namespace for
 `gatewayNamespace`. Helm does not rewrite the Installation Secret. Remove

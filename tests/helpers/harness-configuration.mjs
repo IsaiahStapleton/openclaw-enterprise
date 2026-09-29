@@ -1,5 +1,6 @@
 export function createHarnessConfiguration(harnessId, providerModel) {
   const modelReference = `${harnessId === "codex" ? "codex" : "openai"}/${providerModel}`;
+  const reasoning = !/^gpt-4(?:o(?:-mini)?|\.1)(?:-|$)/u.test(providerModel);
   const provider =
     harnessId === "codex"
       ? {
@@ -13,7 +14,16 @@ export function createHarnessConfiguration(harnessId, providerModel) {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             api: "openai-responses",
-            models: [{ id: providerModel, name: providerModel }],
+            models: [
+              {
+                id: providerModel,
+                name: providerModel,
+                contextWindow: 128000,
+                maxTokens: 8192,
+                reasoning,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
           },
         };
 

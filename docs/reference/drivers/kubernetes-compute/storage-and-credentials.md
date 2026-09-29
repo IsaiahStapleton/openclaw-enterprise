@@ -90,6 +90,10 @@ without credentials or additional privileges. The nested
 `agents/main/agent/codex-home` is overmounted from Pod-local `emptyDir` so
 Codex credentials remain ephemeral. The remaining private runtime home is
 also ephemeral. Persisting these directories does not persist the entire home.
+The same init container creates a node-owned mode-`0700` subdirectory on the
+Pod-local temporary `emptyDir` and mounts that subdirectory at `/tmp`. This
+preserves private temp-workspace ancestry for Gateway and Harness processes;
+the fsGroup-writable volume root is never exposed as their runtime temp root.
 
 The same nonroot initializer creates a private temporary directory in each
 Pod's `emptyDir`, mounted at `/tmp` for native safe temporary-file operations.
@@ -101,13 +105,18 @@ node; runtime upgrades use the operator-selected image and ordinary redeployment
 Each dedicated Agent receives a `40Gi` `ReadWriteOnce` (RWO) filesystem claim
 from the default StorageClass, mounted only by its Harness:
 
-| Subpath                                       | Harness mount                        |
-| --------------------------------------------- | ------------------------------------ |
-| `workspace`                                   | `/home/node/workspace`               |
-| `generated-images`                            | `/home/node/.codex/generated_images` |
-| `workspace-node-<agent-hash>-<revision-hash>` | `/home/node/.openclaw-node`          |
+| Subpath                                      | Harness mount                        |
+| -------------------------------------------- | ------------------------------------ |
+| `workspace`                                  | `/home/node/workspace`               |
+| `generated-images`                           | `/home/node/.codex/generated_images` |
+| `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
 
-The revision-specific directory retains file-node identity across Pod replacement.
+This directory keeps node identity across Pod and revision replacement.
+Container restarts replay the node Secret's setup code, which expires ten minutes
+after preparation mints it. A node with a saved device token for the same Gateway
+reconnects with that token; one without saved credentials rejects the expired code.
+Installations that enrolled one node per revision enroll a new Agent device once,
+at the first replacement; retiring each earlier revision deletes its node Secret.
 Sessions stay on the private Gateway claim. Selected generated-image bytes return
 through the Codex remote-media reader; there is no shared image mount. Each image
 initializes its own bundled/plugin assets instead of mounting shared Skill trees.

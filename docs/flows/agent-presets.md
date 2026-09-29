@@ -229,7 +229,7 @@ or an immutable admitted revision.
 - [Controller integration coverage](../../tests/integration/presets-controller.test.mjs)
   exercises the HTTP workflow, admission, isolation, and copy independence.
   [PostgreSQL coverage](../../tests/integration/postgres-presets.test.mjs) exercises
-  persistence; [browser coverage](../../tests/browser/console-agents.test.mjs)
+  persistence; [browser coverage](../../tests/browser/console-agent-presets.test.mjs)
   exercises the real selection form. Coverage names are not proof of a live model response.
 - The standard Preset's [clean-build network trace](../guides/topics/standard-codex-preset.md#build-network-allowlist)
   covers source builds with cold dependency caches behind an enforcing HTTPS

@@ -91,8 +91,9 @@ so wall-clock time does not change the image manifests on a cold-cache rebuild.
 
 `deploy/runtime/Dockerfile:openclaw-source` verifies the pinned source archive,
 uses its stock Codex 0.158.0 dependency/lockfile selection, and applies the temporary
-OpenClaw read-only-paths compatibility patch. The build verifies the latter's
-hash and records it in runtime provenance. The OpenClaw bridge forwards the bound
+OpenClaw read-only-paths compatibility patch and the `connect --ephemeral`
+expired-setup patch. The build verifies both patch hashes and records them in
+runtime provenance. The OpenClaw bridge forwards the bound
 Agent's stock network settings without modifying the Codex binary. Both installs use
 frozen lockfiles and upstream's selected-plugin manifests, retaining required
 bundled plugins plus Codex and Slack. The standalone Codex command links to the
@@ -232,6 +233,10 @@ owns package-write access and coordination.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-29 12:00: Apply a verified OpenClaw bridge patch so a dedicated native worker reconnects with its saved device token after its replayed setup code expires; record its hash in runtime provenance. (fix/native-worker-restart-expired-setup)
+
+- 2026-09-29 10:00: Update the runtime source to OpenClaw `01d7131999ca4805242ed8b0d8037f4544a9d7b0` (release/2026.9.7 head) with its verified archive checksum; the read-only-paths bridge patch applies unchanged. (chore/openclaw-pin-01d7131999)
 
 - 2026-09-28 14:51: Use upstream Codex 0.158.0 dependencies and remove the old version override. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 6c56149f)
 

@@ -44,7 +44,7 @@ Each operation lists its supported status codes.
 | --- | --- |
 | [Authentication](#authentication) | 19 operations |
 | [Backends](#backends) | 1 operation |
-| [Installation](#installation) | 3 operations |
+| [Installation](#installation) | 4 operations |
 | [Namespaces](#namespaces) | 4 operations |
 | [Agents](#agents) | 24 operations |
 | [Agent deployments](#agent-deployments) | 2 operations |
@@ -92,7 +92,7 @@ Create an administrator-controlled local auth account
 
 **Operation ID:** `createAuthAccount`
 
-**Permissions:** Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.
+**Permissions:** Requires administer permission on the Installation. Creates a Better Auth account and an explicit IAM Principal in one transaction. Supplying roleId also creates a binding to that existing IAM Role; omitting roleId creates no grants. Public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -111,7 +111,7 @@ Create an administrator-controlled local auth account
 | `github.subject` | `string` | Yes | pattern: `^[1-9][0-9]{0,19}$` |
 | `name` | `string` | No | min length: 1; max length: 200 |
 | `password` | `string` | Yes | min length: 12; max length: 128 |
-| `roleId` | `string` | Yes | min length: 1; max length: 200 |
+| `roleId` | `string` | No | min length: 1; max length: 200 |
 
 ##### Responses
 
@@ -910,6 +910,7 @@ List configured Backends (experimental)
 | [`GET /installation`](#get-installation) | Get the singleton Installation |
 | [`POST /installation/bootstrap`](#post-installationbootstrap) | Bootstrap the singleton Installation |
 | [`GET /installation/deployment-inventory`](#get-installationdeploymentinventory) | Get the complete authorized Agent deployment inventory |
+| [`GET /observability`](#get-observability) | Get the configured external observability destination |
 
 #### `GET /installation`
 
@@ -1083,6 +1084,41 @@ Get the complete authorized Agent deployment inventory
 | `data.namespaces[].agents[].status` | `"active" or "deleting"` | Yes | — |
 | `data.namespaces[].id` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.namespaces[].status` | `"provisioning" or "ready" or "failed" or "deleting"` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `GET /observability`
+
+<span id="get-observability"></span>
+
+Get the configured external observability destination
+
+**Operation ID:** `getObservability`
+
+**Permissions:** Requires administer permission on the requested Installation.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.url` | `string (uri) or null` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -3504,7 +3540,7 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 
 **Operation ID:** `createIAMAccessBinding`
 
-**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Namespace when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -3513,6 +3549,7 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 | `read` | `agent` | `request_body` |
 | `read` | `agent_revision` | `request_body` |
 | `read` | `configuration` | `request_body` |
+| `read` | `namespace` | `request_body` |
 | `read` | `secret` | `request_body` |
 | `read` | `service_account` | `request_body` |
 
@@ -3531,7 +3568,7 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `resourceId` | `string` | Yes | min length: 1; max length: 200 |
-| `resourceKind` | `"agent" or "agent_revision" or "configuration" or "credential_source" or "preset" or "secret" or "service_account"` | Yes | — |
+| `resourceKind` | `"namespace" or "agent" or "agent_revision" or "configuration" or "credential_source" or "preset" or "secret" or "service_account"` | Yes | — |
 | `roleId` | `string` | Yes | min length: 1; max length: 200 |
 | `subjectId` | `string` | Yes | min length: 1; max length: 200 |
 | `subjectKind` | `"identity"` | Yes | — |
@@ -3715,7 +3752,7 @@ Create an immutable Namespace IAM Role
 | `name` | `string` | No | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `permissions` | `array<object>` | Yes | min items: 1; max items: 64 |
 | `permissions[].action` | `"create" or "read" or "update" or "delete" or "deploy" or "operate" or "administer"` | Yes | — |
-| `permissions[].resourceKind` | `"agent" or "agent_revision" or "configuration" or "credential_source" or "preset" or "secret" or "service_account"` | Yes | — |
+| `permissions[].resourceKind` | `"namespace" or "agent" or "agent_revision" or "configuration" or "credential_source" or "preset" or "secret" or "service_account"` | Yes | — |
 
 ##### Responses
 

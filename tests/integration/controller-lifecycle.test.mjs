@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
+import {
+  PRODUCTION_HARNESS_DESCRIPTOR,
+  resolveApprovedHarness as resolveApprovedDevelopmentHarness,
+} from "../../apps/controller/src/composition/production-harness.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
@@ -99,7 +102,8 @@ function createDrivers(iam) {
       if (
         auth.method !== "api_key" ||
         !(
-          (harness.id === "openclaw" && harness.mode === "embedded") ||
+          (harness.id === "openclaw" &&
+            (harness.mode === "embedded" || harness.mode === "dedicated")) ||
           (harness.id === "codex" && harness.mode === "dedicated")
         )
       ) {
@@ -710,9 +714,14 @@ test("Sandbox admission applies provider-owned Agent configuration before freezi
   const { controller } = createController();
   const sandbox = createSandboxDriver({
     implementation: "custom-containment",
-    configureAgent(configuration) {
+    configureAgent(configuration, harness) {
       assert.equal(Object.isFrozen(configuration), true);
       assert.equal(Object.isFrozen(configuration.plugins.entries.codex.config.appServer), true);
+      assert.deepEqual(harness, {
+        ...PRODUCTION_HARNESS_DESCRIPTOR,
+        mode: "dedicated",
+      });
+      assert.equal(Object.isFrozen(harness), true);
       const configured = structuredClone(configuration);
       configured.plugins.entries.codex.enabled = true;
       configured.plugins.entries.codex.config.appServer.sandbox = "danger-full-access";
@@ -896,6 +905,56 @@ for (const facets of [["networking"], ["filesystem"], ["process"], ["networking"
     );
   });
 }
+
+test("dedicated native OpenClaw requires a full-facet provisioning Sandbox", async () => {
+  for (const [name, sandbox, admitted] of [
+    ["missing", undefined, false],
+    ["partial", createSandboxDriver({ facets: ["networking", "filesystem"] }), false],
+    ["complete", createSandboxDriver(), true],
+  ]) {
+    const { controller } = createController();
+    if (sandbox !== undefined) {
+      controller.registerDriver(sandbox);
+      controller.selectDriver("sandbox", sandbox.id);
+    }
+    const namespace = await controller.createNamespace("principal-admin", {
+      name: `Native sandbox ${name}`,
+    });
+    await controller.handleNamespaceLifecycle("principal-admin", namespace.id, "ready");
+    const configuration = await createConfiguration(controller, namespace.id, {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          models: { "openai/gpt-5": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
+    });
+    const agent = await controller.createAgent("principal-admin", {
+      namespaceId: namespace.id,
+      name: `Dedicated native ${name}`,
+      configurationId: configuration.id,
+      executionMode: "dedicated",
+    });
+    await bindHarnessAuth(controller, agent);
+
+    const deployment = controller.deployAgent(
+      "principal-admin",
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    );
+    if (admitted) {
+      const revision = await deployment;
+      assert.equal(revision.harness.id, "openclaw");
+      assert.equal(revision.sandboxDriverId, sandbox.id);
+    } else {
+      await assert.rejects(deployment, DependencyUnavailableError);
+      assert.deepEqual(
+        await controller.transact((state) => state.revisions.listRevisions(namespace.id, agent.id)),
+        [],
+      );
+    }
+  }
+});
 
 test("selected Sandbox Drivers fail closed for embedded Agents regardless of declared facets", async () => {
   for (const sandbox of [

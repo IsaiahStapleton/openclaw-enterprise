@@ -121,8 +121,8 @@ the configured base URL is also the trusted origin. Session inspection exposes
 only `authenticated`, `sessionKey`, and the account's `id`, `email`, and `name`.
 
 Protected requests resolve the current stored session with cookie caching
-disabled. A missing, expired, revoked, or forged session is rejected. Supplying
-an `Authorization` header is rejected even if a session cookie is also present.
+disabled. A missing, expired, revoked, or forged session is rejected, as is an
+`Authorization` header even alongside a session cookie.
 
 ## GitHub sign-in for existing accounts
 
@@ -208,7 +208,7 @@ configuration fails startup, and the database refuses sessions from older
 binaries. Returning to password-only sign-in needs [stopped maintenance](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in).
 
 The recovery user needs one local password, its Installation Principal, and
-native IAM Installation `administer`; disablement refuses it. Keep its password
+native IAM Installation `administer`; disabling it returns `409`. Keep its password
 in protected custody; out-of-band database or policy changes can still remove
 recovery. Password login never depends on GitHub.
 
@@ -219,8 +219,9 @@ seeds first activation; a differing value warns, and each start re-checks the ho
 
 Account reads and mutations require a human session, exact `Origin`, and
 Installation `administer`; service keys are refused. State locks actor and target
-accounts and rechecks the actor session, which a concurrent logout or revocation
-can invalidate; a stale target `expectedVersion` returns `409 RESOURCE_CONFLICT`.
+accounts (retryable `503` after five-second lock waits) and rechecks the actor
+session, which logout or revocation can invalidate. A stale
+`expectedVersion` or disabled target returns `409 RESOURCE_CONFLICT`.
 
 Send the version just read, such as `{"expectedVersion":1}`:
 
@@ -281,9 +282,10 @@ singleton Installation, and stays available with GitHub sign-in enabled. One
 transaction writes the account, Principal, grant, enrollment and an optional
 `"github":{"subject":"<numeric id>"}` identity (`409` if GitHub is off or taken).
 
-The request must supply the `roleId` of an existing Role; the endpoint cannot
-create a Role or infer a grant from the account's email or session.
-Creating an account does not sign it in or issue a session.
+An optional `roleId` binds an existing Installation Role (`400` if unknown or
+Namespace-scoped); without one the account has no grants. It cannot create Roles
+or infer grants. Audit records `principalId` and `roleId` or `grant: "none"`.
+Creation issues no session.
 
 A representative provisioning body is:
 
@@ -297,7 +299,7 @@ A representative provisioning body is:
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
 Provisioning has no public email-verification or signup flow; duplicates are
-rejected. The controller API exposes no password reset.
+rejected. There is no password reset API.
 
 ## Authorization and failures
 

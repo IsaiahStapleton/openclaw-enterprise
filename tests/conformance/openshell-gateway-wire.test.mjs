@@ -23,6 +23,7 @@ test("OpenShell client serializes v0.1.0 create-time service exposure", async ()
   server.addService(OpenShell.service, {
     CreateSandbox(call, callback) {
       createRequests.push(call.request);
+      const omitServiceUrls = call.request.name !== "sandbox-wire";
       callback(null, {
         sandbox: {
           metadata: {
@@ -32,9 +33,13 @@ test("OpenShell client serializes v0.1.0 create-time service exposure", async ()
             labels: call.request.labels,
           },
         },
-        service_urls: {
-          "": `http://tenant-workspace--${call.request.name}.openshell.localhost:8080/`,
-        },
+        ...(omitServiceUrls
+          ? {}
+          : {
+              service_urls: {
+                "": `http://tenant-workspace--${call.request.name}.openshell.localhost:8080/`,
+              },
+            }),
       });
     },
     DeleteSandbox(call, callback) {
@@ -107,6 +112,21 @@ test("OpenShell client serializes v0.1.0 create-time service exposure", async ()
     assert.deepEqual(createRequests[0].spec.policy.network_policies.model.binaries, [
       { path: "/app/bin/model-client" },
     ]);
+
+    const outboundOnly = await client.createSandbox(
+      { ...request, name: "sandbox-wire-outbound-only", serviceExposures: [] },
+      AbortSignal.timeout(2_000),
+    );
+    assert.deepEqual(outboundOnly.serviceUrls, {});
+    assert.deepEqual(createRequests[1].service_exposures ?? [], []);
+
+    await assert.rejects(
+      client.createSandbox(
+        { ...request, name: "sandbox-wire-missing-service-url" },
+        AbortSignal.timeout(2_000),
+      ),
+      /OpenShell CreateSandbox returned no service URL map/,
+    );
   } finally {
     client.close();
     await new Promise((resolve) => server.tryShutdown(resolve));

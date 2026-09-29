@@ -1956,7 +1956,7 @@ test("compute rejects plugin selections that target the wrong native runtime", a
   await assert.rejects(async () => {
     const state = openClawPluginState();
     pluginRuntimeSpecForRevision(revision({ plugins: state }));
-  }, /embedded OpenClaw Harness/);
+  }, /require an OpenClaw Harness/);
 });
 
 test("compute fails closed when Codex plugin selections are malformed", () => {
@@ -2021,7 +2021,11 @@ function enrolledNodeSecret(driver, candidate, namespace) {
       driver.pluginRuntimeOwnership(candidate),
       { name: namespace, plane: "execution" },
     ),
-    data: { deviceId: Buffer.from("fixture-node").toString("base64") },
+    data: {
+      deviceId: Buffer.from("fixture-node").toString("base64"),
+      // A current setup code, as preparation keeps renewing it.
+      expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
+    },
   };
 }
 

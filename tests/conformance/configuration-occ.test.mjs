@@ -890,6 +890,26 @@ test("Harness admission rejects conflicting selections, mode mismatches, and una
     resolveApprovedProductionHarness,
   );
   assert.deepEqual(embedded.harness, { ...DEVELOPMENT_HARNESS_DESCRIPTOR, mode: "embedded" });
+  await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: openclawConfiguration.id,
+    executionMode: "dedicated",
+  });
+  // Dedicated OpenClaw fails closed before any revision exists without a provisioning
+  // SandboxDriver that declares networking, filesystem, and process containment.
+  await assert.rejects(
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedProductionHarness,
+    ),
+    (error) =>
+      error instanceof DependencyUnavailableError &&
+      /requires a provisioning SandboxDriver with networking, filesystem, and process containment/.test(
+        error.message,
+      ),
+  );
   assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), [
     embedded,
   ]);

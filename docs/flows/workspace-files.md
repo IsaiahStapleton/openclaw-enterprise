@@ -106,7 +106,7 @@ instead of writing outside the Agent's managed storage. Provider-owned Sandbox
 startup cannot carry this init container and rejects workspace setup rather than
 dropping initialization.
 
-The runner validates identity, paths, OpenClaw `2026.9.6`, and the rendered
+The runner validates identity, paths, OpenClaw `2026.9.7`, and the rendered
 template digest against Console defaults before initialization. Submitted
 defaults identities must match; links and conflicts fail. Without a completion
 marker, native `setup` initializes the workspace and Git without starting the Gateway.
@@ -153,8 +153,7 @@ root Secret and receive only its public certificate. They do not receive the
 CA signing key. An explicit external issuer uses the configured public CA
 bundle, or Node's existing trust store when no bundle is configured.
 
-Kubernetes derives endpoints from admitted Namespace/Agent IDs and Installation
-routing settings. Drivers without endpoint support cannot serve workspace files.
+Kubernetes derives endpoints from admitted IDs and Installation routing. Drivers without endpoint support cannot serve workspace files.
 
 ### 5. OCC admits one exact-Agent file operation
 
@@ -162,7 +161,7 @@ routing settings. Drivers without endpoint support cannot serve workspace files.
 session or scoped service API key. Native Agent credentials cannot invoke this
 administration surface. `GET` needs Agent `read`; `PUT` needs Agent `operate`
 and, for session callers, passes the browser CSRF boundary. OCC resolves the
-active AgentRevision before invoking Compute endpoint resolution.
+active AgentRevision before Compute endpoint resolution.
 
 Only the four names are accepted. `PUT` accepts only `{ "content": "..." }`,
 rejects NUL and unpaired UTF-16 surrogates, enforces 16 KiB of UTF-8 content,
@@ -173,8 +172,9 @@ admission and native access.
 
 `apps/controller/src/composition/workspace-files.ts:createWorkspaceFilesAccess`
 uses `ComputeDriver.getGatewayEndpoint(revision)` to resolve
-`wss://<hostname>/namespaces/<namespaceId>/agents/<agentId>`. The default hostname
-matches Helm's Service DNS. Resolution does not prove readiness.
+`wss://<hostname>[:<endpointPort>]/namespaces/<namespaceId>/agents/<agentId>`.
+Hostname defaults to Helm's Service DNS, port to `443`; resolution does not
+prove readiness.
 
 `kubernetes/index.ts:reconcileGatewayRoute` provisions operator routing and a
 separate exact `/node` HTTPRoute and SecurityPolicy for dedicated runtimes.
@@ -188,7 +188,8 @@ ownership and UID, then remove that revision's endpoint before its policy. See t
 
 `prepareWorkspaceNode` calls
 `gateway/node-enrollment-client.ts:createGatewayNodeEnrollment` after Gateway
-readiness. A revision-owned Secret retains the setup code and device ID.
+readiness. An Agent-owned Secret per Harness kind keeps the setup code and
+device ID; preparation renews expired setup codes.
 Reconciliation attaches the node through a `Recreate` Harness deployment.
 Replacing the Harness restarts its Gateway; `prepareRevision` keeps deployment
 pending until that Gateway is ready, then queries enrollment.
@@ -196,9 +197,8 @@ pending until that Gateway is ready, then queries enrollment.
 - Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
   `dir.list`, `workspace.memory`, and `workspace.skills`. Gateway admits these
   commands before pairing, preserving explicit denies.
-- The Harness PVC stores revision-specific identity at `/home/node/.openclaw-node`.
-  The nonroot private-state initializer creates it at `0700`; Pod replacement
-  reuses it. Retirement deletes the enrollment Secret; PVC deletion removes identity.
+- The Harness PVC keeps Agent-scoped identity at `/home/node/.openclaw-node`
+  (`0700`, nonroot initializer) across revisions until Agent deletion.
 - `AGENT_WITH_NODE_ENTRYPOINT` runs native `setup --baseline` before supervising
   Codex and the node under `tini`. It passes admitted bootstrap options, preserves
   existing edits, and stops on setup failure. Only the node receives its setup
@@ -228,11 +228,11 @@ before cleanup. Embedded storage is unchanged. New Harness PVCs use RWO; owned
 existing RWX claims retain their data. The worker stops predecessors before dedicated preparation and suppresses their
 maintenance. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage)
 owns downtime and recovery limits. These contracts require matching runtime
-images; local checks alone do not prove deployed Enterprise acceptance.
+images; local checks do not prove deployed acceptance.
 
 The API reads the mounted key for each operation, so new connections pick up
-Secret rotation without an API restart. Missing routing, missing or invalid
-key material, expired deadlines, and unavailable targets fail closed. No URL
+Secret rotation without a restart. Missing routing, missing or invalid
+keys, expired deadlines, and unavailable targets fail closed. No URL
 or credential comes from caller JSON or headers.
 
 ### 7. Envoy authenticates and routes the native connection
@@ -321,6 +321,8 @@ replays it. The native client closes in the operation's cleanup path.
 - 2026-09-28 21:47: Defer enrollment checks until Gateway readiness. (authoring-run/1b67a5da-eea7-4eb4-a91f-38abd1fb5792 - 1365d9b33eec2de2452bd3142f57a1729cccd559)
 
 - 2026-09-27 05:17: Give native workspace initialization the Gateway resource budget. (01a0cf72-6985-7712-ba92-d8cc32470f24 - c0f792d5b92e2dee596711654784759d327e0817)
+
+- 2026-09-26 10:10: Documented Gateway endpoint ports. (authoring-run/a4d4256b-3bac-4c88-84aa-cd3501b80aa8 - ee8c080b578b7cce1787e55ac41eabe112cc2f74)
 
 - 2026-09-24 11:28: Document exclusive dedicated preparation and durable RWO workspaces in the accompanying change. (01a0cf72-6985-7712-ba92-d8cc32470f24 - 14a4508baad876d3eea4e6fe6388f8d8a91559b7)
 

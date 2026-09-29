@@ -138,9 +138,12 @@ export class NotImplementedError extends Error {
 }
 
 export class PluginPolicyValidationError extends Error {
-  constructor(field?: "toolDefaults.reviewer" | "tools[id].reviewer") {
+  constructor(field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers") {
     let message = "The supplied plugin policies are invalid.";
-    if (field === "toolDefaults.reviewer") {
+    if (field === "approvers") {
+      message =
+        "This Plugin Driver does not support plugin or tool approvers. Omit approvers from plugin selections and set Agent-wide pluginApprovers instead.";
+    } else if (field === "toolDefaults.reviewer") {
       message =
         "This Plugin Driver does not support toolDefaults.reviewer. Omit the reviewer to inherit the Harness setting.";
     } else if (field === "tools[id].reviewer") {
