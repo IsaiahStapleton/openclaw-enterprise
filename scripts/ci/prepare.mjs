@@ -1737,6 +1737,7 @@ async function prepareLane({ lane, statePath }) {
       );
       break;
     case "images-packaging":
+      env.OCC_TEST_CODEX_PROBE_IMAGE = effectiveLaneEnv(name, env).NODE_BASE_IMAGE;
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await commandAvailable(process.env.OCC_YQ_BIN ?? "yq", ["--version"]);
       Object.assign(
