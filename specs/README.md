@@ -93,6 +93,9 @@ templates with variables, CRUD APIs, and console selection.
 [Agent egress for 0.x](40-agent-egress-0x.md) — Deferred custom proxy; 0.x uses
 OpenShell, OpenClaw secret proxy and Codex sandbox controls instead.
 
+[GitHub sign-in for existing accounts](31-human-federated-sign-in.md) — Proposed;
+administrator-provisioned password accounts with an optional GitHub identity; implemented by PR #305 and its M1 follow-ups.
+
 [Basic role-based access control](31-basic-rbac.md) — Direction; deferred past 0.x.
 Personal and team Agent access, exact grants, and withdrawal; see the current-source amendment.
 
