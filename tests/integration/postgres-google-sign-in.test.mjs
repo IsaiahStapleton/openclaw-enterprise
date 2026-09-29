@@ -415,6 +415,15 @@ test(
         headers: { origin: "https://evil.example.test" },
       });
       assert.equal(crossOrigin.statusCode, 403);
+      // Like sign-out, a supplied Sec-Fetch-Site must be same-origin.
+      const sameSite = await app.inject({
+        method: "POST",
+        url: "/api/auth/providers/google/start",
+        remoteAddress: address(),
+        headers: { origin, "sec-fetch-site": "same-site" },
+      });
+      assert.equal(sameSite.statusCode, 403, sameSite.body);
+      assert.equal(sameSite.headers["set-cookie"], undefined);
     });
 
     await t.test("password sign-in and the recovery lane still work with Google", async () => {

@@ -2668,7 +2668,7 @@
     },
     "/api/auth/providers/github/start": {
       "post": {
-        "description": "Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
+        "description": "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
         "operationId": "startGitHubSignIn",
         "responses": {
           "200": {
@@ -2952,7 +2952,7 @@
     },
     "/api/auth/providers/google/start": {
       "post": {
-        "description": "Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
+        "description": "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
         "operationId": "startGoogleSignIn",
         "responses": {
           "200": {
