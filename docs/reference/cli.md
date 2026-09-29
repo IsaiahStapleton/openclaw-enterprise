@@ -67,6 +67,8 @@ input is not supported. The server validates document fields against the
 | `occ agent update ID --file FILE`              | Updates editable Agent fields; the body must include `configurationId`.                                                                                          |
 | `occ agent deploy ID`                          | Requests deployment and creates an immutable revision.                                                                                                           |
 | `occ agent deployment-status ID DEPLOYMENT_ID` | Reads the durable status of one exact Agent deployment.                                                                                                          |
+| `occ agent runtime-credentials get ID`         | Reads whether generated runtime credentials are configured for the Agent.                                                                                        |
+| `occ agent runtime-credentials provision ID`   | Creates the initial generated runtime credential bundle (empty request body).                                                                                    |
 | `occ agent stop ID`                            | Requests a stop while retaining revisions and persistent state.                                                                                                  |
 
 Use the [HTTP API](api.md) to inspect revision history or to work with

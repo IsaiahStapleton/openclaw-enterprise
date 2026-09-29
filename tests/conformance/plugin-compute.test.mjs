@@ -2754,6 +2754,14 @@ test("Codex runtime gates startup and readiness on a successful native authentic
     type: "item.completed",
     item: { type: "error", message: "Model catalog metadata unavailable" },
   };
+  const recoveredStreamError = {
+    type: "error",
+    message: "Reconnecting... 1/3 stream disconnected before completion",
+  };
+  const recoveredRetryingSamplingError = {
+    type: "error",
+    message: "Reconnecting... 2/3 stream disconnected - retrying sampling request",
+  };
   const scenarios = [
     {
       name: "delayed retry uses only the remaining budget",
@@ -2831,8 +2839,80 @@ test("Codex runtime gates startup and readiness on a successful native authentic
       ready: true,
     },
     {
+      name: "recovered native stream error during active turn",
+      events: [started, recoveredStreamError, assistant, completed],
+      ready: true,
+    },
+    {
+      name: "recovered native sampling retry error during active turn",
+      events: [started, recoveredRetryingSamplingError, assistant, completed],
+      ready: true,
+    },
+    {
       name: "fatal top-level error despite assistant output",
       events: [started, assistant, { type: "error", message: "authentication failed" }, completed],
+    },
+    {
+      name: "reconnecting error with auth marker remains fatal",
+      events: [
+        started,
+        {
+          type: "error",
+          message: "Reconnecting... 1/3 stream disconnected before completion after 401 auth",
+        },
+        assistant,
+        completed,
+      ],
+    },
+    {
+      name: "recovered native stream error with provider detail during active turn",
+      events: [
+        started,
+        {
+          type: "error",
+          message:
+            "Reconnecting... 1/5 (stream disconnected before completion: connection reset by peer)",
+        },
+        assistant,
+        completed,
+      ],
+      ready: true,
+    },
+    {
+      name: "reconnecting error after completed turn remains fatal",
+      events: [started, assistant, completed, recoveredStreamError],
+    },
+    {
+      name: "reconnecting error before the turn starts remains fatal",
+      events: [recoveredStreamError, started, assistant, completed],
+    },
+    ...[
+      [
+        "with auth detail",
+        "Reconnecting... 1/3 stream disconnected before completion: 401 Unauthorized",
+      ],
+      [
+        "with credential detail",
+        "Reconnecting... 1/3 stream disconnected before completion: invalid credential",
+      ],
+      ["with an unknown reason", "Reconnecting... 1/3 request failed with status 500"],
+      ["with trailing reason text", "Reconnecting... 1/3 stream disconnected before completionist"],
+      ["not at the start", "Error: Reconnecting... 1/3 stream disconnected before completion"],
+      ["past its retry limit", "Reconnecting... 4/3 stream disconnected before completion"],
+      ["above the retry budget", "Reconnecting... 1/50 stream disconnected before completion"],
+      ["with a zero attempt", "Reconnecting... 0/3 stream disconnected before completion"],
+    ].map(([description, message]) => ({
+      name: `reconnecting error ${description} remains fatal`,
+      events: [started, { type: "error", message }, assistant, completed],
+    })),
+    {
+      name: "unbounded reconnecting errors remain fatal",
+      events: [
+        started,
+        ...Array.from({ length: 11 }, () => recoveredStreamError),
+        assistant,
+        completed,
+      ],
     },
     {
       name: "failed turn",
