@@ -76,13 +76,13 @@ export async function queryPrometheus(origin, stage, expression) {
   try {
     body = await response.json();
   } catch (error) {
-    if (["TimeoutError", "AbortError"].includes(error.name)) {
+    if (isConnectionError(error) || ["TimeoutError", "AbortError"].includes(error.name)) {
       error.httpStatus = response.status;
       throw error;
     }
     throw monitoringFailure(stage, "query-error", { lastHttpStatus: response.status });
   }
-  if (body.status !== "success" || !Array.isArray(body.data?.result)) {
+  if (body?.status !== "success" || !Array.isArray(body.data?.result)) {
     throw monitoringFailure(stage, "query-error", { lastHttpStatus: response.status });
   }
   return body.data.result;

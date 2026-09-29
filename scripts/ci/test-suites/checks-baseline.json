@@ -199,6 +199,8 @@
         "datasource readiness retries an interrupted response body",
         "invalid Grafana datasource response shapes retain their stage and status",
         "a timed-out Prometheus response body retries and accepts a later valid query",
+        "Prometheus readiness retries an interrupted response body",
+        "a null Prometheus response retains its stage and status",
         "malformed Prometheus responses remain query errors"
       ]
     },

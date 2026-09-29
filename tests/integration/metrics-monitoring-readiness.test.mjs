@@ -161,6 +161,51 @@ test("a timed-out Prometheus response body retries and accepts a later valid que
   assert.equal(attempts, 2);
 });
 
+test("Prometheus readiness retries an interrupted response body", async (t) => {
+  let attempts = 0;
+  const origin = await loopbackServer(t, (_request, response) => {
+    attempts += 1;
+    response.writeHead(200, { "content-type": "application/json" });
+    if (attempts === 1) {
+      // Drop the connection after headers so the failure occurs while reading JSON.
+      response.flushHeaders();
+      response.write('{"status":');
+      setTimeout(() => response.destroy(), 50);
+      return;
+    }
+    response.end(JSON.stringify({ status: "success", data: { result: [{ value: [0, "1"] }] } }));
+  });
+
+  await waitForMonitoring(
+    "prometheus-up",
+    async () => (await queryPrometheus(origin, "prometheus-up", "up")).length === 1,
+    [],
+  );
+  assert.equal(attempts, 2);
+});
+
+test("a null Prometheus response retains its stage and status", async (t) => {
+  const origin = await loopbackServer(t, (_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("null");
+  });
+  const expected = {
+    openclawCiDiagnostic: {
+      kind: "metrics-monitoring",
+      stage: "prometheus-up",
+      reason: "query-error",
+      lastHttpStatus: 200,
+    },
+  };
+
+  // Dashboard checks call the query directly; readiness checks use the waiter.
+  await assert.rejects(queryPrometheus(origin, "prometheus-up", "up"), expected);
+  await assert.rejects(
+    waitForMonitoring("prometheus-up", () => queryPrometheus(origin, "prometheus-up", "up"), []),
+    expected,
+  );
+});
+
 test("malformed Prometheus responses remain query errors", async (t) => {
   const origin = await loopbackServer(t, (_request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
