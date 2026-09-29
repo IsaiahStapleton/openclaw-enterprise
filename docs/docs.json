@@ -151,6 +151,10 @@
                         "label": "Service Accounts"
                       },
                       {
+                        "page": "reference/authentication/external-sign-in",
+                        "label": "External Sign-In"
+                      },
+                      {
                         "page": "reference/authentication/service-api-keys",
                         "label": "Service API Keys"
                       }
