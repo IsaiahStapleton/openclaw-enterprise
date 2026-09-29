@@ -2283,6 +2283,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("AgentRevision Harness execution topology is unsupported.");
     }
     const sandboxDriver = this.sandboxDriverForRevision(revision);
+    // TODO(oauth-admission): Reject this topology during admission, before predecessors
+    // stop. Deferred beyond the first-deploy MVP on Compute-owned dedicated Codex.
     if (revision.harnessAuth.method === "oauth" && sandboxDriver !== undefined) {
       throw new ConfigurationFailure("OAuth requires the Compute-owned dedicated Codex Harness.");
     }

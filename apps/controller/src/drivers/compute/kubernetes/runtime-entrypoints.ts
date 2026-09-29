@@ -1826,6 +1826,8 @@ if (receipt?.sourceUid === expected.sourceUid) {
   if (!validAuth(auth)) {
     throw new Error("OAuth bootstrap credentials are invalid.");
   }
+  // TODO(oauth-reconnect): Use exclusive, non-following temporary writes and validate
+  // the final file before readiness. Deferred beyond the first-deploy MVP on fresh storage.
   const writeJson = (target, value) => {
     const temporary = target + ".bootstrap";
     const descriptor = fs.openSync(temporary, "w", 0o600);

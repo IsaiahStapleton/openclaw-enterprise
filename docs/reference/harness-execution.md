@@ -85,14 +85,14 @@ queue guarantees.
 The Agent's [harnessAuth binding](agents.md#harness-authentication) is the sole
 model-auth selector. Kubernetes supports these combinations:
 
-| Binding                            | Topology          | Credential consumer                                                                                               |
-| ---------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `api_key` with an OCC Secret       | Embedded OpenClaw | Combined gateway/Harness receives `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, selected by its native model provider. |
-| `api_key` with an OCC Secret       | Dedicated Codex   | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
-| `codex_pat` with an OCC Secret     | Dedicated Codex   | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
-| `oauth` with a device-login Secret | Dedicated Codex   | Codex owns the full native credential bundle on private persistent storage after one-time handoff.                |
-| `chatgpt_service_account`          | Dedicated Codex   | Only Codex receives the account token and forced workspace.                                                       |
-| `credential_source`                | Dedicated Codex   | Codex receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.          |
+| Binding                            | Topology                                         | Credential consumer                                                                                               |
+| ---------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `api_key` with an OCC Secret       | Embedded OpenClaw                                | Combined gateway/Harness receives `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, selected by its native model provider. |
+| `api_key` with an OCC Secret       | Dedicated Codex                                  | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
+| `codex_pat` with an OCC Secret     | Dedicated Codex                                  | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
+| `oauth` with a device-login Secret | Compute-owned dedicated Codex, no Sandbox Driver | Codex owns the full native credential bundle on private persistent storage after one-time handoff.                |
+| `chatgpt_service_account`          | Dedicated Codex                                  | Only Codex receives the account token and forced workspace.                                                       |
+| `credential_source`                | Dedicated Codex                                  | Codex receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.          |
 
 Kubernetes workload rendering prepares one explicit login mode and exact Secret
 projections. The selected Sandbox consumes the same already-rendered workload
