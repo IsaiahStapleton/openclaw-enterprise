@@ -77,6 +77,7 @@ import {
   workspaceSetupVerifier,
 } from "../workspace-setup-runtime.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
+import { nodeProgramArguments } from "../node-program.ts";
 import { discoverHarnessModels } from "../model-discovery.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import { unsupportedNativeGatewayAuthFields } from "../../../gateway/auth-fields.ts";
@@ -5839,7 +5840,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     // Independent restarts can orphan descendants of a failed wrapper. Tini
     // reaps them, including when a Sandbox provider runs this below PID 1.
     container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
-    container.args = [AGENT_WITH_NODE_ENTRYPOINT];
+    container.args = nodeProgramArguments(AGENT_WITH_NODE_ENTRYPOINT);
   }
 
   private async workspaceNodeDeviceId(
@@ -8912,7 +8913,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                   ? {}
                   : {
                       command: ["node", "-e"],
-                      args: [
+                      args: nodeProgramArguments(
                         (workspaceSetup === undefined || (!embedded && role === "gateway")
                           ? ""
                           : workspaceSetupVerifier(
@@ -8924,7 +8925,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                           (role === "gateway"
                             ? GATEWAY_RUNTIME_ENTRYPOINT
                             : AGENT_RUNTIME_ENTRYPOINT),
-                      ],
+                      ),
                     }),
               },
             ],
