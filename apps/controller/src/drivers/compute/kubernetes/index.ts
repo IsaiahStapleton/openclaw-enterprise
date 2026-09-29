@@ -549,6 +549,9 @@ const RUNTIME_STATE_VOLUME_SIZE = "1Gi";
 const GATEWAY_PRIVATE_STATE_VOLUME = "openclaw-gateway-state";
 const GATEWAY_PRIVATE_STATE_SIZE = "10Gi";
 const NODE_STATE_VOLUME = "openclaw-node-state";
+// Harness kinds that can own a workspace node. Naming refuses any other kind,
+// so Agent deletion removes every node Secret preparation can create.
+const WORKSPACE_NODE_HARNESS_IDS: readonly string[] = ["codex", "openclaw"];
 const NODE_STATE_PATH = "/home/node/.openclaw-node";
 const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
   ["state", "/home/node/.openclaw/state"],
@@ -6000,6 +6003,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     readonly agentId: string;
     readonly harness: { readonly id: string };
   }): string {
+    if (!WORKSPACE_NODE_HARNESS_IDS.includes(revision.harness.id)) {
+      throw new ConfigurationFailure(
+        "Workspace nodes are limited to Codex and OpenClaw Harnesses.",
+      );
+    }
     return `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(`harness:${revision.harness.id}`, 12)}`;
   }
 
@@ -6029,7 +6037,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ownership: Ownership,
     namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
-    for (const id of ["codex", "openclaw"] as const) {
+    for (const id of WORKSPACE_NODE_HARNESS_IDS) {
       await this.deleteOwnedNamespacedResource(
         "Secret",
         this.workspaceNodeName({ agentId, harness: { id } }),

@@ -419,6 +419,11 @@ test("workspace node identity is Agent-scoped and only Agent deletion removes it
     /Refusing unowned/,
   );
   assert.deepEqual(deleted, []);
+  // Naming admits only the Harness kinds Agent deletion sweeps.
+  assert.throws(
+    () => driver.workspaceNodeName({ ...revision, harness: { id: "other" } }),
+    /limited to Codex and OpenClaw/,
+  );
 });
 
 test("retiring an upgraded revision removes its legacy node Secret and keeps the Agent node", async () => {
