@@ -214,6 +214,38 @@ export {
   type ServiceAccountRepository,
   type TransactionalAuditWriter,
 } from "./state/platform-state.ts";
+export { PostgresCommitOutcomeUnknownError };
+export {
+  PostgresHumanAuthentication,
+  UserAlreadyExistsError,
+} from "./state/human-authentication.ts";
+export type {
+  HumanAuthenticationActivation,
+  HumanAuthenticationActivationHooks,
+  HumanAuthenticationEnrolment,
+  PreparedPasswordAccount,
+  HumanAuthenticationActor,
+  HumanAuthenticationAccount,
+  HumanAuthenticationRecovery,
+  HumanAuthenticationUser,
+  HumanAuthenticationProof,
+  HumanAuthenticationSnapshot,
+  HumanAuthenticationSession,
+  HumanAuthenticationAttemptKey,
+  HumanAuthenticationAttempt,
+  HumanAuthenticationDenial,
+} from "./state/human-authentication.ts";
+export {
+  HumanAuthenticationMaintenanceRefusedError,
+  PostgresHumanAuthenticationMaintenance,
+  WritersNotStoppedError,
+} from "./state/human-authentication-maintenance.ts";
+export type {
+  HumanAuthenticationMaintenanceAccount,
+  HumanAuthenticationMaintenanceBackend,
+  HumanAuthenticationMaintenanceRefusal,
+  HumanAuthenticationMaintenanceStatus,
+} from "./state/human-authentication-maintenance.ts";
 export { createPostgresPool } from "./state/postgres-pool.ts";
 export type {
   RepositoryRevisionOwner,
