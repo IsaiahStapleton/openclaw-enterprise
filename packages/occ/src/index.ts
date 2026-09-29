@@ -1351,20 +1351,38 @@ export class OpenClawController {
     return role;
   }
 
-  async deleteIAMRole(principalId: string, namespaceId: string, roleId: string): Promise<void> {
+  // Returns the removed Role so the caller can audit what was deleted.
+  async deleteIAMRole(
+    principalId: string,
+    namespaceId: string,
+    roleId: string,
+  ): Promise<Readonly<Role>> {
     if (!isNonEmptyString(roleId)) {
       throw new ScopeViolationError("The exact IAM Role identity is missing.");
     }
     const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const reader = this.iamPolicyDriver("getNamespaceRole");
     const driver = this.iamPolicyDriver("deleteNamespaceRole");
     const deleted = await this.mutate((state) =>
-      this.iamPolicyOperation(() =>
-        driver.deleteNamespaceRole!({ policy: state.iamPolicy }, namespace.id, roleId),
-      ),
+      this.iamPolicyOperation(async () => {
+        const role = await reader.getNamespaceRole!(
+          { policy: state.iamPolicy },
+          namespace.id,
+          roleId,
+        );
+        if (
+          role === undefined ||
+          !(await driver.deleteNamespaceRole!({ policy: state.iamPolicy }, namespace.id, roleId))
+        ) {
+          return undefined;
+        }
+        return role;
+      }),
     );
-    if (!deleted) {
+    if (deleted === undefined) {
       throw new ScopeViolationError("The IAM Role does not belong to the exact Namespace.");
     }
+    return deleted;
   }
 
   async listIAMAccessBindings(
@@ -1443,26 +1461,44 @@ export class OpenClawController {
     return binding;
   }
 
+  // Returns the removed AccessBinding so the caller can audit who lost access.
   async deleteIAMAccessBinding(
     principalId: string,
     namespaceId: string,
     bindingId: string,
-  ): Promise<void> {
+  ): Promise<Readonly<AccessBinding>> {
     if (!isNonEmptyString(bindingId)) {
       throw new ScopeViolationError("The exact IAM AccessBinding identity is missing.");
     }
     const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const reader = this.iamPolicyDriver("getNamespaceAccessBinding");
     const driver = this.iamPolicyDriver("deleteNamespaceAccessBinding");
     const deleted = await this.mutate((state) =>
-      this.iamPolicyOperation(() =>
-        driver.deleteNamespaceAccessBinding!({ policy: state.iamPolicy }, namespace.id, bindingId),
-      ),
+      this.iamPolicyOperation(async () => {
+        const binding = await reader.getNamespaceAccessBinding!(
+          { policy: state.iamPolicy },
+          namespace.id,
+          bindingId,
+        );
+        if (
+          binding === undefined ||
+          !(await driver.deleteNamespaceAccessBinding!(
+            { policy: state.iamPolicy },
+            namespace.id,
+            bindingId,
+          ))
+        ) {
+          return undefined;
+        }
+        return binding;
+      }),
     );
-    if (!deleted) {
+    if (deleted === undefined) {
       throw new ScopeViolationError(
         "The IAM AccessBinding does not belong to the exact Namespace.",
       );
     }
+    return deleted;
   }
 
   async listAgents(
