@@ -1392,7 +1392,11 @@ export class PostgresPlatformState implements PlatformStateStore {
     try {
       client = await this.pool.connect();
     } catch (error) {
-      throw databaseError(error);
+      // No statement has run yet, so any checkout failure (DNS, routing, TLS,
+      // credentials or a password callback) is unavailability, not a server verdict.
+      throw error instanceof ScopeViolationError || error instanceof DependencyUnavailableError
+        ? error
+        : new DependencyUnavailableError("The platform persistence repository is unavailable.");
     }
 
     // Checked-out pg clients emit transport errors independently of query rejection.
