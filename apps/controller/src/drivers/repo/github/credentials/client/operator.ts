@@ -156,6 +156,7 @@ async function readBoundRequest(path: string): Promise<RepositoryCredentialBound
       grantId: binding.grantId,
     },
     deadlineWallMs: Number(value.deadlineWallMs),
+    durableAdmission: true,
   };
   return Object.hasOwn(value, "recoverOnly") ? { ...request, recoverOnly: true } : request;
 }
