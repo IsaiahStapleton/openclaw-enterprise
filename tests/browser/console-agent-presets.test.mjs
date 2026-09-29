@@ -1044,13 +1044,12 @@ test("API-key Presets keep their credential provider fixed while allowing model 
 });
 
 test("Dedicated OpenClaw Presets keep their OpenClaw harness", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
-  await fixture.bootstrap();
   const root = await mkdtemp(join(tmpdir(), "occ-dedicated-openclaw-preset-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const configurationDriver = new FilesystemConfigurationDriver(root);
-  fixture.controller.registerDriver(configurationDriver);
-  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const fixture = await createConsoleAppFixture(t, {
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Dedicated OpenClaw Preset", { ready: true });
   const secret = await fixture.createSecret(namespace.id, "OpenAI model key", "dedicated-key");
   const harnessAuth = { method: "api_key", source: secret.ref };
@@ -2020,13 +2019,10 @@ test("a restored default starter chooser still discards its applied form on exit
   const { page } = await newPage(t, fixture);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
-  await page.getByLabel("Variable: name", { exact: true }).fill("Restored starter");
+  await page.getByLabel("Name", { exact: true }).fill("Restored starter");
   await page.getByRole("link", { name: "← Agents" }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
-  assert.equal(
-    await page.getByLabel("Variable: name", { exact: true }).inputValue(),
-    "Restored starter",
-  );
+  assert.equal(await page.getByLabel("Name", { exact: true }).inputValue(), "Restored starter");
   await page.getByRole("button", { name: "Use Preset", exact: true }).click();
   assert.equal(
     await page.getByLabel("Agent name", { exact: true }).inputValue(),
@@ -2039,7 +2035,7 @@ test("a restored default starter chooser still discards its applied form on exit
 
   // Explicit selection of the same Preset retains its form across navigation.
   await page.getByLabel("Preset template").selectOption(starter.id);
-  await page.getByLabel("Variable: name", { exact: true }).fill("Explicit starter");
+  await page.getByLabel("Name", { exact: true }).fill("Explicit starter");
   await page.getByRole("button", { name: "Use Preset", exact: true }).click();
   await page.getByRole("link", { name: "← Agents" }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
@@ -2112,7 +2108,7 @@ test("invalid Preset application retains chooser edits and preserves the selecte
     } else {
       await page.getByLabel("Preset template").selectOption(starter.id);
     }
-    const mode = page.getByLabel("Variable: mode", { exact: true });
+    const mode = page.getByLabel("Mode", { exact: true });
     await mode.fill("invalid");
     await page.getByRole("button", { name: "Use Preset", exact: true }).click();
     await page
@@ -2172,7 +2168,7 @@ test("failed Preset form construction retains chooser edits for both origins", a
     } else {
       await page.getByLabel("Preset template").selectOption(starter.id);
     }
-    const marker = page.getByLabel("Variable: marker", { exact: true });
+    const marker = page.getByLabel("Marker", { exact: true });
     await marker.fill(`draft ${origin}`);
     await page.getByRole("button", { name: "Use Preset", exact: true }).click();
     await page
