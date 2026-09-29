@@ -440,6 +440,12 @@
         "repository source obeys its dependency policy with exact current exceptions",
         "repository policy allows a public root and rejects a new HTTP Driver import"
       ]
+    },
+    {
+      "path": "tests/integration/github-login-transport.test.mjs"
+    },
+    {
+      "path": "tests/integration/client-address.test.mjs"
     }
   ]
 }
