@@ -4,6 +4,7 @@ import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
+import { startAgentNamespaceCapture } from "./k3d-diagnostics.mjs";
 import { loadTestSuites } from "./test-suites.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -520,8 +521,14 @@ async function runFile(root, lane, file, statePath, prepareFile) {
   let nodeResult = null;
   let tests = [];
   let fileFailure;
+  let agentActivity;
   try {
     if (issues.length === 0) {
+      agentActivity = await startAgentNamespaceCapture({
+        statePath,
+        lane: lane.name,
+        file: relativePath,
+      }).catch(() => undefined);
       nodeResult = spawnSync(
         process.execPath,
         ["--test", "--test-reporter", reporterPath, absolutePath],
@@ -574,6 +581,8 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       }),
     );
   } finally {
+    // Capture before cleanup so passing k3d runs keep their Agent Pod timeline.
+    await agentActivity?.finish();
     if (prepared.cleanup) {
       try {
         await prepared.cleanup();

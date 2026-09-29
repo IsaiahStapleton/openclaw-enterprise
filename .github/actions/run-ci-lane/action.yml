@@ -141,9 +141,11 @@ runs:
         path: ${{ runner.temp }}/state/runtime-image-fixture-receipt.json
         if-no-files-found: error
         retention-days: 7
-    - name: Upload cluster setup diagnostics
+    - name: Upload cluster diagnostics
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      if: always() && startsWith(inputs.lane, 'k3d-fixture-')
+      # Setup failures and every k3d file's Agent namespace activity; lanes
+      # without a cluster write no report.
+      if: always()
       with:
         name: diagnostics-${{ inputs.artifact-prefix }}-${{ inputs.lane }}
         path: ${{ runner.temp }}/state/${{ inputs.lane }}.json.diagnostics.json

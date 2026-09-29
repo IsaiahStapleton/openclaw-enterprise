@@ -4320,8 +4320,15 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
     ["openai", "gpt-5", "OPENAI_API_KEY"],
     ["anthropic", "claude-sonnet-4-5", "ANTHROPIC_API_KEY"],
   ]) {
-    for (const accepted of [true, false]) {
-      await t.test(`${provider}: ${accepted ? "accepted" : "wrong provider result"}`, async () => {
+    for (const [variant, probeStatus, failureCode] of [
+      ["accepted", "ok", undefined],
+      ["wrong provider result", "ok", "MODEL_PROBE_FAILED"],
+      // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
+      ["credentials rejected", "auth", "AUTHENTICATION_FAILED"],
+      ["provider unavailable", "unknown", "MODEL_PROBE_FAILED"],
+    ]) {
+      const accepted = failureCode === undefined;
+      await t.test(`${provider}: ${variant}`, async () => {
         const driver = createKubernetesComputeDriver(options());
         const candidate = {
           namespaceId: tenant.id,
@@ -4343,6 +4350,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         const timers = [];
         let started = false;
         let held = false;
+        let statusHandler;
         // Stub native process I/O only: execute the complete generated startup
         // program and its real probe result validation, without claiming a model turn.
         runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, {
@@ -4351,9 +4359,18 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
           URL,
           console: { error: (value) => errors.push(value) },
           process: {
-            env: Object.fromEntries(
-              prepared.environment.map((entry) => [entry.name, entry.value ?? "fixture-model-key"]),
-            ),
+            env: {
+              ...Object.fromEntries(
+                prepared.environment.map((entry) => [
+                  entry.name,
+                  entry.value ?? "fixture-model-key",
+                ]),
+              ),
+              OPENCLAW_AGENT_REVISION_ID: "revision-embedded-probe",
+              OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
+              OPENCLAW_RUNTIME_STATUS_PORT: "18791",
+              OPENCLAW_POD_UID: "pod-embedded-probe",
+            },
             on(signal, callback) {
               signals.set(signal, callback);
             },
@@ -4369,6 +4386,14 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
             held = true;
           },
           require(specifier) {
+            if (specifier === "node:http") {
+              return {
+                createServer(handler) {
+                  statusHandler = handler;
+                  return { listen() {} };
+                },
+              };
+            }
             if (specifier === "node:fs") {
               return {
                 mkdirSync() {},
@@ -4392,10 +4417,11 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
                         probes: {
                           results: [
                             {
-                              provider: accepted ? provider : "another-provider",
+                              provider:
+                                variant === "wrong provider result" ? "another-provider" : provider,
                               model: `${provider}/${model}`,
                               source: "env",
-                              status: "ok",
+                              status: probeStatus,
                             },
                           ],
                         },
@@ -4434,6 +4460,12 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         assert.equal(started, accepted);
         assert.equal(held, !accepted);
         assert.deepEqual(errors, accepted ? [] : ["Harness model authentication probe failed."]);
+        let body = "";
+        statusHandler(
+          { method: "GET", url: "/openclaw/runtime/status" },
+          { writeHead() {}, end: (chunk) => (body += chunk) },
+        );
+        assert.equal(JSON.parse(body).runtimeFailure?.code, failureCode);
         if (accepted) {
           signals.get("SIGTERM")();
           assert.deepEqual(childSignals, ["SIGTERM"]);
@@ -6931,6 +6963,142 @@ test("stopping a provider-owned Kubernetes revision waits for Sandbox workload t
 
   await driver.stopRevision(revision);
   assert.equal(cleanupComplete, true);
+  assert.equal(podObservations, 2);
+});
+
+test("stop and retirement end credential-source access through Sandbox cleanup", async () => {
+  // Salvaged from #146: stop and retirement must still shut the workload down when credential
+  // cleanup is uncertain, and must not report completion until it is confirmed. On main the
+  // Credential Gateway attachment lives only in the paired Sandbox, so Sandbox cleanup is the
+  // withdrawal; OCC has no withdraw caller, and a failed cleanup must keep the work retryable.
+  const cleanupCalls = [];
+  let failCleanup = true;
+  let podObservations = 0;
+  const sandboxDriver = {
+    id: "sandbox-credential-stop",
+    implementation: "test/provider-owned",
+    capability: "sandbox",
+    facets: ["networking", "filesystem", "process"],
+    async provisionHarness() {
+      assert.fail("stop and retirement must not provision a Harness workload");
+    },
+    async cleanup(context) {
+      cleanupCalls.push(context.revision?.id);
+      if (failCleanup) {
+        failCleanup = false;
+        throw new Error("sandbox cleanup failed");
+      }
+    },
+  };
+  const unexpected = (method) => async () => {
+    assert.fail(`stop and retirement must not call Credential Gateway ${method}`);
+  };
+  const credentialGatewayDriver = {
+    id: "credential-gateway-stop",
+    implementation: "test/credential-gateway",
+    capability: "credential_gateway",
+    attachForRevision: unexpected("attachForRevision"),
+    attachmentStatus: unexpected("attachmentStatus"),
+    withdraw: unexpected("withdraw"),
+    removeSource: unexpected("removeSource"),
+  };
+  const driver = new KubernetesComputeDriver(options(), { sandboxDriver, credentialGatewayDriver });
+  const harnessAuth = {
+    method: "credential_source",
+    sourceId: "cs_00000000-0000-4000-8000-000000000146",
+    credentialGatewayId: credentialGatewayDriver.id,
+    sourceType: "openai",
+    loginMode: "api_key",
+  };
+  const revision = routedRevision(driver, {
+    id: "revision-credential-stop",
+    sandboxDriverId: sandboxDriver.id,
+    harnessAuth,
+  });
+  const namespace = kubernetesNamespaceName(revision.namespaceId);
+  const namespaceResource = {
+    apiVersion: "v1",
+    kind: "Namespace",
+    metadata: {
+      name: namespace,
+      labels: {
+        "app.kubernetes.io/managed-by": "openclaw-enterprise",
+        "openclaw.dev/namespace": revision.namespaceId,
+      },
+      annotations: { "openclaw.dev/namespace-id": revision.namespaceId },
+    },
+  };
+  const notFound = () => Object.assign(new Error("Not found"), { code: 404 });
+  driver.apiClients = Promise.resolve({
+    core: {
+      async readNamespacedSecret() {
+        throw notFound();
+      },
+      async readNamespacedService() {
+        throw notFound();
+      },
+      async readNamespacedServiceAccount() {
+        throw notFound();
+      },
+      async readNamespacedPersistentVolumeClaim() {
+        throw notFound();
+      },
+      async readNamespacedConfigMap() {
+        throw notFound();
+      },
+      async listNamespace() {
+        return { apiVersion: "v1", kind: "NamespaceList", items: [namespaceResource] };
+      },
+      async readNamespace({ name }) {
+        if (name === kubernetesGatewayNamespaceName(tenant.id)) {
+          return {
+            ...driver.gatewayNamespaceManifest({ namespaceId: tenant.id }),
+            status: { phase: "Active" },
+          };
+        }
+        return structuredClone(namespaceResource);
+      },
+      async listNamespacedPod(request) {
+        const selected = Object.fromEntries(
+          request.labelSelector.split(",").map((entry) => entry.split("=")),
+        );
+        if (selected["openclaw.dev/workload-role"] === "agent") {
+          // The Harness is only observed as gone after its Sandbox cleanup succeeded.
+          assert.equal(failCleanup, false);
+          podObservations += 1;
+        }
+        return { apiVersion: "v1", kind: "PodList", items: [] };
+      },
+    },
+    apps: {
+      async readNamespacedDeployment() {
+        throw notFound();
+      },
+    },
+    networking: {
+      async readNamespacedNetworkPolicy() {
+        throw notFound();
+      },
+    },
+    objects: {
+      async read() {
+        throw notFound();
+      },
+    },
+  });
+
+  // An uncertain cleanup fails the stop, so the worker keeps the stop pending and retries.
+  await assert.rejects(driver.stopRevision(revision), /sandbox cleanup failed/);
+  assert.deepEqual(cleanupCalls, [revision.id]);
+  assert.equal(podObservations, 0);
+
+  await driver.stopRevision(revision);
+  assert.deepEqual(cleanupCalls, [revision.id, revision.id]);
+  assert.equal(podObservations, 1);
+
+  // Retirement of the same revision repeats the idempotent cleanup instead of skipping it.
+  await driver.retireRevision(revision);
+  assert.deepEqual(cleanupCalls, [revision.id, revision.id, revision.id]);
   assert.equal(podObservations, 2);
 });
 

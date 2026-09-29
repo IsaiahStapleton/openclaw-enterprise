@@ -547,6 +547,18 @@ export const scenarios = {
     emptyAgents: true,
     description: "A ready Namespace with no Agents offers creation.",
   },
+  agentsUnreadableConfiguration: {
+    group: "Pages/Agents",
+    name: "Unreadable saved configuration",
+    deployed: true,
+    unreadableAgentConfiguration: "plugins",
+    description:
+      "One Agent has unreadable saved plugin selections. Both Agents remain in the list, and the affected row shows a warning. This is simulated API data, not database recovery proof.",
+    steps: [
+      "Open Research assistant and select Create new version. Its saved settings show a repair banner without editing or deployment controls.",
+      "Select v1 to inspect the readable admitted snapshot. Return to Agents and open Documentation assistant to check that its draft remains editable.",
+    ],
+  },
   agentsSearch: {
     group: "Pages/Agents",
     name: "No search matches",
@@ -612,6 +624,30 @@ export const scenarios = {
     path: "/console/namespaces",
     description:
       "Installation-wide Namespace identity and status cards, without a Namespace selector.",
+  },
+  namespacesUnavailable: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    description: "Recover from a stale Namespace URL using the selector inside the message.",
+    steps: [
+      "Choose Engineering under Choose a valid namespace; the URL changes and the warning disappears without leaving Namespaces.",
+      "Use browser Back to return to the unavailable selection and recover again.",
+    ],
+  },
+  namespacesUnavailableMobile: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection mobile",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    mobile: true,
+    description: "Recover inline at 390px without opening navigation.",
+  },
+  namespacesUnavailableEmpty: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection without access",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    emptyNamespaces: true,
+    description: "No readable alternatives: show access guidance instead of a selection action.",
   },
   namespacesEmpty: {
     group: "Pages/Namespaces",
@@ -2287,6 +2323,33 @@ export const scenarios = {
       },
     ],
     description: "The Configuration read fails independently of the Agent header.",
+  },
+  unreadableAgentConfiguration: {
+    group: "Pages/Agent detail",
+    name: "Unreadable Agent draft",
+    path: draft,
+    deployed: true,
+    unreadableAgentConfiguration: "plugins",
+    description:
+      "Saved Agent plugin selections could not be read. The Agent header and version history remain visible; draft settings and deployment are unavailable. The admitted v1 snapshot is independently readable.",
+    steps: [
+      "Open Plugins, Channels, and Credentials. Each shows the saved-configuration banner, with no empty settings or editable defaults.",
+      "Select v1 to inspect its admitted configuration, then return to Create new version to see the unreadable draft.",
+    ],
+  },
+  unreadableRevisionConfiguration: {
+    group: "Pages/Agent detail",
+    name: "Unreadable revision snapshot",
+    path: revision,
+    deployed: true,
+    unreadableRevisionConfiguration: "plugins",
+    rules: [{ suffix: "/deployments/rev_00000000-0000-4000-8000-000000000001", status: 503 }],
+    description:
+      "An admitted revision has unreadable plugin selections. Its identity and history remain visible while its saved settings show a repair banner. Deployment activity can fail separately because it still requires a valid snapshot.",
+    steps: [
+      "Open Plugins and confirm the invalid snapshot is not shown as empty JSON.",
+      "Select Create new version. The healthy current draft remains editable independently of the unreadable historical snapshot.",
+    ],
   },
   revisionError: {
     group: "Pages/Agent detail",
