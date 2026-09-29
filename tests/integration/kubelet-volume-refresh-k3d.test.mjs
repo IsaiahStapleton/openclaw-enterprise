@@ -24,9 +24,11 @@ const selection = {
 const image = process.env.OCC_TEST_KUBERNETES_IMAGE;
 const requested = [...Object.values(selection), image].some(Boolean);
 
-// Bounds, from the measured k3d runs recorded in the PR (see "measurement" entries in
-// the lane results). The nudge bound is what the late-delivery design relies on; the
-// unnudged bound only has to cover the kubelet resync period and its jitter.
+// Bounds from measured k3d runs (lane results, files[].measurements). With the Pod
+// annotation nudge the content appeared 1.3-1.4 s after the create call started (two
+// kubectl invocations included); 15 s leaves headroom for a loaded runner and is what
+// late delivery relies on. Without a nudge it took 67-84 s: the kubelet resync period
+// (1 min, jittered up to 1.5x) plus the next sync. 150 s covers that with headroom.
 const nudgedBoundSeconds = 15;
 const unnudgedBoundSeconds = 150;
 const samplesPerCase = 2;
