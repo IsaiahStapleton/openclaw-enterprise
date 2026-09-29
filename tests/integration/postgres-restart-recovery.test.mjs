@@ -1005,9 +1005,9 @@ test(
   },
 );
 
-function repositoryCleanupKey(revisionId, sourceKey, purpose = "sessions") {
+function repositoryCleanupKey(revisionId, _sourceKey, purpose = "sessions") {
   const purposeKey = purpose === "terminal-runtime" ? "retire:" : "";
-  return `agent_revision:${revisionId}:repository_cleanup:${purposeKey}${createHash("sha256").update(sourceKey, "utf8").digest("hex")}`;
+  return `agent_revision:${revisionId}:repository_cleanup:${purposeKey}${createHash("sha256").update(revisionId, "utf8").digest("hex")}`;
 }
 
 async function createRepositoryRevision(
@@ -1132,6 +1132,134 @@ async function completeCleanupWork(queue, revisionId, sourceKey, purpose = "sess
   );
 }
 
+test(
+  "repeated and concurrent cleanup registration coalesces by revision and purpose",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue, WorkClaimLostError } = await dependencies(context);
+    const { namespaceId, agents } = await createResources(pool, 2);
+    const owner = await createRepositoryRevision(pool, namespaceId, agents[0], ["invalidated"]);
+    const sibling = await createRepositoryRevision(pool, namespaceId, agents[1], ["invalidated"]);
+    let firstCleanup;
+
+    for (let index = 0; index < 8; index += 1) {
+      const sourceKey = `agent:${agents[0]}:reconcile:stopped:${randomUUID()}`;
+      await queue.enqueue({
+        idempotencyKey: sourceKey,
+        namespaceId,
+        agentId: agents[0],
+        agentTarget: "stopped",
+        actorId: `principal-source-${index}`,
+        availableAt: new Date(0),
+      });
+      const source = await claimExpected(queue, sourceKey);
+      await assert.rejects(queue.enqueueRepositoryCleanup(source, sibling));
+      await assert.rejects(
+        queue.enqueueRepositoryCleanup({ ...source, claimToken: randomUUID() }, owner),
+        WorkClaimLostError,
+      );
+      // Concurrent registrations must retain the same claim and never multiply
+      // the unknown provider obligation, even across different source actors.
+      const registered = await Promise.all(
+        Array.from({ length: 4 }, () => queue.enqueueRepositoryCleanup(source, owner)),
+      );
+      firstCleanup ??= registered[0];
+      assert.ok(registered.every((work) => work.idempotencyKey === firstCleanup.idempotencyKey));
+      assert.equal(registered[0].actorId, "principal-source-0");
+      await queue.complete(source);
+    }
+    const rows = await pool.query(
+      `SELECT idempotency_key, state, actor_id FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [owner.revisionId, `agent_revision:${owner.revisionId}:repository_cleanup:%`],
+    );
+    assert.deepEqual(rows.rows, [
+      {
+        idempotency_key: firstCleanup.idempotencyKey,
+        state: "queued",
+        actor_id: "principal-source-0",
+      },
+    ]);
+    assert.equal((await readRepositoryAttempts(pool, owner.revisionId))[0].phase, "invalidated");
+    assert.equal((await readRepositoryAttempts(pool, sibling.revisionId))[0].phase, "invalidated");
+
+    // Retry preserves the same durable obligation and claim ownership.
+    const cleanup = await claimExpected(queue, firstCleanup.idempotencyKey);
+    await assert.rejects(queue.fail(cleanup, { code: "CANNOT_ABANDON" }));
+    await queue.defer(cleanup, { code: "REPOSITORY_CLEANUP_PENDING" });
+    await assert.rejects(queue.complete(cleanup), WorkClaimLostError);
+    assert.equal((await readQueueRow(pool, firstCleanup.idempotencyKey)).state, "queued");
+    // Retain the unresolved fixture while keeping it out of other test scheduling.
+    await pool.query(
+      "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",
+      [firstCleanup.idempotencyKey],
+    );
+  },
+);
+
+test(
+  "batch recovery coalesces multiple failed Agent stops without losing audit attribution",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue } = await dependencies(context, { maxAttempts: 1 });
+    const { namespaceId, agents } = await createResources(pool, 2);
+    const owner = await createRepositoryRevision(pool, namespaceId, agents[0], [
+      "open",
+      "invalidated",
+    ]);
+    const sibling = await createRepositoryRevision(pool, namespaceId, agents[1], ["open"]);
+    const siblingBefore = await readRepositoryAttempts(pool, sibling.revisionId);
+    await pool.query("UPDATE occ.agents SET desired_runtime_state = 'stopped' WHERE id = $1", [
+      agents[0],
+    ]);
+    const keys = [];
+    for (const actorId of ["principal-stop-a", "principal-stop-b"]) {
+      const key = `agent:${agents[0]}:reconcile:stopped:${randomUUID()}`;
+      keys.push(key);
+      await queue.enqueue({
+        idempotencyKey: key,
+        namespaceId,
+        agentId: agents[0],
+        agentTarget: "stopped",
+        actorId,
+      });
+    }
+    // Two distinct stop requests exhaust in one recovery statement.
+    await pool.query(
+      "UPDATE occ.controller_work SET attempt_count = 1 WHERE idempotency_key = ANY($1::text[])",
+      [keys],
+    );
+    const recovered = await queue.recoverStale();
+    assert.equal(recovered.exhaustedQueued, 2);
+    const cleanup = await pool.query(
+      `SELECT idempotency_key, state, actor_id FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [owner.revisionId, `agent_revision:${owner.revisionId}:repository_cleanup:%`],
+    );
+    assert.equal(cleanup.rowCount, 1);
+    assert.equal(cleanup.rows[0].state, "queued");
+    assert.ok(["principal-stop-a", "principal-stop-b"].includes(cleanup.rows[0].actor_id));
+    assert.deepEqual(
+      (await readRepositoryAttempts(pool, owner.revisionId)).map(({ phase }) => phase),
+      ["closing", "invalidated"],
+    );
+    assert.deepEqual(await readRepositoryAttempts(pool, sibling.revisionId), siblingBefore);
+    const evidence = await pool.query(
+      `SELECT actor_id FROM occ.audit_events
+       WHERE resource_id = $1 AND details->>'reasonCode' = 'MAX_ATTEMPTS_EXHAUSTED'`,
+      [agents[0]],
+    );
+    assert.deepEqual(evidence.rows.map(({ actor_id }) => actor_id).sort(), [
+      "principal-stop-a",
+      "principal-stop-b",
+    ]);
+    await pool.query(
+      "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",
+      [cleanup.rows[0].idempotency_key],
+    );
+  },
+);
+
 for (const transition of ["fail", "retry", "expired claim", "exhausted queued"]) {
   for (const sessionState of ["mixed", "settled", "unstarted"]) {
     test(
@@ -1219,7 +1347,7 @@ for (const transition of ["fail", "retry", "expired claim", "exhausted queued"])
         );
         const digest = await pool.query(
           "SELECT encode(sha256(convert_to($1, 'UTF8')), 'hex') AS hash",
-          [sourceKey],
+          [owner.revisionId],
         );
         assert.equal(
           cleanupKey,
@@ -1282,12 +1410,13 @@ test(
 );
 
 test(
-  "cleanup transfer rollback and a conflicting cleanup actor preserve the source claim",
+  "cleanup transfer rollback and a conflicting cleanup owner preserve the source claim",
   requiresPostgres,
   async (context) => {
     const { pool, queue, PostgresWorkQueue } = await dependencies(context);
-    const { namespaceId, agents } = await createResources(pool);
+    const { namespaceId, agents } = await createResources(pool, 2);
     const owner = await createRepositoryRevision(pool, namespaceId, agents[0]);
+    const sibling = await createRepositoryRevision(pool, namespaceId, agents[1]);
     const sourceKey = `queue-cleanup-rollback:${randomUUID()}`;
     await queue.enqueue(revisionWork(namespaceId, sourceKey, agents[0], owner.revisionId));
     const claim = await claimExpected(queue, sourceKey);
@@ -1313,7 +1442,7 @@ test(
     const cleanupKey = repositoryCleanupKey(owner.revisionId, sourceKey, "terminal-runtime");
     assert.equal(await readQueueRow(pool, cleanupKey), undefined);
     await insertRawQueueWork(pool, {
-      ...revisionWork(namespaceId, cleanupKey, agents[0], owner.revisionId),
+      ...revisionWork(namespaceId, cleanupKey, agents[1], sibling.revisionId),
       actorId: "principal-conflicting-cleanup",
     });
     await assert.rejects(queue.fail(claim, { code: "COLLIDING_CLEANUP" }));
