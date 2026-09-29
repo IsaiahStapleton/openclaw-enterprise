@@ -5,16 +5,15 @@ Gateway with dedicated Codex and native OpenClaw Harnesses and the bundled
 [Kubernetes Compute Driver](kubernetes-compute.md). OCC retains ownership of
 Agents, revisions, Namespaces, routing, credentials, and authorization.
 
-**OpenShell is not supported for production Agent deployment.** The stock
-OpenShell version this integration targets,
-[`v0.1.0`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0), cannot accept the
+**The OpenShell integration is a work in progress.** Stock OpenShell
+[`v0.1.0`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0) cannot accept the
 Secret-backed app-server token or projected workload identity a dedicated Agent
 requires. The model API key is no longer a blocker: the paired
-[OpenShell Credential Gateway](openshell-credential-gateway.md) delivers it. The Enterprise Driver rejects deployment rather
-than starting an incorrectly credentialed Harness. The real integration keeps
-that rejection proof and has a separate verification-only compatibility bridge
-for a real in-Sandbox model turn. That bridge is not a supported deployment
-path.
+[OpenShell Credential Gateway](openshell-credential-gateway.md) delivers it. The
+Enterprise Driver rejects deployment rather than starting an incorrectly
+credentialed Harness. The real integration keeps that rejection proof and has a
+separate verification-only compatibility bridge for a real in-Sandbox model
+turn. That bridge is not a supported deployment path.
 
 Embedded OpenClaw also fails when OpenShell is selected; the integration is
 designed only for dedicated Harnesses. Kubernetes Compute requires dedicated
@@ -316,8 +315,8 @@ profile. See the
 
 ## Current upstream preconditions
 
-The current integration cannot run production Agents. Production support would
-require upstream OpenShell to satisfy all of these conditions:
+The following upstream OpenShell capabilities are being worked on to enable
+production Agent deployment:
 
 - OpenShell must create Sandboxes with the per-Agent ServiceAccount that Compute
   creates for the Harness.
