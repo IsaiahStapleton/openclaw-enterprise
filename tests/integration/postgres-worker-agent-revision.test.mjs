@@ -63,6 +63,12 @@ async function setup(
     "persisted IAM must contain a Principal authorized for Agent lifecycle and Secret cleanup",
   );
 
+  const namespace = {
+    id: `ns_${randomUUID()}`,
+    name: `revision-worker-${randomUUID()}`,
+    status: "ready",
+    createdAt: new Date().toISOString(),
+  };
   let worker;
   context.after(async () => {
     if (worker === undefined) {
@@ -70,15 +76,25 @@ async function setup(
     } else {
       await worker.stop();
     }
+    // Every case in this file shares one database, and every worker claims from
+    // the whole queue. Close this case's unfinished work (deferred repository
+    // cleanup, retries, abandoned claims) so a later case's worker cannot run it
+    // through that case's recording Compute and repository doubles.
+    await observerPool.query(
+      `UPDATE occ.controller_work
+       SET state = 'failed_permanent',
+           claim_token = NULL,
+           lease_expires_at = NULL,
+           completed_at = clock_timestamp(),
+           reason_code = 'TEST_FIXTURE_CLEANUP',
+           result_data = NULL,
+           updated_at = clock_timestamp()
+       WHERE namespace_id = $1 AND state IN ('queued', 'claimed')`,
+      [namespace.id],
+    );
     await observerPool.end();
   });
 
-  const namespace = {
-    id: `ns_${randomUUID()}`,
-    name: `revision-worker-${randomUUID()}`,
-    status: "ready",
-    createdAt: new Date().toISOString(),
-  };
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = {
     ...createDevelopmentComputeDriver(),
