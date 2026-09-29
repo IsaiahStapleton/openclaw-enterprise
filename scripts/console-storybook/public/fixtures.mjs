@@ -30,6 +30,11 @@ function configurationValues(scenario) {
     agents: { defaults: { model: "codex/gpt-4.1" } },
     channels: {},
   };
+  if (scenario.gatewayPassword) {
+    values.gateway.auth = {
+      password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+    };
+  }
   if (scenario.slack) {
     values.channels.slack = {
       enabled: true,

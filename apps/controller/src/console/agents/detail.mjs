@@ -1658,6 +1658,31 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       editing = true;
       render();
     });
+    const password = values.gateway?.auth?.password;
+    const usesGeneratedGatewayPassword =
+      password?.source === "env" &&
+      (password.provider === undefined || password.provider === "default") &&
+      password.id === "OPENCLAW_GATEWAY_PASSWORD";
+    const enableGatewayPassword = button("Enable Gateway password access", () => {
+      // Stage the native reference through the same draft and save checks as JSON edits.
+      // The Compute Driver delivers the generated value only after deployment.
+      editor.value = JSON.stringify(
+        {
+          ...values,
+          gateway: {
+            ...values.gateway,
+            auth: {
+              ...values.gateway?.auth,
+              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+            },
+          },
+        },
+        null,
+        2,
+      );
+      editing = true;
+      render();
+    });
     const save = button("Save Configuration", () => void saveConfiguration(), {
       className: "primary",
     });
@@ -1715,6 +1740,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       save.disabled = pending || outcomeUnknown || reloadRequired || !dirty;
       cancel.disabled = pending || outcomeUnknown || reloadRequired;
       edit.disabled = pending || outcomeUnknown;
+      enableGatewayPassword.disabled = pending || outcomeUnknown || reloadRequired;
       editor.readOnly = pending || outcomeUnknown || reloadRequired;
       if (outcomeUnknown) {
         feedback.textContent =
@@ -1823,7 +1849,19 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     function render() {
       if (!editing) {
         container.replaceChildren(
-          element("div", { className: "form-actions" }, edit),
+          element(
+            "p",
+            { className: "hint" },
+            usesGeneratedGatewayPassword
+              ? "Gateway password access is enabled in the saved Configuration. Deploy a new version to apply it."
+              : "Use generated credentials for direct Gateway password access. Enable access, save Configuration, then deploy a new version.",
+          ),
+          element(
+            "div",
+            { className: "form-actions" },
+            edit,
+            usesGeneratedGatewayPassword ? null : enableGatewayPassword,
+          ),
           nativeDocument(values, "View native Configuration"),
         );
         return;
