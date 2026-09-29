@@ -61,13 +61,11 @@ Verify the runtime and a real response with
 An **AgentRevision** is an immutable version created by deployment. A
 **Configuration** is the reusable, mutable input for the next version.
 
-The **Versions** list marks the current version. **View version vN** opens
-read-only details: creation time, source Configuration generation, recorded
-deployment status, and captured settings. The activity panel still follows the
-latest visible deployment. **Available versions** jumps to readable versions;
-Configuration and Channels show further details, including admitted native JSON.
-The `rev_…` ID identifies an exact version for API calls and support. Viewing
-does not deploy or activate it.
+**Versions** marks the current version. **View version vN** shows creation time,
+Configuration generation, deployment status, and read-only settings, including
+native JSON. Activity follows the latest visible deployment. **Available versions**
+jumps to readable versions; `rev_…` identifies the version for API calls and
+support. Viewing neither deploys nor activates it.
 
 **Run diagnostics for this version** requests fresh, on-demand observations of
 the viewed version. Checks include a time and `succeeded`, `failed`, or
@@ -97,6 +95,12 @@ The **Configuration**, **Plugins**, **Channels**, **Credentials**, and **Workspa
 change the panel below. Credentials is available only on the new version draft.
 Browser Back and Forward restore the selected tab. Leaving a tab clears entered
 token values. The workspace remains live regardless of the viewed version.
+
+### Unreadable saved settings
+
+Unreadable settings show a warning; identity, navigation, and readable versions
+remain available. Omissions are not defaults. Unreadable drafts block editing and
+deployment; nothing repairs them.
 
 ## Configuration tab
 
