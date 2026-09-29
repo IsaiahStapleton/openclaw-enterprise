@@ -503,6 +503,7 @@ test(
       assert.ok(elapsed >= 9_000 && elapsed < 12_000, `Elapsed: ${elapsed}`);
       await until(() => closed);
       assert.deepEqual(login.subjects, []);
+      assert.deepEqual(login.denialReasons, ["PROVIDER_UNAVAILABLE"]);
     });
 
     await t.test("GitHub and Google share one external admission budget", async () => {

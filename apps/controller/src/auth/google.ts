@@ -1,6 +1,11 @@
 import { createHmac, createPublicKey, verify } from "node:crypto";
 import { authorizationCodeRequest, createAuthorizationURL } from "better-auth/oauth2";
-import { providerJSON, rejected } from "./provider-transport.ts";
+import {
+  providerExchangeFailure,
+  providerJSON,
+  rejected,
+  type ProviderExchange,
+} from "./provider-transport.ts";
 
 // Google OpenID Connect, fixed endpoints (no runtime discovery):
 // https://accounts.google.com/.well-known/openid-configuration
@@ -205,7 +210,7 @@ export async function exchangeGoogleSubject(
   codeVerifier: string,
   redirectURI: string,
   nonce: string,
-): Promise<string | undefined> {
+): Promise<ProviderExchange> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   timer.unref();
@@ -227,16 +232,17 @@ export async function exchangeGoogleSubject(
     }
     const jwks = await providerJSON(certsEndpoint, {}, controller.signal);
     controller.signal.throwIfAborted();
-    return verifyGoogleIdToken(data.id_token, {
+    const subject = verifyGoogleIdToken(data.id_token, {
       clientId: config.clientId,
       nonce,
       allowedDomains: config.allowedDomains,
       jwks,
       now: Date.now(),
     });
-  } catch {
+    return subject === undefined ? { denial: "EXTERNAL_IDENTITY_REJECTED" } : { subject };
+  } catch (error) {
     // Never expose provider response bodies, token values or request credentials.
-    return undefined;
+    return providerExchangeFailure(error, controller.signal);
   } finally {
     clearTimeout(timer);
     controller.abort();
