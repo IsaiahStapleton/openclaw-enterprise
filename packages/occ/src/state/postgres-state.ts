@@ -1400,8 +1400,10 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         throw new PostgresCommitOutcomeUnknownError();
       }
-      if (error === transportError && transportError !== undefined) {
-        throw transportError;
+      // An observed client error means the connection is broken, whatever code it
+      // carries; classify it as unavailable rather than as a server verdict.
+      if (transportError !== undefined && error === transportError) {
+        throw new DependencyUnavailableError("The platform persistence repository is unavailable.");
       }
       throw databaseError(error);
     } finally {

@@ -157,7 +157,7 @@ test("a known-bad client is discarded without attempting pre-COMMIT rollback", a
     p.state.transact(async () => {
       p.emitTransportError(failure);
     }),
-    (error) => error === failure,
+    DependencyUnavailableError,
   );
   assert.deepEqual(p.calls, ["BEGIN"]);
   assert.equal(discarded, true);
@@ -175,7 +175,7 @@ test("observed client error during listener registration prevents admission", as
     p.state.transact(async () => {
       called = true;
     }),
-    (error) => error === failure,
+    DependencyUnavailableError,
   );
   assert.equal(called, false);
   assert.deepEqual(p.calls, []);
@@ -220,7 +220,7 @@ test("observed client error during a resolved BEGIN prevents callback and later 
     p.state.transact(async () => {
       called = true;
     }),
-    (error) => error === failure,
+    DependencyUnavailableError,
   );
   assert.equal(called, false);
   assert.deepEqual(p.calls, ["BEGIN"]);
@@ -228,12 +228,13 @@ test("observed client error during a resolved BEGIN prevents callback and later 
   assert.equal(p.releases(), 1);
 });
 
-test("an observed client error is preserved even with a server-looking code", async () => {
+test("an observed client error is unavailable even with a server-looking code", async () => {
   const failure = Object.assign(new Error("client transport failure"), { code: "23514" });
   const p = protocol({ on: (listener) => listener(failure) });
   await assert.rejects(
     p.state.transact(async () => 1),
-    (error) => error === failure,
+    (error) =>
+      error instanceof DependencyUnavailableError && !(error instanceof ScopeViolationError),
   );
   assert.deepEqual(p.calls, []);
   assert.equal(p.releases(), 1);
@@ -257,7 +258,7 @@ test("observed client error during a repository query blocks result and subseque
       await assert.rejects(unit.audit.list(), (error) => error === failure);
       effect = true;
     }),
-    (error) => error === failure,
+    DependencyUnavailableError,
   );
   // A caller can catch the errors and run external code; the owner still refuses COMMIT.
   assert.equal(effect, true);
@@ -282,10 +283,30 @@ test("observed client error after a resolved repository query blocks following w
       await unit.audit.list();
       effect = true;
     }),
-    (error) => error === failure,
+    DependencyUnavailableError,
   );
   assert.equal(effect, false);
   assert.equal(p.calls.length, 2);
+  assert.equal(p.releases(), 1);
+});
+
+test("a coded transport error that also rejects the active query is unavailable", async () => {
+  // pg rejects the active query with the same object it emits on "error".
+  const failure = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+  const discards = [];
+  const p = protocol({
+    query: () => {
+      p.emitTransportError(failure);
+      throw failure;
+    },
+    release: (destroy) => discards.push(destroy),
+  });
+  await assert.rejects(
+    p.state.transact(async (unit) => unit.audit.list()),
+    DependencyUnavailableError,
+  );
+  assert.equal(p.calls.length, 2);
+  assert.deepEqual(discards, [true]);
   assert.equal(p.releases(), 1);
 });
 

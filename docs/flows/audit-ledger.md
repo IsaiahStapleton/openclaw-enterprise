@@ -125,7 +125,9 @@ unit does not by itself prove that the transaction committed.
 When the checked-out client reports a transport error before callback admission,
 State refuses to start the callback. It refuses further repository queries and
 their results after an observed error, and requests client discard when that
-error is known before release. If an error is observed during cleanup after an
+error is known before release. A transaction that fails on an observed client
+error reports the persistence dependency as unavailable, whatever code the error
+carries. If an error is observed during cleanup after an
 acknowledged COMMIT, State reports an unknown outcome. A caller that catches a
 repository error can still perform its own external effects; this guard does not
 control those effects or establish the outcome of an unobserved transport failure.
