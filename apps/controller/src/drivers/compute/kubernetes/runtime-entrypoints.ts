@@ -1445,16 +1445,28 @@ async function readCodexToolStatuses() {
   throw new Error("Codex tool discovery exceeded its page limit.");
 }
 
+async function readCodexPluginDetails(readParamsList, read = (params) => codexAppServerRequest("plugin/read", params)) {
+  const details = [];
+  // Bound concurrent authenticated requests and drain each batch before a
+  // retry or any installation/configuration write can start.
+  for (let offset = 0; offset < readParamsList.length; offset += 4) {
+    const results = await Promise.allSettled(readParamsList.slice(offset, offset + 4).map(
+      async (params, index) => read(params, offset + index),
+    ));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure !== undefined) throw failure.reason;
+    details.push(...results.map((result) => result.value));
+  }
+  return details;
+}
+
 async function installCodexSelectionSet(selections, failures = []) {
   if (Object.keys(selections).length === 0) return { successfulPluginIds: [], failures: [] };
   const enabledPluginIds = enabledCodexSelectionIds(selections);
   const listed = await codexAppServerRequest("plugin/list", {});
   const readParamsList = pluginRuntimeTranslator.codexReadParamsForSelections(selections, listed);
   if (readParamsList.length === 0) return { successfulPluginIds: [], failures: [] };
-  const resolvedDetails = [];
-  for (const readParams of readParamsList) {
-    resolvedDetails.push(await codexAppServerRequest("plugin/read", readParams));
-  }
+  const resolvedDetails = await readCodexPluginDetails(readParamsList);
   const failed = [...failures];
   const failedIds = pluginFailureIds(failed);
   const successfulPluginIds = [];
@@ -1525,8 +1537,7 @@ async function installCodexSelectionSet(selections, failures = []) {
     : [];
   const effectiveResolvedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, resolvedDetails, failed, toolStatuses);
   await writeCodexAppConfiguration(effectiveResolvedArtifact.configuration);
-  const installedDetails = [];
-  for (const readParams of readParamsList) {
+  const installedDetails = await readCodexPluginDetails(readParamsList, (readParams, index) => {
     const selectedPlugin = installs.find(
       (candidate) => candidate.remotePluginId === readParams.pluginName,
     );
@@ -1534,11 +1545,10 @@ async function installCodexSelectionSet(selections, failures = []) {
       selectedPlugin !== undefined &&
       (failedIds.has(selectedPlugin.pluginId) || !enabledPluginIds.has(selectedPlugin.pluginId))
     ) {
-      installedDetails.push(resolvedDetails[readParamsList.indexOf(readParams)]);
-    } else {
-      installedDetails.push(await codexAppServerRequest("plugin/read", readParams));
+      return resolvedDetails[index];
     }
-  }
+    return codexAppServerRequest("plugin/read", readParams);
+  });
   const installedArtifact = pluginRuntimeTranslator.codexRuntimeArtifact(selections, installedDetails, failed, toolStatuses);
   if (JSON.stringify(installedArtifact.installs) !== JSON.stringify(effectiveResolvedArtifact.installs)) {
     throw new Error("Codex plugin installed release metadata does not match startup resolution.");
