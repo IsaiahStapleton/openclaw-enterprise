@@ -1,27 +1,46 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import type { Clock } from "./backend-contracts.ts";
 import type { SessionInput } from "./sessions.ts";
 import { snapshotSessionInput, sameSessionInput, isBoundInput } from "./sessions.ts";
-import type { SessionControl, ServiceConfig } from "./service-contracts.ts";
+import type {
+  SessionControl,
+  ServiceConfig,
+  SessionStatus,
+  RepositoryCredentialBoundSessionInput,
+} from "./service-contracts.ts";
 import { inspectRequestHead } from "./transport/request.ts";
+import { RepositoryReceiptClient } from "./receipt-client.ts";
 
 // A new correlation must be fresh; completed-session tombstones share this window.
 const admissionWindowMs = 60_000;
+
+interface AdmissionRecord {
+  readonly input: SessionInput;
+  readonly sessionId: string | undefined;
+  readonly forgetAt: number;
+  readonly durable: boolean;
+  ready: Promise<void>;
+  saved: boolean;
+  writing: Promise<void> | undefined;
+  cancel(): void;
+}
 
 export function createControlAdmission(
   service: SessionControl,
   config: ServiceConfig,
   clock: Clock,
+  durableRequired: boolean,
 ) {
-  const records = new Map<
+  const records = new Map<string, AdmissionRecord>();
+  const sessions = new Map<string, string>();
+  const operations = new Map<
     string,
-    {
-      input: SessionInput;
-      sessionId: string | undefined;
-      forgetAt: number;
-      cancel: () => void;
-    }
+    Promise<{ result: unknown; sessionId: string; created: boolean }>
   >();
+  const journal = durableRequired
+    ? new RepositoryReceiptClient(config.gateway.controlSocket, randomUUID())
+    : undefined;
   let disposed = false;
   const startedWall = clock.wallNow();
   const startedMono = clock.monotonicNow();
@@ -39,82 +58,212 @@ export function createControlAdmission(
       const status = record.sessionId === undefined ? undefined : service.status(record.sessionId);
       if (
         (status === undefined || status.state === "DISPOSED") &&
+        (!record.durable || record.saved) &&
         clock.monotonicNow() >= record.forgetAt
       ) {
         record.cancel();
         records.delete(id);
+        if (record.sessionId !== undefined) {
+          sessions.delete(record.sessionId);
+        }
       }
     }
   };
-  return {
-    open(id: string, input: SessionInput) {
-      if (disposed) {
-        throw new Error("CONTROL_CLOSED");
+  const persist = async (id: string, record: AdmissionRecord, status: SessionStatus) => {
+    if (!record.durable || record.saved) {
+      return;
+    }
+    if (!journal || !isBoundInput(record.input)) {
+      throw new Error("RECEIPT_UNAVAILABLE");
+    }
+    record.writing ??= (async () => {
+      await record.ready;
+      await journal.dispose(id, record.input as RepositoryCredentialBoundSessionInput, status);
+      record.saved = true;
+    })().finally(() => {
+      record.writing = undefined;
+    });
+    return record.writing;
+  };
+  const observe = (status: SessionStatus) => {
+    const id = sessions.get(status.sessionId);
+    const record = id === undefined ? undefined : records.get(id);
+    if (id !== undefined && record !== undefined) {
+      void persist(id, record, status).catch(() => {});
+    }
+  };
+  const readStatus = async (sessionId: string) => {
+    const found = service.status(sessionId);
+    if (found?.state === "DISPOSED") {
+      const id = sessions.get(sessionId);
+      const record = id === undefined ? undefined : records.get(id);
+      if (id !== undefined && record !== undefined) {
+        await persist(id, record, found);
       }
-      const recoverOnly = "recoverOnly" in input && input.recoverOnly === true;
-      const snapshot = snapshotSessionInput(input);
-      const admittedInput = isBoundInput(snapshot)
-        ? snapshot
-        : Object.freeze({
-            durationSeconds: snapshot.durationSeconds,
-            profile: snapshot.profile ?? config.sessionPolicy.defaultProfile,
-          });
-      sweep();
-      const previous = records.get(id);
-      if (previous) {
-        if (!sameSessionInput(previous.input, admittedInput)) {
-          throw new Error("ADMISSION_CONFLICT");
-        }
-        const status =
-          previous.sessionId === undefined ? undefined : service.status(previous.sessionId);
-        if (!status) {
-          throw new Error("ADMISSION_MISSING");
-        }
-        return { result: status, sessionId: previous.sessionId!, created: false };
+    }
+    if (found !== undefined) {
+      return found;
+    }
+    return journal?.status(sessionId);
+  };
+  const performOpen = async (
+    id: string,
+    input: SessionInput & { recoverOnly?: true; durableAdmission?: true },
+  ) => {
+    if (disposed) {
+      throw new Error("CONTROL_CLOSED");
+    }
+    const recoverOnly = input.recoverOnly === true;
+    const snapshot = snapshotSessionInput(input);
+    const admittedInput = isBoundInput(snapshot)
+      ? snapshot
+      : Object.freeze({
+          durationSeconds: snapshot.durationSeconds,
+          profile: snapshot.profile ?? config.sessionPolicy.defaultProfile,
+        });
+    if (isBoundInput(admittedInput) && (!journal || input.durableAdmission !== true)) {
+      throw new Error("INVALID_ADMISSION");
+    }
+    sweep();
+    const previous = records.get(id);
+    if (previous) {
+      if (!sameSessionInput(previous.input, admittedInput)) {
+        throw new Error("ADMISSION_CONFLICT");
       }
-      const timestamp =
-        /^([0-9]{13})-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.exec(
-          id,
-        );
-      const age = timestamp ? now() - Number(timestamp[1]) : -1;
-      if (age < 0) {
-        throw new Error("INVALID_ADMISSION");
-      }
-      if (age >= admissionWindowMs) {
+      const status =
+        previous.sessionId === undefined ? undefined : await readStatus(previous.sessionId);
+      if (!status) {
         throw new Error("ADMISSION_MISSING");
       }
-      if (records.size >= 2 * config.limits.sessions) {
-        throw new Error("SESSION_CAPACITY");
+      return { result: status, sessionId: previous.sessionId!, created: false };
+    }
+    const timestamp =
+      /^([0-9]{13})-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.exec(id);
+    const age = timestamp ? now() - Number(timestamp[1]) : -1;
+    if (age < 0) {
+      throw new Error("INVALID_ADMISSION");
+    }
+    if (records.size >= 2 * config.limits.sessions) {
+      throw new Error("SESSION_CAPACITY");
+    }
+    if (isBoundInput(admittedInput)) {
+      const result = await journal!.admission(
+        id,
+        admittedInput,
+        recoverOnly || age >= admissionWindowMs,
+      );
+      if (result.kind === "disposed") {
+        return { result: result.status, sessionId: result.status.sessionId, created: false };
       }
-      const forgetAt = clock.monotonicNow() + admissionWindowMs - age;
-      if (recoverOnly) {
-        // A missing result fences a delayed first-open for this still-fresh ID.
-        // Without the fence, cleanup could finish before that request creates authority.
-        const record = { input: admittedInput, sessionId: undefined, forgetAt, cancel: () => {} };
-        records.set(id, record);
-        record.cancel = clock.schedule(admissionWindowMs - age, () => records.delete(id));
+      if (result.kind === "missing") {
         throw new Error("ADMISSION_MISSING");
       }
-      const opened = service.open(admittedInput);
-      const record = {
+      if (recoverOnly || result.kind !== "reserved") {
+        throw new Error("RECEIPT_UNAVAILABLE");
+      }
+    } else if (age >= admissionWindowMs) {
+      throw new Error("ADMISSION_MISSING");
+    }
+    const forgetAt = clock.monotonicNow() + Math.max(0, admissionWindowMs - age);
+    if (recoverOnly) {
+      const record: AdmissionRecord = {
         input: admittedInput,
-        sessionId: opened.session.sessionId,
+        sessionId: undefined,
         forgetAt,
+        durable: false,
+        ready: Promise.resolve(),
+        saved: false,
+        writing: undefined,
         cancel: () => {},
       };
       records.set(id, record);
-      // Recovery retains only immutable input and ID, never the once-returned bearer.
-      // Deadline expiry cannot discard correlation while CLOSED still owns cleanup.
-      record.cancel = clock.schedule(
-        Math.max(opened.session.deadlineWallMs - clock.wallNow(), admissionWindowMs - age),
-        sweep,
+      record.cancel = clock.schedule(Math.max(0, admissionWindowMs - age), () =>
+        records.delete(id),
       );
-      return { result: opened, sessionId: opened.session.sessionId, created: true };
-    },
-    close(sessionId: string) {
+      throw new Error("ADMISSION_MISSING");
+    }
+    const opened = service.open(admittedInput);
+    const record: AdmissionRecord = {
+      input: admittedInput,
+      sessionId: opened.session.sessionId,
+      forgetAt,
+      durable: isBoundInput(admittedInput),
+      ready: Promise.resolve(),
+      saved: false,
+      writing: undefined,
+      cancel: () => {},
+    };
+    records.set(id, record);
+    sessions.set(opened.session.sessionId, id);
+    record.cancel = clock.schedule(
+      Math.max(opened.session.deadlineWallMs - clock.wallNow(), admissionWindowMs - age, 0),
+      sweep,
+    );
+    if (isBoundInput(admittedInput)) {
+      record.ready = journal!.bind(id, admittedInput, opened.session);
+      try {
+        await record.ready;
+      } catch (error) {
+        service.close(opened.session.sessionId);
+        throw error;
+      }
+      // Binding can outlive the session. Never hand out a bearer for a session
+      // that reached cleanup while its durable admission was being recorded.
+      const current = await readStatus(opened.session.sessionId);
+      if (!current) {
+        throw new Error("RECEIPT_UNAVAILABLE");
+      }
+      if (current.state !== "OPEN") {
+        return { result: current, sessionId: current.sessionId, created: false };
+      }
+    }
+    return { result: opened, sessionId: opened.session.sessionId, created: true };
+  };
+  const open = (
+    id: string,
+    input: SessionInput & { recoverOnly?: true; durableAdmission?: true },
+  ): Promise<{ result: unknown; sessionId: string; created: boolean }> => {
+    const existing = operations.get(id);
+    if (existing) {
+      return existing.then(() => open(id, input));
+    }
+    const running = performOpen(id, input);
+    operations.set(id, running);
+    return running.finally(() => operations.delete(id));
+  };
+  return {
+    durableAdmission: journal !== undefined,
+    open,
+    status: readStatus,
+    async close(sessionId: string) {
+      const found = service.status(sessionId);
+      if (!found) {
+        return journal?.status(sessionId);
+      }
       const result = service.close(sessionId);
+      if (result.state === "DISPOSED") {
+        const id = sessions.get(sessionId);
+        const record = id === undefined ? undefined : records.get(id);
+        if (id !== undefined && record !== undefined) {
+          await persist(id, record, result);
+        }
+      }
       sweep();
       return result;
+    },
+    observe,
+    async flush() {
+      // Service shutdown has settled every session; join their durable writes
+      // before releasing the original broker process.
+      await Promise.all(
+        [...records].map(async ([id, record]) => {
+          const status =
+            record.sessionId === undefined ? undefined : service.status(record.sessionId);
+          if (status?.state === "DISPOSED") {
+            await persist(id, record, status);
+          }
+        }),
+      );
     },
     dispose() {
       disposed = true;
@@ -122,6 +271,7 @@ export function createControlAdmission(
         record.cancel();
       }
       records.clear();
+      sessions.clear();
     },
   };
 }
@@ -141,7 +291,6 @@ function reply(response: ServerResponse, status: number, value: unknown): void {
 export async function handleControl(
   request: IncomingMessage,
   response: ServerResponse,
-  service: SessionControl,
   config: ServiceConfig,
   clock: Clock,
   admissions: ReturnType<typeof createControlAdmission>,
@@ -169,11 +318,13 @@ export async function handleControl(
   }
   const open = head.method === "POST" && head.rawTarget === "/v1/sessions";
   const health = head.method === "GET" && head.rawTarget === "/healthz";
+  const capabilities = head.method === "GET" && head.rawTarget === "/v1/capabilities";
   const status = /^\/v1\/sessions\/([A-Za-z0-9_-]{1,128})$/.exec(head.rawTarget);
   const close = /^\/v1\/sessions\/([A-Za-z0-9_-]{1,128})\/close$/.exec(head.rawTarget);
   if (
     !open &&
     !health &&
+    !capabilities &&
     !(head.method === "GET" && status) &&
     !(head.method === "POST" && close)
   ) {
@@ -206,15 +357,17 @@ export async function handleControl(
       }
       const input = snapshotSessionInput(body);
       const recoverOnly = (body as Record<string, unknown>).recoverOnly === true;
-      const admission = admissions.open(head.headers["x-admission-id"] ?? "", {
+      const durableAdmission = (body as Record<string, unknown>).durableAdmission === true;
+      const admission = await admissions.open(head.headers["x-admission-id"] ?? "", {
         ...input,
         ...(recoverOnly ? { recoverOnly: true as const } : {}),
+        ...(durableAdmission ? { durableAdmission: true as const } : {}),
       });
       // Before handing bytes to the socket, nondelivery is certain. Once writes
       // begin, a lost response is ambiguous and must remain recoverable.
       if (response.destroyed || request.socket.destroyed) {
         if (admission.created) {
-          admissions.close(admission.sessionId);
+          await admissions.close(admission.sessionId);
         }
         return;
       }
@@ -222,7 +375,7 @@ export async function handleControl(
         reply(response, admission.created ? 201 : 200, admission.result);
       } catch (error) {
         if (admission.created && !response.headersSent) {
-          admissions.close(admission.sessionId);
+          await admissions.close(admission.sessionId);
         }
         throw error;
       }
@@ -235,13 +388,21 @@ export async function handleControl(
         reply(response, 200, { ready: true, protocolVersion: 1 });
         return;
       }
+      if (capabilities) {
+        if (!admissions.durableAdmission) {
+          reply(response, 404, { error: "not-found" });
+        } else {
+          reply(response, 200, { durableAdmissionVersion: 1 });
+        }
+        return;
+      }
       const id = (status ?? close)![1]!;
-      const found = service.status(id);
+      const found = await admissions.status(id);
       if (!found) {
         reply(response, 404, { error: "not-found" });
         return;
       }
-      reply(response, 200, close ? admissions.close(id) : found);
+      reply(response, 200, close ? await admissions.close(id) : found);
     }
   } catch (error) {
     if (!response.destroyed && !response.headersSent) {

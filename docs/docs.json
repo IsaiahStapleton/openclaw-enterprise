@@ -418,6 +418,14 @@
                     "label": "Control Plane Setup"
                   },
                   {
+                    "page": "guides/deploy/private-registry-images",
+                    "label": "Private Images"
+                  },
+                  {
+                    "page": "guides/deploy/installation-profiles",
+                    "label": "Profiles"
+                  },
+                  {
                     "page": "guides/deploy/upgrade-checklist",
                     "label": "Upgrade Checklist"
                   },
@@ -436,6 +444,10 @@
                   {
                     "page": "guides/deploy/eks",
                     "label": "Amazon EKS"
+                  },
+                  {
+                    "page": "guides/deploy/eks-private-access",
+                    "label": "Private EKS Access"
                   },
                   {
                     "page": "guides/deploy/codex-sandbox",
@@ -525,7 +537,11 @@
                 ]
               }
             ],
-            "hidden": ["guides/deploy/service-keys", "guides/deploy/local-operations"]
+            "hidden": [
+              "guides/deploy/service-keys",
+              "guides/deploy/local-operations",
+              "flows/installation-profile-rendering"
+            ]
           },
           {
             "tab": "Reference",
@@ -775,6 +791,10 @@
                   {
                     "page": "local-preview",
                     "label": "Preview and Validate"
+                  },
+                  {
+                    "page": "contributing/documentation-hosting",
+                    "label": "Hosting and Launch"
                   },
                   {
                     "page": "base-driver-docs-template",

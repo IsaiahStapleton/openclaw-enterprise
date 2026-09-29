@@ -1,0 +1,15 @@
+{
+  "name": "openclaw",
+  "description": "Embedded OpenClaw profile with the bundled OpenClaw plugin driver.",
+  "recommendedPreset": "Standard OpenClaw",
+  "agentHarness": "embedded-openclaw",
+  "pluginSelection": "manual-or-api",
+  "installation": {
+    "drivers": {
+      "plugin": {
+        "id": "occ-plugin",
+        "configuration": {}
+      }
+    }
+  }
+}

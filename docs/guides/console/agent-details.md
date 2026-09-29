@@ -33,16 +33,21 @@ it does not offer configurable settings. Logout ends your console session.
 **Deployment activity** follows the latest readable version, even while viewing
 another version or the draft. Its milestones use the persisted record:
 
-| Milestone               | Evidence                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| **Admitted**            | OCC saved an immutable AgentRevision and queued its work.                       |
-| **Deployment work**     | `queued` awaits a claim; `running` records a worker claim.                      |
-| **Completion recorded** | `succeeded` means the original work completed activation or was already active. |
+| Milestone               | Evidence                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| **Admitted**            | OCC saved an immutable AgentRevision and queued its work.                         |
+| **Deployment work**     | `queued` awaits an initial or subsequent claim; `running` records a worker claim. |
+| **Completion recorded** | `succeeded` means the original work completed activation or was already active.   |
 
 A `failed` result shows the stored error. Startup evidence may identify the
 runtime component, failed check, code, and check time. Plugin warnings describe
 that attempt. An unavailable record has unknown status. **Refresh deployment**
 rereads it and the selected version without retrying work.
+
+Pending work shows its **Last recorded result** and **Last checked** time,
+including deferred readiness checks and a running worker's previous result.
+Next eligibility does not promise a start time; missing evidence does not mean
+work never started.
 
 **Current version** is OCC's selection, not live health. Deployment may still
 be in progress; a successful historical record does not confirm a response.
@@ -106,22 +111,21 @@ token values. The workspace remains live regardless of the viewed version.
 | **Compute**                            | Revision's Compute Driver identifier and implementation.                                                         |
 | **View admitted native configuration** | Expands the revision's formatted native JSON. The draft uses **View native Configuration**.                      |
 
-In **Create new version**, select **Edit Configuration** to edit the native JSON,
-including model and gateway settings. **Save Configuration** requires a JSON
-object and updates the saved draft; **Cancel** discards unsaved edits. On an
-admitted snapshot, **Edit current Configuration** opens the current draft, not
-a copy of the historical snapshot.
+In the draft, **Enable Gateway password access** stages the generated-password
+reference; authentication mode and proxy settings stay unchanged. The Compute
+Driver owns the password; the Console shows only its reference.
 
-Save does not deploy or change existing AgentRevisions. Select **Deploy new
-version** after saving to apply the new values. Deployment, tab switching, and revision navigation are blocked while edits are unsaved, a save is
-pending, or a stale or unknown result requires reload. Other Agents sharing this
-Configuration also use the updated values on their next deployment.
+**Edit Configuration** edits native JSON. **Save Configuration** requires an object;
+**Cancel** discards edits. **Edit current Configuration** opens the current draft,
+not a historical copy. Saving preserves Secret bindings and admitted revisions;
+**Deploy new version** applies saved values, including for Agents sharing this
+Configuration on their next deployment.
 
-The editor preserves existing Secret bindings and checks for a changed
-Configuration or Agent association before saving. A stale draft requires reload;
-this preflight cannot prevent another write racing with the save. If the outcome
-is unknown, inspect the saved Configuration through a successful reload before
-saving again. Invalid JSON and failed saves retain the text for correction.
+Unsaved edits, pending saves, and stale or unknown outcomes block deployment,
+tab switching, and revision navigation. Save checks Configuration association and
+generation, but another write can race afterward. Reload stale drafts; after an
+unknown outcome, successfully reload saved state before retrying. Invalid JSON
+and failed saves retain text for correction.
 Backend, execution mode, and Harness authentication are Agent fields, not native
 Configuration JSON. See the [Configuration reference](../../reference/configuration.md).
 

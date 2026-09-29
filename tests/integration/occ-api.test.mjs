@@ -1,3 +1,4 @@
+import { SlackChannelDriver } from "../../apps/controller/src/drivers/channel/slack.ts";
 import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import assert from "node:assert/strict";
@@ -1739,6 +1740,7 @@ test("Agent deployment status polls the admitted revision work with exact read a
     status: "queued",
     error: null,
     warnings: [],
+    progress: { lastAttempt: null, nextAttemptAt: new Date(0).toISOString() },
   });
   const runtimeFailure = {
     component: "gateway",
@@ -1774,6 +1776,7 @@ test("Agent deployment status polls the admitted revision work with exact read a
       data: { timeoutMs: 900_000, runtimeFailure },
     },
     warnings: [],
+    progress: null,
   });
 
   const missing = await controller.request(
@@ -4440,4 +4443,134 @@ test("runtime auth admits SSH revisions without source permissions but retains d
     effect: "deny",
   });
   assert.equal((await controller.request("POST", `${path}/deploy`)).status, 403);
+});
+
+test("Slack validation rejects swapped credentials and preserves authorization", async () => {
+  const controller = await configuredController({
+    computeDriver: createProvisioningCapableComputeDriver(),
+    configurationDriver: createProvisioningCapableConfigurationDriver(),
+  });
+  const { fixture } = controller;
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "slack-admission");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const base = `/namespaces/${namespace.id}`;
+  const makeSecret = async (name, value) => {
+    const result = await controller.request("POST", `${base}/secrets`, { body: { name, value } });
+    assert.equal(result.status, 201);
+    return result.data;
+  };
+  const app = await makeSecret("app", "xapp-synthetic-app");
+  const bot = await makeSecret("bot", "xoxb-synthetic-bot");
+  const model = await makeSecret("model", "synthetic-model");
+  let calls = 0;
+  let response = { ok: true, bot_id: "B123", team_id: "T123" };
+  const channel = new SlackChannelDriver(async (url, options) => {
+    calls++;
+    assert.equal(new URL(url).pathname, "/api/auth.test");
+    assert.equal(options.method, "POST");
+    assert.equal(options.headers.authorization, "Bearer xoxb-synthetic-bot");
+    if (response instanceof Error) {
+      throw response;
+    }
+    return new Response(JSON.stringify(response));
+  });
+  fixture.controller.registerDriver(channel);
+  fixture.controller.selectDriver("channel", channel.id);
+  const configuration = {
+    kind: "agent",
+    values: {
+      channels: {
+        slack: {
+          enabled: true,
+          mode: "socket",
+          appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+          botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+        },
+      },
+    },
+    secretBindings: {
+      SLACK_APP_TOKEN: { source: bot.ref, delivery: { type: "env" } },
+      SLACK_BOT_TOKEN: { source: app.ref, delivery: { type: "env" } },
+    },
+  };
+  const provision = () =>
+    controller.request("POST", `${base}/agents/provision`, {
+      body: provisioningRequestBody(
+        namespace.id,
+        { modelApiKey: model, toolApiKey: model },
+        { configuration },
+      ),
+    });
+  const swapped = await provision();
+  assert.equal(swapped.status, 400, JSON.stringify(swapped.body));
+  assert.equal(swapped.body.error.code, "CHANNEL_CREDENTIAL_ROLE_MISMATCH");
+  assert.equal(swapped.body.error.details[0].path, "/channels/slack/appToken");
+  assert.equal(calls, 0);
+  assert.deepEqual(
+    await fixture.platformState.read((view) => view.agents.listAgents(namespace.id)),
+    [],
+  );
+  configuration.secretBindings.SLACK_APP_TOKEN.source = app.ref;
+  const wrongBotRole = await provision();
+  assert.equal(wrongBotRole.body.error.code, "CHANNEL_CREDENTIAL_ROLE_MISMATCH");
+  assert.equal(wrongBotRole.body.error.details[0].path, "/channels/slack/botToken");
+  assert.equal(calls, 0);
+  configuration.secretBindings.SLACK_BOT_TOKEN.source = bot.ref;
+  fixture.state.restrictions.push({
+    id: "deny-bot",
+    namespaceId: namespace.id,
+    resourceKind: "secret",
+    resourceId: bot.id,
+    action: "operate",
+    effect: "deny",
+  });
+  assert.equal((await provision()).status, 403);
+  assert.equal(calls, 0);
+  fixture.state.restrictions.pop();
+  response = new Error("xoxb-sensitive-provider-error");
+  const unavailable = await provision();
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.body.error.code, "CHANNEL_CREDENTIAL_UNAVAILABLE");
+  assert.equal(unavailable.body.error.details[0].path, "/channels/slack/botToken");
+  assert.doesNotMatch(JSON.stringify(unavailable.body), /xoxb|sensitive/);
+  response = { ok: false, error: "invalid_auth" };
+  assert.equal((await provision()).body.error.code, "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED");
+  response = { ok: true, bot_id: "B123", team_id: "T123" };
+  // The in-memory fixture deliberately has no durable work queue. Reaching its
+  // error proves credentials passed without substituting for the durable worker test.
+  assert.equal((await provision()).body.error.code, "DEPENDENCY_UNAVAILABLE");
+  const config = await controller.request("POST", `${base}/configurations`, {
+    body: configuration,
+  });
+  assert.equal(config.status, 201, JSON.stringify(config.body));
+  const agent = await controller.request("POST", `${base}/agents`, {
+    body: { name: "slack-agent", configurationId: config.data.id },
+  });
+  assert.equal(agent.status, 201, JSON.stringify(agent.body));
+  await bindHarnessKey(fixture, namespace.id, agent.data);
+  for (const secret of [app, bot]) {
+    fixture.state.bindings.push({
+      id: `slack-${secret.id}`,
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: agent.data.servicePrincipalId,
+      roleId: `harness-key-${agent.data.id}`,
+      resourceKind: "secret",
+      resourceId: secret.id,
+    });
+  }
+  response = { ok: false, error: "invalid_auth" };
+  const deploy = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
+  assert.equal(deploy.status, 400, JSON.stringify(deploy.body));
+  assert.equal(deploy.body.error.details[0].path, "/channels/slack/botToken");
+  response = { ok: true, bot_id: "B123", team_id: "T123" };
+  const good = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
+  assert.equal(good.status, 202, JSON.stringify(good.body));
+  const beforeDisabled = calls;
+  configuration.values.channels.slack.enabled = false;
+  configuration.secretBindings = {};
+  const disabled = await provision();
+  assert.equal(disabled.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  assert.equal(calls, beforeDisabled);
 });

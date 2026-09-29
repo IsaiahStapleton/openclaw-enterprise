@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { DatabaseError } from "pg";
 
@@ -823,6 +824,7 @@ export class PostgresPlatformState implements PlatformStateStore {
   private readonly queueOptions: PostgresWorkQueueOptions;
   private bootstrapNativeIAM: PersistedNativeIAMState | undefined;
   private readonly contexts = new WeakMap<PlatformUnitOfWork, TransactionContext>();
+  private readonly currentTransaction = new AsyncLocalStorage<TransactionContext>();
 
   constructor(pool: PostgresPool, options: PostgresPlatformStateOptions = {}) {
     this.pool = pool;
@@ -842,6 +844,13 @@ export class PostgresPlatformState implements PlatformStateStore {
   }
 
   async loadNativeIAMState(installationId?: string): Promise<PersistedNativeIAMState> {
+    const current = this.currentTransaction.getStore();
+    if (current !== undefined) {
+      // The selected Driver must observe policy on the same unit as its caller's
+      // mutation and audit. An escaped callback retains a closed lifetime and
+      // cannot silently acquire a new client after the original operation ends.
+      return current.lifetime.run(() => this.readNativeIAMState(current, installationId));
+    }
     return this.execute(true, async (_state, context) => {
       const installation = await this.currentInstallation(context);
       if (installation === undefined && this.bootstrapNativeIAM !== undefined) {
@@ -1264,6 +1273,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       "fail",
       "recoverStale",
       "findWork",
+      "findWorkAttempt",
     ]);
   }
 
@@ -1319,9 +1329,10 @@ export class PostgresPlatformState implements PlatformStateStore {
         installation: undefined,
         installationLoaded: false,
       };
-      unit = bindPlatformUnitOfWork(this.repositories(context), lifetime);
-      this.contexts.set(unit, context);
-      const result = await work(unit, context);
+      const activeUnit = bindPlatformUnitOfWork(this.repositories(context), lifetime);
+      unit = activeUnit;
+      this.contexts.set(activeUnit, context);
+      const result = await this.currentTransaction.run(context, () => work(activeUnit, context));
       await lifetime.finish();
       if (transportError) {
         throw transportError;
@@ -2791,7 +2802,10 @@ export class PostgresPlatformState implements PlatformStateStore {
     ): Promise<boolean> => {
       const queryByKind: Record<string, string> = {
         namespace: "SELECT 1 FROM occ.namespaces WHERE id = $1 AND id = $2 FOR KEY SHARE",
-        agent: "SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
+        // Status can change without changing a key. SHARE also fences the
+        // active -> deleting transition until the policy transaction settles.
+        agent:
+          "SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2 AND status = 'active' FOR SHARE",
         agent_revision: "SELECT 1 FROM occ.agent_revisions WHERE namespace_id = $1 AND id = $2",
         configuration:
           "SELECT 1 FROM occ.configurations WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
@@ -3769,9 +3783,34 @@ export class PostgresPlatformState implements PlatformStateStore {
             }),
           );
         },
+        retryFailedAgentDeletion: async (namespaceId, agentId, actorId) => {
+          await this.requireInitialized(context);
+          const retried = await client.query(
+            `UPDATE occ.controller_work AS work
+             SET state = 'queued', attempt_count = 0,
+                 available_at = clock_timestamp(), claim_token = NULL,
+                 lease_expires_at = NULL, completed_at = NULL,
+                 reason_code = NULL, result_data = NULL, updated_at = clock_timestamp()
+             FROM occ.agents AS agent
+             WHERE work.idempotency_key = $1
+               AND work.work_kind = 'lifecycle'
+               AND work.namespace_id = $2 AND work.agent_id = $3 AND work.actor_id = $4
+               AND work.revision_id IS NULL AND work.namespace_target IS NULL
+               AND work.agent_target = 'deleted' AND work.state = 'failed_permanent'
+               AND agent.namespace_id = work.namespace_id AND agent.id = work.agent_id
+               AND agent.status = 'deleting' AND agent.desired_runtime_state = 'stopped'
+             RETURNING work.idempotency_key`,
+            [`agent:${agentId}:reconcile:deleted`, namespaceId, agentId, actorId],
+          );
+          return retried.rowCount === 1;
+        },
         findWork: async (idempotencyKey) => {
           await this.requireInitialized(context);
           return queue.findWork(idempotencyKey);
+        },
+        findWorkAttempt: async (idempotencyKey) => {
+          await this.requireInitialized(context);
+          return queue.findWorkAttempt(idempotencyKey);
         },
       },
     };

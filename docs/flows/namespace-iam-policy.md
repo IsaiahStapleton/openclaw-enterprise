@@ -1,7 +1,7 @@
 ---
 created: "2026-09-20"
-updated: "2026-09-27"
-last_updated_session: "codex/01a0b3bf-83a8-7392-ae2d-1a369b54ab3f"
+updated: "2026-09-29"
+last_updated_session: "codex/01a0eb4c-5933-7752-bddc-f787e8da79e7"
 ---
 
 # Namespace IAM Policy Flow
@@ -82,6 +82,15 @@ unknown exact bindings without weakening authorization.
 Existing human Principals can receive bindings without a Namespace service
 identity. ServicePrincipal subjects must belong to that exact Namespace.
 
+When the selected native Driver reloads policy during a PostgreSQL State callback,
+`PostgresPlatformState.loadNativeIAMState` reads through that State instance's
+original transaction. Authorization therefore sees that unit's pending grants
+and removals. Outside a callback, the loader opens its ordinary read transaction.
+Work that escapes the callback retains its original closed lifetime and fails;
+it cannot obtain another client after commit, rollback, or an unknown outcome.
+This transaction binding supplies neither authenticated session custody nor a
+fence against concurrent policy invalidation.
+
 ### 5. Platform state commits policy and audit together
 
 `packages/occ/src/state/postgres-state.ts:PostgresPlatformState`
@@ -134,6 +143,7 @@ selected account, session, and policy writers join the same protocol.
 
 ## Changelog
 
+- 2026-09-29 05:28: Bind selected native policy reloads to the original State transaction and reject escaped reads. (codex/01a0eb4c-5933-7752-bddc-f787e8da79e7 - 2a191c74c0079e329db130d0a81a1f0f87869bb9)
 - 2026-09-27 19:15: Clarify unknown commit handling and the unregistered authority barrier. (codex/01a0b3bf-83a8-7392-ae2d-1a369b54ab3f - 181b0472f9a5a9d422035edf5121d3a15c200cb5)
 - 2026-09-23 22:56: Update source ownership for extracted IAM HTTP handlers; preserve admission and transaction boundaries. (codex/01a0d075-a358-7620-8c16-fd4290acddf1 - 4df9f9800836dc1c2b57afd5f8af4d91f55088d5)
 

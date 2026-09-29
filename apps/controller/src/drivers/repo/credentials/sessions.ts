@@ -61,6 +61,7 @@ export function snapshotSessionInput(value: unknown): SessionInput {
     "expectedBinding",
     "deadlineWallMs",
     "recoverOnly",
+    "durableAdmission",
   ];
   const bound = boundFields.some((field) => Object.hasOwn(input, field));
   const allowed = bound
@@ -98,6 +99,7 @@ export function snapshotSessionInput(value: unknown): SessionInput {
     !Number.isSafeInteger(input.deadlineWallMs) ||
     input.deadlineWallMs <= 0 ||
     (input.recoverOnly !== undefined && input.recoverOnly !== true) ||
+    (input.durableAdmission !== undefined && input.durableAdmission !== true) ||
     !input.expectedBinding ||
     typeof input.expectedBinding !== "object" ||
     Array.isArray(input.expectedBinding) ||
