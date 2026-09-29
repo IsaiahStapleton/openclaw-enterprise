@@ -249,9 +249,9 @@ OpenShell Sandbox instead.
 
 If channels are enabled, configure `runtime.channels.proxyUrl`, then store the
 Agent's channel credentials as Namespace Secrets referenced by Configuration
-`secretBindings`. Use a literal-IP proxy URL, or pair a Helm-managed proxy
-Service URL with `runtime.channels.managedProxy` so Compute can render selector
-egress to that exact proxy Pod. Channel credentials are available only to the
+`secretBindings`. Use a literal-IP proxy URL, or pair the Helm-managed proxy
+Service URL with `runtime.channels.managedProxy` so Compute limits gateway egress
+to that proxy's Pods by selector. Channel credentials are available only to the
 dedicated gateway, never to its Codex Harness.
 
 Repository-bearing revisions support embedded OpenClaw or dedicated Codex,

@@ -5,21 +5,21 @@ OpenClaw Enterprise install: a Helm values overlay and the Installation startup
 YAML mounted into the controller. Use a profile when you want the standard
 OpenClaw or Codex defaults without editing the production examples by hand.
 
-Profiles do not create clusters, Secrets, databases, DNS, certificates, hosted
-plugin credentials, ChatGPT service accounts, repository registries, or Slack
-consumers. They render configuration for an already prepared environment.
+Profiles only render configuration for an already prepared environment. They do
+not create clusters, Secrets, databases, DNS, certificates, hosted plugin
+credentials, ChatGPT service accounts, repository registries, or Slack consumers.
 
 ## Choose a profile
 
 Use `openclaw` for embedded OpenClaw Agents with the bundled OpenClaw
-PluginDriver. Plugin selection starts through manual or API configuration.
-Embedded OpenClaw cannot enable external Slack channels; the Standard OpenClaw
-preset must leave channels disabled.
+PluginDriver. Operators select plugins manually or through the API. Embedded
+OpenClaw cannot enable external Slack channels; the Standard OpenClaw preset
+must leave channels disabled.
 
-Use `codex` for dedicated Codex Agents with the bundled Codex PluginDriver.
-Hosted plugin discovery and Codex runtime authentication both use an existing
-`codex_pat` token path by default: add a same-Namespace Secret or enter the PAT
-during Agent creation. Profile rendering does not create the token or make
+Use `codex` for dedicated Codex Agents with the bundled Codex PluginDriver. By
+default, hosted plugin discovery and Codex runtime authentication both use a
+`codex_pat` token that you supply later: add a same-Namespace Secret or enter
+the PAT during Agent creation. The renderer does not create the token or make
 catalog discovery ready.
 
 Both profiles enable:
@@ -30,27 +30,27 @@ Both profiles enable:
   private metrics, digest-pinned images, DNS policy, trusted proxy CIDRs, and
   plugin-status proxy CIDRs.
 
-Preset seeding does not switch the Installation PluginDriver selected by the
-profile. Creating an Agent from the other preset still needs a compatible
-driver, runtime, harness mode, credentials, and channel support.
+Seeding both Presets does not change the profile's PluginDriver. An Agent
+created from the other profile's Preset still needs a compatible driver,
+runtime, harness mode, credentials, and channel support.
 
 To seed additional Presets, add `"presets": { "files": ["/app/deploy/presets/devday.json"] }`
 to the input JSON and rerender. This example adds **SWE Agent** alongside the
-standard Presets. Files must be readable by both controller processes at startup;
-the renderer validates the list but does not read container files. See
+standard Presets. Both controller processes must be able to read the files at
+startup; the renderer validates the list but does not read container files. See
 [Preset initialization](../../reference/presets.md#installation-defaults) for path
 resolution and startup validation.
 
 Repository support is optional. When enabled, the renderer wires the broker
 container, GitHub Backend, Repo Driver, and Compute peer. The repository registry
-still needs Namespace IDs from the first bootstrap pass, so most installs render
-once with repositories disabled, bootstrap the platform, create the registry,
-then render again with `repository.enabled: true`.
+needs Namespace IDs that only exist after the first bootstrap, so most installs
+render with repositories disabled, bootstrap the platform, create the registry,
+then rerender with `repository.enabled: true`.
 
 ## Prepare inputs
 
 Create a JSON file outside the repository or under an ignored local output
-directory. Every field in the file is consumed by the renderer; unsupported
+directory. The renderer rejects any field it does not consume: unsupported
 fields fail preflight.
 
 ```json
@@ -88,8 +88,8 @@ fields fail preflight.
 }
 ```
 
-For the `codex` profile, add the reviewed Codex seccomp profile and model
-discovery egress:
+For the `codex` profile, merge the reviewed Codex seccomp profile and model
+discovery egress into the base input:
 
 ```json
 {
@@ -102,11 +102,9 @@ discovery egress:
 }
 ```
 
-This fragment shows only the additional shape. Merge it with the base input.
-
-If you have qualified the ChatGPT Backend admin credential path and want OCE to
-issue managed runtime credentials, add the optional managed ServiceAccount
-binding:
+To have OCE issue managed ChatGPT service-account runtime credentials, add the
+optional managed ServiceAccount binding. Do this only after you qualify the
+ChatGPT Backend admin credential path:
 
 ```json
 {
@@ -121,9 +119,9 @@ binding:
 }
 ```
 
-Managed issuance is separate from the default existing-token path. Rendering
-the optional Backend and ServiceAccount Driver wiring does not prove live
-service-account creation until the admin credential flow is qualified.
+Managed issuance is separate from the default `codex_pat` path. The rendered
+Backend and ServiceAccount Driver wiring does not prove that live
+service-account creation works.
 
 If you opt in to repositories, add the broker inputs:
 
@@ -165,22 +163,21 @@ On success, the output directory contains:
 - `preflight.json`: rendered output paths, warnings, prerequisites, and next
   steps.
 
-Once CLI arguments are valid, the renderer clears these three generated files
-before loading the new input, including when reusing an output directory. Other
-files are preserved. If required input is missing or unsupported input is present,
-it writes `preflight.json` with `ok: false` and only the report path in `outputs`,
-leaves both YAML files absent, and exits nonzero. Unreadable or malformed input
-JSON also leaves no preflight report. Correct the input and rerun successfully
-before using either artifact.
+After validating the CLI arguments, the renderer deletes these three files from
+the output directory before it reads the input. It keeps other files. If
+required input is missing or unsupported input is present, it writes
+`preflight.json` with `ok: false` and only the report path in `outputs`, leaves
+both YAML files absent, and exits nonzero. If the input JSON is unreadable or
+malformed, it exits without writing a preflight report.
 
 ## Use rendered files
 
-This guide stops after rendering. Set `OCC_INPUT_DIRECTORY` to the output
-directory, then complete the [production shell and context setup](production-installation.md#configure-the-installation).
+Set `OCC_INPUT_DIRECTORY` to the output directory, then complete the
+[production shell and context setup](production-installation.md#configure-the-installation).
 Skip both configuration-generation branches and continue at the
 [shared bootstrap PVC and configuration checks](production-installation.md#shared-bootstrap-pvc-and-configuration-checks).
-The runbook owns Secret creation, Helm installation, bootstrap key retrieval, and
-authenticated API verification.
+The runbook covers Secret creation, Helm installation, bootstrap key retrieval,
+and authenticated API verification.
 
 If rendering fails or either YAML file is absent, stop and fix the input. Do not
 copy manual examples into the same output directory. Rerender successfully so
@@ -189,8 +186,8 @@ paired.
 
 ## Required environment checks
 
-Before calling the install ready, verify these prerequisites outside the
-renderer:
+The renderer does not check these prerequisites. Verify them before you treat
+the install as ready:
 
 - Kubernetes 1.35 or later, enforced NetworkPolicies, and exact API/database
   egress destinations.
@@ -200,25 +197,25 @@ renderer:
   `runtime.gatewayStorageClassName` for gateway state.
 - For Codex, the configured localhost seccomp profile installed and verified on
   every node selected by `runtime.nodeSelector`.
-- For Slack, separate runtime and Console directory proxies. Rendering proxy
-  wiring does not enable a Slack consumer. The managed proxy can be installed by
-  either profile for API directory lookup and dedicated gateway use, but enabled
-  Slack Agents require dedicated Codex execution. Standard OpenClaw embedded
-  Agents must leave channels disabled. The default profile input uses the
-  chart-managed proxy Service with `managedSlackProxy: true`. Its network policy
-  allows public IPv4 HTTPS while excluding private and reserved ranges; the proxy
-  authorizes Slack hostnames. This preserves connectivity when Slack DNS rotates.
-  If you use an external proxy instead, provide the literal IPv4 `runtimeProxyUrl`
-  and `directoryProxyUrl` inputs and omit `managedSlackProxy`.
-- For hosted plugin discovery and Codex runtime authentication, a
-  same-Namespace `codex_pat` token Secret or entered PAT during Agent creation.
-  Rendering the Codex profile does not create or verify that credential.
+- For Slack, a proxy route for both gateway runtime traffic and Console
+  directory lookup. The managed proxy serves both; external proxies need both
+  URLs. Rendering proxy wiring does not enable a Slack consumer. Either profile
+  can install the managed
+  proxy for API directory lookup and dedicated gateway use, but Slack-enabled
+  Agents require dedicated Codex execution. The example input sets
+  `managedSlackProxy: true` to use the chart-managed proxy Service. Its network
+  policy allows public IPv4 HTTPS, excluding private and reserved ranges, and the
+  proxy authorizes Slack hostnames, so connectivity survives Slack DNS rotation.
+  For an external proxy, omit `managedSlackProxy` and provide literal IPv4
+  `runtimeProxyUrl` and `directoryProxyUrl` inputs.
+- For Codex hosted plugin discovery and runtime authentication, a
+  same-Namespace `codex_pat` token Secret or a PAT entered during Agent creation.
 - For optional OCE-managed ChatGPT service-account runtime credentials, the
   admin Secret, workspace authority, and app connections described in
   [Configure the ChatGPT Backend](../integrations/chatgpt.md). Treat managed
   issuance as unverified until the admin credential flow is separately proven.
-- For repositories, the first bootstrap pass must create Namespace IDs before
-  you create the registry ConfigMap and rerender with repository support enabled.
+- For repositories, create the registry ConfigMap after the first bootstrap
+  creates Namespace IDs, then rerender with repository support enabled.
   Preserve the existing installation's approved GitHub ranges in
   `repository.upstreamCidrs`. For a new installation, obtain the current API and
   Git IPv4 ranges from [GitHub Meta](https://api.github.com/meta), following the

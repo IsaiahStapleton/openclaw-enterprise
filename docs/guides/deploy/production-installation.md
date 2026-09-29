@@ -8,8 +8,8 @@ first. Workspace access is required: install the
 and keep private routing enabled. Control UI is enabled in the
 production values; complete [native admin prerequisites](native-admin.md#requirements).
 
-Use [profiles](#recommended-generate-profile-configuration) for configuration, or
-[manual YAML](#advanced-copy-manual-yaml-examples) for advanced customization.
+Configure with an [installation profile](#recommended-generate-profile-configuration)
+or, for advanced customization, [manual YAML](#advanced-copy-manual-yaml-examples).
 
 Run from a clean checkout at the image source revision so the chart, examples,
 and helpers match. See [Deliver images to a private registry](private-registry-images.md)
@@ -18,16 +18,16 @@ shell and protected files for [Agent deployment](production-agents.md).
 
 ## Use published images
 
-Select a verified release or custom controller image that matches this chart and
-supports the generated configuration: native admin, private routing, the selected
-PluginDriver catalog or hosted discovery path, and any optional managed proxy or
-repository wiring. Select a compatible runtime image. Export immutable digests as
-`CONTROLLER_IMAGE` and `RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images)
+Select a verified release or custom controller image built for this chart. It
+must support native admin, private routing, the selected PluginDriver catalog or
+hosted discovery, and any managed proxy or repository wiring you enable. Select a
+compatible runtime image. Export their immutable digests as `CONTROLLER_IMAGE`
+and `RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images)
 from this checkout.
 
-The historical published controller below supports the curated catalog but
-predates the origin check and profile-generated configuration. Use it only for
-image tests or workflows targeting its source revision.
+The published controller below supports the curated catalog but predates the
+origin check and profile-generated configuration. Use it only for image tests or
+workflows targeting its source revision.
 
 Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
 matching-architecture startup and remote digest checks in
@@ -124,16 +124,15 @@ credentials for control-plane and tenant Pods; builder login does not authentica
 
 ## Configure the Installation
 
-Set the production shell before the first Kubernetes command. This runbook uses
-Helm release `oce` in Namespace `openclaw-system`. Keep one protected handoff
-directory for generated configuration and the bootstrap PVC YAML. Secret input
-files stay under `/secure/occ`, even when `OCC_INPUT_DIRECTORY` points elsewhere.
+Set the production shell before the first Kubernetes command. This runbook
+uses Helm release `oce` in Namespace `openclaw-system`. Keep configuration and
+bootstrap PVC YAML in the protected `OCC_INPUT_DIRECTORY`; Secret input files
+always stay under `/secure/occ`.
 
-For existing profile output or verified YAML from
+To reuse profile output or verified YAML from
 [local operations](local-operations.md#build-images-for-local-kubernetes), set
-`OCC_INPUT_DIRECTORY` to that directory before this setup. Then skip both
-generation branches and continue with the
-[shared checks](#shared-bootstrap-pvc-and-configuration-checks).
+`OCC_INPUT_DIRECTORY` to that directory first. Then skip both generation branches
+and continue with the [shared checks](#shared-bootstrap-pvc-and-configuration-checks).
 
 ```bash
 umask 077
@@ -145,7 +144,7 @@ chmod 600 "$KUBECONFIG_FILE"
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" version
 ```
 
-Kubernetes older than 1.35 remains unsupported; API and worker emit
+Kubernetes older than 1.35 is unsupported; the API and worker emit
 `compute.preflight-warning`.
 
 ### Recommended: generate profile configuration
@@ -154,13 +153,12 @@ Choose `openclaw` or `codex` from the [profile options](installation-profiles.md
 Generation requires Node.js 24 or newer on the operator host; manual YAML does not.
 
 Create `$OCC_INPUT_DIRECTORY/profile-input.json` from the schema in
-[Render installation profiles](installation-profiles.md#prepare-inputs). Keep the
-input JSON separate from renderer-owned `values.yaml`, `installation.yaml`, and
-`preflight.json`; reruns clear those three output files. For this runbook, set
+[Render installation profiles](installation-profiles.md#prepare-inputs). Set
 `controlPlane.releaseName` to `oce`, `controlPlane.namespace` to
 `openclaw-system`, `controlPlane.controllerImage` to `$CONTROLLER_IMAGE`, and
 `runtime.image` to `$RUNTIME_IMAGE`. Keep credentials and tokens out of the
-input JSON.
+input JSON. Keep it separate from `values.yaml`, `installation.yaml`, and
+`preflight.json`, which each render clears.
 
 ```bash
 export OCC_PROFILE="${OCC_PROFILE:-codex}"
@@ -181,17 +179,15 @@ export OCC_PROFILE_INPUT="${OCC_PROFILE_INPUT:-$OCC_INPUT_DIRECTORY/profile-inpu
 )
 ```
 
-If rendering fails, stop and fix the input. Do not fall back to example YAML or
-copy manual files over failed profile output. Update the input and rerender so
-`values.yaml`, `installation.yaml`, and `controlPlane.installationChecksum` stay
-paired.
+If rendering fails, fix the input and rerender. Do not fall back to example YAML
+or copy manual files over failed output; `values.yaml`, `installation.yaml`, and
+`controlPlane.installationChecksum` must come from one successful render.
 
 ### Advanced: copy manual YAML examples
 
-Use this branch only when you are deliberately not using an installation profile.
-It refuses to overwrite profile output. The manual production example is not the
-`codex` profile: it selects the curated Codex PluginDriver catalog, while the
-`codex` profile defaults to hosted PAT-backed discovery.
+Use this branch only when not using an installation profile. The block refuses
+to overwrite existing configuration YAML. The manual example differs from the `codex` profile: it selects the curated Codex PluginDriver
+catalog, while the profile defaults to hosted PAT-backed discovery.
 
 ```bash
 (
@@ -209,10 +205,9 @@ It refuses to overwrite profile output. The manual production example is not the
 )
 ```
 
-For registry-backed installs, compare the selected images with the checked
-digests before continuing: profile-generated installs compare the image fields
-in the input JSON before rendering; manual installs compare the edited YAML with
-[Verify installation image selections](../../testing/images.md#verify-installation-image-selections).
+For registry-backed installs, confirm the selected images match the checked
+digests. For profiles, check the input JSON image fields before rendering. For
+manual YAML, follow [Verify installation image selections](../../testing/images.md#verify-installation-image-selections).
 
 ### Shared bootstrap PVC and configuration checks
 
@@ -226,9 +221,9 @@ chmod 600 "$OCC_INPUT_DIRECTORY/values.yaml" \
   "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml"
 ```
 
-For profile installs, change `$OCC_PROFILE_INPUT` and rerender; do not hand-edit
+For profile installs, change `$OCC_PROFILE_INPUT` and rerender instead of editing
 `values.yaml` or `installation.yaml`. For manual installs, edit the copied YAML
-before validation:
+before running the checks:
 
 - `values.yaml`: set auth URL, admin email, database and cluster CIDRs,
   control-plane node selector, database CA, DNS, API clients, and bootstrap
@@ -236,18 +231,22 @@ before validation:
   GatewayClass and Secret names.
 - `installation.yaml`: set cluster name, log level, DNS selectors,
   service-principal token settings, Secret prefixes, runtime storage class,
-  immutable runtime image digests, and PluginDriver catalog.
+  immutable runtime image digests, and PluginDriver catalog. Set
+  `runtime.gatewayNodeSelector` and `runtime.nodeSelector` to
+  [disjoint Ready pools](../../reference/drivers/kubernetes-compute.md#images-and-resources);
+  Helm does not place runtimes. Omit `network.gatewayClients` with
+  [routing](../../reference/gateway-routing.md#routing-configuration) enabled.
+  `presets.includeDefaults: false` disables the
+  [bundled Presets](../../reference/presets.md#installation-defaults).
 
-For both branches, set `bootstrap-pvc.yaml` name, namespace, size, and protected
-`storageClassName`.
+For every install, set `bootstrap-pvc.yaml` name, namespace, size, and
+protected `storageClassName`.
 
 For `logging.level`, see [Choose the log level](../observability.md#1-choose-the-log-level).
 Configure native admin domains through [native admin setup](native-admin.md#steps).
 For Slack Agents, configure both proxy paths in the
 [Slack guide](../integrations/slack.md#configure-both-slack-proxies). For Codex
-sandboxing, follow [Codex sandbox setup](codex-sandbox.md): install a reviewed
-profile on every eligible node, set `runtime.codexSeccompProfile`, and verify
-enforcement.
+sandboxing, follow [Codex sandbox setup](codex-sandbox.md).
 
 Run every check below before provisioning:
 
@@ -287,7 +286,7 @@ without quotes or a variable assignment.
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Obtain it from your database administrator or provider. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`.                   |
 | `occ-migration-url`   | Connection URL for a separate role allowed to apply schema migrations. It targets the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker. |
-| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set; the example mount path is `/etc/openclaw/database-ca/ca.pem`.                                                                |
+| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set.                                                                                                                              |
 | `occ-auth-secret`     | A random secret used to sign and verify user sessions. Generate it once for this Installation with the command below, then retain it across redeployments. It is separate from the administrator password, service API key, and model-provider key.                             |
 
 Save both database URLs in protected files, replacing placeholders and preserving
@@ -363,18 +362,23 @@ read-only into migration, bootstrap, API, and worker containers at
 
 Enable repository credentials only after preparing the
 [repository service inputs](../repository-credentials/installation.md) and
-[GitHub Backend selection](../../reference/backends.md#github-repository-credentials).
-Keep the feature disabled until you have the immutable service image, registry
-ConfigMap, private service configuration, App key, internal-Service TLS Secret,
-public CA Secret, worker peer on port `8443`, and Service HTTPS on port `443`.
-Mount one registry version into API, worker, and service.
+[GitHub Backend selection](../../reference/backends.md#github-repository-credentials):
+the immutable service image, registry ConfigMap, private service configuration,
+App key, internal-Service TLS Secret, and public CA Secret. Mount one registry
+version into the API, worker, and
+service. The Compute network peer must select the worker Pod on port `8443`; the
+Service serves HTTPS on `443`.
 
-The chart runs one `Recreate` worker Pod with a sidecar for private inputs. The
-sidecar has no Kubernetes API token; the worker token owns tenant Secret verbs.
-NetworkPolicies admit managed gateways and approved provider CIDRs, while
-registry and session checks enforce exact scope. Keep `limits.shutdownGraceMs` at
-or below `60000`. Restart API and worker together after registry or service input
-changes; readiness does not prove token minting or Agent Git workflows.
+The chart runs one `Recreate` worker Pod with a credential sidecar. Only the
+sidecar mounts the App and TLS private inputs, and it has no Kubernetes API token;
+only the worker container's token has tenant Secret access, and the worker stays
+[trusted per tenant namespace](../../reference/security/runtime-isolation.md#temporary-runtime-credential-exceptions).
+NetworkPolicies let managed gateways reach the service and the worker reach
+approved provider CIDRs; registry and session checks enforce exact scope. Startup
+rejects `limits.shutdownGraceMs` above `60000` to finish cleanup within the
+Pod's 75-second grace. Restart the API and worker together after registry
+or service input changes; readiness does not prove token minting or Agent Git
+workflows.
 
 ### Azure PostgreSQL workload identity
 
