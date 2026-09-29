@@ -1983,6 +1983,71 @@ test("Agent plugin reviewer selection preserves omission and rejects unsupported
   assert.deepEqual(replaced.data.plugins, inherited);
 });
 
+test("Codex Agents refuse plugin and tool approver overrides and keep Agent-wide approvers", async () => {
+  const controller = await configuredController();
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "codex-plugin-approvers-api");
+  const configuration = await createConfiguration(controller, namespace.id, {
+    agents: { defaults: { model: "codex/gpt-6-astra" } },
+  });
+  const pluginDriver = new CodexPluginDriver();
+  controller.fixture.controller.registerDriver(pluginDriver);
+  controller.fixture.controller.selectDriver("plugin", pluginDriver.id);
+  // The Console reads this capability to hide plugin and tool approver fields for Codex.
+  const installation = await controller.request("GET", "/installation");
+  assert.equal(installation.status, 200);
+  assert.deepEqual(installation.data.capabilities.pluginPolicies.approvers, {
+    agent: true,
+    plugin: false,
+    tools: false,
+  });
+
+  const approvers = [{ channel: "slack", id: "team:T123:user:U123" }];
+  const plugins = { [linearPluginId]: { enabled: true } };
+  const created = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "codex-approvers-agent",
+      executionMode: "dedicated",
+      configurationId: configuration.id,
+      plugins,
+      pluginApprovers: approvers,
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.deepEqual(created.data.pluginApprovers, approvers);
+  const path = `/namespaces/${namespace.id}/agents/${created.data.id}`;
+
+  // Codex approval requests carry no plugin or tool identity, so any override list would make
+  // every Codex plugin request unapprovable in Slack. Admission refuses it with remediation.
+  const message =
+    "This Plugin Driver does not support plugin or tool approvers. Omit approvers from plugin selections and set Agent-wide pluginApprovers instead.";
+  for (const policy of [
+    { enabled: true, approvers },
+    { enabled: true, approvers: [] },
+    { enabled: true, tools: { "app/search": { approvers } } },
+  ]) {
+    const rejectedUpdate = await controller.request("PATCH", path, {
+      body: { configurationId: configuration.id, plugins: { [linearPluginId]: policy } },
+    });
+    assert.equal(rejectedUpdate.status, 400);
+    assert.equal(rejectedUpdate.body.error.code, "INVALID_REQUEST");
+    assert.equal(rejectedUpdate.body.error.message, message);
+  }
+  const rejectedCreate = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "codex-override-agent",
+      executionMode: "dedicated",
+      configurationId: configuration.id,
+      plugins: { [linearPluginId]: { enabled: true, approvers } },
+    },
+  });
+  assert.equal(rejectedCreate.status, 400);
+  assert.equal(rejectedCreate.body.error.message, message);
+  const saved = await controller.request("GET", path);
+  assert.deepEqual(saved.data.plugins, plugins);
+  assert.deepEqual(saved.data.pluginApprovers, approvers);
+});
+
 test("Agent plugin maps reject structural errors and preserve exact authorization and audit boundaries", async () => {
   const controller = await configuredController();
   await bootstrap(controller);
