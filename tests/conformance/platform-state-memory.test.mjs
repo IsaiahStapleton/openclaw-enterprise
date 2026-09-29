@@ -5,6 +5,51 @@ import { InMemoryPlatformState } from "../../packages/occ/src/state/platform-sta
 import { verifyPlatformStateStoreContract } from "./platform-state-store.contract.mjs";
 import { seedSessionRevision } from "./repository-sessions.contract.mjs";
 
+test("memory policy refuses new grants to an Agent after deletion admission", async () => {
+  const store = new InMemoryPlatformState();
+  const { namespace, agent } = await seedSessionRevision(store);
+  const role = {
+    id: `role_${randomUUID()}`,
+    namespaceId: namespace.id,
+    permissions: [{ action: "read", resourceKind: "agent" }],
+  };
+  const binding = {
+    id: `binding_${randomUUID()}`,
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: agent.servicePrincipalId,
+    roleId: role.id,
+    resourceKind: "agent",
+    resourceId: agent.id,
+  };
+  await store.transact(async (unit) => {
+    await unit.iamPolicy.createRole(role);
+    assert.deepEqual(await unit.iamPolicy.createAccessBinding(binding), binding);
+  });
+  await store.transact(async (unit) => {
+    await unit.agents.transitionAgentDesiredRuntimeState(
+      namespace.id,
+      agent.id,
+      ["running", "stopped"],
+      "stopped",
+    );
+    assert.equal(
+      (await unit.agents.transitionAgentStatus(namespace.id, agent.id, "active", "deleting"))
+        .status,
+      "deleting",
+    );
+  });
+  await assert.rejects(
+    store.transact((unit) =>
+      unit.iamPolicy.createAccessBinding({
+        ...binding,
+        id: `binding_${randomUUID()}`,
+      }),
+    ),
+    /target does not belong to the exact Namespace/,
+  );
+});
+
 test("the memory platform state adapter satisfies the shared ownership and atomicity contract", async () => {
   await verifyPlatformStateStoreContract(new InMemoryPlatformState());
 });

@@ -244,6 +244,7 @@
         "type:DeploymentStatusResult",
         "value:controllerWorkDeploymentStatus",
         "value:deploymentErrorForWork",
+        "value:deploymentProgressForWork",
         "value:deploymentWarningsForWork"
       ],
       "owner": "Work status projection",

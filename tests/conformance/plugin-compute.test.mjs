@@ -2747,6 +2747,48 @@ test("Codex runtime gates startup and readiness on a successful native authentic
     item: { type: "error", message: "Model catalog metadata unavailable" },
   };
   const scenarios = [
+    {
+      name: "delayed retry uses only the remaining budget",
+      probeTimeouts: 2,
+      retryDelayMs: 30500,
+      expectedTimeouts: [30000, 500],
+      failureCode: "MODEL_PROBE_TIMEOUT",
+    },
+    {
+      name: "expired retry budget starts no process",
+      probeTimeouts: 1,
+      retryDelayMs: 32000,
+      expiredBudget: true,
+      failureCode: "MODEL_PROBE_TIMEOUT",
+    },
+    {
+      name: "tool output followed by timeout is not retried",
+      probeError: "ETIMEDOUT",
+      events: [started, { type: "item.completed", item: { type: "command_execution" } }],
+    },
+    {
+      name: "rejection followed by timeout is not retried",
+      probeError: "ETIMEDOUT",
+      events: [{ type: "error", message: "authentication rejected" }],
+    },
+    {
+      name: "malformed output followed by timeout is not retried",
+      probeError: "ETIMEDOUT",
+      probeOutput: "not-json",
+    },
+    {
+      name: "model timeout recovers on the second attempt",
+      probeTimeouts: 1,
+      events: [started, assistant, completed],
+      ready: true,
+    },
+    {
+      name: "model timeout exhausts two attempts",
+      probeTimeouts: 2,
+      failureCode: "MODEL_PROBE_TIMEOUT",
+    },
+    { name: "external SIGKILL is not a timeout or retried", probeSignal: "SIGKILL" },
+    { name: "malformed model output is not retried", probeOutput: "not-json" },
     { name: "failed login", loginStatus: 1 },
     {
       name: "API-key login timeout is not retried",
@@ -2824,8 +2866,14 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         let appServerStarts = 0;
         let nativeCalls = 0;
         let loginCalls = 0;
+        let probeCalls = 0;
+        let clock = 0;
+        const retryTimers = [];
         const sandbox = {
           URL,
+          setTimeout(callback, delay) {
+            retryTimers.push({ callback, delay });
+          },
           console: {
             error(message) {
               diagnostics.push(message);
@@ -2856,6 +2904,9 @@ test("Codex runtime gates startup and readiness on a successful native authentic
             },
           },
           require(specifier) {
+            if (specifier === "node:perf_hooks") {
+              return { performance: { now: () => clock } };
+            }
             if (specifier === "node:fs") {
               return {
                 mkdirSync() {},
@@ -2909,9 +2960,24 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                     }
                     return { status: scenario.loginStatus ?? 0 };
                   }
+                  probeCalls++;
+                  assert.ok(options.timeout > 0 && options.timeout <= 30000);
+                  if (scenario.expectedTimeouts) {
+                    assert.equal(options.timeout, scenario.expectedTimeouts[probeCalls - 1]);
+                  }
+                  if (probeCalls <= (scenario.probeTimeouts ?? 0)) {
+                    clock += options.timeout;
+                    return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" } };
+                  }
+                  if (scenario.probeSignal) {
+                    return { status: null, signal: scenario.probeSignal };
+                  }
                   return {
                     status: scenario.probeStatus ?? 0,
-                    stdout: scenario.events.map((event) => JSON.stringify(event)).join("\n"),
+                    ...(scenario.probeError ? { error: { code: scenario.probeError } } : {}),
+                    stdout:
+                      scenario.probeOutput ??
+                      scenario.events.map((event) => JSON.stringify(event)).join("\n"),
                   };
                 },
                 spawn(_command, args) {
@@ -2925,13 +2991,42 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           },
         };
         vm.runInNewContext(AGENT_RUNTIME_ENTRYPOINT, sandbox);
+        if (scenario.probeTimeouts) {
+          assert.equal(appServerStarts, 0);
+          assert.equal(existsSync(marker), false);
+          assert.equal(readRuntimeStatusFromHandler(statusHandler).runtimeFailure, undefined);
+          assert.equal(retryTimers.length, 1);
+          assert.equal(retryTimers[0].delay, 1000);
+          clock += scenario.retryDelayMs ?? 1000;
+          retryTimers[0].callback();
+          assert.equal(retryTimers.length, 1, "exhaustion must not schedule another retry");
+        } else {
+          assert.equal(retryTimers.length, 0);
+        }
         const loginFailed =
           scenario.loginFailed || scenario.loginStatus === 1 || scenario.loginTimeouts === 3;
         assert.equal(
           loginCalls,
           scenario.loginAttempts ?? Math.min((scenario.loginTimeouts ?? 0) + 1, 3),
         );
-        assert.equal(nativeCalls, loginCalls + (loginFailed ? 0 : 1));
+        assert.equal(
+          nativeCalls,
+          loginCalls +
+            (loginFailed ? 0 : scenario.probeTimeouts && !scenario.expiredBudget ? 2 : 1),
+        );
+        const probeDiagnostics = diagnostics
+          .filter((message) => message.startsWith("{"))
+          .map(JSON.parse);
+        assert.equal(probeDiagnostics.length, probeCalls);
+        for (const [index, diagnostic] of probeDiagnostics.entries()) {
+          assert.equal(diagnostic.event, "codex.model_probe");
+          assert.equal(diagnostic.attempt, index + 1);
+          assert.ok(diagnostic.elapsedMs >= 0);
+        }
+        if (scenario.probeTimeouts) {
+          assert.equal(probeDiagnostics[0].code, "MODEL_PROBE_TIMEOUT");
+        }
+        const failureMessages = diagnostics.filter((message) => !message.startsWith("{"));
         assert.ok(statusHandler);
         const runtimeStatus = readRuntimeStatusFromHandler(statusHandler);
         assert.equal(runtimeStatus.revisionId, revisionId);
@@ -2939,13 +3034,14 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         assert.equal(runtimeStatus.podUid, "pod-runtime-auth-gate");
         if (scenario.ready) {
           assert.equal(appServerStarts, 1);
-          assert.deepEqual(diagnostics, []);
+          assert.deepEqual(failureMessages, []);
+          assert.equal(probeDiagnostics.at(-1).code, "READY");
           assert.equal(idleTimers.length, 0);
           assert.equal(readFileSync(marker, "utf8"), "ready\n");
           assert.equal(runtimeStatus.runtimeFailure, undefined);
         } else {
           assert.equal(appServerStarts, 0);
-          assert.deepEqual(diagnostics, ["Harness model authentication probe failed."]);
+          assert.deepEqual(failureMessages, ["Harness model authentication probe failed."]);
           assert.equal(idleTimers.length, 1);
           assert.equal(typeof idleTimers[0].callback, "function");
           assert.ok(idleTimers[0].delay > 0);
@@ -2954,7 +3050,7 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           assert.equal(runtimeStatus.runtimeFailure.check, loginFailed ? "login" : "model-probe");
           assert.equal(
             runtimeStatus.runtimeFailure.code,
-            loginFailed ? "LOGIN_FAILED" : "MODEL_PROBE_FAILED",
+            loginFailed ? "LOGIN_FAILED" : (scenario.failureCode ?? "MODEL_PROBE_FAILED"),
           );
           assert.match(runtimeStatus.runtimeFailure.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
         }

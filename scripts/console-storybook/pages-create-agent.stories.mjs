@@ -53,6 +53,8 @@ export const CreateProvisioningSecrets = {
   ...story("createProvisioningSecrets"),
   name: "Provisioning with saved Secrets",
 };
+export const CreateDeploymentPending = story("createDeploymentPending");
+export const CreateDeploymentFailed = story("createDeploymentFailed");
 export const CreateUnsupportedProvisioning = {
   ...story("createUnsupportedProvisioning"),
   name: "Unsupported provisioning",
