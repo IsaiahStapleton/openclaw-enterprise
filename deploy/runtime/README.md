@@ -41,8 +41,10 @@ needs required worker placement (`cloudWorkers.requiredProfile`) and native
 worker inference (`nodeHost.workerRuns.nativeInferenceConfig`), which are not in
 upstream main yet. This image's configuration validation rejects both keys, so
 its Gateway and Harness exit at startup rather than place sessions on the
-Gateway. The images-packaging lane runs both entrypoints against this image and
-fails when that gap changes.
+Gateway. `PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS` in
+`packages/occ/src/native-worker-support.ts` records this, and admission refuses
+dedicated native OpenClaw while it is `false`. The images-packaging lane runs
+both entrypoints against this image and fails when the image disagrees with it.
 
 | Input                                        | Selection                                                                                                    |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
