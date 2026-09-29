@@ -1961,7 +1961,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     resourceId: string,
   ): Promise<boolean> => {
     if (resourceKind === "agent") {
-      return (await agents.findAgent(namespaceId, resourceId)) !== undefined;
+      return (await agents.findAgent(namespaceId, resourceId))?.status === "active";
     }
     if (resourceKind === "agent_revision") {
       return agentRevisionExists(namespaceId, resourceId);

@@ -2789,7 +2789,10 @@ export class PostgresPlatformState implements PlatformStateStore {
       resourceId: string,
     ): Promise<boolean> => {
       const queryByKind: Record<string, string> = {
-        agent: "SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
+        // Status can change without changing a key. SHARE also fences the
+        // active -> deleting transition until the policy transaction settles.
+        agent:
+          "SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2 AND status = 'active' FOR SHARE",
         agent_revision: "SELECT 1 FROM occ.agent_revisions WHERE namespace_id = $1 AND id = $2",
         configuration:
           "SELECT 1 FROM occ.configurations WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
