@@ -301,16 +301,17 @@ must allow only gateway, control-plane, callback, and approved provider
 connectivity needed for OpenShell to function. Broad namespace egress or ingress
 allows can bypass the intended boundary.
 
-Compute passes the ordinary network profile to the provider Harness template;
-the provider must retain it on the resulting Pod. The gateway's callers are
+Compute passes the provider-fenced network profile (`provider-fenced-v1`) to the
+provider Harness template; the provider must retain it on the resulting Pod.
+That profile admits Gateway transport ingress but none of Compute's DNS, model
+or authentication egress, so OpenShell's workload fence alone governs egress. The gateway's callers are
 OpenShell supervisor Pods (`openshell.ai/managed-by=openshell`,
 `openshell.ai/boundary-role=supervisor`), which carry no `openclaw.dev` labels,
 so gateway callback policies must select those supervisor labels rather than the
 Harness profile. The separately installed OpenShell gateway needs its own scoped
 DNS/API policies because it does not receive ordinary tenant DNS by omission.
 Existing Sandboxes keep their template: redeploy the Agent revision to apply the
-profile. The Harness profile currently unions Compute's ordinary grants with
-OpenShell's egress fence; see the
+profile. See the
 [network profile reference](kubernetes-compute/networking-and-isolation.md#explicit-network-profiles).
 
 ## Current upstream preconditions

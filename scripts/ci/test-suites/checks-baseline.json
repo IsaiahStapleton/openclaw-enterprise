@@ -28,6 +28,9 @@
       "path": "tests/conformance/docker-compute.test.mjs"
     },
     {
+      "path": "tests/conformance/grafana-overview-dashboard.test.mjs"
+    },
+    {
       "path": "tests/conformance/iam.test.mjs"
     },
     {
