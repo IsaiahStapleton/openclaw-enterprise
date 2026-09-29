@@ -168,11 +168,12 @@ before using either artifact.
 
 ## Use rendered files
 
-This guide stops after rendering. The canonical production runbook owns the
-protected handoff directory, Kubernetes context, startup Secret, bootstrap PVC,
-Helm install, bootstrap key retrieval, and authenticated API check. Continue at
-[Configure the Installation](production-installation.md#configure-the-installation)
-and use the rendered `values.yaml` and `installation.yaml` there.
+This guide stops after rendering. Set `OCC_INPUT_DIRECTORY` to the output
+directory, then complete the [production shell and context setup](production-installation.md#configure-the-installation).
+Skip both configuration-generation branches and continue at the
+[shared bootstrap PVC and configuration checks](production-installation.md#shared-bootstrap-pvc-and-configuration-checks).
+The runbook owns Secret creation, Helm installation, bootstrap key retrieval, and
+authenticated API verification.
 
 If rendering fails or either YAML file is absent, stop and fix the input. Do not
 copy manual examples into the same output directory. Rerender successfully so

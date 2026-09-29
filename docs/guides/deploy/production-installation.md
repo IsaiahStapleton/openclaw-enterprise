@@ -5,8 +5,11 @@ authenticated API access. Prepare [standard Kubernetes](kubernetes.md) or
 [Amazon EKS](eks.md) and complete the [production prerequisites](../deploy.md#production-prerequisites)
 first. Workspace access is required: install the
 [routing prerequisites](workspace-routing.md#requirements), provide a GatewayClass,
-and keep routing enabled in both example files. Control UI is enabled in the
+and keep private routing enabled. Control UI is enabled in the
 production values; complete [native admin prerequisites](native-admin.md#requirements).
+
+Use [profiles](#recommended-generate-profile-configuration) for configuration, or
+[manual YAML](#advanced-copy-manual-yaml-examples) for advanced customization.
 
 Run from a clean checkout at the image source revision so the chart, examples,
 and helpers match. See [Deliver images to a private registry](private-registry-images.md)
@@ -126,6 +129,12 @@ Helm release `oce` in Namespace `openclaw-system`. Keep one protected handoff
 directory for generated configuration and the bootstrap PVC YAML. Secret input
 files stay under `/secure/occ`, even when `OCC_INPUT_DIRECTORY` points elsewhere.
 
+For existing profile output or verified YAML from
+[local operations](local-operations.md#build-images-for-local-kubernetes), set
+`OCC_INPUT_DIRECTORY` to that directory before this setup. Then skip both
+generation branches and continue with the
+[shared checks](#shared-bootstrap-pvc-and-configuration-checks).
+
 ```bash
 umask 077
 export OCC_INPUT_DIRECTORY="${OCC_INPUT_DIRECTORY:-/secure/occ}"
@@ -137,16 +146,12 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" version
 ```
 
 Kubernetes older than 1.35 remains unsupported; API and worker emit
-`compute.preflight-warning`. If
-[local operations](local-operations.md#build-images-for-local-kubernetes) already
-produced verified YAML with real digests, set `OCC_INPUT_DIRECTORY` to that output,
-skip both generation branches, and continue with shared checks.
+`compute.preflight-warning`.
 
 ### Recommended: generate profile configuration
 
-Use this path unless you need advanced hand-authored YAML. It requires Node.js
-24 or newer on the operator host, matching the repository-supported runtime.
-Manual YAML needs no host Node.
+Choose `openclaw` or `codex` from the [profile options](installation-profiles.md#choose-a-profile).
+Generation requires Node.js 24 or newer on the operator host; manual YAML does not.
 
 Create `$OCC_INPUT_DIRECTORY/profile-input.json` from the schema in
 [Render installation profiles](installation-profiles.md#prepare-inputs). Keep the
@@ -158,12 +163,12 @@ input JSON separate from renderer-owned `values.yaml`, `installation.yaml`, and
 input JSON.
 
 ```bash
+export OCC_PROFILE="${OCC_PROFILE:-codex}"
+export OCC_PROFILE_INPUT="${OCC_PROFILE_INPUT:-$OCC_INPUT_DIRECTORY/profile-input.json}"
 (
   set -e
   : "${CONTROLLER_IMAGE:?Set the controller digest reference}"
   : "${RUNTIME_IMAGE:?Set the runtime digest reference}"
-  export OCC_PROFILE="${OCC_PROFILE:-codex}"
-  export OCC_PROFILE_INPUT="${OCC_PROFILE_INPUT:-$OCC_INPUT_DIRECTORY/profile-input.json}"
   test -s "$OCC_PROFILE_INPUT"
   yq -e '.controlPlane.releaseName == "oce" and .controlPlane.namespace == "openclaw-system"' \
     "$OCC_PROFILE_INPUT" >/dev/null
