@@ -395,14 +395,20 @@ test(
     await t.test(
       "two administrators attaching one GitHub identity to two accounts at once: one wins, one conflicts",
       async () => {
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/auth/accounts",
-          headers: adminHeaders,
-          payload: { email: "attach-third@example.test", password, roleId: roles.reader.id },
-        });
-        assert.equal(created.statusCode, 201, created.body);
-        const third = { id: created.json().data.id, email: "attach-third@example.test", password };
+        const createReader = async (email) => {
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/auth/accounts",
+            headers: adminHeaders,
+            payload: { email, password, roleId: roles.reader.id },
+          });
+          assert.equal(created.statusCode, 201, created.body);
+          return { id: created.json().data.id, email, password };
+        };
+        const third = await createReader("attach-third@example.test");
+        // The blocking row's owner is locked by neither attach: its foreign key share
+        // lock would otherwise hold an actor's own row lock instead of the identity insert.
+        const bystander = await createReader("attach-bystander@example.test");
         const secondHeaders = await signedInHeaders(app, origin, second, address());
         const racedSubject = "9100004";
         const { providerId } = (await readAccount(app, adminHeaders, admin.id)).methods.find(
@@ -423,10 +429,11 @@ test(
         let attaches;
         try {
           await blocker.query("BEGIN");
+          const blockerPid = (await blocker.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
           await blocker.query(
             `INSERT INTO occ.account (id, account_id, provider_id, user_id, created_at, updated_at, identity_only)
              VALUES ('race-blocker', $1, $2, $3, clock_timestamp(), clock_timestamp(), true)`,
-            [racedSubject, providerId, admin.id],
+            [racedSubject, providerId, bystander.id],
           );
           attaches = Promise.all([
             attach(adminHeaders, member.id, racedSubject, before[0].version),
@@ -436,9 +443,10 @@ test(
           for (;;) {
             const { rows } = await pool.query(
               `SELECT count(*)::int AS count FROM pg_stat_activity
-               WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+               WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'INSERT INTO occ.account %'`,
+              [blockerPid],
             );
-            if (rows[0].count >= 2) {
+            if (rows[0].count === 2) {
               break;
             }
             assert.ok(performance.now() < deadline, "both attaches reach the identity insert");
