@@ -147,6 +147,13 @@ elapsed milliseconds, exit code, recognized termination signal, and final code
 credentials and raw provider output. The existing runtime failure status is
 published only after retries end.
 
+Gateway and Harness startup wrappers also emit one `runtime.startup_phase` log
+per startup phase, such as login, model probe, peer plugin status, plugin
+install, workspace setup, and native process spawn, with its container, phase name, `ok` or `failed` outcome,
+duration, and time since the wrapper started. A Gateway also logs
+`peer-status-changed` before it exits to restart for a replaced Harness. These
+logs carry no provider, model, credential, or path values.
+
 These startup checks make provider requests and may incur model usage charges.
 They do not verify access to every other configured model or guarantee continued validity
 after upstream revocation. Embedded probe transport configuration must use

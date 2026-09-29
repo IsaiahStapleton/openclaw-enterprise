@@ -474,10 +474,11 @@ test("activation refuses a missing or foreign workspace node before changing the
   );
 });
 
-test("dedicated startup initializes Harness plugins before enrolling its workspace node", async () => {
-  let setupCalls = 0;
-  let connected = false;
-  let enrollmentAvailable = true;
+// A first dedicated Codex deploy with plugins, workspace node enrollment and
+// gateway routing. Only transport observations are faked; startup order and
+// readiness come from the real driver.
+function dedicatedFirstDeployFixture() {
+  const state = { setupCalls: 0, connected: false, enrollmentAvailable: true };
   const driver = new KubernetesComputeDriver(
     routedOptions({
       runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
@@ -485,17 +486,17 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     {
       nodeEnrollment: {
         async createSetup() {
-          setupCalls++;
+          state.setupCalls++;
           return { setupId: "setup-1", setupCode: "setup-code", expiresAtMs: Date.now() + 60000 };
         },
         async observeSetup() {
-          if (!enrollmentAvailable) {
+          if (!state.enrollmentAvailable) {
             throw new Error("Gateway is restarting after the Harness replacement");
           }
-          return connected ? { deviceId: "node-1", connected: true } : undefined;
+          return state.connected ? { deviceId: "node-1", connected: true } : undefined;
         },
         async isConnected() {
-          return connected;
+          return state.connected;
         },
       },
     },
@@ -520,6 +521,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   const gatewayName = `gateway-${digest(revision.agentId)}`;
   const agentName = `agent-${digest(revision.agentId)}-rev-${digest(revision.id)}`;
   const objects = new Map();
+  const templates = [];
   const key = (kind, name, target = namespace) =>
     `${kind}:${kind === "Namespace" ? "" : target}:${name}`;
   const save = (object) =>
@@ -608,6 +610,14 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
           },
         };
         if (kind === "Deployment") {
+          const template = JSON.stringify(body.spec.template);
+          if (template !== JSON.stringify(previous?.spec.template)) {
+            // Each new pod template is a workload start: both use Recreate.
+            templates.push({
+              name: body.metadata.name,
+              template: structuredClone(body.spec.template),
+            });
+          }
           value.metadata.generation = (previous?.metadata.generation ?? 0) + Number(changed);
           if (changed) {
             delete value.status;
@@ -689,6 +699,26 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     object.status = { observedGeneration: object.metadata.generation, readyReplicas: 1 };
     save(object);
   };
+  return {
+    state,
+    driver,
+    revision,
+    namespace,
+    gatewayName,
+    agentName,
+    objects,
+    templates,
+    key,
+    save,
+    read,
+    prepare,
+    markReady,
+  };
+}
+
+test("dedicated startup initializes Harness plugins before enrolling its workspace node", async () => {
+  const { state, revision, gatewayName, agentName, objects, key, save, read, prepare, markReady } =
+    dedicatedFirstDeployFixture();
   assert.equal((await prepare()).ready, false);
   const renderedConfiguration = JSON.parse(
     read(
@@ -714,7 +744,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     bind: "lan",
     auth: { trustedProxy: { requiredHeaders: ["x-real-ip"], allowLoopback: false } },
   });
-  assert.equal(setupCalls, 0);
+  assert.equal(state.setupCalls, 0);
   assert.equal(
     objects.has(key("Deployment", gatewayName, kubernetesGatewayNamespaceName(tenant.id))),
     false,
@@ -735,10 +765,10 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     objects.has(key("Deployment", gatewayName, kubernetesGatewayNamespaceName(tenant.id))),
     "plugin readiness permits Gateway startup",
   );
-  assert.equal(setupCalls, 0);
+  assert.equal(state.setupCalls, 0);
   markReady(gatewayName);
   assert.equal((await prepare()).ready, false);
-  assert.equal(setupCalls, 1);
+  assert.equal(state.setupCalls, 1);
   const agent = read("Deployment", agentName);
   assert.deepEqual(agent.spec.strategy, initialStrategy);
   assert.ok(
@@ -756,14 +786,72 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   );
   restartingGateway.status.readyReplicas = 0;
   save(restartingGateway);
-  enrollmentAvailable = false;
+  state.enrollmentAvailable = false;
   assert.equal((await prepare()).ready, false, "Gateway restart keeps deployment pending");
-  enrollmentAvailable = true;
+  state.enrollmentAvailable = true;
   markReady(gatewayName);
   assert.equal((await prepare()).ready, false, "running workloads alone are not node readiness");
-  connected = true;
+  state.connected = true;
   assert.equal((await prepare()).ready, true);
-  assert.equal(setupCalls, 1);
+  assert.equal(state.setupCalls, 1);
+});
+
+// Ratchet for deploy time: a first dedicated deploy starts its workloads
+// serially, and every start repeats login, the model probe and plugin install.
+// Lower these counts when a change removes a start; never raise them silently.
+test("a first dedicated deploy pins its serial workload starts through activation", async () => {
+  const { state, driver, revision, gatewayName, agentName, templates, prepare, markReady } =
+    dedicatedFirstDeployFixture();
+  const environment = (template) =>
+    new Set(template.spec.containers[0].env.map(({ name }) => name));
+  // Workloads become ready as soon as the controller waits on them, so every
+  // pending pass below is a wait on a workload start, not on test timing.
+  let pendingPasses = 0;
+  const pass = async () => {
+    const { ready } = await prepare();
+    pendingPasses += Number(!ready);
+    return ready;
+  };
+  assert.equal(await pass(), false, "the Harness starts first, without its node");
+  markReady(agentName);
+  assert.equal(await pass(), false, "the Gateway waits for Harness plugin status");
+  markReady(gatewayName);
+  state.connected = true;
+  assert.equal(await pass(), false, "node enrollment replaces the Harness");
+  markReady(agentName);
+  assert.equal(await pass(), true);
+  assert.equal(pendingPasses, 3);
+  await assert.rejects(
+    driver.activateRevision(revision, authContext(revision)),
+    /gateway is not ready/,
+    "activation replaces the serving Gateway",
+  );
+  markReady(gatewayName);
+  await driver.activateRevision(revision, authContext(revision));
+  assert.equal(state.setupCalls, 1);
+
+  assert.deepEqual(
+    templates.map(({ name }) => (name === agentName ? "harness" : name)),
+    ["harness", gatewayName, "harness", gatewayName],
+  );
+  const [harness, gateway, enrolledHarness, activeGateway] = templates.map(
+    ({ template }) => template,
+  );
+  // Harness start 2: the node setup code reaches the Harness through its pod spec.
+  assert.equal(environment(harness).has("OPENCLAW_NODE_SETUP_CODE"), false);
+  assert.equal(environment(enrolledHarness).has("OPENCLAW_NODE_SETUP_CODE"), true);
+  // Gateway start 3: activation adds the enrolled node id to the Gateway pod spec.
+  assert.equal(environment(gateway).has("OPENCLAW_WORKSPACE_NODE_ID"), false);
+  assert.equal(environment(activeGateway).has("OPENCLAW_WORKSPACE_NODE_ID"), true);
+  // Gateway start 2 has no pod template change: the running Gateway container
+  // exits when its Harness peer restarts (GATEWAY_RUNTIME_ENTRYPOINT peer poll),
+  // and the kubelet restarts it.
+  const gatewayCreated = templates.findIndex(({ name }) => name === gatewayName);
+  const inPodGatewayRestarts = templates
+    .slice(gatewayCreated)
+    .filter(({ name }) => name === agentName).length;
+  assert.equal(inPodGatewayRestarts, 1);
+  assert.equal(templates.length + inPodGatewayRestarts, 5, "Harness 2 + Gateway 3");
 });
 
 test("dedicated replacement starts a candidate Gateway when the predecessor cannot enroll its workspace node", async () => {
@@ -4433,7 +4521,26 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         );
         assert.equal(started, accepted);
         assert.equal(held, !accepted);
-        assert.deepEqual(errors, accepted ? [] : ["Harness model authentication probe failed."]);
+        const phaseLines = errors.filter((line) => line.includes('"runtime.startup_phase"'));
+        assert.deepEqual(
+          errors.filter((line) => !phaseLines.includes(line)),
+          accepted ? [] : ["Harness model authentication probe failed."],
+        );
+        // Startup timing names phases only, never the provider, model or credential.
+        assert.deepEqual(
+          phaseLines.map((line) => {
+            const { container, phase, outcome } = JSON.parse(line);
+            return [container, phase, outcome];
+          }),
+          [
+            ["gateway", "model-probe", accepted ? "ok" : "failed"],
+            ...(accepted ? [["gateway", "native-spawn", "ok"]] : []),
+          ],
+        );
+        assert.doesNotMatch(
+          phaseLines.join("\n"),
+          new RegExp([provider, model, credentialName, "fixture-model-key"].join("|")),
+        );
         if (accepted) {
           signals.get("SIGTERM")();
           assert.deepEqual(childSignals, ["SIGTERM"]);
