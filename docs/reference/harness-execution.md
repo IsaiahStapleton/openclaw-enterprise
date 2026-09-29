@@ -175,6 +175,13 @@ login error reporting HTTP 401 or 403. The worker then fails the deployment with
 Timeouts, provider server errors, and transport failures keep `MODEL_PROBE_TIMEOUT`,
 `MODEL_PROBE_FAILED`, or `LOGIN_FAILED` and remain pending.
 
+Gateway and Harness startup wrappers also emit one `runtime.startup_phase` log
+per startup phase, such as login, model probe, peer plugin status, plugin
+install, workspace setup, and native process spawn, with its container, phase name, `ok` or `failed` outcome,
+duration, and time since the wrapper started. A Gateway also logs
+`peer-status-changed` before it exits to restart for a replaced Harness. These
+logs carry no provider, model, credential, or path values.
+
 These startup checks make provider requests and may incur model usage charges.
 They do not verify access to every other configured model or guarantee continued validity
 after upstream revocation. Embedded probe transport configuration must use
