@@ -421,6 +421,9 @@
       "path": "tests/integration/google-id-token.test.mjs"
     },
     {
+      "path": "tests/integration/google-login-transport.test.mjs"
+    },
+    {
       "path": "tests/integration/client-address.test.mjs"
     }
   ]

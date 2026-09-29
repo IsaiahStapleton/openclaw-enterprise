@@ -1,5 +1,5 @@
 import { createHmac, createPublicKey, verify } from "node:crypto";
-import { authorizationCodeRequest } from "better-auth/oauth2";
+import { authorizationCodeRequest, createAuthorizationURL } from "better-auth/oauth2";
 import { providerJSON, rejected } from "./github.ts";
 
 // Google OpenID Connect, fixed endpoints (no runtime discovery):
@@ -44,6 +44,33 @@ export function googleLoginConfiguration(
     );
   }
   return { clientId, clientSecret, allowedDomains };
+}
+
+// Google sign-in's configuration as the controller receives it: the guarded profile's
+// recovery user ID travels with each configured provider.
+export interface GoogleSignInConfiguration extends GoogleLoginConfiguration {
+  readonly recoveryUserId: string;
+}
+
+// Builds the authorization request directly: Better Auth's Google provider treats
+// nonce as a reserved additional parameter and would drop it.
+export async function googleAuthorizationURL(
+  config: GoogleLoginConfiguration,
+  state: string,
+  codeVerifier: string,
+  redirectURI: string,
+  nonce: string,
+): Promise<URL> {
+  return createAuthorizationURL({
+    id: "google",
+    options: { clientId: config.clientId, clientSecret: config.clientSecret },
+    authorizationEndpoint: googleAuthorizationEndpoint,
+    scopes: ["openid", "email"],
+    state,
+    codeVerifier,
+    redirectURI,
+    nonce,
+  });
 }
 
 // The OIDC nonce is derived from the one-use, browser-bound attempt state, so it

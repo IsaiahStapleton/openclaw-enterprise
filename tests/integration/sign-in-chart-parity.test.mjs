@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   clientAddressConfiguration,
   githubLoginConfiguration,
+  humanLoginConfiguration,
   resolveClientAddress,
 } from "../../apps/controller/src/auth/index.ts";
 import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
@@ -314,7 +315,7 @@ test("values the chart refuses are settings the API also refuses", tooling, asyn
       if (parser !== undefined) {
         assert.throws(
           () => {
-            githubLoginConfiguration(environment);
+            humanLoginConfiguration(environment);
             clientAddressConfiguration(environment);
           },
           parser,

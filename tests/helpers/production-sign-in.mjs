@@ -6,7 +6,7 @@ import { composeProduction } from "../../apps/controller/src/composition/product
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
 import {
   clientAddressConfiguration,
-  githubLoginConfiguration,
+  humanLoginConfiguration,
 } from "../../apps/controller/src/auth/index.ts";
 import { createOccLogger } from "../../apps/controller/src/logging.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
@@ -159,7 +159,7 @@ export async function composeProductionSignIn(context, { databaseUrl, settings, 
     startupConfiguration: { configuration, logging: { level: "info" } },
   });
   const { installation } = runtime;
-  const github = githubLoginConfiguration(environment);
+  const humanLogin = humanLoginConfiguration(environment);
   const clientAddress = clientAddressConfiguration(environment);
   const nativeAdminEnabled = environment.OCC_AGENT_NATIVE_ADMIN_ENABLED === "true";
   return composeProduction({
@@ -169,7 +169,7 @@ export async function composeProductionSignIn(context, { databaseUrl, settings, 
     authSecret: environment.OCC_AUTH_SECRET,
     authBaseURL: environment.OCC_AUTH_BASE_URL,
     ...(environment.OCC_GATEWAY_API_KEY_PATH === undefined ? {} : { gatewayApiKeyPath: keyFile }),
-    ...(github === undefined ? {} : { github }),
+    ...humanLogin,
     ...(clientAddress === undefined ? {} : { clientAddress }),
     ...(nativeAdminEnabled
       ? {

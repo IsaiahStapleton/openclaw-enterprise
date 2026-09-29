@@ -37,9 +37,8 @@ function loginFixture(overrides = {}) {
   const login = createHumanLogin(
     state,
     {
-      clientId: "fixture-client",
-      clientSecret: "fixture-client-secret",
       recoveryUserId: "fixture-recovery",
+      github: { clientId: "fixture-client", clientSecret: "fixture-client-secret" },
     },
     origin,
   );
