@@ -273,8 +273,8 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
 Pending convergence requeues with backoff and refunds the attempt. Dependency
-failures consume attempts; permanent failure, exhaustion or deadline terminates
-work. See [outcomes](../reference/controller.md) and
+failures consume attempts; permanent failure, exhaustion, deadline, or
+`AUTHENTICATION_FAILED` evidence terminates work. See [outcomes](../reference/controller.md) and
 [timing controls](../reference/settings/operations.md#controller-worker-environment).
 
 `ControllerWorker.processRepositoryCleanup` defers every incomplete pass at the

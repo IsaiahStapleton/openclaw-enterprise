@@ -4958,8 +4958,15 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
     ["openai", "gpt-5", "OPENAI_API_KEY"],
     ["anthropic", "claude-sonnet-4-5", "ANTHROPIC_API_KEY"],
   ]) {
-    for (const accepted of [true, false]) {
-      await t.test(`${provider}: ${accepted ? "accepted" : "wrong provider result"}`, async () => {
+    for (const [variant, probeStatus, failureCode] of [
+      ["accepted", "ok", undefined],
+      ["wrong provider result", "ok", "MODEL_PROBE_FAILED"],
+      // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
+      ["credentials rejected", "auth", "AUTHENTICATION_FAILED"],
+      ["provider unavailable", "unknown", "MODEL_PROBE_FAILED"],
+    ]) {
+      const accepted = failureCode === undefined;
+      await t.test(`${provider}: ${variant}`, async () => {
         const driver = createKubernetesComputeDriver(options());
         const candidate = {
           namespaceId: tenant.id,
@@ -4982,6 +4989,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         let probeTemplate;
         let started = false;
         let held = false;
+        let statusHandler;
         // Stub native process I/O only: execute the complete generated startup
         // program and its real probe result validation, without claiming a model turn.
         runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, {
@@ -4998,6 +5006,10 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
               ["TMPDIR", "/approved-temporary"],
               ["NODE_EXTRA_CA_CERTS", "/run/openshell/ca.crt"],
               ["SSL_CERT_FILE", "/run/openshell/ca-bundle.crt"],
+              ["OPENCLAW_AGENT_REVISION_ID", "revision-embedded-probe"],
+              ["OPENCLAW_RUNTIME_STATUS_CONTAINER", "gateway"],
+              ["OPENCLAW_RUNTIME_STATUS_PORT", "18791"],
+              ["OPENCLAW_POD_UID", "pod-embedded-probe"],
             ]),
             on(signal, callback) {
               signals.set(signal, callback);
@@ -5014,6 +5026,14 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
             held = true;
           },
           require(specifier) {
+            if (specifier === "node:http") {
+              return {
+                createServer(handler) {
+                  statusHandler = handler;
+                  return { listen() {} };
+                },
+              };
+            }
             if (specifier === "node:fs") {
               return {
                 mkdirSync() {},
@@ -5038,10 +5058,11 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
                         probes: {
                           results: [
                             {
-                              provider: accepted ? provider : "another-provider",
+                              provider:
+                                variant === "wrong provider result" ? "another-provider" : provider,
                               model: `${provider}/${model}`,
                               source: "env",
-                              status: "ok",
+                              status: probeStatus,
                             },
                           ],
                         },
@@ -5084,6 +5105,12 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         assert.equal(started, accepted);
         assert.equal(held, !accepted);
         assert.deepEqual(errors, accepted ? [] : ["Harness model authentication probe failed."]);
+        let body = "";
+        statusHandler(
+          { method: "GET", url: "/openclaw/runtime/status" },
+          { writeHead() {}, end: (chunk) => (body += chunk) },
+        );
+        assert.equal(JSON.parse(body).runtimeFailure?.code, failureCode);
         if (accepted) {
           signals.get("SIGTERM")();
           assert.deepEqual(childSignals, ["SIGTERM"]);

@@ -79,6 +79,138 @@ test("OpenClaw runtime helper installs exact admitted package pins and verifies 
   assert.deepEqual(effective.tools.alsoAllow, ["existing-tool", "diffs"]);
 });
 
+for (const [label, channels] of [
+  ["no channels", undefined],
+  ["unrelated channel", { msteams: { enabled: true } }],
+  ["disabled Slack", { slack: { enabled: false, accounts: { team: { enabled: true } } } }],
+]) {
+  test(`Gateway omits managed Slack approvers for ${label} while preserving admitted denies`, () => {
+    for (const kind of ["openclaw", "codex"]) {
+      const runtime =
+        kind === "openclaw"
+          ? openClawRuntime({ approvers: [], tools: { diffs: { approvers: [] } } })
+          : {
+              manifest: {
+                kind,
+                selections: {
+                  "codex-plugin:linear@openai-curated-remote": {
+                    enabled: true,
+                    approvers: [],
+                    tools: {
+                      "asdk_app_69a089a326dc8191b32a3f2553f5be2c/repos%2Fwrite": { approvers: [] },
+                    },
+                  },
+                },
+              },
+            };
+      runtime.manifest.pluginApprovers = [];
+      const admitted = structuredClone(runtime);
+      const nativeApprovals = { exec: { enabled: true, mode: "session" } };
+      const { files, calls } = runOpenClawRuntimeHelper(runtime, installedPluginResponses(), {
+        baseConfig: { ...(channels ? { channels } : {}), approvals: nativeApprovals },
+      });
+      const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+      assert.deepEqual(effective.approvals, nativeApprovals);
+      assert.deepEqual(runtime, admitted);
+      assert.equal(
+        calls.some((call) => call.args[1] === "config"),
+        false,
+      );
+    }
+  });
+}
+
+test("Gateway validates only the generated Slack policy before writing the effective configuration", () => {
+  const runtime = { manifest: { kind: "codex", selections: {}, pluginApprovers: [] } };
+  const baseConfig = {
+    channels: { slack: { enabled: true, accounts: { disabled: { enabled: false } } } },
+    approvals: { exec: { enabled: true, mode: "session" } },
+  };
+  let candidate;
+  const { calls, files } = runOpenClawRuntimeHelper(runtime, [], {
+    baseConfig,
+    beforeSpawn(command, args, sandbox, options) {
+      if (args[1] !== "config") {
+        return;
+      }
+      assert.equal(sandbox.files.has("/home/node/.openclaw/openclaw.json"), false);
+      candidate = JSON.parse(sandbox.files.get(options.env.OPENCLAW_CONFIG_PATH));
+      assert.notEqual(options.env.OPENCLAW_CONFIG_PATH, sandbox.process.env.OPENCLAW_CONFIG_PATH);
+      assert.equal(options.timeout, 30_000);
+      assert.equal(options.maxBuffer, 1024 * 1024);
+    },
+  });
+  assert.deepEqual(candidate, { approvals: { plugin: { slack: { approvers: [] } } } });
+  // Reapplying the identical policy after install reuses its successful probe.
+  assert.deepEqual(
+    calls.map((call) => Array.from(call.args)),
+    [["/app/openclaw.mjs", "config", "validate", "--json"]],
+  );
+  const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+  assert.deepEqual(effective.approvals, {
+    ...baseConfig.approvals,
+    plugin: { slack: { approvers: [] } },
+  });
+  assert.equal(files.get("/etc/openclaw/openclaw.json"), JSON.stringify(baseConfig));
+  assert.equal(
+    [...files.keys()].some((path) => path.includes("oce-plugin-approvers-")),
+    false,
+  );
+});
+
+for (const [label, response] of [
+  [
+    "unsupported field",
+    { status: 1, stdout: JSON.stringify({ valid: false }), stderr: "unknown key" },
+  ],
+  ["rejected configuration", { status: 0, stdout: JSON.stringify({ valid: false }), stderr: "" }],
+  ["unavailable validator", { status: null, error: new Error("spawn failed") }],
+  ["non-JSON output", { status: 0, stdout: "invalid response", stderr: "" }],
+]) {
+  test(`Gateway rejects ${label} before replacing its effective configuration`, () => {
+    const runtime = { manifest: { kind: "codex", selections: {}, pluginApprovers: [] } };
+    const baseConfig = { channels: { slack: { enabled: true } } };
+    const effectivePath = "/home/node/.openclaw/openclaw.json";
+    const previousConfiguration = JSON.stringify({ gateway: { port: 9999 } });
+    const result = runOpenClawRuntimeHelper(runtime, [], {
+      baseConfig,
+      files: [[effectivePath, previousConfiguration]],
+      configValidationResponse: response,
+      captureError: true,
+    });
+    assert.match(
+      result.error?.message ?? "",
+      /gateway image cannot validate approvals\.plugin\.slack/,
+    );
+    assert.equal(result.files.get(effectivePath), previousConfiguration);
+    assert.equal(result.files.get("/etc/openclaw/openclaw.json"), JSON.stringify(baseConfig));
+    assert.equal(result.calls.length, 1);
+    assert.equal(
+      [...result.files.keys()].some((path) => path.includes("oce-plugin-approvers-")),
+      false,
+    );
+  });
+}
+
+test("Gateway maps approver probe tmpdir failures to the approver configuration error", () => {
+  const runtime = { manifest: { kind: "codex", selections: {}, pluginApprovers: [] } };
+  const baseConfig = { channels: { slack: { enabled: true } } };
+  const effectivePath = "/home/node/.openclaw/openclaw.json";
+  const previousConfiguration = JSON.stringify({ gateway: { port: 9999 } });
+  const result = runOpenClawRuntimeHelper(runtime, [], {
+    baseConfig,
+    files: [[effectivePath, previousConfiguration]],
+    mkdtempError: Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }),
+    captureError: true,
+  });
+  assert.match(
+    result.error?.message ?? "",
+    /gateway image cannot validate approvals\.plugin\.slack/,
+  );
+  assert.equal(result.files.get(effectivePath), previousConfiguration);
+  assert.equal(result.calls.length, 0);
+});
+
 test("OpenClaw runtime merges matching inherited native approvers", () => {
   const agentApprover = "team:T123:user:U123";
   const otherAgentApprover = "team:T123:user:U789";
@@ -101,7 +233,10 @@ test("OpenClaw runtime merges matching inherited native approvers", () => {
     },
   };
   const { files } = runOpenClawRuntimeHelper(runtime, installedPluginResponses(), {
-    baseConfig: { approvals: { plugin: { slack: configured } } },
+    baseConfig: {
+      channels: { slack: { enabled: true } },
+      approvals: { plugin: { slack: configured } },
+    },
   });
   const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.deepEqual(effective.approvals.plugin.slack, {
@@ -111,6 +246,7 @@ test("OpenClaw runtime merges matching inherited native approvers", () => {
 
   const conflicting = runOpenClawRuntimeHelper(runtime, [], {
     baseConfig: {
+      channels: { slack: { enabled: true } },
       approvals: {
         plugin: {
           slack: {
@@ -123,10 +259,14 @@ test("OpenClaw runtime merges matching inherited native approvers", () => {
     captureError: true,
   });
   assert.match(conflicting.error?.message ?? "", /conflicts with managed Agent approvers/);
-  assert.deepEqual(conflicting.calls, []);
+  assert.deepEqual(
+    conflicting.calls.map((call) => Array.from(call.args).slice(1)),
+    [["config", "validate", "--json"]],
+  );
 
   const conflictingTool = runOpenClawRuntimeHelper(runtime, [], {
     baseConfig: {
+      channels: { slack: { enabled: true } },
       approvals: {
         plugin: {
           slack: {
@@ -144,7 +284,10 @@ test("OpenClaw runtime merges matching inherited native approvers", () => {
     captureError: true,
   });
   assert.match(conflictingTool.error?.message ?? "", /conflicts with managed Agent approvers/);
-  assert.deepEqual(conflictingTool.calls, []);
+  assert.deepEqual(
+    conflictingTool.calls.map((call) => Array.from(call.args).slice(1)),
+    [["config", "validate", "--json"]],
+  );
 });
 
 test("OpenClaw startup rejects native approvers that bypass an Agent ancestor", () => {
@@ -160,11 +303,17 @@ test("OpenClaw startup rejects native approvers that bypass an Agent ancestor", 
     ],
   ]) {
     const result = runOpenClawRuntimeHelper(runtime, installedPluginResponses(), {
-      baseConfig: { approvals: { plugin: { slack: configured } } },
+      baseConfig: {
+        channels: { slack: { enabled: true } },
+        approvals: { plugin: { slack: configured } },
+      },
       captureError: true,
     });
     assert.match(result.error?.message ?? "", /conflicts with managed Agent approvers/);
-    assert.deepEqual(result.calls, []);
+    assert.deepEqual(
+      result.calls.map((call) => Array.from(call.args).slice(1)),
+      [["config", "validate", "--json"]],
+    );
   }
 });
 
@@ -186,6 +335,7 @@ test("Codex bridge preserves an unrelated native tool approver for the same plug
   };
   const { files } = runOpenClawRuntimeHelper(runtime, [], {
     baseConfig: {
+      channels: { slack: { enabled: true } },
       approvals: {
         plugin: { slack: { plugins: { linear: { tools: { [writeTool]: { approvers: [] } } } } } },
       },

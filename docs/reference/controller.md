@@ -121,7 +121,13 @@ The worker emits fixed operational event classes through the same logger:
 - `worker.health`: reports readiness and pending work count at debug level.
 - `worker.completed`: includes `namespaceId`, work identity, attempt, outcome,
   and a stable result code; AgentRevision operations also include `agentId` and
-  `revisionId`.
+  `revisionId`. Each deployment pass adds worker wall-clock milliseconds:
+  `durationMs` for the pass, `deployPasses` and summed Compute `prepareMs` so
+  far, `readinessWaitMs` from the first unready observation to the first ready
+  one (or to now while pending), `activationMs` from the ready observation to
+  completion, and `elapsedMs` since admission. Totals cover the passes this
+  worker process ran; a restart starts them again. Maintenance, cleanup, and
+  stop work carry no deployment timing.
 - `worker.error`: reports `CLAIM_LOST` or `WORKER_UNAVAILABLE` without exposing
   credentials.
 - `worker.stopped`: confirms graceful shutdown.
