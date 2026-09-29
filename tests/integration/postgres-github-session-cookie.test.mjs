@@ -157,6 +157,47 @@ test(
     assert.match(sessionCookie, /; HttpOnly(?:;|$)/i);
     assert.match(sessionCookie, /; Path=\/(?:;|$)/i);
     assert.doesNotMatch(sessionCookie, /; Domain=/i);
+    // x-occ-session-key can only narrow which cookie session a request may use:
+    // absent keeps the cookie contract, and a key never selects a session.
+    const ownKey = signedIn.json().data.sessionKey;
+    assert.match(ownKey, /^[A-Za-z0-9_-]{43}$/);
+    const ownCookie = sessionCookie.split(";")[0];
+    const otherLogin = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      headers: { origin },
+      payload: { email, password },
+    });
+    const foreignKey = otherLogin.json().data.sessionKey;
+    assert.notEqual(foreignKey, ownKey);
+    const inspect = (url, headers) => app.inject({ url, headers: { origin, ...headers } });
+    assert.equal(
+      (await inspect("/api/auth/session", { cookie: ownCookie })).json().data.sessionKey,
+      ownKey,
+    );
+    // Protected API narrowing is proved with the full composition in
+    // postgres-github-sign-in.test.mjs; this fixture owns the HTTPS session route.
+    const plain = await inspect("/api/auth/session", { cookie: ownCookie });
+    assert.equal(plain.json().data.user.id, recoveryUserId);
+    assert.equal(
+      (
+        await inspect("/api/auth/session", { cookie: ownCookie, "x-occ-session-key": ownKey })
+      ).json().data.sessionKey,
+      ownKey,
+    );
+    for (const key of [foreignKey, "malformed", [ownKey, ownKey]]) {
+      const refused = await inspect("/api/auth/session", {
+        cookie: ownCookie,
+        "x-occ-session-key": key,
+      });
+      assert.equal(refused.statusCode, 401, refused.body);
+      assert.equal(refused.headers["set-cookie"], undefined);
+    }
+    // Without a cookie the key selects nothing: no session and no protected access.
+    assert.equal(
+      (await inspect("/api/auth/session", { "x-occ-session-key": ownKey })).json().data,
+      null,
+    );
     plantedCookie = sessionCookie.split(";")[0];
     browser = await chromium.launch({
       chromiumSandbox: true,

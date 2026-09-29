@@ -6,6 +6,15 @@ import { deleteSessionCookie, setSessionCookie } from "better-auth/cookies";
 import { github } from "better-auth/social-providers";
 import { authorizationCodeRequest, getOAuth2Tokens } from "better-auth/oauth2";
 import type { DBAdapter, DBAdapterInstance } from "better-auth/adapters";
+import {
+  LOGIN_RECEIPT_LIFETIME_SECONDS,
+  isBindingValue,
+  loginAttemptId,
+  receiptLedger,
+  sessionBindingKey,
+  signLoginReceipt,
+  verifyLoginReceipt,
+} from "./session-binding.ts";
 import type {
   PostgresHumanAuthentication,
   HumanAuthenticationProof,
@@ -307,6 +316,9 @@ export function createHumanLogin(
   const callbackURL = new URL("/api/auth/providers/github/callback", baseURL).href;
   const secure = new URL(baseURL).protocol === "https:";
   const bindingCookie = secure ? "__Host-occ_login_attempt" : "occ_login_attempt";
+  const receiptCookie = secure ? "__Host-occ_login_receipt" : "occ_login_receipt";
+  const receiptAttributes = { httpOnly: true, secure, sameSite: "strict" as const, path: "/" };
+  const receipts = receiptLedger();
   const cookieAttributes = { httpOnly: true, secure, sameSite: "lax" as const, path: "/" };
   const provider = github({
     clientId: config.clientId,
@@ -458,7 +470,10 @@ export function createHumanLogin(
           await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
             maxAge,
           });
-          return ctx.json({ authenticated: true });
+          return ctx.json({
+            authenticated: true,
+            sessionKey: sessionBindingKey(ctx.context.secret, session.id),
+          });
         };
         return recoveryEmail !== undefined && email === recoveryEmail
           ? admitPassword.admitRecovery(work)
@@ -511,7 +526,10 @@ export function createHumanLogin(
               ...cookieAttributes,
               maxAge,
             });
-            return ctx.json({ url: url.href });
+            return ctx.json({
+              url: url.href,
+              attemptId: loginAttemptId(ctx.context.secret, digest(attemptState)),
+            });
           }),
       ),
       oceGithubCallback: createAuthEndpoint(
@@ -571,7 +589,52 @@ export function createHumanLogin(
             await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
               maxAge,
             });
+            // The redirect carries no secret. The starting tab exchanges this
+            // receipt for the key of exactly the session this attempt created.
+            ctx.setCookie(
+              receiptCookie,
+              signLoginReceipt(ctx.context.secret, {
+                sessionId: session.id,
+                attemptId: loginAttemptId(ctx.context.secret, digest(stateValue)),
+                expiresAt: Date.now() + LOGIN_RECEIPT_LIFETIME_SECONDS * 1000,
+              }),
+              { ...receiptAttributes, maxAge: LOGIN_RECEIPT_LIFETIME_SECONDS },
+            );
             return ctx.json({ authenticated: true });
+          }),
+      ),
+      oceGithubResult: createAuthEndpoint(
+        "/oce/providers/github/result",
+        { method: "POST" },
+        async (ctx) =>
+          admitGithub.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
+            const body = ctx.body as { attemptId?: unknown } | undefined;
+            const now = Date.now();
+            const receipt = verifyLoginReceipt(
+              ctx.context.secret,
+              ctx.getCookie(receiptCookie),
+              now,
+            );
+            if (
+              !receipt ||
+              !isBindingValue(body?.attemptId) ||
+              body.attemptId !== receipt.attemptId
+            ) {
+              throw rejected();
+            }
+            const token = await ctx.getSignedCookie(
+              ctx.context.authCookies.sessionToken.name,
+              ctx.context.secret,
+            );
+            const current = token ? await state.currentSession(token) : undefined;
+            // The receipt names the session its callback created. A cookie replaced by
+            // another sign-in, or a revoked session, cannot adopt this attempt's key.
+            if (!current || current.id !== receipt.sessionId || !receipts.consume(receipt, now)) {
+              throw rejected();
+            }
+            ctx.setCookie(receiptCookie, "", { ...receiptAttributes, maxAge: 0 });
+            // This exchange neither issues nor extends a session.
+            return ctx.json({ sessionKey: sessionBindingKey(ctx.context.secret, current.id) });
           }),
       ),
     },

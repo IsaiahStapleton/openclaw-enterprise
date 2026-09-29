@@ -433,9 +433,12 @@ test(
         url.searchParams.get("redirect_uri"),
         `${origin}/api/auth/providers/github/callback`,
       );
+      const { attemptId } = response.json().data;
+      assert.match(attemptId, /^[A-Za-z0-9_-]{43}$/);
       return {
         cookie: cookieHeaderFromSetCookie(response.headers["set-cookie"]),
         state: url.searchParams.get("state"),
+        attemptId,
       };
     }
     const attempt = await start();
@@ -515,6 +518,101 @@ test(
     });
     assert.equal(consumed.headers.location, "/console/?authError=github");
     assert.equal(exchangeCount, 1, "a consumed callback cannot exchange again");
+
+    // The redirect stays exactly /console/; only the HttpOnly receipt cookie tells
+    // the starting tab which session its attempt created.
+    const receipt = [callback.headers["set-cookie"]]
+      .flat()
+      .find((value) => value.startsWith("occ_login_receipt="));
+    assert.ok(receipt);
+    assert.match(receipt, /HttpOnly/i);
+    assert.match(receipt, /SameSite=Strict/i);
+    assert.match(receipt, /Max-Age=120/);
+    const receiptCookie = receipt.split(";", 1)[0];
+    const githubSessionCookie = githubCookie
+      .split("; ")
+      .filter((cookie) => !cookie.startsWith("occ_login_receipt="))
+      .join("; ");
+    async function result(attemptId, cookie, requestHeaders = { origin }) {
+      return app.inject({
+        method: "POST",
+        url: "/api/auth/providers/github/result",
+        headers: { ...requestHeaders, cookie },
+        payload: { attemptId },
+      });
+    }
+    async function sessionRows() {
+      return (await pool.query("SELECT id, expires_at FROM occ.session ORDER BY id")).rows;
+    }
+    const sessionsBeforeResult = await sessionRows();
+    // A cross-origin or Origin-less request cannot read the key, even with valid cookies.
+    const withoutOrigin = await result(attempt.attemptId, githubCookie, {});
+    assert.equal(withoutOrigin.statusCode, 403, withoutOrigin.body);
+    // Like sign-out, a supplied Sec-Fetch-Site must be same-origin.
+    const sameSite = await result(attempt.attemptId, githubCookie, {
+      origin,
+      "sec-fetch-site": "same-site",
+    });
+    assert.equal(sameSite.statusCode, 403, sameSite.body);
+    // A different live attempt, such as another tab's, cannot claim this session.
+    const otherTab = await start();
+    const wrongAttempt = await result(otherTab.attemptId, githubCookie);
+    assert.equal(wrongAttempt.statusCode, 401, wrongAttempt.body);
+    // A later sign-in replaced the cookie: the receipt must not bind the new session.
+    const replacedCookie = `${(await passwordLogin()).cookie}; ${receiptCookie}`;
+    const replacedSession = await result(attempt.attemptId, replacedCookie);
+    assert.equal(replacedSession.statusCode, 401, replacedSession.body);
+    // An expired receipt is refused even while its browser cookie is still sent.
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 121_000 });
+    let expired;
+    try {
+      expired = await result(attempt.attemptId, githubCookie);
+    } finally {
+      t.mock.timers.reset();
+    }
+    assert.equal(expired.statusCode, 401, expired.body);
+    const confirmed = await result(attempt.attemptId, githubCookie);
+    assert.equal(confirmed.statusCode, 200, confirmed.body);
+    assert.equal(confirmed.headers["cache-control"], "no-store");
+    const { sessionKey } = confirmed.json().data;
+    assert.equal(
+      (await app.inject({ url: "/api/auth/session", headers: { cookie: githubCookie } })).json()
+        .data.sessionKey,
+      sessionKey,
+      "the result key names the session the callback issued",
+    );
+    const confirmedCookies = [confirmed.headers["set-cookie"]].flat().join("\n");
+    assert.doesNotMatch(confirmedCookies, /session_token/, "the exchange issues no session");
+    assert.match(confirmedCookies, /occ_login_receipt=;.*Max-Age=0/);
+    // The password login above added a row; the exchange itself added or extended none.
+    const sessionsAfterResult = await sessionRows();
+    for (const row of sessionsBeforeResult) {
+      assert.deepEqual(
+        sessionsAfterResult.find((candidate) => candidate.id === row.id),
+        row,
+      );
+    }
+    assert.equal(sessionsAfterResult.length, sessionsBeforeResult.length + 1);
+    // Replaying a copied receipt after the browser cleared it is refused.
+    const replay = await result(attempt.attemptId, githubCookie);
+    assert.equal(replay.statusCode, 401, replay.body);
+    // The key narrows protected API admission: absent keeps the cookie contract,
+    // a matching key admits, and a foreign, malformed or duplicated key rejects.
+    // A key without the cookie never selects a session.
+    const foreignKey = (
+      await app.inject({ url: "/api/auth/session", headers: { cookie: headers.cookie } })
+    ).json().data.sessionKey;
+    for (const [requestHeaders, status] of [
+      [{ cookie: githubSessionCookie }, 200],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": sessionKey }, 200],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": foreignKey }, 401],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": "malformed" }, 401],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": [sessionKey, sessionKey] }, 401],
+      [{ "x-occ-session-key": sessionKey }, 401],
+    ]) {
+      const narrowed = await app.inject({ url: "/namespaces", headers: requestHeaders });
+      assert.equal(narrowed.statusCode, status, narrowed.body);
+    }
 
     // Unknown provider identities cannot create accounts, even when local account data exists.
     providerSubject = 87654321;
@@ -611,12 +709,29 @@ test(
       });
     });
     await page.goto(`${origin}/console/`);
+    // The Console confirms that the callback's session is the one this tab's attempt
+    // created, then pins its key on every later request.
+    const resultRequest = page.waitForRequest(
+      (candidate) => new URL(candidate.url()).pathname === "/api/auth/providers/github/result",
+    );
+    const pinnedRead = page.waitForRequest(
+      (candidate) => new URL(candidate.url()).pathname === "/namespaces",
+    );
     await page.getByRole("button", { name: "Continue with GitHub" }).click();
     await page.waitForURL(/\/console\/(agents|providers|namespaces|settings)/);
+    const confirmedResult = await (await resultRequest).response();
+    assert.equal(confirmedResult.status(), 200);
     const browserSession = await page.evaluate(
       async () => (await (await fetch("/api/auth/session")).json()).data,
     );
     assert.equal(browserSession.user.id, recovery);
+    assert.equal((await confirmedResult.json()).data.sessionKey, browserSession.sessionKey);
+    assert.equal((await pinnedRead).headers()["x-occ-session-key"], browserSession.sessionKey);
+    assert.deepEqual(
+      await page.evaluate(() => ({ ...sessionStorage })),
+      {},
+      "the one-use attemptId leaves tab storage after the exchange",
+    );
     const browserNamespaces = await page.evaluate(
       async () => (await (await fetch("/namespaces")).json()).data,
     );
@@ -982,6 +1097,43 @@ test(
         .statusCode,
       403,
       "a trusted Origin is required",
+    );
+    // Recovery and enrolment routes honour x-occ-session-key like other account routes:
+    // a foreign or malformed key is refused before any read or change, and the
+    // matching key admits.
+    const sessionKeyOf = async (cookie) =>
+      (await app.inject({ url: "/api/auth/session", headers: { cookie } })).json().data.sessionKey;
+    const adminKey = await sessionKeyOf(browserCookies);
+    const limitedKey = await sessionKeyOf(limitedCookie);
+    assert.notEqual(adminKey, limitedKey);
+    const recoveryVersion = (
+      await pool.query("SELECT xmin::text AS version FROM occ.human_authentication_recovery")
+    ).rows;
+    for (const key of [limitedKey, "malformed"]) {
+      const narrowedHeaders = { ...adminHeaders, "x-occ-session-key": key };
+      const read = await app.inject({ url: "/api/auth/recovery", headers: narrowedHeaders });
+      assert.equal(read.statusCode, 401, read.body);
+      const move = await replaceRecovery(
+        { userId: limited.id, expectedCurrentUserId: recovery, expectedVersion: 1 },
+        narrowedHeaders,
+      );
+      assert.equal(move.statusCode, 401, move.body);
+      const enrol = await app.inject({
+        method: "POST",
+        url: `/api/auth/accounts/${limited.id}/enrol`,
+        headers: narrowedHeaders,
+      });
+      assert.equal(enrol.statusCode, 401, enrol.body);
+    }
+    assert.deepEqual(
+      (await pool.query("SELECT xmin::text AS version FROM occ.human_authentication_recovery"))
+        .rows,
+      recoveryVersion,
+      "a refused narrowed request leaves the designation untouched",
+    );
+    assert.equal(
+      (await readRecovery({ ...adminHeaders, "x-occ-session-key": adminKey })).userId,
+      recovery,
     );
     assert.equal(
       (

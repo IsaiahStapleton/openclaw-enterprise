@@ -12,4 +12,5 @@ export const GitHubLogin = { ...story("githubLogin") };
 export const GitHubUnavailable = { ...story("githubUnavailable") };
 export const GitHubRateLimited = { ...story("githubRateLimited") };
 export const GitHubCallbackRejected = { ...story("githubCallbackRejected") };
+export const GitHubResultRejected = { ...story("githubResultRejected") };
 export const ProviderDiscoveryUnavailable = { ...story("providerDiscoveryUnavailable") };

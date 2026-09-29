@@ -98,34 +98,27 @@ not require Origin, and an invalid key never falls back to a session cookie.
 
 ## Session lifecycle
 
-| Operation                      | Supported behavior                                                                                                                                          |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/sign-in/email` | Verifies an existing account's email and password and issues a session cookie. The JSON response confirms authentication without returning a session token. |
-| `GET /api/auth/session`        | Returns safe account identity and a noncredential `sessionKey`, or `data: null` without a valid session.                                                    |
-| `POST /api/auth/sign-out`      | Revokes the current session. Protected API requests using that session subsequently return `401`.                                                           |
+| Operation                      | Supported behavior                                                                                                                                                                             |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/sign-in/email` | Verifies an existing account's email and password and issues a session cookie. The JSON response confirms authentication, and with GitHub enabled returns `sessionKey`, never a session token. |
+| `GET /api/auth/session`        | Returns safe account identity and a noncredential `sessionKey`, or `data: null` without a valid session.                                                                                       |
+| `POST /api/auth/sign-out`      | Revokes the current session. Protected API requests using that session subsequently return `401`.                                                                                              |
 
-The `sessionKey` identifies the current session record, stays stable across reads,
-and changes on a new sign-in, including for the same account. It cannot authenticate
-requests; the session token remains in its HttpOnly cookie. Console uses this key
-to discard retained content and drafts when the session changes.
+The `sessionKey` names the current session, stays stable across reads, and changes
+on each sign-in. It cannot authenticate; the token stays in its HttpOnly cookie.
+Sending it back as `x-occ-session-key` narrows a request to that session: a
+foreign, malformed, or duplicated key returns `401`, and such a sign-out neither
+revokes nor clears the cookie. Without the header, requests are unchanged. Console
+pins each tab's key this way.
 
-For example, the sign-in body is:
-
-```json
-{
-  "email": "admin@example.invalid",
-  "password": "<account-password>"
-}
-```
-
-A successful sign-in returns `data: { "authenticated": true }` and delivers the
-session only through `Set-Cookie`, which protected OCC API calls use.
+Sign-in takes `{"email": "...", "password": "..."}`. The session credential
+arrives only through `Set-Cookie`; protected OCC API calls use that cookie.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
 HTTP-only, use `SameSite=Lax`, and cover `/`. Production enables secure cookies;
 the configured base URL is also the trusted origin. Session inspection exposes
-only `authenticated` and the account's `id`, `email`, and `name`.
+only `authenticated`, `sessionKey`, and the account's `id`, `email`, and `name`.
 
 Protected requests resolve the current stored session with cookie caching
 disabled. A missing, expired, revoked, or forged session is rejected. Supplying
@@ -189,16 +182,20 @@ user, email association, signup, identity transfer, and self-service linking are
 rejected. For unknown identities, follow the
 [enrollment procedure](../guides/deploy/production-installation.md#enable-github-browser-sign-in).
 
-`GET /api/auth/providers` returns `data: {"github": true}` when enabled. A
-same-origin `POST /api/auth/providers/github/start` returns `data.url` and sets a
-browser-binding cookie. Other provider names return `404`; callers cannot select
+`GET /api/auth/providers` returns `github` and `sessionBinding` as `true` when enabled. A
+same-origin `POST /api/auth/providers/github/start` returns `data.url` and a public
+`data.attemptId`, and sets a browser-binding cookie. Other provider names return `404`; callers cannot select
 callback or return destinations. The [Console flow](../flows/platform-console.md#2-resolve-the-session-before-private-reads)
 owns button and error display.
 
 The callback consumes a short-lived, browser-bound attempt once before code
 exchange and resolves the immutable numeric GitHub user ID's exact enrollment.
-Unknown identities fail without signup. Success returns to `/console/`; failure
-returns to `/console/?authError=github` without automatic retry.
+Unknown identities fail without signup. Success returns to exactly `/console/`
+and sets a two-minute HttpOnly, `SameSite=Strict` login receipt; failure returns
+to `/console/?authError=github` without automatic retry. The starting tab sends its
+`attemptId` with the configured Origin to `POST /api/auth/providers/github/result`,
+which returns the callback session's `sessionKey` once, only while that session's
+cookie is current. It never issues or extends a session.
 
 ### Session and recovery controls
 
@@ -222,8 +219,8 @@ seeds first activation; a differing value warns, and each start re-checks the ho
 
 Account reads and mutations require a human session, exact `Origin`, and
 Installation `administer`; service keys are refused. State locks actor and target
-accounts and rechecks the actor session; a concurrent logout or revocation can
-invalidate the actor, and a stale target `expectedVersion` returns `409 RESOURCE_CONFLICT`.
+accounts and rechecks the actor session, which a concurrent logout or revocation
+can invalidate; a stale target `expectedVersion` returns `409 RESOURCE_CONFLICT`.
 
 Send the version just read, such as `{"expectedVersion":1}`:
 
@@ -255,30 +252,25 @@ deadline, refuse redirects, and read at most 64 KiB. Limits are per controller.
 ## Native admin shared sessions
 
 Agent native admin UI access starts from an ordinary controller browser session.
-When the trusted-operator pilot is enabled, the server parses
-`nativeAdmin.sharedCookieDomain` and configures the Better Auth session cookie
-for that explicit shared OCE parent domain so the console host and derived Agent
-hosts can use the same human session. Service API keys do not create browser
-sessions and cannot open native admin UI access. When native admin is disabled,
-leftover shared-cookie-domain configuration is ignored and Better Auth keeps the
-legacy host-only `openclaw_occ` cookie prefix and scope.
+With the trusted-operator pilot enabled, the session cookie is scoped to the
+explicit `nativeAdmin.sharedCookieDomain` parent so the console and derived Agent
+hosts share one human session. Service API keys cannot open native admin UI.
+When native admin is disabled, leftover shared-cookie-domain configuration is
+ignored and the host-only `openclaw_occ` cookie remains.
 
-The shared cookie parent domain is configured explicitly and validated against
-the console origin and Agent host suffix on DNS-label boundaries. Public
-suffixes, malformed domains, and hosts outside the configured parent are
-rejected; OCC does not infer a broader parent domain from either host. A
-domain-scoped cookie cannot use a host-only `__Host-` prefix. The shared-domain
-session uses the Better Auth cookie prefix `openclaw_occ_shared`; on HTTPS its
-cookie name is `__Secure-openclaw_occ_shared.session_token`. During migration,
-successful sign-in/sign-out responses clear prior host-only `openclaw_occ` and
-`openclaw_occ_shared` session-cookie names without a `Domain` attribute so
-browsers do not choose between duplicate host-only and domain cookies.
+The explicit parent domain is validated against the console origin and Agent host
+suffix on DNS-label boundaries. Public suffixes, malformed domains, and outside
+hosts are rejected; OCC never infers a broader parent. Because a domain cookie
+cannot use `__Host-`, the shared session uses prefix `openclaw_occ_shared`
+(`__Secure-openclaw_occ_shared.session_token` on HTTPS). Successful sign-in and
+sign-out clear prior host-only `openclaw_occ` and `openclaw_occ_shared` cookie
+names so browsers never choose between duplicates.
 
 Native-host requests authenticate the shared OCE session, resolve the exact
 Agent represented by the requested host, authorize exact Agent `administer`, and
 validate the current active revision and supported native configuration before
-proxying. OCC strips browser cookies, `Authorization`, API keys, forwarded
-identity, and native scope headers before forwarding upstream, so the native
+proxying. OCC strips browser cookies, `Authorization`, API and session keys,
+forwarded identity, and native scope headers before forwarding upstream, so the native
 gateway never receives the OCE session cookie. Native chat or other Agent-host
 activity does not renew the console session.
 
@@ -304,9 +296,8 @@ A representative provisioning body is:
 ```
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
-The backend provisions the account without a public email-verification or
-signup flow. Duplicate accounts are rejected. The controller API exposes no
-password reset.
+Provisioning has no public email-verification or signup flow; duplicates are
+rejected. The controller API exposes no password reset.
 
 ## Authorization and failures
 

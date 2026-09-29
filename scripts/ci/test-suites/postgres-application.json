@@ -263,6 +263,48 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-password-default.test.mjs",
+      "expectedTests": [
+        "a password-only install without GitHub onboards, signs in and out, and refuses GitHub routes"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-password-default-activation.test.mjs",
+      "expectedTests": [
+        "password accounts from before GitHub activation keep signing in, and creation continues after it"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-github-outage.test.mjs",
+      "expectedTests": [
+        "a GitHub outage fails GitHub sign-in closed while password sign-in keeps working"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-github-admin-attach.test.mjs",
+      "expectedTests": [
+        "Installation administrators attach, detach and re-attach GitHub identities and disable accounts"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-github-tab-binding.test.mjs",
+      "expectedTests": [
+        "a GitHub tab keeps its own session: another tab's password sign-in signs it out"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
+      "expectedTests": [
+        "online recovery replacement moves the reserved lane and survives a restart with the original seed"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-break-glass-auth-maintain.test.mjs",
+      "expectedTests": [
+        "stopped-maintenance break-glass resets the recovery password and returns to the password profile"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-trusted-proxy.test.mjs",
       "expectedTests": [
         "sign-in admission keys on the client behind a trusted ingress and ignores other peers' headers"
