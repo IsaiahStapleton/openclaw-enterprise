@@ -1574,7 +1574,7 @@ test("Agent repository recovery with empty current policy requires an explicit n
   );
 });
 
-test("Dedicated Agent creation provisions inline Configuration and masked new Secrets", async (t) => {
+test("Dedicated Agent creation opens deployment details after provisioning with masked new Secrets", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Provisioned create", { ready: true });
@@ -1585,7 +1585,7 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   const revisionId = "rev_00000000-0000-4000-8000-00000000feed";
   let allowProvisioningSuccess = false;
   let provisioningReads = 0;
-  let deploymentReads = 0;
+  let deploymentStatus = "queued";
   let provisionBody;
   const savedSecrets = new Map();
   await routeInstallationProvisioning(page, fixture);
@@ -1620,7 +1620,7 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
     },
     servicePrincipalId: "identity_provisioned_agent",
     createdAt: new Date().toISOString(),
-    activeRevisionId: revisionId,
+    activeRevisionId: null,
   };
   const revision = {
     id: revisionId,
@@ -1725,13 +1725,15 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   await page.route(
     `**/namespaces/${namespace.id}/agents/${agentId}/deployments/${revisionId}`,
     async (route) => {
-      deploymentReads += 1;
       await route.fulfill(
         json({
           deploymentId: `dep_${revisionId}`,
           revisionId,
-          status: deploymentReads > 1 ? "succeeded" : "queued",
-          error: null,
+          status: deploymentStatus,
+          error:
+            deploymentStatus === "failed"
+              ? { code: "DEPENDENCY_UNAVAILABLE", message: "Deployment reconciliation failed." }
+              : null,
         }),
       );
     },
@@ -1828,9 +1830,19 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
       url.pathname === `/console/agents/${agentId}` &&
       url.searchParams.get("namespace") === namespace.id &&
       url.searchParams.get("revision") === revisionId &&
-      url.searchParams.get("tab") === "workspace"
+      url.searchParams.get("tab") === "configuration"
     );
   });
+  // Creation must hand off to the detail page while deployment is still queued.
+  const deploymentPanel = page.locator(".deployment-status");
+  await deploymentPanel.getByText("Recorded status: queued", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Create Agent", exact: true }).count(), 0);
+  deploymentStatus = "failed";
+  await deploymentPanel.getByRole("button", { name: "Refresh deployment", exact: true }).click();
+  await deploymentPanel.getByText("Recorded status: failed", { exact: true }).waitFor();
+  await deploymentPanel
+    .getByText("DEPENDENCY_UNAVAILABLE: Deployment reconciliation failed.", { exact: true })
+    .waitFor();
 
   assert.match(provisionBody.requestId, /^req_[0-9a-f-]{36}$/);
   assert.equal(provisionBody.name, agent.name);
@@ -1882,7 +1894,6 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
   assert.equal(agentPostRequests(requests, namespace.id).length, 0);
   assert.ok(provisioningReads >= 1);
-  assert.ok(deploymentReads >= 2);
 });
 
 test("Dedicated Agent creation keeps provisioning when optional repository discovery is unavailable", async (t) => {
@@ -2315,7 +2326,7 @@ test("Dedicated Agent creation reuses separately saved Secret references after p
       url.pathname === `/console/agents/${agentId}` &&
       url.searchParams.get("namespace") === namespace.id &&
       url.searchParams.get("revision") === revisionId &&
-      url.searchParams.get("tab") === "workspace"
+      url.searchParams.get("tab") === "configuration"
     );
   });
   assert.equal(bodies.length, 2);
