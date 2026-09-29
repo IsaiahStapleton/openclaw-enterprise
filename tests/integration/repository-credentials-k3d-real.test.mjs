@@ -1283,14 +1283,15 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
               entry.mirrorIdentity === `${nativeTrace.turnId}:tool:${command.id}:result`,
           );
           assert.ok(call && result && result.seq > call.seq, `${operation} must be mirrored`);
-          assert.equal(command.status, "completed");
           if (operation === "push") {
+            assert.equal(command.status, "failed");
             assert.ok(
               Number.isInteger(command.exitCode) && command.exitCode !== 0,
               "the read-only push must fail",
             );
             assert.equal(command.http400, true, "the broker must reject receive-pack discovery");
           } else {
+            assert.equal(command.status, "completed");
             assert.equal(command.exitCode, 0, `${operation} must succeed`);
             if (operation === "readBase") {
               assert.ok(command.commitShas.includes(baseSha));
