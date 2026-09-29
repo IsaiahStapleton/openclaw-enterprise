@@ -11,7 +11,7 @@ ChatGPT service account), without a Sandbox Driver. Other combinations reject
 repository-bearing revisions. Helm's `Recreate` strategy prevents overlapping
 worker/credential-service owners.
 
-Only the repository consumer receives repository and model credentials. Dedicated
+Only the consumer receives repository and model credentials. Dedicated
 Slack tokens stay in the gateway. Repository profiles and model authentication
 are independent. [Kubernetes policies](drivers/kubernetes-compute/networking-and-isolation.md#networking)
 allow consumer access to the credential sidecar.
@@ -61,9 +61,9 @@ session identities and deadlines after Agent deletion, without bearers or tokens
 Agent deletion retires Compute without waiting for repository-session cleanup.
 Pending, missing, unknown and `invalidated` sessions block neither deletion
 admission nor completion. Retained attempts and cleanup Work survive deletion;
-cleanup continues independently. Deletion, invalidation and elapsed deadlines do
-not prove disposal or provider revocation. Evidence pruning and durable token
-recovery are unimplemented.
+cleanup continues independently. New requests share Work by revision and purpose.
+Deletion, invalidation and elapsed deadlines do not prove disposal or provider
+revocation. Evidence pruning and durable token recovery are unimplemented.
 
 Worker restart can retain surviving sessions and Compute material. A broker can
 recover the original broker's committed `DISPOSED` observation; active or uncertain
@@ -75,8 +75,8 @@ authorized revision neither settles old cleanup nor replays Git/API mutations.
 
 ### Canonical platform registry
 
-The GitHub Backend selects one registry through `configuration.registryPath`;
-its `drivers.repo` names the selected Driver. API, worker and
+The GitHub Backend selects `configuration.registryPath` and names its Driver
+in `drivers.repo`. API, worker and
 service load the same immutable, versioned ConfigMap. The registry contains
 nonsecret identity and Namespace policy for one App installation and multiple
 repositories:

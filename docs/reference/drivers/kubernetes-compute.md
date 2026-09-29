@@ -159,7 +159,7 @@ drivers:
         gatewayNodeSelector: { oce-role: control-plane }
         transportSecretPrefix: openclaw-agent-transport
         # Optional; first install this reviewed profile on every eligible node.
-        codexSeccompProfile: profiles/codex-0.156.0.json
+        codexSeccompProfile: profiles/codex-0.158.0.json
 ```
 
 This example shows only the Compute Driver portion of the Installation

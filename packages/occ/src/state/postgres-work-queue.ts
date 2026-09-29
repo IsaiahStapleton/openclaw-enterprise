@@ -148,15 +148,14 @@ function repositoryCleanupSql(alias: string): string {
     ))`;
 }
 
-// Only lifecycle columns are writable by occ_app. An identity collision must
-// violate the existing attempt-count constraint and roll back the entire transfer.
+// Keep the creating source actor for audit attribution. Only lifecycle columns
+// are writable by occ_app; an owner collision must roll back the transfer.
 const CLEANUP_CONFLICT_SQL = `
   ON CONFLICT (idempotency_key) DO UPDATE
   SET attempt_count = CASE
         WHEN controller_work.namespace_id = EXCLUDED.namespace_id
           AND controller_work.agent_id = EXCLUDED.agent_id
           AND controller_work.revision_id = EXCLUDED.revision_id
-          AND controller_work.actor_id = EXCLUDED.actor_id
           AND controller_work.namespace_target IS NULL
           AND controller_work.agent_target IS NULL
           AND controller_work.state <> 'failed_permanent'
@@ -258,10 +257,11 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
         idempotency_key, namespace_id, agent_id, revision_id, actor_id,
         namespace_target, agent_target, state, available_at, attempt_count, created_at, updated_at
       )
-      SELECT DISTINCT
+      SELECT DISTINCT ON (revision.namespace_id, revision.agent_id, revision.revision_id,
+        COALESCE(revision.retire_runtime, false))
         'agent_revision:' || revision.revision_id || ':repository_cleanup:' ||
           CASE WHEN revision.retire_runtime THEN 'retire:' ELSE '' END ||
-          encode(sha256(convert_to(revision.source_key, 'UTF8')), 'hex'),
+          encode(sha256(convert_to(revision.revision_id, 'UTF8')), 'hex'),
         revision.namespace_id, revision.agent_id, revision.revision_id, revision.actor_id,
         NULL, NULL, 'queued', statement_timestamp(), 0, statement_timestamp(), statement_timestamp()
       FROM cleanup_revisions AS revision
@@ -269,6 +269,8 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
         ON obligation.namespace_id = revision.namespace_id AND obligation.agent_id = revision.agent_id
         AND obligation.revision_id = revision.revision_id
       WHERE revision.retire_runtime OR obligation.revision_id IS NOT NULL
+      ORDER BY revision.namespace_id, revision.agent_id, revision.revision_id,
+        COALESCE(revision.retire_runtime, false), revision.source_key
       ${CLEANUP_CONFLICT_SQL}
       RETURNING idempotency_key
     ),`;
@@ -584,7 +586,7 @@ export class PostgresWorkQueue {
     const key = `agent_revision:${revisionId}:repository_cleanup:${retireRuntime ? "retire:" : ""}${createHash(
       "sha256",
     )
-      .update(claim.idempotencyKey, "utf8")
+      .update(revisionId, "utf8")
       .digest("hex")}`;
     const result = await this.client.query(
       `WITH source AS MATERIALIZED (
