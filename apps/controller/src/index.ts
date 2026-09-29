@@ -3103,7 +3103,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: operation.operationId,
           summary: operation.summary,
           description: creating
-            ? "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope; creates no identity or IAM grant. The plaintext key is returned only here."
+            ? "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope when the caller already holds every IAM grant of that ServicePrincipal at the same or a broader scope; creates no identity or IAM grant. The plaintext key is returned only here."
             : "Requires a session or Installation-scoped service key with administer on the Installation. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.",
           tags: [...operation.tags],
           security: [{ sessionCookie: [] }, { serviceApiKey: [] }],
@@ -3218,6 +3218,26 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 400,
                 "INVALID_REQUEST",
                 "An existing non-Agent ServicePrincipal in the exact scope is required.",
+              );
+            }
+            // A key carries all of its principal's grants; never issue beyond the caller's own.
+            let covered;
+            try {
+              covered =
+                typeof selected.coversIdentityAccess === "function" &&
+                (await selected.coversIdentityAccess({
+                  principalId: context.actorId,
+                  targetIdentityId: principal.id,
+                })) === true;
+            } catch {
+              throw dependencyUnavailable();
+            }
+            if (!covered) {
+              await denial(operation, request, "authorization_denial", context, decision.evidence);
+              throw failure(
+                403,
+                "FORBIDDEN",
+                "The caller does not hold every grant of the target ServicePrincipal.",
               );
             }
             let key;
