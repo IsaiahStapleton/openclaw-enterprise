@@ -1033,9 +1033,7 @@ export class ControllerWorker {
         await queue.defer(
           claim,
           { code: "REPOSITORY_CLEANUP_PENDING" },
-          attempts.some((attempt) => attempt.phase === "invalidated")
-            ? { delayMs: this.repositoryCleanupRetryMs }
-            : undefined,
+          { delayMs: this.repositoryCleanupRetryMs },
         );
       }
     }, this.queueOptions);
