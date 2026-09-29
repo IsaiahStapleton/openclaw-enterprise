@@ -62,6 +62,11 @@ remain pending; see the [validation profile](../docs/testing/two-cluster-local.m
 [Agent access](36-agent-access.md) — Proposed; existing-person sharing for trusted
 full native administration, followed by atomic enrollment and granular permissions.
 
+[Credential Gateway Driver](39-sandbox-credential-injection.md) — Implementing; first slice in #461;
+Namespace credential sources attached to Agent revisions, with OpenShell
+injecting credentials outside the workload; static first (only the `openai` type
+ships), with OAuth2 refresh after real-path verification.
+
 [Dedicated Harness RWO workspace](38-harness-rwo-workspace-plan.md) — Implementing;
 exclusive revision preparation, durable RWO workspaces, and retained existing claims.
 
