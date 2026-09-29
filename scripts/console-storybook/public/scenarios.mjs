@@ -468,6 +468,45 @@ export const scenarios = {
     description:
       "The tab that started GitHub sign-in could not confirm that the current session is the one its attempt created, so it shows the sign-in error instead of adopting that session.",
   },
+  googleLogin: {
+    group: "Pages/Sign in",
+    name: "Google enabled",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    googleEnabled: true,
+    description:
+      "Provider discovery adds Continue with Google beside the password form and any other configured provider. Clicking it demonstrates an unavailable provider; this fixture never navigates to Google.",
+    gap: "An administrator must attach the Google subject identifier to an existing account through the API. Email addresses never match an account. OAuth navigation and session issuance require backend verification.",
+  },
+  googleUnavailable: {
+    group: "Pages/Sign in",
+    name: "Google unavailable",
+    path: "/console/login",
+    signedOut: true,
+    googleEnabled: true,
+    actions: [click("Continue with Google")],
+    description: "A failed Google start leaves password sign-in and a deliberate retry available.",
+  },
+  googleCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "Google callback rejected",
+    path: "/console/?authError=google",
+    signedOut: true,
+    googleEnabled: true,
+    description:
+      "A rejected Google callback shows the generic sign-in error and keeps password recovery available.",
+  },
+  googleResultRejected: {
+    group: "Pages/Sign in",
+    name: "Google result not confirmed",
+    path: "/console/",
+    pendingGoogleAttempt: true,
+    googleEnabled: true,
+    rules: [{ path: "/api/auth/providers/google/result", method: "POST", status: 401 }],
+    description:
+      "The tab that started Google sign-in could not confirm that the current session is the one its attempt created, so it shows the sign-in error instead of adopting that session.",
+  },
   providerDiscoveryUnavailable: {
     group: "Pages/Sign in",
     name: "Provider discovery unavailable",
@@ -475,7 +514,7 @@ export const scenarios = {
     signedOut: true,
     rules: [{ path: "/api/auth/providers", status: 503 }],
     description:
-      "Failed provider discovery leaves the password form usable without a GitHub button.",
+      "Failed provider discovery leaves the password form usable without provider buttons.",
   },
   loginError: {
     group: "Pages/Sign in",

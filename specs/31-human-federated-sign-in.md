@@ -17,7 +17,7 @@ An Installation administrator creates an OpenClaw Enterprise (OCE) password acco
 
 ## Scope
 
-One Installation and one serving controller, which the chart enforces with `Recreate`. Helm is the launch deployment path, behind ingress-nginx, an AWS load balancer or another proxy. The guarded profile requires PostgreSQL State with its restricted role, native IAM and one HTTPS origin. Excluded: self-service linking, other providers (future spec), password reset by email, and shared native administration with the guarded profile. Service keys retain precedence.
+One Installation and one serving controller, which the chart enforces with `Recreate`. Helm is the launch deployment path, behind ingress-nginx, an AWS load balancer or another proxy. The guarded profile requires PostgreSQL State with its restricted role, native IAM and one HTTPS origin. Excluded: self-service linking, providers other than GitHub and [Google](#google-sign-in) (future spec), password reset by email, and shared native administration with the guarded profile. Service keys retain precedence.
 
 ## Profiles: password default, optional GitHub, fallback
 
@@ -142,6 +142,18 @@ Attempts expire in five minutes and bind to one browser cookie; State caps 1,000
 ### Recovery and uncertain outcomes
 
 State commits local effects and audit together, not IAM reads, GitHub calls or browser delivery. An unknown administrative commit returns `503 DEPENDENCY_UNAVAILABLE` stating the outcome is unknown, without replay or compensation; inspect before retrying. An administrator replaces the recovery designation online through `POST /recovery`. `auth:maintain` (PR #521) is implemented: with every writer stopped it activates, repairs enrollment, resets a lost recovery password, purges sessions and deactivates; see the [operator procedure](../docs/guides/deploy/auth-maintenance.md). Before activation, verify the designated account's local password and preserve that credential. Do not edit authentication rows ad hoc or roll back past activation.
+
+## Google sign-in
+
+**2026-09-29 amendment (G, branch `feat/google-sign-in-20260929`).** Google OpenID Connect is a second optional provider in the guarded profile, with the same rules: administrators attach an exact identity to an existing account, sign-in never creates or matches accounts, and password fallback and recovery are unchanged. Operator procedure: [Google sign-in](../docs/guides/deploy/google-sign-in.md).
+
+- **Provider instance.** `google:<sha256(client ID)>`, mirroring `github:<sha256(client ID)>`; the method subject is the ID token's `sub`, never the email. A new client ID needs reattachment.
+- **Shared endpoint code.** Start, callback and result run through one provider-parameterized helper in `apps/controller/src/auth/github.ts`, so `Origin` checks, PKCE `S256`, state, the `__Host-` binding cookie, the keyed limiter (one budget for both providers), `attemptId`, the receipt and the one-use result apply unchanged. Routes are `/api/auth/providers/google/{start,callback,result}` and `POST /api/auth/accounts/:userId/providers/google`; discovery adds `google`.
+- **Nonce.** `base64url(HMAC-SHA256(OCC_AUTH_SECRET, "oce-google-nonce\0" + state))`, sent at start and recomputed from the callback state. It binds the ID token to one one-use, five-minute attempt without storage; rotating the auth secret fails attempts in flight.
+- **Verification.** Fixed endpoints, no runtime discovery. The ID token must have exactly three base64url segments, `alg` `RS256` and a `kid` matching an RSA key from `https://www.googleapis.com/oauth2/v3/certs`, fetched through the bounded provider transport. `iss` is `https://accounts.google.com` or `accounts.google.com`; `aud` equals the client ID (an array must include it, with `azp` equal to it); `exp` is in the future; `iat` lies within the last hour and at most 60 seconds ahead; `nonce` matches; `sub` is 1–255 printable ASCII characters. With `OCC_AUTH_GOOGLE_ALLOWED_DOMAINS`, `hd` must be listed and `email_verified` exactly `true`. Tokens are never stored or logged.
+- **Configuration.** Client ID and secret are both or neither; the recovery ID (`OCC_AUTH_GITHUB_RECOVERY_USER_ID`, Helm `auth.recoveryUserId`) is required when either provider is configured; an activated database with no provider refuses startup. Helm adds `auth.google` with its own Secret and egress policy.
+- **No migration.** Identities are `identity_only` account rows and attempts use the existing free-text provider id.
+- **Verification status.** Tested against a fake OIDC provider (`google-id-token`, `google-login-transport`, `postgres-google-sign-in`, chart parity). Not yet verified against a real Google client.
 
 ## Milestones
 

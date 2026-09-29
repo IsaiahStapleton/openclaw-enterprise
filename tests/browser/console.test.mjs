@@ -804,6 +804,54 @@ test("an abandoned GitHub attempt does not turn password sign-in into a GitHub f
   await expectNoText(page, /Could not sign in with GitHub/);
 });
 
+test("Google sign-in accepts only a Google authorization URL and confirms through its own result", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  const requests = [];
+  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+  const envelope = (data) => ({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ data, meta: { requestId: "browser-google" } }),
+  });
+  // This controller has no Google configuration; discovery and start are modelled here.
+  await page.route("**/api/auth/providers", (route) =>
+    route.fulfill(envelope({ github: false, google: true, sessionBinding: true })),
+  );
+  const attemptId = "b".repeat(43);
+  const starts = [
+    "https://accounts.google.com.example.test/o/oauth2/v2/auth",
+    "https://accounts.google.com/o/oauth2/v2/auth?client_id=fixture",
+  ];
+  await page.route("**/api/auth/providers/google/start", (route) =>
+    route.fulfill(envelope({ url: starts.shift(), attemptId })),
+  );
+  // Models Google redirecting back to Console after the callback set its cookies.
+  await page.route("https://accounts.google.com/**", (route) =>
+    route.fulfill({ status: 302, headers: { location: `${fixture.origin}/console/` } }),
+  );
+  await page.goto(`${fixture.origin}/console/login`);
+  const google = page.getByRole("button", { name: "Continue with Google" });
+  await google.click();
+  await page.getByText("Google sign-in is unavailable. Try again or use your password.").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Continue with GitHub" }).count(), 0);
+
+  const result = page.waitForResponse(
+    (candidate) => new URL(candidate.url()).pathname === "/api/auth/providers/google/result",
+  );
+  await google.click();
+  const refused = await result;
+  assert.equal(refused.request().postDataJSON().attemptId, attemptId);
+  // The unconfigured controller refuses the result, so this tab adopts no session.
+  assert.equal(refused.status(), 403);
+  await page.getByText("Could not sign in with Google. Try again or use your password.").waitFor();
+  assert.equal(requests.includes("/api/auth/providers/github/result"), false);
+
+  await page.goto(`${fixture.origin}/console/?authError=google`);
+  await page.getByText("Could not sign in with Google. Try again or use your password.").waitFor();
+});
+
 test("known Namespace revocation invalidates a cached global collection with another selection", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

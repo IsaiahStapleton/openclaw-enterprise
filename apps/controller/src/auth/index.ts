@@ -30,11 +30,57 @@ import {
   type PreparedPasswordAccount,
 } from "@openclaw-enterprise/occ";
 import type { IAMDriver } from "@openclaw-enterprise/contracts";
-import { createHumanLogin, type GitHubLoginConfiguration } from "./github.ts";
+import {
+  createHumanLogin,
+  githubLoginConfiguration,
+  type GitHubLoginConfiguration,
+} from "./github.ts";
+import { googleLoginConfiguration, type GoogleSignInConfiguration } from "./google.ts";
 import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
 import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
+export {
+  googleLoginConfiguration,
+  type GoogleLoginConfiguration,
+  type GoogleSignInConfiguration,
+} from "./google.ts";
+
+export interface HumanLoginConfiguration {
+  readonly github?: GitHubLoginConfiguration;
+  readonly google?: GoogleSignInConfiguration;
+}
+
+/**
+ * Parses every external sign-in provider. The recovery user ID (still named
+ * OCC_AUTH_GITHUB_RECOVERY_USER_ID) seeds the guarded profile, so it is required exactly
+ * when at least one provider is configured.
+ */
+export function humanLoginConfiguration(
+  environment: Readonly<Record<string, string | undefined>>,
+): HumanLoginConfiguration {
+  const github = githubLoginConfiguration(environment);
+  const google = googleLoginConfiguration(environment);
+  const recoveryUserId = environment.OCC_AUTH_GITHUB_RECOVERY_USER_ID;
+  if (github === undefined && google === undefined) {
+    if (recoveryUserId !== undefined) {
+      throw new Error(
+        "External sign-in requires client ID, client secret and recovery user ID for GitHub or Google.",
+      );
+    }
+    return {};
+  }
+  if (
+    google !== undefined &&
+    (recoveryUserId === undefined || recoveryUserId.trim().length === 0)
+  ) {
+    throw new Error("Google sign-in requires client ID, client secret and recovery user ID.");
+  }
+  return {
+    ...(github === undefined ? {} : { github }),
+    ...(google === undefined ? {} : { google: { ...google, recoveryUserId: recoveryUserId! } }),
+  };
+}
 export {
   clientAddressConfiguration,
   resolveClientAddress,
@@ -93,6 +139,7 @@ export interface PostgresControllerAuthOptions extends Omit<
   readonly state?: PostgresPlatformState;
   readonly iamDriver?: IAMDriver;
   readonly github?: GitHubLoginConfiguration;
+  readonly google?: GoogleSignInConfiguration;
   /** Receives nonfatal startup conditions as structured log events. */
   readonly onWarning?: (event: { readonly event: string; readonly message: string }) => void;
 }
@@ -135,11 +182,23 @@ export interface ControllerAuth {
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  readonly googleEnabled: boolean;
+  /** Provider-instance key for Google identities; set only while Google sign-in is configured. */
+  readonly googleProviderId?: string;
+  googleStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  googleCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  googleResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   readAccount?(
     userId: string,
     actor: HumanAuthenticationActor,
   ): Promise<HumanAuthenticationAccount>;
   attachGitHub?(
+    userId: string,
+    subject: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<unknown>;
+  attachGoogle?(
     userId: string,
     subject: string,
     actor: HumanAuthenticationActor,
@@ -978,59 +1037,69 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     return { response: await response.json(), headers: response.headers, status: response.status };
   }
 
-  async function githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    await sendAuthEndpoint(
-      request,
-      reply,
-      () => {
-        if (!humanLogin) {
-          throw new AdmissionFailure(403, "FORBIDDEN", "GitHub sign-in is unavailable.");
-        }
-        if (request.headers.origin !== expectedBrowserOrigin) {
-          throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
-        }
-        return runPrivateEndpoint(request, "/oce/providers/github/start");
+  // Browser endpoints for one external provider; its absence is a 403 (start/result) or
+  // the console error redirect (callback), as before.
+  function externalProviderRoutes(name: "github" | "google", label: string) {
+    const configured =
+      name === "github"
+        ? humanLogin?.githubProviderId !== undefined
+        : humanLogin?.googleProviderId !== undefined;
+    return {
+      async start(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+        await sendAuthEndpoint(
+          request,
+          reply,
+          () => {
+            if (!configured) {
+              throw new AdmissionFailure(403, "FORBIDDEN", `${label} sign-in is unavailable.`);
+            }
+            if (request.headers.origin !== expectedBrowserOrigin) {
+              throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+            }
+            return runPrivateEndpoint(request, `/oce/providers/${name}/start`);
+          },
+          (value) => value,
+          `${label} sign-in could not be started.`,
+        );
       },
-      (value) => value,
-      "GitHub sign-in could not be started.",
-    );
-  }
-
-  async function githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    reply.header("cache-control", "no-store");
-    reply.header("referrer-policy", "no-referrer");
-    try {
-      if (!humanLogin) {
-        throw new Error("GitHub sign-in unavailable.");
-      }
-      const result = await runPrivateEndpoint(request, "/oce/providers/github/callback");
-      setAuthHeaders(reply, result.headers);
-      reply.redirect("/console/");
-    } catch {
-      reply.redirect("/console/?authError=github");
-    }
-  }
-
-  async function githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    reply.header("cache-control", "no-store");
-    await sendAuthEndpoint(
-      request,
-      reply,
-      () => {
-        if (!humanLogin) {
-          throw new AdmissionFailure(403, "FORBIDDEN", "GitHub sign-in is unavailable.");
+      async callback(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+        reply.header("cache-control", "no-store");
+        reply.header("referrer-policy", "no-referrer");
+        try {
+          if (!configured) {
+            throw new Error(`${label} sign-in unavailable.`);
+          }
+          const result = await runPrivateEndpoint(request, `/oce/providers/${name}/callback`);
+          setAuthHeaders(reply, result.headers);
+          reply.redirect("/console/");
+        } catch {
+          reply.redirect(`/console/?authError=${name}`);
         }
-        // Reads the session cookie, so it takes the same exact-Origin guard as sign-out.
-        requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
-        return runPrivateEndpoint(request, "/oce/providers/github/result", authBody(request));
       },
-      (value) => {
-        const sessionKey = (value as { readonly sessionKey?: unknown } | null)?.sessionKey;
-        return { sessionKey: isNonEmptyString(sessionKey) ? sessionKey : null };
+      async result(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+        reply.header("cache-control", "no-store");
+        await sendAuthEndpoint(
+          request,
+          reply,
+          () => {
+            if (!configured) {
+              throw new AdmissionFailure(403, "FORBIDDEN", `${label} sign-in is unavailable.`);
+            }
+            // Reads the session cookie, so it takes the same exact-Origin guard as sign-out.
+            requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
+            return runPrivateEndpoint(request, `/oce/providers/${name}/result`, authBody(request));
+          },
+          (value) => {
+            const sessionKey = (value as { readonly sessionKey?: unknown } | null)?.sessionKey;
+            return { sessionKey: isNonEmptyString(sessionKey) ? sessionKey : null };
+          },
+          `${label} sign-in could not be confirmed.`,
+        );
       },
-      "GitHub sign-in could not be confirmed.",
-    );
+    };
   }
+  const githubRoutes = externalProviderRoutes("github", "GitHub");
+  const googleRoutes = externalProviderRoutes("google", "Google");
 
   async function signInEmail(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     await sendAuthEndpoint(
@@ -1171,11 +1240,15 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         account,
         seedOptions,
       ),
-    githubEnabled: humanLogin !== undefined,
+    githubEnabled: humanLogin?.githubProviderId !== undefined,
     humanProfile: humanLogin === undefined ? "password" : "guarded",
-    githubStart,
-    githubCallback,
-    githubResult,
+    githubStart: githubRoutes.start,
+    githubCallback: githubRoutes.callback,
+    githubResult: githubRoutes.result,
+    googleEnabled: humanLogin?.googleProviderId !== undefined,
+    googleStart: googleRoutes.start,
+    googleCallback: googleRoutes.callback,
+    googleResult: googleRoutes.result,
     signInEmail,
     signOut,
     session,
@@ -1223,7 +1296,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
 }
 
 /**
- * Startup and stopped maintenance share this one-way activation path. GitHub sign-in
+ * Startup and stopped maintenance share this one-way activation path. External sign-in
  * requires the native IAM Driver, so both authorize through it. The configured recovery
  * user id only seeds the first activation: once a designation exists (possibly moved by an
  * online replacement) it is kept, and `seedIgnored` reports a differing seed. Every call
@@ -1273,7 +1346,7 @@ export async function hashLocalPassword(password: string): Promise<string> {
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, state, iamDriver, github, onWarning, ...controllerOptions } = options;
+  const { pool, state, iamDriver, github, google, onWarning, ...controllerOptions } = options;
   const persistence =
     state === undefined
       ? undefined
@@ -1282,26 +1355,48 @@ export async function createPostgresControllerAuth(
           options.installationId,
           betterAuthIssuer(options.installationId),
         );
-  if (github === undefined && persistence && (await persistence.recoveryDesignation())) {
-    throw new Error("An activated human authentication profile requires its GitHub configuration.");
+  // Either external provider activates the guarded profile; both share its recovery user.
+  const recoveryUserId = github?.recoveryUserId ?? google?.recoveryUserId;
+  const guarded = recoveryUserId !== undefined;
+  const providerLabel = github === undefined ? "Google" : "GitHub";
+  if (!guarded && persistence && (await persistence.recoveryDesignation())) {
+    throw new Error(
+      "An activated human authentication profile requires a configured external sign-in provider.",
+    );
   }
-  if (github !== undefined) {
+  if (guarded) {
+    if (
+      github !== undefined &&
+      google !== undefined &&
+      github.recoveryUserId !== google.recoveryUserId
+    ) {
+      throw new Error("GitHub and Google sign-in require the same recovery user ID.");
+    }
     if (!persistence || !(iamDriver instanceof NativeIAMDriver)) {
       throw new Error(
-        "GitHub sign-in requires original PostgreSQL State and the native IAM Driver.",
+        `${providerLabel} sign-in requires original PostgreSQL State and the native IAM Driver.`,
       );
     }
     if (options.sharedCookieDomain !== undefined) {
       throw new Error(
-        "GitHub sign-in supports host-only cookies without shared native administration.",
+        `${providerLabel} sign-in supports host-only cookies without shared native administration.`,
       );
     }
     if (options.mode === "production" && new URL(options.baseURL).protocol !== "https:") {
-      throw new Error("Production GitHub sign-in requires HTTPS.");
+      throw new Error(`Production ${providerLabel} sign-in requires HTTPS.`);
     }
   }
-  const humanLogin =
-    github === undefined ? undefined : createHumanLogin(persistence!, github, options.baseURL);
+  const humanLogin = !guarded
+    ? undefined
+    : createHumanLogin(
+        persistence!,
+        {
+          recoveryUserId,
+          ...(github === undefined ? {} : { github }),
+          ...(google === undefined ? {} : { google }),
+        },
+        options.baseURL,
+      );
   const auth = createControllerAuth({
     ...controllerOptions,
     ...(humanLogin === undefined ? {} : { humanLogin }),
@@ -1310,13 +1405,13 @@ export async function createPostgresControllerAuth(
   // Finish static auth initialization before the one-way activation transaction.
   await auth.auth.$context;
   let activationSkipped: readonly string[] = [];
-  if (github !== undefined) {
+  if (guarded) {
     const activation = await activateRecoveryAccount(
       persistence!,
-      // Checked above: GitHub sign-in requires the native IAM Driver.
+      // Checked above: external sign-in requires the native IAM Driver.
       iamDriver as NativeIAMDriver,
       options.installationId,
-      github.recoveryUserId,
+      recoveryUserId,
     );
     if (activation.seedIgnored) {
       onWarning?.({
@@ -1340,22 +1435,48 @@ export async function createPostgresControllerAuth(
     ...(humanLogin === undefined
       ? {}
       : {
-          githubProviderId: humanLogin.providerId,
+          ...(humanLogin.githubProviderId === undefined
+            ? {}
+            : { githubProviderId: humanLogin.githubProviderId }),
+          ...(humanLogin.googleProviderId === undefined
+            ? {}
+            : { googleProviderId: humanLogin.googleProviderId }),
           readAccount: (userId: string, actor: HumanAuthenticationActor) =>
             persistence!.readAccount(userId, actor),
-          attachGitHub: (
-            userId: string,
-            subject: string,
-            actor: HumanAuthenticationActor,
-            expectedVersion: number,
-          ) =>
-            persistence!.attachExternal(
-              userId,
-              humanLogin.providerId,
-              subject,
-              actor,
-              expectedVersion,
-            ),
+          ...(humanLogin.githubProviderId === undefined
+            ? {}
+            : {
+                attachGitHub: (
+                  userId: string,
+                  subject: string,
+                  actor: HumanAuthenticationActor,
+                  expectedVersion: number,
+                ) =>
+                  persistence!.attachExternal(
+                    userId,
+                    humanLogin.githubProviderId!,
+                    subject,
+                    actor,
+                    expectedVersion,
+                  ),
+              }),
+          ...(humanLogin.googleProviderId === undefined
+            ? {}
+            : {
+                attachGoogle: (
+                  userId: string,
+                  subject: string,
+                  actor: HumanAuthenticationActor,
+                  expectedVersion: number,
+                ) =>
+                  persistence!.attachExternal(
+                    userId,
+                    humanLogin.googleProviderId!,
+                    subject,
+                    actor,
+                    expectedVersion,
+                  ),
+              }),
           changeAccount: (
             userId: string,
             operation: "disable" | "enable" | "revoke",

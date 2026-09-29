@@ -294,6 +294,12 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-google-sign-in.test.mjs",
+      "expectedTests": [
+        "PostgreSQL Google sign-in admits only attached identities through the guarded profile"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
       "expectedTests": [
         "online recovery replacement moves the reserved lane and survives a restart with the original seed"

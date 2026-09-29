@@ -15,6 +15,7 @@ import {
   createPostgresControllerAuth,
   type ClientAddressConfiguration,
   type GitHubLoginConfiguration,
+  type GoogleSignInConfiguration,
   type PreparedAuthAccount,
 } from "../auth/index.ts";
 import { createFastifyApp } from "../index.ts";
@@ -45,6 +46,7 @@ export interface ProductionConfig {
   readonly authSecret: string;
   readonly authBaseURL: string;
   readonly github?: GitHubLoginConfiguration;
+  readonly google?: GoogleSignInConfiguration;
   readonly clientAddress?: ClientAddressConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
@@ -85,6 +87,9 @@ export async function composeProduction(config: ProductionConfig) {
   if (config.github !== undefined && config.nativeAdmin?.enabled === true) {
     throw new Error("GitHub sign-in does not support native administration.");
   }
+  if (config.google !== undefined && config.nativeAdmin?.enabled === true) {
+    throw new Error("Google sign-in does not support native administration.");
+  }
 
   const pool = await createPostgresPool(config.databaseUrl, {
     ...(config.poolMax === undefined ? {} : { max: config.poolMax }),
@@ -112,6 +117,7 @@ export async function composeProduction(config: ProductionConfig) {
       state,
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.google === undefined ? {} : { google: config.google }),
       ...(config.logger === undefined
         ? {}
         : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),

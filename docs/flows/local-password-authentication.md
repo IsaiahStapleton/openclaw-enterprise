@@ -21,7 +21,8 @@ service-key verification, rotation, and revocation continue in the
 
 - Trigger: `node scripts/bootstrap-installation.mjs` with `NODE_ENV=development`
   or `production`, `POST /api/auth/sign-in/email`, `POST /api/auth/providers/github/start`,
-  `GET /api/auth/providers/github/callback`, or a protected controller request.
+  `GET /api/auth/providers/github/callback`, the matching `google` routes, or a protected
+  controller request.
 - Source: [`scripts/bootstrap-installation.mjs`](../../scripts/bootstrap-installation.mjs),
   [`apps/controller/src/auth/index.ts:createControllerAuth`](../../apps/controller/src/auth/index.ts),
   and [`apps/controller/src/index.ts:createFastifyApp`](../../apps/controller/src/index.ts).
@@ -184,7 +185,16 @@ session. Password sign-in in this profile returns the same key. Expected protoco
 audited separately from State dependency failure or uncertain session completion.
 Neither path automatically retries.
 
-Password and GitHub work have separate bounded process-local admission. GitHub token/profile HTTP shares a deadline and
+Google uses the same start, callback, and result code through
+`apps/controller/src/auth/github.ts:externalProviderEndpoints`, with provider instance
+`google:<sha256(client ID)>`. Its authorization request adds scope `openid email` and a
+nonce, an HMAC of the attempt state under the auth secret, so it needs no extra storage.
+`apps/controller/src/auth/google.ts:exchangeGoogleSubject` exchanges the code, fetches
+Google's signing keys through the same bounded transport, verifies the RS256 ID token's
+signature, issuer, audience, expiry, and nonce (plus `hd` and `email_verified` when
+allowed domains are set), and returns only `sub`. Tokens and email are discarded.
+
+Password and external-provider work have separate bounded process-local admission; GitHub and Google share one budget. Provider HTTP shares a deadline and
 limits streamed response bytes; State bounds pending attempts and expired cleanup.
 State sets the five-minute attempt and eight-hour session deadlines. Cookie
 Max-Age subtracts monotonic elapsed work from that persisted lifetime; expired

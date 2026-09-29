@@ -19,6 +19,13 @@ import type {
   PostgresHumanAuthentication,
   HumanAuthenticationProof,
 } from "@openclaw-enterprise/occ";
+import {
+  exchangeGoogleSubject,
+  googleAuthorizationURL,
+  googleNonce,
+  type GoogleLoginConfiguration,
+} from "./google.ts";
+import { providerJSON, rejected } from "./provider-transport.ts";
 
 export interface GitHubLoginConfiguration {
   readonly clientId: string;
@@ -32,7 +39,8 @@ export function githubLoginConfiguration(
   const clientId = environment.OCC_AUTH_GITHUB_CLIENT_ID;
   const clientSecret = environment.OCC_AUTH_GITHUB_CLIENT_SECRET;
   const recoveryUserId = environment.OCC_AUTH_GITHUB_RECOVERY_USER_ID;
-  if (clientId === undefined && clientSecret === undefined && recoveryUserId === undefined) {
+  // The recovery user ID alone may belong to another provider; see humanLoginConfiguration.
+  if (clientId === undefined && clientSecret === undefined) {
     return undefined;
   }
   if (
@@ -48,68 +56,42 @@ export function githubLoginConfiguration(
   return { clientId, clientSecret, recoveryUserId };
 }
 
-function githubProviderInstance(config: GitHubLoginConfiguration): string {
-  return `github:${digest(config.clientId)}`;
+interface ProviderClient {
+  readonly clientId: string;
+  readonly clientSecret: string;
 }
 
-function digest(value: string): string {
+export interface HumanLoginProviders {
+  readonly recoveryUserId: string;
+  readonly github?: ProviderClient;
+  readonly google?: GoogleLoginConfiguration;
+}
+
+// What one external provider contributes to the shared start/callback/result flow.
+interface ExternalProvider {
+  readonly providerId: string;
+  readonly attemptProviderId: string;
+  readonly callbackURL: string;
+  authorizationURL(secret: string, state: string, codeVerifier: string): Promise<URL>;
+  exchange(
+    secret: string,
+    code: string,
+    codeVerifier: string,
+    state: string,
+  ): Promise<string | undefined>;
+}
+
+export function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 function secret(): string {
   return randomBytes(32).toString("base64url");
 }
-function rejected(): APIError {
-  return APIError.fromStatus("UNAUTHORIZED", { message: "Authentication was not accepted." });
-}
-
 const tokenEndpoint = "https://github.com/login/oauth/access_token";
 const profileEndpoint = "https://api.github.com/user";
-const providerResponseLimit = 64 * 1024;
-
-// The two fixed provider requests share a deadline, including streaming body reads.
-async function providerJSON(
-  endpoint: typeof tokenEndpoint | typeof profileEndpoint,
-  init: RequestInit,
-  signal: AbortSignal,
-): Promise<Record<string, unknown>> {
-  const response = await fetch(endpoint, { ...init, signal, redirect: "error" });
-  if (!response.ok || !response.body) {
-    await response.body?.cancel();
-    throw rejected();
-  }
-  const reader = response.body.getReader();
-  try {
-    if (Number(response.headers.get("content-length")) > providerResponseLimit) {
-      await reader.cancel();
-      throw rejected();
-    }
-    const chunks: Uint8Array[] = [];
-    let length = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      signal.throwIfAborted();
-      if (done) {
-        break;
-      }
-      length += value.byteLength;
-      if (length > providerResponseLimit) {
-        await reader.cancel();
-        throw rejected();
-      }
-      chunks.push(value);
-    }
-    const data: unknown = JSON.parse(Buffer.concat(chunks, length).toString("utf8"));
-    if (typeof data !== "object" || data === null || Array.isArray(data)) {
-      throw rejected();
-    }
-    return data as Record<string, unknown>;
-  } finally {
-    reader.releaseLock();
-  }
-}
 
 async function exchangeGithubSubject(
-  config: GitHubLoginConfiguration,
+  config: ProviderClient,
   code: string,
   codeVerifier: string,
   redirectURI: string,
@@ -305,26 +287,59 @@ function githubSubject(value: unknown): string | undefined {
   return typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value) ? value : undefined;
 }
 
+function githubProvider(config: ProviderClient, baseURL: string): ExternalProvider {
+  const providerId = `github:${digest(config.clientId)}`;
+  const callbackURL = new URL("/api/auth/providers/github/callback", baseURL).href;
+  const provider = github({
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    disableDefaultScope: true,
+  });
+  return {
+    providerId,
+    attemptProviderId: `${providerId}:${digest(config.clientSecret)}`,
+    callbackURL,
+    authorizationURL: (_secret, state, codeVerifier) =>
+      provider.createAuthorizationURL({ state, codeVerifier, redirectURI: callbackURL }),
+    exchange: (_secret, code, codeVerifier) =>
+      exchangeGithubSubject(config, code, codeVerifier, callbackURL),
+  };
+}
+
+function googleProvider(config: GoogleLoginConfiguration, baseURL: string): ExternalProvider {
+  const providerId = `google:${digest(config.clientId)}`;
+  const callbackURL = new URL("/api/auth/providers/google/callback", baseURL).href;
+  return {
+    providerId,
+    attemptProviderId: `${providerId}:${digest(config.clientSecret)}`,
+    callbackURL,
+    // The nonce is recomputed from the callback's one-use state, binding the ID token to it.
+    authorizationURL: (secret, state, codeVerifier) =>
+      googleAuthorizationURL(config, state, codeVerifier, callbackURL, googleNonce(secret, state)),
+    exchange: (secret, code, codeVerifier, state) =>
+      exchangeGoogleSubject(config, code, codeVerifier, callbackURL, googleNonce(secret, state)),
+  };
+}
+
 export function createHumanLogin(
   state: PostgresHumanAuthentication,
-  config: GitHubLoginConfiguration,
+  config: HumanLoginProviders,
   baseURL: string,
 ) {
+  if (config.github === undefined && config.google === undefined) {
+    throw new Error("Guarded human sign-in requires a configured external sign-in provider.");
+  }
   const proofScope = new AsyncLocalStorage<{ proof?: HumanAuthenticationProof }>();
-  const providerId = githubProviderInstance(config);
-  const attemptProviderId = `${providerId}:${digest(config.clientSecret)}`;
-  const callbackURL = new URL("/api/auth/providers/github/callback", baseURL).href;
+  const githubLogin =
+    config.github === undefined ? undefined : githubProvider(config.github, baseURL);
+  const googleLogin =
+    config.google === undefined ? undefined : googleProvider(config.google, baseURL);
   const secure = new URL(baseURL).protocol === "https:";
   const bindingCookie = secure ? "__Host-occ_login_attempt" : "occ_login_attempt";
   const receiptCookie = secure ? "__Host-occ_login_receipt" : "occ_login_receipt";
   const receiptAttributes = { httpOnly: true, secure, sameSite: "strict" as const, path: "/" };
   const receipts = receiptLedger();
   const cookieAttributes = { httpOnly: true, secure, sameSite: "lax" as const, path: "/" };
-  const provider = github({
-    clientId: config.clientId,
-    clientSecret: config.clientSecret,
-    disableDefaultScope: true,
-  });
 
   async function rejectExternalIdentity(): Promise<never> {
     await state.recordDenied("EXTERNAL_IDENTITY_REJECTED");
@@ -418,7 +433,8 @@ export function createHumanLogin(
     { concurrent: 4, reserved: 1 },
     { perMinute: 20, concurrent: 2 },
   );
-  const admitGithub = keyedAdmission(
+  // Every external provider shares one budget, so enabling another does not raise it.
+  const admitExternal = keyedAdmission(
     { perMinute: 30, concurrent: 4 },
     { concurrent: 8, reserved: 0 },
   );
@@ -426,6 +442,150 @@ export function createHumanLogin(
   function designateRecovery(email: string): void {
     recoveryEmail = email.trim().toLowerCase();
   }
+  // Start, callback and result for one external provider. Every provider shares the
+  // admission budget, the browser-bound attempt and receipt cookies, PKCE and session binding.
+  function externalProviderEndpoints(name: "github" | "google", provider: ExternalProvider) {
+    return {
+      start: createAuthEndpoint(`/oce/providers/${name}/start`, { method: "POST" }, async (ctx) =>
+        admitExternal.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
+          const attemptState = secret();
+          const browser = secret();
+          const codeVerifier = secret();
+          const startedAt = performance.now();
+          const attempt = await state.createAttempt({
+            stateHash: digest(attemptState),
+            browserHash: digest(browser),
+            providerId: provider.attemptProviderId,
+            callbackURL: provider.callbackURL,
+            codeVerifier,
+          });
+          const url = await provider.authorizationURL(
+            ctx.context.secret,
+            attemptState,
+            codeVerifier,
+          );
+          const maxAge = cookieLifetime(attempt.createdAt, attempt.expiresAt, startedAt);
+          ctx.setCookie(bindingCookie, browser, {
+            ...cookieAttributes,
+            maxAge,
+          });
+          return ctx.json({
+            url: url.href,
+            attemptId: loginAttemptId(ctx.context.secret, digest(attemptState)),
+          });
+        }),
+      ),
+      callback: createAuthEndpoint(
+        `/oce/providers/${name}/callback`,
+        { method: "GET", requireRequest: true },
+        async (ctx) =>
+          admitExternal.admit(
+            [admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))],
+            async () => {
+              const parameters = new URL(ctx.request!.url).searchParams;
+              const stateValue = parameters.get("state");
+              const code = parameters.get("code");
+              const error = parameters.get("error");
+              const browser = ctx.getCookie(bindingCookie);
+              if (
+                parameters.getAll("state").length !== 1 ||
+                parameters.getAll("code").length > 1 ||
+                parameters.getAll("error").length > 1 ||
+                !stateValue ||
+                !/^[A-Za-z0-9_-]{43}$/.test(stateValue) ||
+                !browser ||
+                !/^[A-Za-z0-9_-]{43}$/.test(browser) ||
+                (!error && (!code || code.length > 1024)) ||
+                (error && (error.length > 200 || code))
+              ) {
+                return rejectExternalIdentity();
+              }
+              const attempt = await state.consumeAttempt({
+                stateHash: digest(stateValue),
+                browserHash: digest(browser),
+                providerId: provider.attemptProviderId,
+                callbackURL: provider.callbackURL,
+              });
+              if (!attempt || error) {
+                return rejectExternalIdentity();
+              }
+              ctx.setCookie(bindingCookie, "", { ...cookieAttributes, maxAge: 0 });
+              const subject = await provider.exchange(
+                ctx.context.secret,
+                code!,
+                attempt.codeVerifier,
+                stateValue,
+              );
+              if (!subject) {
+                return rejectExternalIdentity();
+              }
+              const snapshot = await state.snapshotExternal(
+                provider.providerId,
+                subject,
+                attempt.createdAt,
+              );
+              if (!snapshot) {
+                return rejectExternalIdentity();
+              }
+              const startedAt = performance.now();
+              const session = await proofScope.run({ proof: snapshot.proof }, () =>
+                ctx.context.internalAdapter.createSession(snapshot.user.id, false),
+              );
+              if (!session) {
+                throw rejected();
+              }
+              const maxAge = cookieLifetime(session.createdAt, session.expiresAt, startedAt);
+              await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
+                maxAge,
+              });
+              // The redirect carries no secret. The starting tab exchanges this
+              // receipt for the key of exactly the session this attempt created.
+              ctx.setCookie(
+                receiptCookie,
+                signLoginReceipt(ctx.context.secret, {
+                  sessionId: session.id,
+                  attemptId: loginAttemptId(ctx.context.secret, digest(stateValue)),
+                  expiresAt: Date.now() + LOGIN_RECEIPT_LIFETIME_SECONDS * 1000,
+                }),
+                { ...receiptAttributes, maxAge: LOGIN_RECEIPT_LIFETIME_SECONDS },
+              );
+              return ctx.json({ authenticated: true });
+            },
+          ),
+      ),
+      result: createAuthEndpoint(`/oce/providers/${name}/result`, { method: "POST" }, async (ctx) =>
+        admitExternal.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
+          const body = ctx.body as { attemptId?: unknown } | undefined;
+          const now = Date.now();
+          const receipt = verifyLoginReceipt(ctx.context.secret, ctx.getCookie(receiptCookie), now);
+          if (
+            !receipt ||
+            !isBindingValue(body?.attemptId) ||
+            body.attemptId !== receipt.attemptId
+          ) {
+            throw rejected();
+          }
+          const token = await ctx.getSignedCookie(
+            ctx.context.authCookies.sessionToken.name,
+            ctx.context.secret,
+          );
+          const current = token ? await state.currentSession(token) : undefined;
+          // The receipt names the session its callback created. A cookie replaced by
+          // another sign-in, or a revoked session, cannot adopt this attempt's key.
+          if (!current || current.id !== receipt.sessionId || !receipts.consume(receipt, now)) {
+            throw rejected();
+          }
+          ctx.setCookie(receiptCookie, "", { ...receiptAttributes, maxAge: 0 });
+          // This exchange neither issues nor extends a session.
+          return ctx.json({ sessionKey: sessionBindingKey(ctx.context.secret, current.id) });
+        }),
+      ),
+    };
+  }
+  const githubEndpoints =
+    githubLogin === undefined ? undefined : externalProviderEndpoints("github", githubLogin);
+  const googleEndpoints =
+    googleLogin === undefined ? undefined : externalProviderEndpoints("google", googleLogin);
   const plugin = {
     id: "oce-human-login",
     endpoints: {
@@ -500,144 +660,27 @@ export function createHumanLogin(
           return ctx.json({ success: true });
         },
       ),
-      oceGithubStart: createAuthEndpoint(
-        "/oce/providers/github/start",
-        { method: "POST" },
-        async (ctx) =>
-          admitGithub.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
-            const attemptState = secret();
-            const browser = secret();
-            const codeVerifier = secret();
-            const startedAt = performance.now();
-            const attempt = await state.createAttempt({
-              stateHash: digest(attemptState),
-              browserHash: digest(browser),
-              providerId: attemptProviderId,
-              callbackURL,
-              codeVerifier,
-            });
-            const url = await provider.createAuthorizationURL({
-              state: attemptState,
-              codeVerifier,
-              redirectURI: callbackURL,
-            });
-            const maxAge = cookieLifetime(attempt.createdAt, attempt.expiresAt, startedAt);
-            ctx.setCookie(bindingCookie, browser, {
-              ...cookieAttributes,
-              maxAge,
-            });
-            return ctx.json({
-              url: url.href,
-              attemptId: loginAttemptId(ctx.context.secret, digest(attemptState)),
-            });
+      ...(githubEndpoints === undefined
+        ? {}
+        : {
+            oceGithubStart: githubEndpoints.start,
+            oceGithubCallback: githubEndpoints.callback,
+            oceGithubResult: githubEndpoints.result,
           }),
-      ),
-      oceGithubCallback: createAuthEndpoint(
-        "/oce/providers/github/callback",
-        { method: "GET", requireRequest: true },
-        async (ctx) =>
-          admitGithub.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
-            const parameters = new URL(ctx.request!.url).searchParams;
-            const stateValue = parameters.get("state");
-            const code = parameters.get("code");
-            const error = parameters.get("error");
-            const browser = ctx.getCookie(bindingCookie);
-            if (
-              parameters.getAll("state").length !== 1 ||
-              parameters.getAll("code").length > 1 ||
-              parameters.getAll("error").length > 1 ||
-              !stateValue ||
-              !/^[A-Za-z0-9_-]{43}$/.test(stateValue) ||
-              !browser ||
-              !/^[A-Za-z0-9_-]{43}$/.test(browser) ||
-              (!error && (!code || code.length > 1024)) ||
-              (error && (error.length > 200 || code))
-            ) {
-              return rejectExternalIdentity();
-            }
-            const attempt = await state.consumeAttempt({
-              stateHash: digest(stateValue),
-              browserHash: digest(browser),
-              providerId: attemptProviderId,
-              callbackURL,
-            });
-            if (!attempt || error) {
-              return rejectExternalIdentity();
-            }
-            ctx.setCookie(bindingCookie, "", { ...cookieAttributes, maxAge: 0 });
-            const subject = await exchangeGithubSubject(
-              config,
-              code!,
-              attempt.codeVerifier,
-              callbackURL,
-            );
-            if (!subject) {
-              return rejectExternalIdentity();
-            }
-            const snapshot = await state.snapshotExternal(providerId, subject, attempt.createdAt);
-            if (!snapshot) {
-              return rejectExternalIdentity();
-            }
-            const startedAt = performance.now();
-            const session = await proofScope.run({ proof: snapshot.proof }, () =>
-              ctx.context.internalAdapter.createSession(snapshot.user.id, false),
-            );
-            if (!session) {
-              throw rejected();
-            }
-            const maxAge = cookieLifetime(session.createdAt, session.expiresAt, startedAt);
-            await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
-              maxAge,
-            });
-            // The redirect carries no secret. The starting tab exchanges this
-            // receipt for the key of exactly the session this attempt created.
-            ctx.setCookie(
-              receiptCookie,
-              signLoginReceipt(ctx.context.secret, {
-                sessionId: session.id,
-                attemptId: loginAttemptId(ctx.context.secret, digest(stateValue)),
-                expiresAt: Date.now() + LOGIN_RECEIPT_LIFETIME_SECONDS * 1000,
-              }),
-              { ...receiptAttributes, maxAge: LOGIN_RECEIPT_LIFETIME_SECONDS },
-            );
-            return ctx.json({ authenticated: true });
+      ...(googleEndpoints === undefined
+        ? {}
+        : {
+            oceGoogleStart: googleEndpoints.start,
+            oceGoogleCallback: googleEndpoints.callback,
+            oceGoogleResult: googleEndpoints.result,
           }),
-      ),
-      oceGithubResult: createAuthEndpoint(
-        "/oce/providers/github/result",
-        { method: "POST" },
-        async (ctx) =>
-          admitGithub.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
-            const body = ctx.body as { attemptId?: unknown } | undefined;
-            const now = Date.now();
-            const receipt = verifyLoginReceipt(
-              ctx.context.secret,
-              ctx.getCookie(receiptCookie),
-              now,
-            );
-            if (
-              !receipt ||
-              !isBindingValue(body?.attemptId) ||
-              body.attemptId !== receipt.attemptId
-            ) {
-              throw rejected();
-            }
-            const token = await ctx.getSignedCookie(
-              ctx.context.authCookies.sessionToken.name,
-              ctx.context.secret,
-            );
-            const current = token ? await state.currentSession(token) : undefined;
-            // The receipt names the session its callback created. A cookie replaced by
-            // another sign-in, or a revoked session, cannot adopt this attempt's key.
-            if (!current || current.id !== receipt.sessionId || !receipts.consume(receipt, now)) {
-              throw rejected();
-            }
-            ctx.setCookie(receiptCookie, "", { ...receiptAttributes, maxAge: 0 });
-            // This exchange neither issues nor extends a session.
-            return ctx.json({ sessionKey: sessionBindingKey(ctx.context.secret, current.id) });
-          }),
-      ),
     },
   } satisfies BetterAuthPlugin;
-  return { plugin, database, providerId, designateRecovery };
+  return {
+    plugin,
+    database,
+    ...(githubLogin === undefined ? {} : { githubProviderId: githubLogin.providerId }),
+    ...(googleLogin === undefined ? {} : { googleProviderId: googleLogin.providerId }),
+    designateRecovery,
+  };
 }

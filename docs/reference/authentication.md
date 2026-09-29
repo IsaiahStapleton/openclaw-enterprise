@@ -2,18 +2,18 @@
 
 OpenClaw Control Plane (OCC) authenticates human controller API clients with
 user sessions established through email/password sign-in or an administrator-enrolled
-GitHub identity. Programmatic non-Agent automation authenticates with service
+GitHub or Google identity. Programmatic non-Agent automation authenticates with service
 API keys. Better Auth owns
 password verification, revocable session cookies, and hashed API-key storage.
 The selected IAM Driver resolves the authenticated account or service identity
 to an explicitly provisioned Principal or ServicePrincipal and owns
 [authorization](authorization.md).
 
-For a working sign-in procedure, see
+For a sign-in procedure, see
 [human administrator sign-in](authentication/service-api-keys.md#sign-in-as-a-human-administrator).
 For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
 The [platform console](console.md) provides login at `/console/` and uses these
-same session endpoints. Public signup, Google, enterprise OIDC, and bearer
+same session endpoints. Public signup, generic OIDC, and bearer
 credentials are not supported controller API authentication paths.
 
 ## Installation and account ownership
@@ -85,7 +85,7 @@ File existence alone is not proof of successful initialization.
 
 ## Browser request origin
 
-Controller API requests that use a session cookie for a mutation must include an
+Cookie-authenticated controller API mutations must include an
 `Origin` matching the origin of `OCC_AUTH_BASE_URL`. This includes sign-out. A missing,
 malformed, or different origin is rejected with `403`. If `Sec-Fetch-Site` is
 present, it must be `same-origin`. Safe reads do not require an Origin.
@@ -112,7 +112,7 @@ revokes nor clears the cookie. Without the header, requests are unchanged. Conso
 pins each tab's key this way.
 
 Sign-in takes `{"email": "...", "password": "..."}`. The session credential
-arrives only through `Set-Cookie`; protected OCC API calls use that cookie.
+arrives only through `Set-Cookie`; protected API calls use it.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
@@ -134,6 +134,8 @@ mutable Installation policy are unsupported. Keep bootstrap, seeding, external
 policy writers, and recovery-affecting changes stopped.
 Native IAM's policy read remains separate from State's actor guard. Loopback
 development does not qualify deployed HTTPS.
+[Google sign-in](../guides/deploy/google-sign-in.md) uses this profile and its
+controls.
 
 HTTPS sessions use `__Host-openclaw_occ.session_token`, `Secure`, `HttpOnly`,
 `Path=/`, and no `Domain`, preventing sibling hosts from planting that cookie.
@@ -182,7 +184,7 @@ user, email association, signup, identity transfer, and self-service linking are
 rejected. For unknown identities, follow the
 [enrollment procedure](../guides/deploy/production-installation.md#enable-github-browser-sign-in).
 
-`GET /api/auth/providers` returns `github` and `sessionBinding` as `true` when enabled. A
+`GET /api/auth/providers` returns `github`, `google`, and `sessionBinding` as `true` when enabled. A
 same-origin `POST /api/auth/providers/github/start` returns `data.url` and a public
 `data.attemptId`, and sets a browser-binding cookie. Other provider names return `404`; callers cannot select
 callback or return destinations. The [Console flow](../flows/platform-console.md#2-resolve-the-session-before-private-reads)
@@ -203,8 +205,8 @@ Enabling this profile applies the same admission rules to password and GitHub
 sessions: an eight-hour absolute lifetime without refresh, current account and
 method checks, and required audit before a cookie is released or, on logout,
 cleared. Older sessions without account/method binding are
-rejected; users sign in again. Activation is one-way: removing GitHub
-configuration fails startup, and the database refuses sessions from older
+rejected; users sign in again. Activation is one-way: removing every provider
+fails startup, and the database refuses sessions from older
 binaries. Returning to password-only sign-in needs [stopped maintenance](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in).
 
 The recovery user needs one local password, its Installation Principal, and

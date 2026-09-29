@@ -439,9 +439,11 @@ test("production Helm values example renders the backendless default chart", too
   assert.deepEqual(selected("Deployment", "api").spec.strategy, { type: "Recreate" });
   for (const component of ["api", "worker"]) {
     const env = selected("Deployment", component).spec.template.spec.containers[0].env;
-    assert.ok(!env.some(({ name }) => name.startsWith("OCC_AUTH_GITHUB_")));
+    assert.ok(!env.some(({ name }) => /^OCC_AUTH_(GITHUB|GOOGLE)_/.test(name)));
   }
-  assert.ok(!objects.some(({ metadata }) => metadata.name.endsWith("-api-github-login-egress")));
+  assert.ok(
+    !objects.some(({ metadata }) => /-api-(github|google)-login-egress$/.test(metadata.name)),
+  );
   assert.ok(
     initialization.spec.template.spec.volumes.some(
       ({ name, secret }) => name === "database-ca" && secret?.secretName === "occ-rds-ca",
@@ -1966,7 +1968,7 @@ test(
   },
 );
 
-const signInEnv = /^OCC_AUTH_(GITHUB_|TRUSTED_PROXY_CIDRS|CLIENT_IP_HEADER)/;
+const signInEnv = /^OCC_AUTH_(GITHUB_|GOOGLE_|TRUSTED_PROXY_CIDRS|CLIENT_IP_HEADER)/;
 
 async function signInObjects(overrides) {
   const objects = await resources((await render(overrides)).stdout);
@@ -2114,9 +2116,9 @@ test(
         /auth\.github\.enabled requires auth\.recoveryUserId/,
       ],
       [
-        "a recovery user without GitHub sign-in",
+        "a recovery user without GitHub or Google sign-in",
         { "auth.recoveryUserId": "Xk3u9pQ2rT7vW1yZ" },
-        /auth\.recoveryUserId requires auth\.github\.enabled/,
+        /auth\.recoveryUserId requires auth\.github\.enabled or auth\.google\.enabled/,
       ],
       [
         "GitHub sign-in with an invalid recovery user",

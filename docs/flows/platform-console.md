@@ -133,12 +133,12 @@ Debug runtime disclosures follow the same validation and retain expanded state.
 
 A changed user or session key clears retained views and drafts before further
 private reads. Missing sessions open login; failed reads offer Retry.
-`showLogin` reads `GET /api/auth/providers`; only `github: true` adds **Continue
-with GitHub**, and discovery failure keeps password login. Pending login disables
-both; generations reject late redirects. With `sessionBinding`, `loadPage`
+`showLogin` reads `GET /api/auth/providers`; true `github`/`google` flags add their **Continue
+with** buttons, and discovery failure keeps password login. Pending login disables
+all; generations reject late redirects. With `sessionBinding`, `loadPage`
 exchanges the button's stored `attemptId` once for its key. Tabs then send
 their pinned `x-occ-session-key`, so a replaced cookie yields login.
-`authError=github` shows a generic, one-time error. The
+`authError=<provider>` shows a generic, one-time error. The
 [authentication flow](local-password-authentication.md#3-construct-session-authentication)
 owns the server side.
 
