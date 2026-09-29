@@ -91,8 +91,10 @@ spec:
 
 The API refuses protected requests carrying `X-Forwarded-*` or `X-Real-IP`
 headers, which ingress-nginx adds, unless the sender is a trusted proxy: set
-[`OCC_AUTH_TRUSTED_PROXY_CIDRS`](../../reference/cheatsheets/environment-variables.md#controller-and-authentication)
-to the ingress-nginx Pod CIDR, or strip those headers at the ingress.
+[`api.trustedProxy`](../../reference/settings/production.md#github-sign-in-and-trusted-proxies)
+to preset `ingress-nginx` with the ingress-nginx Pod CIDR (profile installs:
+[`controlPlane.trustedProxy`](installation-profiles.md#external-sign-in-and-trusted-proxies)),
+or strip those headers at the ingress.
 
 Allow ingress only to the API Pods selected for public browser traffic. Keep the Envoy Service private:
 

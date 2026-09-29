@@ -577,3 +577,102 @@ test("profiles pass an optional observability URL to Installation startup YAML",
     );
   }
 });
+
+function externalSignInInput(signIn = {}) {
+  const { agentNativeAdminDomain, sharedCookieDomain, ...controlPlane } = baseInput().controlPlane;
+  assert.ok(agentNativeAdminDomain && sharedCookieDomain);
+  return baseInput({
+    controlPlane: {
+      ...controlPlane,
+      recoveryUserId: "recovery-admin_1",
+      github: { egressCidrs: ["140.82.112.0/20"] },
+      ...signIn,
+    },
+  });
+}
+
+test(
+  "profiles carry external sign-in and trusted proxy settings through rerenders",
+  { skip: helmSkip },
+  () => {
+    const trustedProxy = { preset: "ingress-nginx", cidrs: ["10.42.0.0/16"] };
+    const github = render("openclaw", externalSignInInput({ trustedProxy }));
+    assert.equal(github.summary.ok, true);
+    // GitHub and Google sign-in support host-only cookies only, so native admin stays off.
+    assert.match(github.values, /agentNativeAdmin:\n {2}enabled: false\n/);
+    assert.match(github.values, /recoveryUserId: recovery-admin_1/);
+    assert.match(
+      github.values,
+      /github:\n {4}enabled: true\n {4}egressCidrs:\n {6}- 140\.82\.112\.0\/20/,
+    );
+    assert.match(github.values, /trustedProxy:\n {4}preset: ingress-nginx/);
+    assert.doesNotMatch(github.preflight.prerequisites.join("\n"), /native admin domain/);
+    const manifests = helmTemplate(github);
+    assert.match(manifests, /name: OCC_AUTH_GITHUB_CLIENT_ID/);
+    assert.match(manifests, /name: OCC_AUTH_GITHUB_RECOVERY_USER_ID\n\s+value: "recovery-admin_1"/);
+    assert.match(manifests, /name: OCC_AUTH_TRUSTED_PROXY_CIDRS\n\s+value: "10\.42\.0\.0\/16"/);
+
+    const google = render(
+      "codex",
+      codexInput({
+        controlPlane: externalSignInInput({
+          github: undefined,
+          google: { allowedDomains: ["example.com"] },
+        }).controlPlane,
+      }),
+    );
+    assert.equal(google.summary.ok, true);
+    assert.match(
+      google.values,
+      /google:\n {4}enabled: true\n {4}allowedDomains:\n {6}- example\.com/,
+    );
+    assert.doesNotMatch(google.values, /github:/);
+    assert.match(helmTemplate(google), /name: OCC_AUTH_GOOGLE_ALLOWED_DOMAINS/);
+
+    // Password-only installs behind ingress-nginx keep native admin and still trust the proxy.
+    const nativeAdmin = render(
+      "openclaw",
+      baseInput({ controlPlane: { ...baseInput().controlPlane, trustedProxy } }),
+    );
+    assert.match(nativeAdmin.values, /agentNativeAdmin:\n {2}enabled: true/);
+    assert.match(helmTemplate(nativeAdmin), /name: OCC_AUTH_TRUSTED_PROXY_PRESET/);
+  },
+);
+
+test("preflight rejects external sign-in and trusted proxy inputs Helm would reject", () => {
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ recoveryUserId: undefined }),
+    /controlPlane.recoveryUserId is required with controlPlane.github or controlPlane.google/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    baseInput({ controlPlane: { ...baseInput().controlPlane, recoveryUserId: "admin" } }),
+    /controlPlane.recoveryUserId requires controlPlane.github or controlPlane.google/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ agentNativeAdminDomain: "agents.oce.example.internal" }),
+    /controlPlane.agentNativeAdminDomain is not consumed with external sign-in/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ authBaseUrl: "http://console.oce.example.internal" }),
+    /controlPlane.authBaseUrl must use HTTPS with external sign-in/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ github: { clientSecret: "inline" } }),
+    /controlPlane.github.clientSecret is not supported/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ trustedProxy: { preset: "generic", cidrs: ["10.42.0.0/16"] } }),
+    /controlPlane.trustedProxy.clientAddressHeader is required for the generic preset/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ trustedProxy: { preset: "ingress-nginx", cidrs: ["0.0.0.0/0"] } }),
+    /controlPlane.trustedProxy.cidrs\[0\] must be/,
+  );
+});

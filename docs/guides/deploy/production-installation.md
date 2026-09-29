@@ -227,7 +227,8 @@ yq e -e '.auth.baseUrl != "" and .bootstrap.adminEmail != "" and
   (.controlPlane.nodeSelector | length > 0) and
   (.api.clients | length > 0) and .gatewayRouting.enabled == true and
   .gatewayRouting.gatewayClassName != "" and
-  .gatewayRouting.apiKeySecretName != "" and .agentNativeAdmin.enabled == true' \
+  .gatewayRouting.apiKeySecretName != "" and (.agentNativeAdmin.enabled == true or
+  .auth.github.enabled == true or .auth.google.enabled == true)' \
   "$OCC_INPUT_DIRECTORY/values.yaml" >/dev/null
 yq e -e '.drivers.compute.configuration.images.requireImmutableDigest == true and
   (.drivers.compute.configuration.images.gateway | test("@sha256:[a-f0-9]{64}$")) and
@@ -480,7 +481,9 @@ Activation is one-way: the database refuses older images' sessions and
 2. Create the Secret, then set `auth.github.enabled: true`, that ID as
    `auth.recoveryUserId`, and `agentNativeAdmin.enabled: false` in protected
    values, keeping workspace routing. Optionally narrow `auth.github.egressCidrs` or set `api.trustedProxy`
-   ([settings](../../reference/settings/production.md#github-sign-in-and-trusted-proxies)). Rerender.
+   ([settings](../../reference/settings/production.md#github-sign-in-and-trusted-proxies)).
+   Profile installs set [these inputs](installation-profiles.md#external-sign-in-and-trusted-proxies)
+   and keep them in every rerender. Rerender.
 
    ```bash
    kubectl -n openclaw-system create secret generic occ-github-login \
