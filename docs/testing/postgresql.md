@@ -195,7 +195,9 @@ example Helm values render, after the real production bootstrap:
 The same composition covers the GitHub profile against the fixture provider:
 
 - `postgres-github-admin-attach.test.mjs`: administrators attach, detach and
-  re-attach GitHub identities, and disable and enable accounts.
+  re-attach GitHub identities, and disable and enable accounts. A session without
+  Installation `administer` gets `403` on every account and recovery route, and two
+  administrators attaching one GitHub identity at once get one `200` and one `409`.
 - `postgres-github-admin-scope.test.mjs`: a created administrator cannot attach
   an identity to, or revoke, the broader bootstrap administrator's account.
 - `postgres-github-tab-binding.test.mjs`: Playwright over the HTTPS Origin. A tab
