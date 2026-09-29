@@ -245,10 +245,10 @@ test(
           persistence.activateRecovery(person.id, seed.principal.id),
           /designation cannot be changed/,
         );
-        await assert.rejects(
-          changeAccount(recoveryUser.id, "disable"),
-          /recovery account cannot be disabled/,
-        );
+        await assert.rejects(changeAccount(recoveryUser.id, "disable"), {
+          name: "ResourceConflictError",
+          message: /recovery account cannot be disabled/,
+        });
         await assert.rejects(pool.query('DELETE FROM occ."user" WHERE id=$1', [recoveryUser.id]), {
           code: "23001",
         });
@@ -626,8 +626,9 @@ test(
           installation.id,
           issuer,
         );
+        // A lock timeout (55P03) is retryable contention, not an internal error.
         await assert.rejects(changeAccount(person.id, "revoke", bounded), {
-          code: "55P03",
+          name: "DependencyUnavailableError",
         });
       } finally {
         release.resolve();
@@ -779,6 +780,13 @@ test(
           persistence.issueSession(proof, sessionRecord(person.id)),
           /no longer current/,
         );
+        // A disabled target is a state conflict (409), not an unknown account (404).
+        const disabledTarget = await persistence.readAccount(person.id, admin);
+        await assert.rejects(
+          persistence.attachExternal(person.id, providerId, "99", admin, disabledTarget.version),
+          { name: "ResourceConflictError", message: /account is disabled/ },
+        );
+        assert.deepEqual(await persistence.readAccount(person.id, admin), disabledTarget);
         const audits = await state.transact((unit) => unit.audit.list());
         assert.ok(
           audits.some(
@@ -863,7 +871,7 @@ test(
             admin,
             disabled.version,
           ),
-          /recovery account is unavailable/,
+          { name: "ResourceConflictError", message: /account is disabled/ },
         );
         await assert.rejects(
           persistence.replaceRecovery(successor.id, successorPrincipal, successor.id, admin, 1),
@@ -947,10 +955,10 @@ test(
           [recoveryUser.id, previousHash],
         );
         await signInAdmin();
-        await assert.rejects(
-          changeAccount(successor.id, "disable"),
-          /recovery account cannot be disabled/,
-        );
+        await assert.rejects(changeAccount(successor.id, "disable"), {
+          name: "ResourceConflictError",
+          message: /recovery account cannot be disabled/,
+        });
         // The application role cannot delete the designation, only move it.
         await assert.rejects(
           pool.query("DELETE FROM occ.human_authentication_recovery WHERE installation_id=$1", [

@@ -630,7 +630,8 @@ test(
       headers,
       payload: { expectedVersion: (await readAccount(recovery, headers)).version },
     });
-    assert.equal(recoveryDisable.statusCode, 404);
+    assert.equal(recoveryDisable.statusCode, 409, recoveryDisable.body);
+    assert.equal(recoveryDisable.json().error.code, "RESOURCE_CONFLICT");
 
     const stale = await start();
     assert.equal(
@@ -1230,7 +1231,7 @@ test(
           payload: { expectedVersion: limitedVersion },
         })
       ).statusCode,
-      404,
+      409,
       "the new recovery account cannot be disabled",
     );
     // A stale environment id does not skip the startup checks: they run against the

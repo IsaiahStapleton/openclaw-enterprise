@@ -1007,7 +1007,8 @@ test(
                   return enqueueNamespace(unit, queue, input);
                 },
               ),
-              { code: "55P03" },
+              // State classifies the lock timeout (55P03) as retryable unavailability.
+              { name: "DependencyUnavailableError" },
             );
             assert.equal(called, false);
             assert.deepEqual(await effects(contender, input), { namespaces: 0, work: 0, audit: 0 });
@@ -1174,7 +1175,7 @@ test(
                       });
                     },
                   ),
-                  { code: "55P03" },
+                  { name: "DependencyUnavailableError" },
                 );
                 assert.equal(protectedWorkReached, false);
                 assert.equal(
