@@ -122,6 +122,8 @@ test(
       );
       assert.equal(warnings.length, 1);
       assert.deepEqual(warnings[0].skippedUserIds, [unprovisioned.id]);
+      assert.equal(warnings[0].skippedUserCount, 1);
+      assert.equal(warnings[0].skippedUserIdsTruncated, false);
       const enrolled = (
         await pool.query("SELECT user_id FROM occ.human_authentication_accounts")
       ).rows

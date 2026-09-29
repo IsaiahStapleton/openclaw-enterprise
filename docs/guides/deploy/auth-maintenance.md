@@ -113,5 +113,7 @@ Activating again later, at startup or with `activate`, enrolls every account
 that has its Principal and exactly one password, as an enabled account; earlier
 disablement is not restored. Accounts that `--purge-disabled` left without a
 password are skipped: startup logs them, `status` lists them as unenrolled, and
-they cannot sign in. Disable again, through the accounts API, any account that
+they cannot sign in. The startup warning names at most 100 accounts;
+`skippedUserCount` gives the total and `skippedUserIdsTruncated` is `true` when
+names were left out, so use `status` for the complete list. Disable again, through the accounts API, any account that
 must stay disabled.

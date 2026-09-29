@@ -9,7 +9,9 @@ import {
   createOccLogger,
   createWorkerLogEmitter,
   emitOccLogEvent,
+  MAX_LOGGED_IDENTIFIERS,
   operationalLoggingConfiguration,
+  skippedUserLogFields,
 } from "../../apps/controller/src/logging.ts";
 import {
   loadInstallationConfiguration,
@@ -268,6 +270,50 @@ test("OCC event sanitizer drops arbitrary fields and unsafe diagnostic text", ()
   assert.equal(Object.hasOwn(output.lines[0], "secret"), false);
   assert.equal(JSON.stringify(output.lines).includes("token-that-must-not-log"), false);
   assert.equal(JSON.stringify(output.lines).includes("arbitrary"), false);
+});
+
+test("activation warning caps skipped account IDs and reports the total and truncation", () => {
+  const output = memoryDestination();
+  const logger = createOccLogger({
+    component: "occ-api",
+    level: "info",
+    destination: output.destination,
+  });
+  const ids = (count) =>
+    Array.from({ length: count }, (_, index) => `user_${String(index).padStart(4, "0")}`);
+
+  for (const skipped of [ids(1), ids(MAX_LOGGED_IDENTIFIERS), ids(MAX_LOGGED_IDENTIFIERS + 1)]) {
+    emitOccLogEvent(logger, {
+      event: "authentication.activation-warning",
+      ...skippedUserLogFields(skipped),
+    });
+  }
+
+  assert.equal(output.lines.length, 3);
+  assert.deepEqual(
+    output.lines.map(({ severity, skippedUserIds, skippedUserCount, skippedUserIdsTruncated }) => ({
+      severity,
+      ids: skippedUserIds.length,
+      skippedUserCount,
+      skippedUserIdsTruncated,
+    })),
+    [
+      { severity: "WARN", ids: 1, skippedUserCount: 1, skippedUserIdsTruncated: false },
+      {
+        severity: "WARN",
+        ids: MAX_LOGGED_IDENTIFIERS,
+        skippedUserCount: MAX_LOGGED_IDENTIFIERS,
+        skippedUserIdsTruncated: false,
+      },
+      {
+        severity: "WARN",
+        ids: MAX_LOGGED_IDENTIFIERS,
+        skippedUserCount: MAX_LOGGED_IDENTIFIERS + 1,
+        skippedUserIdsTruncated: true,
+      },
+    ],
+  );
+  assert.deepEqual(output.lines[2].skippedUserIds, ids(MAX_LOGGED_IDENTIFIERS));
 });
 
 test("Fastify app writes one safe HTTP completion record and bounded unexpected-error diagnostics", async () => {
