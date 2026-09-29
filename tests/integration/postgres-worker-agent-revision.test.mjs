@@ -1536,6 +1536,93 @@ test(
   },
 );
 
+test(
+  "an expired exhausted repository maintenance claim keeps the active runtime",
+  requiresPostgres,
+  async (context) => {
+    const repository = repositoryBoundary();
+    const fixture = await setup(context, { repoDriver: repository.driver, maxAttempts: 1 });
+    const owner = await fixture.agent("repository-maintenance-lease-expiry");
+    const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
+    const stopped = [];
+    const compute = {
+      ...fixture.compute,
+      async stopRevision(revision) {
+        stopped.push(revision.id);
+        return fixture.compute.stopRevision(revision);
+      },
+    };
+    await fixture.start(compute);
+    await fixture.work(candidate, "succeeded");
+    await fixture.stop();
+
+    // A worker claims the maintenance item on its last attempt and crashes
+    // before it finishes, so only lease expiry can release the claim.
+    const maintenance = await fixture.observerPool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+       RETURNING idempotency_key`,
+      [candidate.id, `agent_revision:${candidate.id}:maintenance:%`],
+    );
+    assert.equal(maintenance.rowCount, 1);
+    const crashedKey = maintenance.rows[0].idempotency_key;
+    const queue = new fixture.PostgresWorkQueue(fixture.observerPool, {
+      leaseDurationMs: 30_000,
+      maxAttempts: 1,
+      random: () => 0,
+    });
+    const crashed = await queue.claim();
+    assert.equal(crashed?.idempotencyKey, crashedKey);
+    await fixture.observerPool.query(
+      `UPDATE occ.controller_work
+       SET lease_expires_at = clock_timestamp() - interval '1 second'
+       WHERE idempotency_key = $1 AND claim_token = $2::uuid`,
+      [crashedKey, crashed.claimToken],
+    );
+    const recovery = await queue.recoverStale();
+    assert.equal(recovery.recovered, 1);
+
+    const failed = await fixture.observerPool.query(
+      "SELECT state, reason_code FROM occ.controller_work WHERE idempotency_key = $1",
+      [crashedKey],
+    );
+    assert.deepEqual(failed.rows[0], { state: "failed_permanent", reason_code: "LEASE_EXPIRED" });
+    const retirement = await fixture.observerPool.query(
+      `SELECT idempotency_key FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+    );
+    assert.equal(retirement.rowCount, 0, "a crashed worker must not retire the active runtime");
+    const agent = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(agent.activeRevisionId, candidate.id);
+    assert.equal(agent.desiredRuntimeState, "running");
+
+    // The maintenance chain continues with the next bucket.
+    const next = await fixture.observerPool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+       RETURNING idempotency_key, attempt_count, actor_id`,
+      [candidate.id, `agent_revision:${candidate.id}:maintenance:%`],
+    );
+    assert.equal(next.rowCount, 1);
+    const bucket = BigInt(crashedKey.slice(crashedKey.lastIndexOf(":") + 1));
+    assert.deepEqual(next.rows[0], {
+      idempotency_key: `agent_revision:${candidate.id}:maintenance:${bucket + 1n}`,
+      attempt_count: 0,
+      actor_id: crashed.actorId,
+    });
+    await fixture.start(compute);
+    await fixture.work(
+      { id: candidate.id, idempotencyKey: next.rows[0].idempotency_key },
+      "succeeded",
+    );
+    await fixture.stop();
+    assert.deepEqual(stopped, []);
+  },
+);
+
 for (const loss of ["missing", "closed-repair"]) {
   test(
     loss === "missing"
