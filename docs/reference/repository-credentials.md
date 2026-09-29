@@ -58,10 +58,11 @@ State derives immutable Driver, Backend, profile and grant context from the
 admitted revision. It retains original Namespace, Agent, revision, admission and
 session identities and deadlines after Agent deletion, without bearers or tokens.
 
-Agent deletion closes sessions and retires Compute. Physical deletion and live
-revision detachment require every attempt to be `disposed`. `CLOSED`, missing
-inventory and `invalidated` attempts retain cleanup Work and the deleting Agent.
-Deadlines do not settle provider cleanup. Evidence pruning and durable token
+Agent deletion retires Compute without waiting for repository-session cleanup.
+Pending, missing, unknown and `invalidated` sessions block neither deletion
+admission nor completion. Retained attempts and cleanup Work survive deletion;
+cleanup continues independently. Deletion, invalidation and elapsed deadlines do
+not prove disposal or provider revocation. Evidence pruning and durable token
 recovery are unimplemented.
 
 Worker restart can retain surviving sessions and Compute material. A broker can

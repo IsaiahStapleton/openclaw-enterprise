@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
 updated: 2026-09-28
-last_updated_session: "01a0e6ca-0480-79a1-ab5d-31a7cfb42228"
+last_updated_session: "authoring-run/df373b87-44bc-442f-bce4-03ca8ab4e3f7"
 ---
 
 # Agent repository credential flow
@@ -77,9 +77,9 @@ graph TD
   Queue --> Close
   Close -->|Confirmed disposal| Terminal["<b>Terminal receipt</b><br/>Commit exact result"]
   Terminal --> Done["<b>Cleanup settled</b><br/>Retain immutable evidence"]
-  Pod -->|Delete Agent| Delete["<b>Agent deletion</b><br/>Close and retire Compute"]
-  Delete --> Close
-  Done -->|Deleting Agent| Finalize["<b>State finalizer</b><br/>Detach and remove live rows"]
+  Pod -->|Delete Agent| Delete["<b>Agent deletion</b><br/>Queue cleanup and retire Compute"]
+  Delete -->|Independent cleanup| Queue
+  Delete -->|Runtime retired| Finalize["<b>State finalizer</b><br/>Detach and remove live rows"]
 
   classDef state fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
   classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
@@ -302,16 +302,18 @@ and calls Compute's `stopRevision` for that revision. Compute mismatch or stop
 failure remains retryable beyond foreground limits. Completion requires settled
 sessions and runtime retirement. Session-only repair/rotation never stops healthy
 workloads. `CLOSED` denies local use but awaits disposal; missing inventory or
-invalidation does not prove provider settlement.
+invalidation does not prove provider settlement. Retained attempt context supports
+session cleanup after live revision deletion.
 
-`ControllerWorker.processAgentDeletion` closes and registers each revision's
-attempts, then retires Compute even while service cleanup is pending. Deleted-Agent
-Work covers only its exact owner and admitted revisions; the same boundary governs failed and stale Work transfer.
-`PostgresWorkQueue.completeAgentDeletion` calls `occ.finalize_agent_deletion` under
-the current claim. The function locks Namespace, Agent and attempts and returns a
-distinct pending outcome unless every attempt is disposed. The worker defers that
-outcome without consuming its retry budget. Once settled, the finalizer detaches
-live revision pointers, removes live rows and records deletion atomically.
+`ControllerWorker.processAgentDeletion` registers independent cleanup and retires
+Compute without waiting for repository sessions. Cleanup Work retains the exact
+revision identity in its idempotency key after live owner columns detach.
+`PostgresWorkQueue.completeAgentDeletion` calls
+`occ.finalize_agent_deletion` under the current claim. The finalizer detaches
+live revision pointers, removes live rows and records deletion atomically,
+retaining unresolved attempts and cleanup Work. Session state cannot block
+admission or completion and deletion never fabricates disposal. Unresolved
+provisioning effects still defer completion without consuming its retry budget.
 
 Compute retirement waits for owned Pods to stop before removing their material.
 It preserves Secrets referenced by actual Pods and current Deployments, and
@@ -353,6 +355,8 @@ Slack or GitHub execution; Ready Pods and local commands do not prove live write
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 17:25: Decouple Agent deletion from repository-session cleanup in the accompanying worker and finalizer changes. (authoring-run/df373b87-44bc-442f-bce4-03ca8ab4e3f7 - 33a2528163d5bbff311bb685345e60aadb24a70a)
 
 - 2026-09-28 12:09: Check broker capability before fresh admission and worker readiness. (01a0e6ca-0480-79a1-ab5d-31a7cfb42228 - 5b66ac97aa3b805099aeebfaadeb846eb957707d)
 

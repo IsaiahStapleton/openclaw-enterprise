@@ -98,21 +98,28 @@ const MAINTENANCE_KEY = new RegExp(
   `^agent_revision:(${REVISION_ID_PATTERN}):maintenance:(0|[1-9][0-9]*)$`,
 );
 
-/** Cleanup dispatch and retry exemption require the complete immutable revision target. */
+/** Cleanup dispatch and retry exemption require an exact immutable revision target. */
+export function repositoryCleanupRevisionId(
+  work: Pick<ControllerWork, "idempotencyKey" | "namespaceTarget" | "agentTarget">,
+): string | undefined {
+  if (work.namespaceTarget !== undefined || work.agentTarget !== undefined) {
+    return undefined;
+  }
+  const key = REPOSITORY_CLEANUP_KEY.exec(work.idempotencyKey);
+  return key?.[0] === work.idempotencyKey ? key[1] : undefined;
+}
+
 export function isRepositoryCleanupWork(
   work: Pick<
     ControllerWork,
     "idempotencyKey" | "agentId" | "revisionId" | "namespaceTarget" | "agentTarget"
   >,
 ): boolean {
-  const key = REPOSITORY_CLEANUP_KEY.exec(work.idempotencyKey);
+  const revisionId = repositoryCleanupRevisionId(work);
   return (
-    key !== null &&
-    key[0] === work.idempotencyKey &&
-    key[1] === work.revisionId &&
-    isNonEmptyString(work.agentId) &&
-    work.namespaceTarget === undefined &&
-    work.agentTarget === undefined
+    revisionId !== undefined &&
+    ((work.revisionId === revisionId && isNonEmptyString(work.agentId)) ||
+      (work.revisionId === undefined && work.agentId === undefined))
   );
 }
 
@@ -127,12 +134,18 @@ export function isRepositoryRuntimeRetirementWork(
 }
 
 function repositoryCleanupSql(alias: string): string {
-  return `(${alias}.agent_id IS NOT NULL
-    AND ${alias}.revision_id IS NOT NULL
-    AND ${alias}.namespace_target IS NULL AND ${alias}.agent_target IS NULL
-    AND ${alias}.revision_id ~ '^${REVISION_ID_PATTERN}$'
-    AND ${alias}.idempotency_key ~
-      ('^agent_revision:' || ${alias}.revision_id || ':repository_cleanup:(retire:)?[0-9a-f]{64}$'))`;
+  return `(${alias}.namespace_target IS NULL AND ${alias}.agent_target IS NULL
+    AND (
+      (${alias}.agent_id IS NOT NULL
+        AND ${alias}.revision_id IS NOT NULL
+        AND ${alias}.revision_id ~ '^${REVISION_ID_PATTERN}$'
+        AND ${alias}.idempotency_key ~
+          ('^agent_revision:' || ${alias}.revision_id || ':repository_cleanup:(retire:)?[0-9a-f]{64}$'))
+      OR (${alias}.agent_id IS NULL
+        AND ${alias}.revision_id IS NULL
+        AND ${alias}.idempotency_key ~
+          '^agent_revision:${REVISION_ID_PATTERN}:repository_cleanup:(retire:)?[0-9a-f]{64}$')
+    ))`;
 }
 
 // Only lifecycle columns are writable by occ_app. An identity collision must
