@@ -57,6 +57,18 @@ const agentNativeAdminValues = {
   "agentNativeAdmin.domain": "agents.example.invalid",
   "agentNativeAdmin.sharedCookieDomain": "example.invalid",
 };
+const githubLoginValues = {
+  "auth.github.enabled": "true",
+  "auth.recoveryUserId": "Xk3u9pQ2rT7vW1yZ",
+};
+const githubEgressValues = {
+  "auth.github.egressCidrs[0]": "140.82.112.0/20",
+  "auth.github.egressCidrs[1]": "192.30.252.0/22",
+};
+const trustedProxyValues = {
+  "api.trustedProxy.preset": "ingress-nginx",
+  "api.trustedProxy.cidrs[0]": "10.42.0.0/16",
+};
 const databaseCaValues = {
   "database.caSecretName": "occ-rds-ca",
   "database.caKey": "ca.pem",
@@ -423,6 +435,13 @@ test("production Helm values example renders the backendless default chart", too
     type: "RollingUpdate",
     rollingUpdate: { maxSurge: "25%", maxUnavailable: "25%" },
   });
+  // Session admission and sign-in limits are process-local: never overlap two API Pods.
+  assert.deepEqual(selected("Deployment", "api").spec.strategy, { type: "Recreate" });
+  for (const component of ["api", "worker"]) {
+    const env = selected("Deployment", component).spec.template.spec.containers[0].env;
+    assert.ok(!env.some(({ name }) => name.startsWith("OCC_AUTH_GITHUB_")));
+  }
+  assert.ok(!objects.some(({ metadata }) => metadata.name.endsWith("-api-github-login-egress")));
   assert.ok(
     initialization.spec.template.spec.volumes.some(
       ({ name, secret }) => name === "database-ca" && secret?.secretName === "occ-rds-ca",
@@ -1944,6 +1963,319 @@ test(
         ports: [{ protocol: "TCP", port: 443 }],
       },
     ]);
+  },
+);
+
+const signInEnv = /^OCC_AUTH_(GITHUB_|TRUSTED_PROXY_CIDRS|CLIENT_IP_HEADER)/;
+
+async function signInObjects(overrides) {
+  const objects = await resources((await render(overrides)).stdout);
+  const selected = (kind, component) =>
+    objects.find(
+      (object) =>
+        object.kind === kind &&
+        object.metadata.labels?.["app.kubernetes.io/component"] === component,
+    );
+  const apiEnv = Object.fromEntries(
+    selected("Deployment", "api").spec.template.spec.containers[0].env.map(({ name, ...value }) => [
+      name,
+      value,
+    ]),
+  );
+  const egress = objects.find(
+    ({ kind, metadata }) =>
+      kind === "NetworkPolicy" && metadata.name === "openclaw-enterprise-api-github-login-egress",
+  );
+  return { objects, selected, apiEnv, egress };
+}
+
+test(
+  "optional GitHub sign-in reaches only the API through a dedicated Secret and GitHub egress",
+  tooling,
+  async () => {
+    const { objects, selected, apiEnv, egress } = await signInObjects({
+      ...githubLoginValues,
+      ...githubEgressValues,
+      ...trustedProxyValues,
+    });
+    assert.deepEqual(selected("Deployment", "api").spec.strategy, { type: "Recreate" });
+    assert.deepEqual(apiEnv.OCC_AUTH_GITHUB_CLIENT_ID, {
+      valueFrom: { secretKeyRef: { name: "occ-github-login", key: "client-id" } },
+    });
+    assert.deepEqual(apiEnv.OCC_AUTH_GITHUB_CLIENT_SECRET, {
+      valueFrom: { secretKeyRef: { name: "occ-github-login", key: "client-secret" } },
+    });
+    assert.deepEqual(apiEnv.OCC_AUTH_GITHUB_RECOVERY_USER_ID, { value: "Xk3u9pQ2rT7vW1yZ" });
+    assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, { value: "10.42.0.0/16" });
+    assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, { value: "ingress-nginx" });
+    assert.equal(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, undefined);
+    // Bootstrap never activates the profile and the worker never signs anyone in.
+    const jobs = objects.filter(({ kind }) => kind === "Job");
+    assert.ok(jobs.length > 0);
+    for (const pod of [
+      selected("Deployment", "worker").spec.template.spec,
+      ...jobs.map((job) => job.spec.template.spec),
+    ]) {
+      for (const container of [...(pod.initContainers ?? []), ...pod.containers]) {
+        assert.ok(!(container.env ?? []).some(({ name }) => signInEnv.test(name)));
+      }
+    }
+    assert.deepEqual(egress.spec.podSelector.matchLabels, {
+      "app.kubernetes.io/name": "openclaw-enterprise",
+      "app.kubernetes.io/instance": "oce",
+      "app.kubernetes.io/component": "api",
+    });
+    assert.deepEqual(egress.spec.policyTypes, ["Egress"]);
+    assert.deepEqual(egress.spec.egress, [
+      {
+        to: [{ ipBlock: { cidr: "140.82.112.0/20" } }, { ipBlock: { cidr: "192.30.252.0/22" } }],
+        ports: [{ protocol: "TCP", port: 443 }],
+      },
+    ]);
+    assert.equal(objects.filter(({ kind }) => kind === "Secret").length, 0);
+  },
+);
+
+test("GitHub sign-in egress defaults to HTTPS to any IPv4 address", tooling, async () => {
+  const { apiEnv, egress } = await signInObjects(githubLoginValues);
+  assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, undefined);
+  assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, undefined);
+  assert.equal(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, undefined);
+  assert.deepEqual(egress.spec.egress, [
+    { to: [{ ipBlock: { cidr: "0.0.0.0/0" } }], ports: [{ protocol: "TCP", port: 443 }] },
+  ]);
+});
+
+test(
+  "trusted proxy presets render the client-address header for the API only",
+  tooling,
+  async () => {
+    // Named presets fix x-forwarded-for in the controller; only generic renders a header.
+    for (const [overrides, preset, cidrs, header] of [
+      [trustedProxyValues, "ingress-nginx", "10.42.0.0/16", undefined],
+      [
+        { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "X-Forwarded-For" },
+        "ingress-nginx",
+        "10.42.0.0/16",
+        undefined,
+      ],
+      [
+        {
+          "api.trustedProxy.preset": "aws",
+          "api.trustedProxy.cidrs[0]": "10.0.0.0/20",
+          "api.trustedProxy.cidrs[1]": "10.0.16.0/20",
+        },
+        "aws",
+        "10.0.0.0/20,10.0.16.0/20",
+        undefined,
+      ],
+      [
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "fd00:10::/64",
+          "api.trustedProxy.clientAddressHeader": "X-Client-Address",
+        },
+        "generic",
+        "fd00:10::/64",
+        { value: "x-client-address" },
+      ],
+      [
+        // The controller's header token allows at most 64 characters.
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "10.42.0.0/16",
+          "api.trustedProxy.clientAddressHeader": `x-${"a".repeat(62)}`,
+        },
+        "generic",
+        "10.42.0.0/16",
+        { value: `x-${"a".repeat(62)}` },
+      ],
+    ]) {
+      const { selected, apiEnv, egress } = await signInObjects(overrides);
+      assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, { value: cidrs });
+      assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, { value: preset });
+      assert.deepEqual(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, header);
+      assert.ok(!Object.keys(apiEnv).some((name) => name.startsWith("OCC_AUTH_GITHUB_")));
+      assert.equal(egress, undefined);
+      const worker = selected("Deployment", "worker").spec.template.spec.containers[0];
+      assert.ok(!worker.env.some(({ name }) => signInEnv.test(name)));
+    }
+  },
+);
+
+test(
+  "the real Helm renderer rejects sign-in and trusted proxy misconfigurations",
+  tooling,
+  async () => {
+    for (const [description, override, message] of [
+      [
+        "GitHub sign-in without a recovery user",
+        { "auth.github.enabled": "true" },
+        /auth\.github\.enabled requires auth\.recoveryUserId/,
+      ],
+      [
+        "a recovery user without GitHub sign-in",
+        { "auth.recoveryUserId": "Xk3u9pQ2rT7vW1yZ" },
+        /auth\.recoveryUserId requires auth\.github\.enabled/,
+      ],
+      [
+        "GitHub sign-in with an invalid recovery user",
+        { ...githubLoginValues, "auth.recoveryUserId": "admin@example.invalid" },
+        /auth\.recoveryUserId must be/,
+      ],
+      [
+        "GitHub sign-in with the retired nested recovery user",
+        { ...githubLoginValues, "auth.github.recoveryUserId": "Xk3u9pQ2rT7vW1yZ" },
+        /set auth\.recoveryUserId/,
+      ],
+      [
+        "GitHub sign-in with a hostname egress",
+        { ...githubLoginValues, "auth.github.egressCidrs[0]": "github.com" },
+        /auth\.github\.egressCidrs requires explicit IPv4 CIDRs/,
+      ],
+      [
+        "GitHub sign-in with an invalid egress address",
+        { ...githubLoginValues, "auth.github.egressCidrs[0]": "140.82.312.0/20" },
+        /invalid IPv4 address/,
+      ],
+      [
+        "GitHub sign-in with a /0 egress entry",
+        { ...githubLoginValues, "auth.github.egressCidrs[0]": "0.0.0.0/0" },
+        /prefixes 1 through 32/,
+      ],
+      [
+        "GitHub sign-in sharing the Better Auth Secret",
+        { ...githubLoginValues, "auth.github.secretName": "occ-auth" },
+        /dedicated Secret/,
+      ],
+      [
+        "GitHub sign-in sharing the database Secret",
+        { ...githubLoginValues, "auth.github.secretName": "occ-database" },
+        /dedicated Secret/,
+      ],
+      [
+        "GitHub sign-in sharing the installation Secret",
+        { ...githubLoginValues, "auth.github.secretName": "occ-installation-startup" },
+        /dedicated Secret/,
+      ],
+      [
+        "GitHub sign-in reusing one Secret key",
+        { ...githubLoginValues, "auth.github.clientSecretKey": "client-id" },
+        /different Secret keys/,
+      ],
+      [
+        "GitHub sign-in without a client ID key",
+        { ...githubLoginValues, "auth.github.clientIdKey": "" },
+        /client ID key/,
+      ],
+      [
+        "GitHub sign-in over HTTP",
+        { ...githubLoginValues, "auth.baseUrl": "http://occ.example.invalid" },
+        /HTTPS auth\.baseUrl/,
+      ],
+      [
+        "GitHub sign-in with shared native admin cookies",
+        { ...githubLoginValues, ...agentNativeAdminValues },
+        /agentNativeAdmin\.enabled: false/,
+      ],
+      [
+        "an unknown trusted proxy preset",
+        { ...trustedProxyValues, "api.trustedProxy.preset": "haproxy" },
+        /ingress-nginx, aws, or generic/,
+      ],
+      [
+        "a trusted proxy preset without CIDRs",
+        { "api.trustedProxy.preset": "ingress-nginx" },
+        /requires api\.trustedProxy\.cidrs/,
+      ],
+      [
+        "trusted proxy CIDRs without a preset",
+        { "api.trustedProxy.cidrs[0]": "10.42.0.0/16" },
+        /require api\.trustedProxy\.preset/,
+      ],
+      [
+        "a client-address header without a preset",
+        { "api.trustedProxy.clientAddressHeader": "x-real-ip" },
+        /require api\.trustedProxy\.preset/,
+      ],
+      [
+        "a generic trusted proxy without a header",
+        { ...trustedProxyValues, "api.trustedProxy.preset": "generic" },
+        /generic requires api\.trustedProxy\.clientAddressHeader/,
+      ],
+      [
+        "a trusted proxy for every IPv4 peer",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "0.0.0.0/0" },
+        /nonzero prefix/,
+      ],
+      [
+        "a trusted proxy for every IPv6 peer",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "::/0" },
+        /nonzero prefix/,
+      ],
+      [
+        "a trusted proxy hostname",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "ingress.example.invalid" },
+        /nonzero prefix/,
+      ],
+      [
+        "a trusted proxy with an invalid IPv4 address",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "10.420.0.0/16" },
+        /invalid IPv4 address/,
+      ],
+      [
+        "the internal client-address header",
+        { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "X-OCC-Client-IP" },
+        /cannot be x-occ-client-ip/,
+      ],
+      [
+        "the cookie header as a client address",
+        { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "cookie" },
+        /cannot be cookie/,
+      ],
+      [
+        "a structured Forwarded header as a client address",
+        { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "Forwarded" },
+        /cannot be forwarded/,
+      ],
+      [
+        "a client-address header list",
+        {
+          ...trustedProxyValues,
+          "api.trustedProxy.clientAddressHeader": "x-real-ip x-forwarded-for",
+        },
+        /single HTTP header name/,
+      ],
+      [
+        "a client-address header longer than the controller accepts",
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "10.42.0.0/16",
+          "api.trustedProxy.clientAddressHeader": `x-${"a".repeat(63)}`,
+        },
+        /single HTTP header name of at most 64 characters/,
+      ],
+      [
+        "an API key header as a client address",
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "10.42.0.0/16",
+          "api.trustedProxy.clientAddressHeader": "X-API-Key",
+        },
+        /cannot be x-api-key/,
+      ],
+      [
+        "a named preset with another client-address header",
+        { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "X-Real-IP" },
+        /ingress-nginx reads x-forwarded-for; use the generic preset for x-real-ip/,
+      ],
+    ]) {
+      await assert.rejects(
+        render(override),
+        ({ code, stderr }) => code !== 0 && message.test(stderr),
+        description,
+      );
+    }
   },
 );
 

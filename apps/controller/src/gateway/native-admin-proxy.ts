@@ -56,6 +56,7 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   "x-forwarded-for",
   "x-real-ip",
   "x-occ-identity",
+  "x-occ-session-key",
   "x-openclaw-scopes",
 ]);
 
