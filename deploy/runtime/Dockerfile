@@ -53,6 +53,11 @@ RUN --mount=type=secret,id=build-ca,required=false \
 COPY deploy/runtime/openclaw-codex-read-only-paths.patch /tmp/openclaw-codex-read-only-paths.patch
 RUN echo '62328f7cc72ada024a97a5a7bf89e988db3f91b64b4c6d7fa6809c218fc8b72e  /tmp/openclaw-codex-read-only-paths.patch' | sha256sum --check --strict \
     && git apply /tmp/openclaw-codex-read-only-paths.patch
+# TODO: Remove this bridge patch when OpenClaw `connect --ephemeral` accepts an expired
+# replayed setup code for a node whose saved device token can reconnect.
+COPY deploy/runtime/openclaw-connect-ephemeral-expired-setup.patch /tmp/openclaw-connect-ephemeral-expired-setup.patch
+RUN echo 'c57722da9a88ec4295577ab9a9ba6e2ca37fceda11ce8b51b08ee1425e00851f  /tmp/openclaw-connect-ephemeral-expired-setup.patch' | sha256sum --check --strict \
+    && git apply /tmp/openclaw-connect-ephemeral-expired-setup.patch
 COPY scripts/build-runtime-assets.mjs /tmp/build-runtime-assets.mjs
 RUN node /tmp/build-runtime-assets.mjs inputs /source /inputs
 
