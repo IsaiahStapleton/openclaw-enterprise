@@ -35,9 +35,8 @@ docker build -f deploy/runtime/Dockerfile \
   -t openclaw-enterprise-runtime:repository-credentials .
 ```
 
-This image contains stock Git, the client helper and pinned `gh` 2.100.0.
-Follow the production guides to publish or import it, select its digest and
-configure model authentication.
+The image includes Git, the client helper and pinned `gh` 2.100.0. Publish or
+import it, select its digest and configure model authentication.
 
 ## Create and deploy an Agent
 
@@ -109,7 +108,7 @@ Read-only (`git-read`), Contributor with issue management off (`git-write`), or
 Contributor (`git-full`). Send the profile explicitly; omitting it in an API
 binding selects `git-write`. The Console's Contributor choice defaults to
 `git-full` when approved.
-Add distinct approved references to the array for more repositories. API
+Add approved references for more repositories. API
 creation uses `POST /namespaces/$NAMESPACE_ID/agents`; the CLI returns the
 unwrapped Agent. Bindings confer no model access: before deploying, complete the
 production guide's exact Agent-principal Secret grant and initial transport
@@ -162,7 +161,7 @@ gh pr create -R github.com/example/project --base main --head agent-example \
   --draft --title "Repository access check" --body "Verify the Agent repository workflow."
 ```
 
-Stock Git resolves its normal remotes and push URLs. The scoped credential helper
+Git resolves normal remotes and push URLs. The scoped credential helper
 selects an admitted binding from the effective HTTPS host and repository path.
 `OCE_REPOSITORY_REF=application` selects among bindings for the same repository;
 it does not override the network destination. Concurrent commands can use
