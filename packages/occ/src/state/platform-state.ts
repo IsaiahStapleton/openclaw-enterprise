@@ -629,7 +629,16 @@ export interface PlatformOperationRepository extends PlatformOperationReadReposi
     initiatingActorId: string,
     actorId: string,
   ): Promise<boolean>;
-  retryFailedNamespaceDeletion(namespaceId: string, actorId: string): Promise<boolean>;
+  /**
+   * Requeue the exact deleting Namespace's terminal teardown initiated by
+   * `initiatingActorId`, assigning it to `actorId` (the same actor for a plain
+   * retry, another for a takeover).
+   */
+  retryFailedNamespaceDeletion(
+    namespaceId: string,
+    initiatingActorId: string,
+    actorId: string,
+  ): Promise<boolean>;
 }
 
 export type { AgentProvisioningRecord } from "./agent-provisioning.ts";
