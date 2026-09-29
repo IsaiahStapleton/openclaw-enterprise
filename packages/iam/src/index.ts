@@ -62,6 +62,14 @@ export class AuthAccountRoleNotFoundError extends Error {
   }
 }
 
+/** The requested Role exists but cannot be bound to a new auth account. */
+export class AuthAccountRoleInvalidError extends Error {
+  constructor(roleId: string) {
+    super(`The requested auth account Role ${roleId} is not an Installation-scoped Role.`);
+    this.name = "AuthAccountRoleInvalidError";
+  }
+}
+
 /** Fresh bootstrap creates both administrator identities against one shared Role. */
 export function createBootstrapAdministratorSeed(
   installationId: string,
@@ -208,8 +216,12 @@ export function validateAuthAccountPrincipalSeed(
     if (role === undefined) {
       throw new AuthAccountRoleNotFoundError(binding.roleId);
     }
+    // A caller-supplied Namespace Role is a request error; the binding shape
+    // below is built by createAuthPrincipalSeed, so a mismatch is an internal fault.
+    if (role.namespaceId !== undefined) {
+      throw new AuthAccountRoleInvalidError(binding.roleId);
+    }
     if (
-      role.namespaceId !== undefined ||
       binding.namespaceId !== undefined ||
       binding.subjectKind !== "identity" ||
       binding.subjectId !== seed.principal.id ||

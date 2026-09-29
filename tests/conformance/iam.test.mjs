@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { InMemoryPlatformState } from "../../packages/occ/src/state/platform-state.ts";
 import {
+  AuthAccountRoleInvalidError,
+  AuthAccountRoleNotFoundError,
   createAuthPrincipalSeed,
   createBootstrapAdministratorSeed,
   evaluateAuthorization,
   NativeIAMDriver,
+  validateAuthAccountPrincipalSeed,
 } from "../../packages/iam/src/index.ts";
 
 const identities = [
@@ -462,6 +465,46 @@ test("auth Principal seeds fail closed unless a Role id or explicit grant is giv
   assert.equal(administrator.roles.length, 1);
   assert.equal(administrator.bindings.length, 1);
   assert.equal(administrator.bindings[0].roleId, administrator.roles[0].id);
+});
+
+test("auth account seeds reject unknown and Namespace-scoped Roles with typed errors", () => {
+  const permissions = [{ action: "read", resourceKind: "installation" }];
+  const state = {
+    roles: [
+      { id: "role-installation", name: "Installation reader", permissions },
+      {
+        id: "role-namespace",
+        name: "Namespace reader",
+        namespaceId: "namespace-a",
+        permissions: [{ action: "read", resourceKind: "namespace" }],
+      },
+    ],
+  };
+  const validate = (options) =>
+    validateAuthAccountPrincipalSeed(
+      createAuthPrincipalSeed("ins_seed", "issuer", { id: "user-seed" }, options),
+      state,
+      "ins_seed",
+    );
+
+  validate({ roleId: "role-installation" });
+  validate({ grant: "none" });
+  assert.throws(() => validate({ roleId: "role-missing" }), AuthAccountRoleNotFoundError);
+  assert.throws(() => validate({ roleId: "role-namespace" }), AuthAccountRoleInvalidError);
+  // A malformed binding is an internal fault, not a request error.
+  const seed = createAuthPrincipalSeed(
+    "ins_seed",
+    "issuer",
+    { id: "user-seed" },
+    { roleId: "role-installation" },
+  );
+  const malformed = { ...seed, bindings: [{ ...seed.bindings[0], resourceId: "ins_other" }] };
+  assert.throws(
+    () => validateAuthAccountPrincipalSeed(malformed, state, "ins_seed"),
+    (error) =>
+      !(error instanceof AuthAccountRoleInvalidError) &&
+      /must bind an existing Installation IAM Role/.test(error.message),
+  );
 });
 
 test("fresh bootstrap seed creates human and service administrators on one shared Role", async () => {

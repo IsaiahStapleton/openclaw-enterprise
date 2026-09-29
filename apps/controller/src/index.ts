@@ -17,7 +17,11 @@ import swagger from "@fastify/swagger";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import ajvFormats from "ajv-formats";
 import { AuditEventFactory, type AuditSink } from "@openclaw-enterprise/audit";
-import { AuthAccountRoleNotFoundError, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
+import {
+  AuthAccountRoleInvalidError,
+  AuthAccountRoleNotFoundError,
+  type AuthPrincipalSeed,
+} from "@openclaw-enterprise/iam";
 import {
   harnessAuthBindingFromSnapshot,
   WORKSPACE_DEFAULTS_ID,
@@ -3976,7 +3980,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           prepared,
           roleId === undefined ? { grant: "none" } : { roleId },
         );
-        const auditEvent = event(
+        const baseAuditEvent = event(
           createAuthAccountOperation,
           request,
           target,
@@ -3984,6 +3988,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           context,
           decision.evidence,
         );
+        // Record who was enrolled and what they were granted; never the email or password.
+        const auditEvent: AuditEvent = {
+          ...baseAuditEvent,
+          details: {
+            ...baseAuditEvent.details,
+            principalId: seed.principal.id,
+            ...(roleId === undefined ? { grant: "none" } : { roleId }),
+          },
+        };
         try {
           await options.provisionAuthAccount(seed, auditEvent, prepared, external);
         } catch (error) {
@@ -3993,7 +4006,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               ? failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.")
               : external !== undefined && error instanceof ResourceConflictError
                 ? failure(409, "RESOURCE_CONFLICT", "The external identity is already assigned.")
-                : error instanceof AuthAccountRoleNotFoundError
+                : error instanceof AuthAccountRoleNotFoundError ||
+                    error instanceof AuthAccountRoleInvalidError
                   ? failure(
                       400,
                       "INVALID_REQUEST",
