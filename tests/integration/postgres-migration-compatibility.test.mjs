@@ -1122,6 +1122,31 @@ async function seedCanonicalData(db, { preset = false } = {}) {
     VALUES($1,now(),'mutation','migration-fixture','reconcile',$2,'namespace',$2,'success','{"reasonCode":"NAMESPACE_READY"}')`,
     [`aud_${randomUUID()}`, namespace],
   );
+  // Stored human sign-in state: a password method, an external method holding
+  // provider tokens, and a live session. Later auth migrations alter these tables.
+  const user = `usr_${randomUUID()}`;
+  await db.app.query(
+    `INSERT INTO occ."user"(id,name,email,email_verified,created_at,updated_at)
+    VALUES($1,'Migration fixture',$2,true,now(),now())`,
+    [user, `migration-${randomUUID()}@example.test`],
+  );
+  await db.app.query(
+    `INSERT INTO occ.account(id,account_id,provider_id,user_id,password,created_at,updated_at)
+    VALUES($1,$2,'credential',$2,'fixture-password-hash',now(),now())`,
+    [`acc_${randomUUID()}`, user],
+  );
+  await db.app.query(
+    `INSERT INTO occ.account(id,account_id,provider_id,user_id,access_token,refresh_token,id_token,
+      access_token_expires_at,refresh_token_expires_at,scope,created_at,updated_at)
+    VALUES($1,$2,'oidc',$3,'fixture-access','fixture-refresh','fixture-id',
+      now()+interval '1 hour',now()+interval '1 day','openid email',now(),now())`,
+    [`acc_${randomUUID()}`, `subject-${randomUUID()}`, user],
+  );
+  await db.app.query(
+    `INSERT INTO occ.session(id,expires_at,token,created_at,updated_at,ip_address,user_agent,user_id)
+    VALUES($1,now()+interval '1 day',$2,now(),now(),'127.0.0.1','migration-fixture',$3)`,
+    [`ses_${randomUUID()}`, `token-${randomUUID()}`, user],
+  );
   if (preset) {
     await db.app.query(
       "INSERT INTO occ.presets(id,namespace_id,name,template,created_at) VALUES($1,$2,'Migration preset',$3,now())",
@@ -1307,6 +1332,49 @@ async function seedProviderCompletedData(db) {
   };
 }
 
+// Migration 0037 adds authentication-version columns, the identity-only CHECK
+// and the method guard trigger to occ.account. Populated upgrades must default
+// the new columns onto stored methods and enforce both rules on those rows.
+async function assertUpgradedAuthentication(db) {
+  assert.deepEqual(
+    (
+      await db.app.query(
+        `SELECT provider_id,authentication_version,identity_only FROM occ.account ORDER BY provider_id`,
+      )
+    ).rows,
+    [
+      { provider_id: "credential", authentication_version: 1, identity_only: false },
+      { provider_id: "oidc", authentication_version: 1, identity_only: false },
+    ],
+  );
+  assert.equal(
+    (await db.app.query("SELECT count(*)::integer AS sessions FROM occ.session")).rows[0].sessions,
+    1,
+  );
+  assert.deepEqual(
+    (
+      await db.app.query(
+        "UPDATE occ.account SET password='rotated-fixture-hash' WHERE provider_id='credential' RETURNING authentication_version",
+      )
+    ).rows,
+    [{ authentication_version: 2 }],
+  );
+  await assert.rejects(
+    db.app.query("UPDATE occ.account SET identity_only=true WHERE provider_id='oidc'"),
+    (error) => error.code === "23514" && error.constraint === "account_identity_only",
+  );
+  assert.deepEqual(
+    (
+      await db.app.query(
+        `UPDATE occ.account SET identity_only=true,access_token=NULL,refresh_token=NULL,id_token=NULL,
+          access_token_expires_at=NULL,refresh_token_expires_at=NULL,scope=NULL
+        WHERE provider_id='oidc' RETURNING authentication_version`,
+      )
+    ).rows,
+    [{ authentication_version: 2 }],
+  );
+}
+
 async function canonicalData(db) {
   const result = { presets: [] };
   const hasPresets =
@@ -1325,19 +1393,24 @@ async function canonicalData(db) {
     "iam_group_memberships",
     "iam_access_bindings",
     "iam_restrictions",
+    "user",
+    "account",
+    "session",
     ...(hasPresets ? ["presets"] : []),
   ]) {
     const ignoredColumns =
-      table === "agents"
-        ? ["repository_bindings", "harness_auth_credential_source_id", "plugin_approvers"]
-        : table === "controller_work"
-          ? ["work_kind"]
-          : [];
+      table === "account"
+        ? ["authentication_version", "identity_only"]
+        : table === "agents"
+          ? ["repository_bindings", "harness_auth_credential_source_id", "plugin_approvers"]
+          : table === "controller_work"
+            ? ["work_kind"]
+            : [];
     result[table] = (
       await db.app.query(
         // New migration-owned compatibility columns may be defaulted onto
         // existing rows; every previously stored field must remain identical.
-        `SELECT to_jsonb(t) - $1::pg_catalog.text[] AS value FROM occ.${table} t ORDER BY to_jsonb(t)::pg_catalog.text`,
+        `SELECT to_jsonb(t) - $1::pg_catalog.text[] AS value FROM occ."${table}" t ORDER BY to_jsonb(t)::pg_catalog.text`,
         [ignoredColumns],
       )
     ).rows;
@@ -1408,6 +1481,7 @@ test(
         assert.deepEqual(await runHistoryMigration(db), { ok: true, history });
         await assertCompletedHistory(db, receipts);
         assert.deepEqual(await canonicalData(db), before);
+        await assertUpgradedAuthentication(db);
         // Main's existing IAM DELETE compatibility grant belongs to its later controlled-writer transition.
         assert.equal(
           (
