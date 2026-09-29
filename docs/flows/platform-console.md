@@ -8,13 +8,14 @@ last_updated_session: 01a0cf72-6985-7712-ba92-d8cc32470f24
 
 ## Overview
 
-`/console/` resolves a session and renders authorized resources. See the
-[console reference](../reference/console.md) for user-visible behavior.
+`/console/` resolves a session and renders authorized resources.
+The [console reference](../reference/console.md) owns user-visible behavior;
+API and IAM authorize resources.
 
 ## Entry Points
 
 - Browser entry: `apps/controller/src/console/console.mjs` composes the session,
-  request client and shell.
+  request client, view lifetime, navigation, and shell.
 - `api-client.mjs` owns cancellation and session expiry; `view-lifetime.mjs`
   owns generation and abort state; `navigation.mjs` owns return paths and history;
   `shell.mjs` owns navigation and collections.
@@ -141,9 +142,9 @@ selection or choosing the first ready/readable Namespace. Unreadable IDs stay
 unavailable; selection never becomes an API query selector.
 
 `shell.mjs:namespaceSelector` lists readable choices in headers except Namespaces,
-disabled while loading or empty. Changes call `navigation.mjs:navigate` with the
-current feature and chosen ID: Agent detail/creation return to the Agents list;
-global pages stay open.
+disabled while loading or empty; Namespaces embeds it only for
+unavailable-selection recovery. Selection calls `navigation.mjs:navigate`: Agent
+detail/creation return to Agents; global pages stay open.
 
 ### 3. Authorize the selected page resource
 
@@ -303,8 +304,6 @@ refresh and inspection.
   wiring, static MIME/allowlisting, and unchanged API JSON errors. See
   [Testing](../testing/README.md) for commands and the image smoke boundary.
 
-The [observability link flow](platform-console/observability-link.md) traces its authorization.
-
 ## Related docs
 
 - [Console reference](../reference/console.md)
@@ -322,8 +321,6 @@ The [observability link flow](platform-console/observability-link.md) traces its
 
 - 2026-09-27 19:38: Preserve validated page and tab DOM in accompanying changes. (01a0b1f2-e696-7232-a439-5b668154bcd9 - 0663fa97)
 
-- 2026-09-27 15:08: Link observability flow. (authoring-run/f396defd-23ca-46d0-ab3a-e749b6ea1d18 - 0663fa97)
-
 - 2026-09-27 05:05: Keep supported Dedicated provisioning available without optional repository discovery. (01a0cf72-6985-7712-ba92-d8cc32470f24 - c0f792d5b92e2dee596711654784759d327e0817)
 
 - 2026-09-27 02:30: Use selected PAT Secrets for discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - ec4e9dc517497afe05be63a320542abcf61e8a55)
@@ -339,6 +336,8 @@ The [observability link flow](platform-console/observability-link.md) traces its
 - 2026-09-25 00:00: Retain repository draft bindings through failed rediscovery. (01a0d557-f6e3-7da2-af52-993d05735554 - 2e0604a2)
 
 - 2026-09-24 22:03: Link shared editor draft capture before tab teardown. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)
+
+- 2026-09-24 20:03: Recover unavailable Namespace selection inline. (authoring-run/bb42c16a-c6e1-4900-adf5-9ba37629e491 - 09a392cbda669a99e69d5f6a905921b9f10b43d9)
 
 - 2026-09-24 17:13: Trace the header Namespace selector and preserved navigation scope. (authoring-run/fdba83e7-9f34-4b8b-8af2-625214851f27 - 1a458b227585c572ec0ac70fd10efc3834165075)
 

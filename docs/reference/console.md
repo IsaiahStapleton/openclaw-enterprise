@@ -37,13 +37,11 @@ The sidebar opens **Agents** or **Namespaces**; **Refresh** repeats the read.
 Set up models during Agent creation; the [experimental Backends](backends.md)
 tab is hidden. Namespace rows are read-only.
 
-Installation administrators see an external **Observability** link for a configured
-[observability URL](configuration.md#installation-startup-configuration).
-
-| Page       | Scope and permission                                                     |
-| ---------- | ------------------------------------------------------------------------ |
-| Agents     | Selected Namespace; Namespace `read`, then exact Agent `read` filtering. |
-| Namespaces | Installation-wide collection filtered by exact Namespace `read`.         |
+| Page          | Scope and permission                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Agents        | Selected Namespace; Namespace `read`, then exact Agent `read` filtering.                                             |
+| Namespaces    | Installation-wide collection filtered by exact Namespace `read`.                                                     |
+| Observability | External [`observability.url`](configuration.md#installation-startup-configuration) link; Installation `administer`. |
 
 The console uses a light appearance and OCC-served fonts.
 
@@ -56,18 +54,20 @@ are scoped to account, session, route, and Namespace; sign-out, session changes,
 and exit clear them. Failed reads show recovery. Installation-wide Backend
 denial clears all previews.
 
-Use the header **Namespace** selector to switch scope. It lists readable Namespaces and shows the current selection. The
-Installation-wide Namespaces page omits the selector. The bottom
+The page-header **Namespace** selector switches scope on desktop and mobile,
+listing readable Namespaces and the current selection. The
+Installation-wide Namespaces page omits the header selector. The bottom
 **OpenClaw Enterprise** menu contains **Settings** and **Logout**. Settings shows
 the signed-in account and no configurable settings.
 
 The selected Namespace stays in `?namespace=<id>` across pages, reload, and Back.
 An unreadable explicit ID shows **Namespace unavailable** and requires another
-selection. With no readable Namespaces, Agents explains that provisioning or
-access is needed; global pages remain available.
+selection; on Namespaces, choose one inside the message to clear it in place.
+Without readable Namespaces, Agents and Namespaces explain how to get access;
+global pages remain available.
 
-Switching Namespace from Agent detail or creation returns to the Agents list in
-the new scope. Other global pages stay open. The API makes all authorization decisions; the selector does
+Switching from Agent detail or creation returns to Agents in the new scope;
+other global pages stay open. The API authorizes everything; the selector does
 not broaden access.
 
 ## Inspect build and runtime images
