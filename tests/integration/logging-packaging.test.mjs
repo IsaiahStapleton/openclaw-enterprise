@@ -296,6 +296,15 @@ test(
         { ...loggingValues, "logging.collector.exporter.cidr": "0.0.0.0/0" },
       ],
       ["missing env Secret", { ...loggingValues, "logging.collector.envSecretName": "" }],
+      [
+        "shared GitHub sign-in Secret",
+        {
+          ...loggingValues,
+          "auth.github.enabled": "true",
+          "auth.recoveryUserId": "Xk3u9pQ2rT7vW1yZ",
+          "logging.collector.envSecretName": "occ-github-login",
+        },
+      ],
     ]) {
       await assert.rejects(
         render(override),

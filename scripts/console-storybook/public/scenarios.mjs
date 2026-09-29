@@ -406,12 +406,69 @@ export const scenarios = {
     description:
       "The email and password form. Any nonempty demo email/password signs into this fixture.",
   },
+  githubLogin: {
+    group: "Pages/Sign in",
+    name: "GitHub enabled",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    description:
+      "Provider discovery adds Continue with GitHub beside the password form. Clicking it demonstrates an unavailable provider; this fixture never navigates to GitHub.",
+    gap: "An administrator must attach the numeric GitHub identity to an existing account through the API. Enrollment, account creation, and recovery administration have no console controls. OAuth navigation and session issuance require backend verification.",
+  },
+  githubUnavailable: {
+    group: "Pages/Sign in",
+    name: "GitHub unavailable",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    actions: [click("Continue with GitHub")],
+    description: "A failed GitHub start leaves password sign-in and a deliberate retry available.",
+  },
+  githubRateLimited: {
+    group: "Pages/Sign in",
+    name: "GitHub rate limited",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    rules: [{ path: "/api/auth/providers/github/start", method: "POST", status: 429 }],
+    actions: [click("Continue with GitHub")],
+    description: "Admission refusal asks the user to wait without automatically retrying.",
+  },
+  githubCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "GitHub callback rejected",
+    path: "/console/?authError=github",
+    signedOut: true,
+    githubEnabled: true,
+    description:
+      "A rejected callback shows the generic sign-in error and keeps password recovery available.",
+  },
+  githubResultRejected: {
+    group: "Pages/Sign in",
+    name: "GitHub result not confirmed",
+    path: "/console/",
+    pendingGithubAttempt: true,
+    githubEnabled: true,
+    rules: [{ path: "/api/auth/providers/github/result", method: "POST", status: 401 }],
+    description:
+      "The tab that started GitHub sign-in could not confirm that the current session is the one its attempt created, so it shows the sign-in error instead of adopting that session.",
+  },
+  providerDiscoveryUnavailable: {
+    group: "Pages/Sign in",
+    name: "Provider discovery unavailable",
+    path: "/console/login",
+    signedOut: true,
+    rules: [{ path: "/api/auth/providers", status: 503 }],
+    description:
+      "Failed provider discovery leaves the password form usable without a GitHub button.",
+  },
   loginError: {
     group: "Pages/Sign in",
     name: "Invalid credentials",
     path: "/console/login",
     signedOut: true,
-    rules: [{ path: "/api/auth/sign-in/email", status: 401 }],
+    rules: [{ path: "/api/auth/sign-in/email", method: "POST", status: 401 }],
     actions: [
       { selector: "#username", value: "operator@example.com" },
       { selector: "#password", value: "demo-only" },
@@ -443,7 +500,7 @@ export const scenarios = {
   logoutFailure: {
     group: "Pages/Sign in",
     name: "Logout unconfirmed",
-    rules: [{ path: "/api/auth/sign-out", status: 503 }],
+    rules: [{ path: "/api/auth/sign-out", method: "POST", status: 503 }],
     actions: [...account, click("Logout")],
     description:
       "Failed logout with a still-active session hides private content until revocation can be confirmed.",
