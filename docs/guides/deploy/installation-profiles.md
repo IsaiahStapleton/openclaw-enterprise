@@ -13,6 +13,8 @@ consumers. They render configuration for an already prepared environment.
 
 Use `openclaw` for embedded OpenClaw Agents with the bundled OpenClaw
 PluginDriver. Plugin selection starts through manual or API configuration.
+Embedded OpenClaw cannot enable external Slack channels; the Standard OpenClaw
+preset must leave channels disabled.
 
 Use `codex` for dedicated Codex Agents with the bundled Codex PluginDriver.
 Hosted plugin discovery and Codex runtime authentication both use an existing
@@ -27,6 +29,10 @@ Both profiles enable:
 - Kubernetes Compute, Kubernetes Configuration, Kubernetes Secrets, native IAM,
   private metrics, digest-pinned images, DNS policy, trusted proxy CIDRs, and
   plugin-status proxy CIDRs.
+
+Preset seeding does not switch the Installation PluginDriver selected by the
+profile. Creating an Agent from the other preset still needs a compatible
+driver, runtime, harness mode, credentials, and channel support.
 
 Repository support is optional. When enabled, the renderer wires the broker
 container, GitHub Backend, Repo Driver, and Compute peer. The repository registry
@@ -195,7 +201,10 @@ renderer:
 - For Codex, the configured localhost seccomp profile installed and verified on
   every node selected by `runtime.nodeSelector`.
 - For Slack, separate runtime and Console directory proxies. Rendering proxy
-  wiring does not enable a Slack consumer. The default profile input uses the
+  wiring does not enable a Slack consumer. The managed proxy can be installed by
+  either profile for API directory lookup and dedicated gateway use, but enabled
+  Slack Agents require dedicated Codex execution. Standard OpenClaw embedded
+  Agents must leave channels disabled. The default profile input uses the
   chart-managed restricted proxy Service. Set `slackProxyUpstreamCidrs` to the
   reviewed Slack DNS answers as resolved from the proxy workload network, not
   from an operator workstation; refresh those CIDRs under the operator

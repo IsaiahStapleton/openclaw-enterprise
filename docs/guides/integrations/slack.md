@@ -19,9 +19,11 @@ go to the Agent's gateway; model credentials are configured separately.
 - Require the operator to [configure and verify both Slack proxies](#configure-both-slack-proxies)
   before enabling Slack: gateway messaging and Console directory lookup use
   separate settings and egress rules.
-- Choose a dedicated Agent on Kubernetes and configure its
+- Choose a dedicated Codex Agent on Kubernetes and configure its
   [model authentication](../../reference/agents.md#harness-authentication).
-  Embedded execution cannot isolate channel credentials from the Harness.
+  Embedded OpenClaw execution cannot isolate channel credentials from the
+  Harness, and Kubernetes Compute rejects enabled external channels for embedded
+  revisions. The Standard OpenClaw preset must leave channels disabled.
 - First deployment generates required connection credentials. It requires Agent
   `deploy`, plus Agent `read` and `operate` when generation is needed.
   Selecting Secrets requires [readable Secret metadata](../../reference/drivers/secret.md#iam)
@@ -33,8 +35,8 @@ go to the Agent's gateway; model credentials are configured separately.
 ## Configure both Slack proxies
 
 For Slack-enabled k3d and EKS installations, configure both paths before
-creating a Slack-enabled Agent. A working Socket Mode connection does not
-establish that Console user or channel search works.
+creating a Slack-enabled dedicated Codex Agent. A working Socket Mode connection
+does not establish that Console user or channel search works.
 
 | Path                            | Required setting                                                       | Consumer          |
 | ------------------------------- | ---------------------------------------------------------------------- | ----------------- |
@@ -48,7 +50,9 @@ directory proxy at that Service DNS name, admits API and managed gateway callers
 to the proxy, and allows the proxy to reach only the supplied upstream CIDRs on
 TCP 443. If you use an external proxy instead, use a literal IPv4 address and
 explicit port with no URL credentials or path. Setting one proxy path does not
-configure the other consumer path.
+configure the other consumer path. Installing the managed proxy does not make
+embedded OpenClaw Slack-capable; it only provides shared proxy infrastructure
+for API directory lookup and dedicated gateway channel traffic.
 
 Choose upstream CIDRs from Slack DNS answers as resolved by the proxy workload's
 network path. Do not assume an operator workstation resolves the same Slack

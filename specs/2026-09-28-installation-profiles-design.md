@@ -46,8 +46,8 @@ All entries below are proposed final configuration, not existing named profiles.
 | Installation plugin driver         | `drivers.plugin.id: occ-plugin`                                                             | `drivers.plugin.id: codex-plugin`                                                                                    |
 | Plugin catalog                     | Pinned catalog; manual/API selection, Console discovery gap                                 | `configuration.catalogSource: hosted`; PAT-backed discovery                                                          |
 | Plugin credentials                 | Bundled `diffs` needs none                                                                  | Hosted discovery PAT required; existing account access token or optional managed ChatGPT ServiceAccount for runtime  |
-| Slack/channel proxy                | Shared restricted proxy infrastructure; runtime plus Console lookup wiring                  | Same                                                                                                                 |
-| Slack consumer                     | Inactive until operator supplies Channel/Agent configuration and credentials                | Same                                                                                                                 |
+| Slack/channel proxy                | Shared restricted proxy infrastructure for API directory lookup; no embedded Agent Slack    | Shared restricted proxy infrastructure; runtime plus Console lookup wiring                                           |
+| Slack consumer                     | Unsupported for embedded OpenClaw; Standard OpenClaw must leave channels disabled           | Inactive until operator supplies dedicated Agent Channel configuration and credentials                               |
 | Private gateway routing            | `gatewayRouting.enabled: true`; Envoy/cert-manager prerequisites                            | Same                                                                                                                 |
 | Agent native admin UI              | Enabled by default; `agentNativeAdmin.enabled: true`; DNS/TLS/cookie-domain inputs required | Same                                                                                                                 |
 | Metrics                            | `metrics.enabled: true`, private listener; explicit scraper selectors                       | Same                                                                                                                 |
@@ -57,6 +57,10 @@ All entries below are proposed final configuration, not existing named profiles.
 
 Both profiles include the shared installation capabilities and select one plugin
 driver globally. Selecting another Agent preset does not switch that driver.
+Installing the shared proxy infrastructure is not Agent channel capability:
+Kubernetes Compute rejects enabled external channels for embedded OpenClaw, so
+only dedicated Codex Agents can use the Slack consumer path in the initial
+profiles.
 Profile names must not become a new persisted platform resource.
 
 ## Shared defaults and optional integrations
@@ -260,3 +264,5 @@ model/plugin execution; record both outcomes independently.
 - 2026-09-28 16:24: Added the first profile packaging artifacts: two profile definitions, renderer, guide, and focused renderer coverage. Session `01a0e8d0-c07a-71c2-9bf1-04394d5e6f76`.
 
 - 2026-09-28 15:52: Qualified the existing-account token path separately from optional managed account provisioning; clarified broker versus worker-process restart behavior.
+
+- 2026-09-28 17:35: Clarified that shared Slack proxy infrastructure does not enable embedded OpenClaw Slack consumers; dedicated Codex execution remains required. Session `01a0e8d0-c07a-71c2-9bf1-04394d5e6f76`.
