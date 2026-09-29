@@ -136,8 +136,9 @@ export interface ControllerAuthOptions {
   /** Trusted proxies whose client-address header keys sign-in admission. */
   readonly clientAddress?: ClientAddressConfiguration;
   /**
-   * Password-only profile: whether a user administers the Installation, which gives that
-   * account the reserved password lane. Without it no account has the reserved lane.
+   * Password-only profile: whether a user administers the Installation. Once the shared
+   * budget is spent, only administrators' passwords are still checked (slowly). Without it
+   * no account is.
    */
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
   /** Password-only profile: replaces the in-memory failure-counting admission. */
@@ -899,8 +900,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     },
   });
   const api = auth.api;
-  // Password-only profile: failure-counting admission keyed on client address and email,
-  // with a reserved lane for Installation administrators (see admission.ts).
+  // Password-only profile: failure-counting admission keyed on email and, behind a trusted
+  // proxy, client address; administrators are slowed, never refused (see admission.ts).
   const passwordAdmission =
     humanLogin !== undefined
       ? undefined
@@ -908,7 +909,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         passwordFailureAdmission({
           ...passwordFailureBudget,
           countsAsFailure: countsAsSignInFailure,
-          // Timing differences here are hidden by the reserved lane's refusal floor.
+          // Timing differences here are hidden by the slow lane's floor. Lookup failures
+          // propagate, so an outage is 503 rather than a refusal.
           async isReserved(email) {
             if (options.passwordAdministrator === undefined) {
               return false;
@@ -1159,8 +1161,12 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/password", body);
         }
+        // The address lane needs a trusted proxy: without one, browsers behind the ingress
+        // share its address, so only the email lane applies.
         const attempt = {
-          clientAddress: clientAddressOf(request),
+          ...(options.clientAddress === undefined
+            ? {}
+            : { clientAddress: clientAddressOf(request) }),
           email: body.email.trim().toLowerCase(),
         };
         return passwordAdmission!.admit(attempt, () =>

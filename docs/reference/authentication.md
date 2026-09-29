@@ -12,15 +12,13 @@ to an explicitly provisioned Principal or ServicePrincipal and owns
 For a sign-in procedure, see
 [human administrator sign-in](authentication/service-api-keys.md#sign-in-as-a-human-administrator).
 For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
-The [platform console](console.md) provides login at `/console/` and uses these
-same session endpoints. Public signup, generic OIDC, and bearer
+The [platform console](console.md) at `/console/` uses these session endpoints. Public signup, generic OIDC, and bearer
 credentials are unsupported.
 
 ## Installation and account ownership
 
 Authentication belongs to one bootstrapped Installation. The controller requires
-`OCC_AUTH_SECRET` and `OCC_AUTH_BASE_URL`; their deployment configuration is
-specified in [settings](settings.md). An account's immutable Better Auth user ID
+`OCC_AUTH_SECRET` and `OCC_AUTH_BASE_URL` (see [settings](settings.md)). An account's immutable Better Auth user ID
 and Installation-specific trusted issuer identify its IAM Principal. Email
 addresses and display names do not grant access.
 
@@ -39,16 +37,14 @@ Bootstrap issues a 30-day service API key named `bootstrap-admin` and writes its
 one-time response to `OCC_BOOTSTRAP_SERVICE_KEY_FILE`. The JSON contains
 `data.id`, `data.servicePrincipalId`, `data.name`, `data.expiresAt`, `data.key`,
 and `meta.installationId`; it is usable with the existing service-key examples.
-Better Auth retains the hash, not plaintext. The file remains readable until the
-operator removes it; there is no server-side plaintext retrieval endpoint.
+Better Auth keeps only the hash; there is no server-side plaintext retrieval.
 
 Production also creates the configured `OCC_BOOTSTRAP_ADMIN_EMAIL` account with
 a random password written to `OCC_BOOTSTRAP_PASSWORD_FILE`. Both paths must be
 absolute, distinct siblings on protected operator-owned storage. Output is
 exclusive, owner-only (`0600`), and synced before committing Installation/IAM
 state; existing files, symlinks, or unsafe parent directories fail closed.
-Credentials never appear in bootstrap logs, audit, or the HTTP bootstrap
-response. OCC creates no Kubernetes Secret or PVC for delivery.
+Credentials never appear in logs, audit, or the bootstrap response. OCC creates no Kubernetes Secret or PVC for delivery.
 
 In Helm, `bootstrap.password.claimName` selects the existing protected PVC.
 Only the initialization Job mounts it; `bootstrap.password.fileName` and
@@ -111,12 +107,15 @@ foreign, malformed, or duplicated key returns `401`, and such a sign-out neither
 revokes nor clears the cookie. Without the header, requests are unchanged. Console
 pins each tab's key this way.
 
-Sign-in takes `{"email": "...", "password": "..."}`. The session credential
-arrives only through `Set-Cookie`.
+Sign-in takes `{"email": "...", "password": "..."}`. The session arrives only
+through `Set-Cookie`.
 
-Without an external provider, only failures count: 20 per minute per client
-address and 10 per email, then `429` with `Retry-After`. Installation
-administrators keep a reserved lane.
+Without an external provider, after 10 failed sign-ins per minute per email, or 20
+per client address with [`api.trustedProxy`](settings/production.md#github-sign-in-and-trusted-proxies),
+attempts wait 1–8 s and return `429` with `Retry-After`, whether or not the email
+exists; an Installation administrator's correct password still signs in. Without
+one, browsers share the ingress address and startup logs
+`authentication.sign-in-limit-warning`.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are

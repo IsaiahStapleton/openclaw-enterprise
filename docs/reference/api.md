@@ -939,7 +939,7 @@ Sign in with email and password
 
 **Operation ID:** `signInEmail`
 
-**Permissions:** Authenticates a local account and issues a user session cookie. Repeated failed attempts from one client address or for one email return 429 with Retry-After.
+**Permissions:** Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are delayed and return 429 with Retry-After.
 
 ##### Request body
 

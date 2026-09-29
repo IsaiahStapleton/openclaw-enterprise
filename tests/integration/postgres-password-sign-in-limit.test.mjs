@@ -8,6 +8,7 @@ import {
   consoleOrigin as origin,
   defaultInstallSettings,
   installationRoles,
+  memoryLogger,
   signedInHeaders,
 } from "../helpers/production-sign-in.mjs";
 
@@ -20,9 +21,10 @@ const wrongPassword = "wrong-guess-password";
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
-// The default install (no external provider) behind a trusted ingress: password sign-in
-// admission keys on the resolved client address and the email, counts only failures, and
-// keeps a reserved lane for Installation administrators.
+// The default install (no external provider), composed twice over one database: behind a
+// trusted ingress, where admission keys on the resolved client address and the email, and
+// with the chart's defaults (no trusted proxy), where only the email lane applies. Only
+// failures count; once the budget is spent, administrators are slowed, never refused.
 test(
   "password-only sign-in limits failures per client and email with a reserved administrator lane",
   { skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL for real PostgreSQL proof." },
@@ -30,8 +32,10 @@ test(
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const state = new PostgresPlatformState(pool);
     let app;
+    let plainApp;
     t.after(async () => {
       await app?.close();
+      await plainApp?.close();
       await pool.end();
     });
     const adminPassword = await bootstrapProductionInstallation(t, {
@@ -41,11 +45,29 @@ test(
     });
     const admin = { email: adminEmail, password: adminPassword };
     const roles = await installationRoles(state, pool);
+    const proxiedLog = memoryLogger();
     app = await composeProductionSignIn(t, {
       databaseUrl,
       settings: { ...defaultInstallSettings, OCC_AUTH_TRUSTED_PROXY_CIDRS: "10.0.0.0/24" },
       secrets,
+      logger: proxiedLog.logger,
     });
+    const plainLog = memoryLogger();
+    plainApp = await composeProductionSignIn(t, {
+      databaseUrl,
+      settings: { ...defaultInstallSettings },
+      secrets,
+      logger: plainLog.logger,
+    });
+    // Without a trusted proxy every browser reaches the API from the ingress address.
+    const plainSignIn = (account) =>
+      plainApp.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        remoteAddress: ingress,
+        headers: { origin },
+        payload: account,
+      });
     const signIn = (client, account) =>
       app.inject({
         method: "POST",
@@ -72,7 +94,73 @@ test(
       return { email, password: accountPassword };
     };
     const member = await createAccount("limit-member@example.test", roles.reader.id);
+    const target = await createAccount("limit-target@example.test", roles.reader.id);
     const secondAdmin = await createAccount("limit-second-admin@example.test", roles.admin.id);
+    const plainAdmin = await createAccount("limit-plain-admin@example.test", roles.admin.id);
+    const limitWarnings = (events) =>
+      events.filter((event) => event.event === "authentication.sign-in-limit-warning");
+
+    await t.test("startup warns once when no trusted proxy enables the address lane", () => {
+      assert.equal(limitWarnings(plainLog.events).length, 1);
+      assert.equal(limitWarnings(plainLog.events)[0].code, "TRUSTED_PROXY_NOT_CONFIGURED");
+      assert.equal(limitWarnings(proxiedLog.events).length, 0);
+    });
+
+    await t.test(
+      "without a trusted proxy, an administrator is slowed, never refused, by wrong guesses",
+      async () => {
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignIn({ ...plainAdmin, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+        }
+        // Two at a time: the email's slow slots. Each is paced and refused.
+        const slowed = [];
+        for (let pair = 0; pair < 5; pair += 1) {
+          slowed.push(
+            ...(await Promise.all(
+              [0, 1].map(() => plainSignIn({ ...plainAdmin, password: wrongPassword })),
+            )),
+          );
+        }
+        assert.deepEqual(
+          slowed.map((response) => response.statusCode),
+          Array(10).fill(429),
+        );
+        const started = performance.now();
+        const correct = await plainSignIn(plainAdmin);
+        assert.equal(correct.statusCode, 200, correct.body);
+        assert.ok(performance.now() - started < 20_000, "the administrator is only delayed");
+        assert.equal((await plainSignIn(admin)).statusCode, 200);
+      },
+    );
+
+    await t.test(
+      "without a trusted proxy, failures through the shared ingress refuse no other account",
+      async () => {
+        const junk = [];
+        for (let index = 0; index < 25; index += 1) {
+          junk.push(
+            await plainSignIn({
+              email: `ingress-junk-${index}@example.test`,
+              password: wrongPassword,
+            }),
+          );
+        }
+        const victim = await plainSignIn(member);
+        assert.equal(victim.statusCode, 200, victim.body);
+        assert.deepEqual(
+          junk.map((response) => response.statusCode),
+          Array(25).fill(401),
+        );
+        // The email lane still applies.
+        for (let index = 0; index < 10; index += 1) {
+          assert.equal((await plainSignIn({ ...target, password: wrongPassword })).statusCode, 401);
+        }
+        const spent = await plainSignIn(target);
+        assert.equal(spent.statusCode, 429, spent.body);
+        assert.ok(Number(spent.headers["retry-after"]) >= 1);
+      },
+    );
 
     await t.test("repeated successful sign-ins are not limited", async () => {
       for (let index = 0; index < 30; index += 1) {
@@ -119,7 +207,47 @@ test(
     });
 
     await t.test(
-      "guessing an administrator's password from many clients keeps the lane",
+      "flooding distinct emails from an exhausted client resets no other budget",
+      async () => {
+        const guesser = "203.0.113.61";
+        const flooder = "203.0.113.62";
+        for (let index = 0; index < 10; index += 1) {
+          const response = await signIn(guesser, { ...target, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+        }
+        assert.equal(
+          (await signIn(guesser, { ...target, password: wrongPassword })).statusCode,
+          429,
+        );
+        for (let index = 0; index < 20; index += 1) {
+          const response = await signIn(flooder, {
+            email: `flood-spend-${index}@example.test`,
+            password: wrongPassword,
+          });
+          assert.equal(response.statusCode, 401, `spend ${index}: ${response.body}`);
+        }
+        // More distinct emails than the budget table holds; refused attempts create no entries.
+        const flood = await Promise.all(
+          Array.from({ length: 4200 }, (_, index) =>
+            signIn(flooder, { email: `flood-${index}@example.test`, password: wrongPassword }),
+          ),
+        );
+        assert.deepEqual([...new Set(flood.map((response) => response.statusCode))], [429]);
+        assert.equal(
+          (await signIn(guesser, { ...target, password: wrongPassword })).statusCode,
+          429,
+        );
+        assert.equal((await signIn("198.51.100.62", target)).statusCode, 429);
+        assert.equal(
+          (await signIn(flooder, { email: "after-flood@example.test", password: wrongPassword }))
+            .statusCode,
+          429,
+        );
+      },
+    );
+
+    await t.test(
+      "guessing an administrator's password from many clients slows but never refuses it",
       async () => {
         for (let index = 0; index < 10; index += 1) {
           const response = await signIn(`203.0.113.${100 + index}`, {
@@ -128,8 +256,19 @@ test(
           });
           assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
         }
-        // The email's shared budget is spent; the reserved lane still admits the right password.
-        assert.equal((await signIn("203.0.113.200", secondAdmin)).statusCode, 200);
+        // The email's budget is spent: further guesses from anywhere are paced and refused,
+        // but the right password is still checked and admitted.
+        const slowed = await Promise.all(
+          Array.from({ length: 10 }, (_, index) =>
+            signIn(`203.0.113.${120 + index}`, { ...secondAdmin, password: wrongPassword }),
+          ),
+        );
+        assert.deepEqual(
+          slowed.map((response) => response.statusCode),
+          Array(10).fill(429),
+        );
+        const correct = await signIn("203.0.113.200", secondAdmin);
+        assert.equal(correct.statusCode, 200, correct.body);
       },
     );
 
@@ -160,23 +299,34 @@ test(
           401,
         );
       }
-      // Exhausted client: ordinary, unknown and wrong administrator attempts all wait out
-      // the same refusal floor and return the same 429.
-      const refusals = [];
-      for (const account of [
-        { ...member, password: wrongPassword },
-        { email: "missing-after@example.test", password: wrongPassword },
-        { ...admin, password: wrongPassword },
-        { ...member, password: wrongPassword },
-        { email: "missing-again@example.test", password: wrongPassword },
-        { ...admin, password: wrongPassword },
-      ]) {
-        const { response, elapsed } = await timed(client, account);
-        assert.equal(response.statusCode, 429, response.body);
-        refusals.push({ elapsed, retryAfter: response.headers["retry-after"] });
-      }
+      // Exhausted client: its refusals are paced by a floor that doubles up to 8 s. Warm it
+      // to the cap, then ordinary, unknown and wrong administrator attempts all wait out the
+      // same floor and return the same 429.
+      const warmUp = await Promise.all(
+        [0, 1, 2].map((index) =>
+          signIn(client, { email: `warm-${index}@example.test`, password: wrongPassword }),
+        ),
+      );
+      assert.deepEqual(
+        warmUp.map((response) => response.statusCode),
+        [429, 429, 429],
+      );
+      const refusals = await Promise.all(
+        [
+          { ...member, password: wrongPassword },
+          { email: "missing-after@example.test", password: wrongPassword },
+          { ...admin, password: wrongPassword },
+          { ...member, password: wrongPassword },
+          { email: "missing-again@example.test", password: wrongPassword },
+          { ...admin, password: wrongPassword },
+        ].map(async (account) => {
+          const { response, elapsed } = await timed(client, account);
+          assert.equal(response.statusCode, 429, response.body);
+          return { elapsed, retryAfter: response.headers["retry-after"] };
+        }),
+      );
       const elapsed = refusals.map((refusal) => refusal.elapsed);
-      assert.ok(Math.min(...elapsed) >= 990, `refusal floor: ${elapsed.join(", ")}`);
+      assert.ok(Math.min(...elapsed) >= 7990, `refusal floor: ${elapsed.join(", ")}`);
       assert.ok(Math.max(...elapsed) - Math.min(...elapsed) < 400, `spread: ${elapsed.join(", ")}`);
       for (const { retryAfter } of refusals) {
         assert.ok(Number(retryAfter) >= 1 && Number(retryAfter) <= 60, `Retry-After ${retryAfter}`);

@@ -458,6 +458,9 @@
     },
     {
       "path": "tests/integration/client-address.test.mjs"
+    },
+    {
+      "path": "tests/integration/password-sign-in-admission.test.mjs"
     }
   ]
 }

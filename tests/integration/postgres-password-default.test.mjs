@@ -186,8 +186,9 @@ test(
         401,
         "a wrong administrator password is refused",
       );
-      // The password-only profile has no sign-in rate limit (a known gap tracked for after
-      // launch); what it must never do is lock the only administrator out.
+      // These failures stay under the password-only profile's limits
+      // (postgres-password-sign-in-limit.test.mjs); what it must never do is lock the only
+      // administrator out.
       const admin = await signIn(adminEmail, adminPassword, guesser);
       assert.equal(admin.statusCode, 200, admin.body);
       const other = await signIn(adminEmail, adminPassword, "203.0.113.20");

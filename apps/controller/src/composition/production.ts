@@ -123,6 +123,19 @@ export async function composeProduction(config: ProductionConfig) {
         : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
       ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
     });
+    if (
+      config.github === undefined &&
+      config.google === undefined &&
+      config.clientAddress === undefined &&
+      config.logger !== undefined
+    ) {
+      // No trusted proxy: failed password sign-ins are limited per email only, because every
+      // browser behind the ingress shares its address. api.trustedProxy adds the address lane.
+      emitOccLogEvent(config.logger, {
+        event: "authentication.sign-in-limit-warning",
+        code: "TRUSTED_PROXY_NOT_CONFIGURED",
+      });
+    }
     if (auth.activationSkipped !== undefined && config.logger !== undefined) {
       emitOccLogEvent(config.logger, {
         event: "authentication.activation-warning",
