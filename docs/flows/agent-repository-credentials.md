@@ -106,8 +106,8 @@ Only classified optional discovery failure after authorization becomes
 permits creation. Transport, malformed, throttled and generic failures block both
 writes; denial and lifecycle conflict remain distinct. Model selection is independent; toggles preserve focus.
 
-The form saves Configuration first. Known Agent rejections preserve it. Ordinary
-retries reuse it; repository-scoped retries require a successful reload, nonempty reselection
+The form saves Configuration first and preserves it after known Agent rejections.
+Retries reuse it; repository retries require successful reload, nonempty reselection
 and explicit profile. Empty selections cannot downgrade the attempt. Failed reloads
 block creation, expiry signs out, and obsolete completions cannot mutate the view.
 Unknown outcomes require stored Agent and Configuration reads.
@@ -205,8 +205,7 @@ material read-only. Public metadata and gateway bearers remain separate files.
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.activateRevision`
 replaces the consumer when material changes, including within one revision.
-Readiness requires its role, revision and generation. Dedicated replacement preserves workspace-node enrollment and revision-private
-storage. `KubernetesComputeDriver.prepareRevision` rechecks material after plugin,
+Readiness requires role, revision and generation. Dedicated replacement preserves enrollment and revision-private storage. `KubernetesComputeDriver.prepareRevision` rechecks material after plugin,
 gateway and node observations, including for successors; changed generation or
 lost readiness returns incomplete.
 The gateway receives neither repository material nor repository-gateway egress.
@@ -283,8 +282,7 @@ cannot use this continuation to reopen sessions.
 
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.enqueueRepositoryCleanup`
 and terminal queue transitions persist exact revision-owned obligations. Registration checks claim and owner; recovery transfers eligible failures.
-New Work is coalesced by revision and purpose, retaining its creating actor;
-source failures retain their audit evidence. Queued or claimed Work keeps its
+Work coalesces by revision and purpose, retaining its creating actor and source failure evidence. Queued or claimed Work keeps its
 schedule and claim; later obligations requeue succeeded Work. Previously queued
 cleanup remains eligible.
 `RepositoryCredentialLifecycle.closeRevision` records session-only cleanup with
@@ -328,12 +326,12 @@ identity and deadline before retrying.
 or `name-one-repository-ref` requires explicit selection. Inspect material metadata
 and Pod generation without printing bearers or Secrets.
 
-The [test guide](../testing/repository-credentials.md) separates browser recovery,
-Driver lifecycle, State/worker, installed-runtime and live-provider proof. The
-required [image volume case](../testing/images.md#repository-runtime-volume-test-environment)
-checks installed-client Docker mounts; Helm checks rendered ingress. Neither proves
-live CNI enforcement. Console recordings prove their fixture/API path, not model,
-Slack or GitHub execution; Ready Pods and local commands do not prove live writes.
+The [test guide](../testing/repository-credentials.md) distinguishes lifecycle,
+installed-runtime and live-provider proof. The
+[image volume case](../testing/images.md#repository-runtime-volume-test-environment)
+checks Docker mounts; Helm checks rendered ingress. Neither proves CNI enforcement.
+Console recordings cover fixture/API behavior, not model, Slack or GitHub execution.
+Ready Pods and local commands do not prove live writes.
 
 ## Related docs
 
