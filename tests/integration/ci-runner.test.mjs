@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1127,6 +1136,154 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     assert.equal(rejected.status, "failed");
     assert.equal(rejected.error.diagnostic, undefined);
   }
+});
+
+test("run keeps bounded Agent namespace activity from a passing k3d file", async (t) => {
+  const root = await fixture(t);
+  const clusterDirectory = join(root, "cluster");
+  await mkdir(clusterDirectory);
+  const statePath = join(root, "state/k3d.json");
+  const resultsPath = join(root, "results/k3d.json");
+  await writeJson(statePath, {
+    lane: "k3d-lane",
+    resources: [
+      {
+        kind: "k3d-cluster",
+        status: "ready",
+        name: "owned-cluster",
+        directory: clusterDirectory,
+        kubeconfig: join(clusterDirectory, "kubeconfig"),
+        context: "k3d-owned-cluster",
+      },
+    ],
+  });
+  // This kubectl stand-in serves the raw watch streams a live API server would
+  // send while the test file creates and deletes its Agent namespace.
+  const kubectl = join(root, "kubectl");
+  const pod = (ready, type) => ({
+    type,
+    object: {
+      kind: "Pod",
+      metadata: {
+        namespace: "occ-agent-a",
+        name: "harness-0",
+        creationTimestamp: "2026-09-29T00:00:00Z",
+      },
+      spec: {
+        nodeName: "server-0",
+        containers: [{ name: "harness", env: [{ name: "TOKEN", value: "do-not-publish-env" }] }],
+      },
+      status: {
+        phase: "Running",
+        conditions: [{ type: "Ready", status: ready ? "True" : "False", lastTransitionTime: "t" }],
+        containerStatuses: [{ name: "harness", ready, restartCount: 0 }],
+      },
+    },
+  });
+  const event = (namespace, uid, reason, message, count = 1) => ({
+    type: "ADDED",
+    object: {
+      metadata: { namespace, name: `${uid}.event`, uid },
+      involvedObject: { kind: "Pod", name: "harness-0", namespace },
+      type: "Normal",
+      reason,
+      message,
+      count,
+      firstTimestamp: "2026-09-29T00:00:01Z",
+      lastTimestamp: `2026-09-29T00:00:0${count}Z`,
+    },
+  });
+  const pods = [
+    pod(false, "ADDED"),
+    pod(false, "MODIFIED"),
+    pod(true, "MODIFIED"),
+    pod(true, "DELETED"),
+  ];
+  const events = [
+    event("occ-agent-a", "e1", "Pulled", "Successfully pulled image"),
+    event("occ-agent-a", "e2", "Unhealthy", "Readiness probe failed"),
+    event("occ-agent-a", "e2", "Unhealthy", "Readiness probe failed", 3),
+    event("occ-agent-a", "e3", "Failed", "bearer do-not-publish-event"),
+    event("kube-system", "e4", "Started", "unrelated system event"),
+  ];
+  await writeFile(
+    kubectl,
+    [
+      `#!${process.execPath}`,
+      "const query = process.argv.at(-1);",
+      `const lines = query.startsWith("/api/v1/pods?") ? ${JSON.stringify(pods)} : ${JSON.stringify(events)};`,
+      "for (const line of lines) process.stdout.write(JSON.stringify(line) + '\\n');",
+      'process.stdout.write(\'{"type":"MODIFIED","object":\');',
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+  );
+  await chmod(kubectl, 0o755);
+  await writeFile(
+    join(root, "tests/integration/agent.test.mjs"),
+    [
+      'import test from "node:test";',
+      'import { setTimeout as delay } from "node:timers/promises";',
+      'test("agent file passes", () => delay(300));',
+      "",
+    ].join("\n"),
+  );
+  await writeJson(join(root, "scripts/ci/k3d-lane.json"), {
+    files: [{ path: "tests/integration/agent.test.mjs", expectedTests: ["agent file passes"] }],
+  });
+  await writeJson(join(root, "scripts/ci/suites.json"), {
+    version: 1,
+    lanes: { "k3d-lane": "./k3d-lane.json" },
+    groups: {},
+  });
+
+  const result = run(
+    root,
+    [
+      "run",
+      "k3d-lane",
+      "--manifest",
+      join(root, "scripts/ci/suites.json"),
+      "--root",
+      root,
+      "--state",
+      statePath,
+      "--results",
+      resultsPath,
+    ],
+    { OCC_KUBECTL_BIN: kubectl },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(await readFile(resultsPath, "utf8")).status, "passed");
+  const text = await readFile(`${statePath}.diagnostics.json`, "utf8");
+  const report = JSON.parse(text);
+  assert.equal(report.lane, "k3d-lane");
+  assert.equal(report.agentNamespaces.length, 1);
+  const [activity] = report.agentNamespaces;
+  assert.equal(activity.file, "tests/integration/agent.test.mjs");
+  assert.equal(activity.cluster, "owned-cluster");
+  assert.deepEqual(activity.namespaces, ["occ-agent-a"]);
+  // Unchanged watch records collapse; readiness and deletion transitions remain.
+  assert.deepEqual(
+    activity.pods.map(({ watch, containers }) => [watch, containers[0].ready]),
+    [
+      ["ADDED", false],
+      ["MODIFIED", true],
+      ["DELETED", true],
+    ],
+  );
+  assert.deepEqual(
+    activity.events.map(({ reason, count }) => [reason, count]),
+    [
+      ["Pulled", 1],
+      ["Failed", 1],
+      ["Unhealthy", 3],
+    ],
+  );
+  assert.doesNotMatch(text, /do-not-publish|unrelated system event/);
+  // Raw watch streams hold full Pod specs; only the projection survives.
+  assert.deepEqual(await readdir(clusterDirectory), []);
 });
 
 test("audit fails when a referenced lane cannot be loaded", async (t) => {
