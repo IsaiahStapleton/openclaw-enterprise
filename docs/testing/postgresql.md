@@ -300,8 +300,8 @@ Select the `postgres-azure-workload-identity` lane to run
 [postgres-azure-workload-identity.test.mjs](../../tests/integration/postgres-azure-workload-identity.test.mjs)
 against an existing authorized Azure PostgreSQL database. This lane has no
 GitHub workflow entrypoint and provisions no database or identity resources.
-The ordinary constructor, security-rejection, and real password-authentication
-cases remain in
+The ordinary constructor, security-rejection, real password-authentication,
+and terminated-idle-connection cases remain in
 [postgres-connection-auth.test.mjs](../../tests/integration/postgres-connection-auth.test.mjs),
 owned by the mandatory `postgres` lane.
 
