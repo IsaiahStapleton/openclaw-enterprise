@@ -48,6 +48,29 @@ with `--volumes`. It uses disposable project resources and no model credentials
 or Agent runtime image. Failure cleanup uses Compose directly without masking
 the CLI failure. This proves the cleanup lifecycle, not Agent execution.
 
+## Verify Codex startup probe recovery
+
+Use an existing immutable Node 24+ Linux image and a running Docker engine:
+
+```sh
+OCC_TEST_CODEX_PROBE_IMAGE=sha256:<local-image-id> \
+  node --test tests/integration/codex-model-probe.test.mjs
+```
+
+The image selector also accepts a repository digest. The test never pulls an
+image. It runs the generated dedicated Codex launcher in disposable containers
+with networking disabled, a read-only root, and temporary writable state. A
+fixture CLI supplies failures and success; no provider credentials are needed.
+The `images-packaging` CI lane uses its selected Node base image for this test.
+
+Expect timeout recovery, two-attempt exhaustion, nonretryable rejection, malformed
+output, tool events, external `SIGKILL`, and termination during backoff to pass.
+The tests exercise real 30-second subprocess deadlines and verify the readiness
+file, HTTP runtime status, cleanup, and sanitized logs. They take about 95 seconds
+and remove their own containers and temporary files. They do not establish real
+Codex/provider compatibility or Kubernetes deployment success; use the
+[Kubernetes runtime journey](kubernetes.md) for those checks.
+
 ## Docker Compose development test environment
 
 `tests/integration/docker-compute-real.test.mjs` retains the Docker and Podman

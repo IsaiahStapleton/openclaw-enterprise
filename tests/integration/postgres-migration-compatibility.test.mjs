@@ -1389,7 +1389,10 @@ test(
       [31, "backendCompleted"],
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
-      [34, "preHumanAuthentication"],
+      [34, "preBrokerReceipts"],
+      [35, "preAgentDeletion"],
+      [36, "preDeploymentProgress"],
+      [37, "preHumanAuthentication"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1473,6 +1476,7 @@ test(
       before.map(({ value }) => ({
         value: {
           ...value,
+          broker_protocol: 0,
           live_revision_id: revisionId,
           cleanup_context: { driver: snapshot.driver, binding: snapshot.bindings[0] },
         },
@@ -1629,7 +1633,10 @@ test(
     for (const [prefix, history] of [
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
-      [34, "preHumanAuthentication"],
+      [34, "preBrokerReceipts"],
+      [35, "preAgentDeletion"],
+      [36, "preDeploymentProgress"],
+      [37, "preHumanAuthentication"],
     ]) {
       await context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1692,7 +1699,10 @@ test(
       [31, "backendCompleted"],
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
-      [34, "preHumanAuthentication"],
+      [34, "preBrokerReceipts"],
+      [35, "preAgentDeletion"],
+      [36, "preDeploymentProgress"],
+      [37, "preHumanAuthentication"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });
@@ -1707,7 +1717,7 @@ test(
           db,
           db.name,
           `CREATE FUNCTION public.reject_migration_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'migration rollback fixture' USING ERRCODE='55000'; END $$;
-        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix >= 31 ? "ALTER TABLE" : prefix >= 27 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
+        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix >= 36 ? "CREATE INDEX" : prefix >= 31 ? "ALTER TABLE" : prefix >= 27 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
         );
         assert.deepEqual(await runHistoryMigration(db), { ok: false, code: "MIGRATION_FAILED" });
         assert.deepEqual(await historyReceipts(db.migrator), before.receipts);
@@ -1802,7 +1812,7 @@ test(
       await assertHistoryRefused(db);
       assert.deepEqual(await canonicalData(db), before);
     });
-    for (const slot of [30, 31]) {
+    for (const slot of [30, 31, 34, 35, 36]) {
       await context.test(
         `unpublished authentication at occupied migration slot ${slot}`,
         async (child) => {
@@ -1814,7 +1824,7 @@ test(
           // SQL bytes at slots later published for other migrations. Neither
           // migration command may relabel that history or change its data.
           const authentication = journal.entries.find(
-            (entry) => entry.tag === "0034_human_authentication",
+            (entry) => entry.tag === "0037_human_authentication",
           );
           const entries = [
             ...journal.entries.slice(0, slot),
