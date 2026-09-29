@@ -2829,6 +2829,22 @@ test("Codex runtime gates startup and readiness on a successful native authentic
     },
     { name: "access-token login refusal is not retried", pat: true, loginStatus: 1 },
     {
+      // Native text observed from codex-cli 0.154 with a revoked access token.
+      name: "access-token login credential rejection is a deterministic authentication failure",
+      pat: true,
+      loginStatus: 1,
+      loginStderr:
+        "Error logging in with access token: personal access token metadata request failed with status 403 Forbidden\n",
+      failureCode: "AUTHENTICATION_FAILED",
+    },
+    {
+      name: "access-token login transport error remains a login failure",
+      pat: true,
+      loginStatus: 1,
+      loginStderr:
+        "Error logging in with access token: failed to request personal access token metadata: error sending request for url (https://auth.openai.com/)\n",
+    },
+    {
       name: "access-token login recovers one timeout before probing",
       pat: true,
       loginTimeouts: 1,
@@ -2930,6 +2946,31 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         assistant,
         { type: "turn.failed", error: { message: "authentication failed" } },
       ],
+    },
+    {
+      // Native terminal event observed from codex-cli 0.154 with an invalid API key.
+      name: "provider credential rejection is a deterministic authentication failure",
+      events: [
+        started,
+        {
+          type: "error",
+          message: "unexpected status 401 Unauthorized: Incorrect API key provided",
+        },
+        {
+          type: "turn.failed",
+          error: { message: "unexpected status 401 Unauthorized: Incorrect API key provided" },
+        },
+      ],
+      probeStatus: 1,
+      failureCode: "AUTHENTICATION_FAILED",
+    },
+    {
+      name: "provider server error is not an authentication failure",
+      events: [
+        started,
+        { type: "turn.failed", error: { message: "unexpected status 503 Service Unavailable" } },
+      ],
+      probeStatus: 1,
     },
     { name: "completed turn without visible assistant", events: [started, advisory, completed] },
     {
@@ -3055,7 +3096,10 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                     if (loginCalls <= (scenario.loginTimeouts ?? 0)) {
                       return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" } };
                     }
-                    return { status: scenario.loginStatus ?? 0 };
+                    return {
+                      status: scenario.loginStatus ?? 0,
+                      ...(scenario.loginStderr ? { stderr: scenario.loginStderr } : {}),
+                    };
                   }
                   probeCalls++;
                   assert.ok(options.timeout > 0 && options.timeout <= 30000);
@@ -3147,7 +3191,7 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           assert.equal(runtimeStatus.runtimeFailure.check, loginFailed ? "login" : "model-probe");
           assert.equal(
             runtimeStatus.runtimeFailure.code,
-            loginFailed ? "LOGIN_FAILED" : (scenario.failureCode ?? "MODEL_PROBE_FAILED"),
+            scenario.failureCode ?? (loginFailed ? "LOGIN_FAILED" : "MODEL_PROBE_FAILED"),
           );
           assert.match(runtimeStatus.runtimeFailure.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
         }

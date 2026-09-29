@@ -4915,6 +4915,77 @@ test(
 );
 
 test(
+  "rejected runtime credentials fail deployment before the convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("rejected-runtime");
+    const candidate = await fixture.revision(owner, 1);
+    const failure = (code) => ({
+      component: "agent",
+      check: "model-probe",
+      checkedAt: "2026-09-29T08:00:00.000Z",
+      code,
+    });
+    let observations = 0;
+
+    // The default 900-second deadline stays in force: a transient probe failure
+    // remains pending, and only the credential rejection ends the deployment.
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        observations += 1;
+        return {
+          ...(await fixture.compute.prepareRevision(revision)),
+          ready: false,
+          runtimeFailure: failure(
+            observations === 1 ? "MODEL_PROBE_TIMEOUT" : "AUTHENTICATION_FAILED",
+          ),
+        };
+      },
+    });
+
+    const failed = await fixture.work(candidate, "failed_permanent");
+    assert.equal(observations, 2);
+    assert.equal(failed.attempt_count, 1);
+    const result = await fixture.observerPool.query(
+      "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(result.rows, [
+      { reason_code: "RUNTIME_AUTHENTICATION_FAILED", result_data: null },
+    ]);
+    const active = await fixture.observerPool.query(
+      "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+      [fixture.namespace.id, owner.id],
+    );
+    assert.equal(active.rows[0].active_revision_id, null);
+    const evidence = await fixture.observerPool.query(
+      `SELECT details->>'reasonCode' AS reason FROM occ.audit_events
+       WHERE resource_id = $1 AND details->>'reasonCode' IN
+         ('REVISION_INCOMPLETE', 'RUNTIME_AUTHENTICATION_FAILED')
+       ORDER BY occurred_at`,
+      [candidate.id],
+    );
+    assert.deepEqual(
+      evidence.rows.map(({ reason }) => reason),
+      ["REVISION_INCOMPLETE", "RUNTIME_AUTHENTICATION_FAILED"],
+    );
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "RUNTIME_AUTHENTICATION_FAILED",
+      message: "Deployment runtime credentials were rejected.",
+    });
+  },
+);
+
+test(
   "plugin startup warnings complete deployment and remain visible in status",
   requiresPostgres,
   async (context) => {
