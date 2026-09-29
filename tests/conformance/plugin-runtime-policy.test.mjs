@@ -130,7 +130,9 @@ test("Gateway validates only the generated Slack policy before writing the effec
   const { calls, files } = runOpenClawRuntimeHelper(runtime, [], {
     baseConfig,
     beforeSpawn(command, args, sandbox, options) {
-      if (args[1] !== "config") return;
+      if (args[1] !== "config") {
+        return;
+      }
       assert.equal(sandbox.files.has("/home/node/.openclaw/openclaw.json"), false);
       candidate = JSON.parse(sandbox.files.get(options.env.OPENCLAW_CONFIG_PATH));
       assert.notEqual(options.env.OPENCLAW_CONFIG_PATH, sandbox.process.env.OPENCLAW_CONFIG_PATH);
@@ -189,6 +191,25 @@ for (const [label, response] of [
     );
   });
 }
+
+test("Gateway maps approver probe tmpdir failures to the approver configuration error", () => {
+  const runtime = { manifest: { kind: "codex", selections: {}, pluginApprovers: [] } };
+  const baseConfig = { channels: { slack: { enabled: true } } };
+  const effectivePath = "/home/node/.openclaw/openclaw.json";
+  const previousConfiguration = JSON.stringify({ gateway: { port: 9999 } });
+  const result = runOpenClawRuntimeHelper(runtime, [], {
+    baseConfig,
+    files: [[effectivePath, previousConfiguration]],
+    mkdtempError: Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }),
+    captureError: true,
+  });
+  assert.match(
+    result.error?.message ?? "",
+    /gateway image cannot validate approvals\.plugin\.slack/,
+  );
+  assert.equal(result.files.get(effectivePath), previousConfiguration);
+  assert.equal(result.calls.length, 0);
+});
 
 test("OpenClaw runtime merges matching inherited native approvers", () => {
   const agentApprover = "team:T123:user:U123";

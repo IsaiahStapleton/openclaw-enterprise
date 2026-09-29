@@ -75,11 +75,16 @@ export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
           },
           mkdirSync() {},
           mkdtempSync(prefix) {
+            if (options.mkdtempError !== undefined) {
+              throw options.mkdtempError;
+            }
             return `${prefix}${++temporaryDirectory}`;
           },
           rmSync(path) {
             for (const file of files.keys()) {
-              if (file === path || file.startsWith(`${path}/`)) files.delete(file);
+              if (file === path || file.startsWith(`${path}/`)) {
+                files.delete(file);
+              }
             }
           },
           readFileSync(path) {

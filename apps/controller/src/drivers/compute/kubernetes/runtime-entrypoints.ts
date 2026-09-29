@@ -887,8 +887,9 @@ let validatedPluginApproverConfiguration;
 function validateOpenClawPluginApprovers(overlay) {
   const candidate = JSON.stringify({ approvals: overlay.approvals });
   if (candidate === validatedPluginApproverConfiguration) return;
-  const directory = pluginMkdtempSync(pluginResolve(pluginTmpdir(), "oce-plugin-approvers-"));
+  let directory;
   try {
+    directory = pluginMkdtempSync(pluginResolve(pluginTmpdir(), "oce-plugin-approvers-"));
     const configPath = pluginResolve(directory, "openclaw.json");
     pluginWriteFileSync(configPath, candidate, { mode: 0o600 });
     // Probe only the exact generated approval policy: selected external plugins
@@ -908,7 +909,9 @@ function validateOpenClawPluginApprovers(overlay) {
   } catch {
     throw new PluginApproverConfigurationError();
   } finally {
-    pluginRmSync(directory, { recursive: true, force: true });
+    if (directory !== undefined) {
+      pluginRmSync(directory, { recursive: true, force: true });
+    }
   }
 }
 
