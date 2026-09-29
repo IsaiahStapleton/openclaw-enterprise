@@ -1438,6 +1438,32 @@ test(
 );
 
 test(
+  "runtime image reconnects an ephemeral native worker from an expired replayed setup code",
+  imageTestOptions,
+  async (t) => {
+    // Pod restarts replay the enrollment Secret's setup code after its expiry.
+    const configurationPath = await temporaryGatewayConfiguration(t, "codex");
+    const { containerName } = await runGatewaySmoke(t, "codex", {
+      configurationPath: "/etc/openclaw/openclaw.json",
+      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+      volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
+    });
+    const source = await readFile(
+      new URL("../fixtures/runtime-native-worker-restart.mjs", import.meta.url),
+      "utf8",
+    );
+    const { stdout } = await runDocker(
+      ["exec", containerName, "node", "--input-type=module", "-e", source],
+      { timeout: 300_000 * imageSmokeTimeoutMultiplier },
+    );
+    const result = JSON.parse(stdout);
+    assert.equal(result.sameIdentityAfterExpiredReplay, true);
+    assert.equal(result.singleBootstrapCompletion, true);
+    assert.equal(result.unpairedExpiredRejected, true);
+  },
+);
+
+test(
   "runtime image routes sandboxed Git through stock Codex and the repository broker",
   imageTestOptions,
   async (t) => {
@@ -2020,6 +2046,7 @@ assert.equal(provenance.source, "https://github.com/openclaw/openclaw");
 assert.equal(provenance.commit, "01d7131999ca4805242ed8b0d8037f4544a9d7b0");
 assert.equal(provenance.sourceArchiveSha256, "e51b4e37b4cec2c449bb3588d4a72cdb4c684765b7867490f0cc6f2ecb864b84");
 assert.equal(provenance.openclawBridgePatchSha256, "62328f7cc72ada024a97a5a7bf89e988db3f91b64b4c6d7fa6809c218fc8b72e");
+assert.equal(provenance.openclawConnectPatchSha256, "c57722da9a88ec4295577ab9a9ba6e2ca37fceda11ce8b51b08ee1425e00851f");
 assert.equal(provenance.codex.version, "0.158.0");
 assert.equal(Object.hasOwn(provenance, "codexPatchSha256"), false);
 assert.equal(Object.hasOwn(provenance, "codexVersion"), false);
