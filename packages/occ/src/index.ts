@@ -4641,14 +4641,33 @@ export class OpenClawController {
       });
       // Keep in-flight teardown idempotent. The original caller can explicitly
       // retry terminal work after repairing the dependency or permission failure.
+      // Another authorized caller can take over only once the initiating actor
+      // no longer holds delete permission on this Namespace (for example, it
+      // was offboarded), so terminal teardown is never stranded.
       if (namespace.status === "deleting") {
         const workId = `namespace:${namespace.id}:reconcile:deleted`;
         const work = await state.operations.findWork(workId);
         if (work?.state === "failed_permanent") {
-          if (work.actorId !== principalId) {
+          const takeover = work.actorId !== principalId;
+          if (
+            takeover &&
+            (
+              await this.authorizationDecision(work.actorId, "delete", {
+                kind: "namespace",
+                id: namespace.id,
+                namespaceId: namespace.id,
+              })
+            ).decision.allowed
+          ) {
             throw new AuthorizationDeniedError("Only the initiating actor can retry deletion.");
           }
-          if (!(await state.operations.retryFailedNamespaceDeletion(namespace.id, principalId))) {
+          if (
+            !(await state.operations.retryFailedNamespaceDeletion(
+              namespace.id,
+              work.actorId,
+              principalId,
+            ))
+          ) {
             throw new ResourceConflictError("The Namespace deletion work changed during retry.");
           }
           await state.audit.append({
@@ -4666,6 +4685,7 @@ export class OpenClawController {
               workId,
               previousAttemptCount: work.attemptCount,
               previousReasonCode: work.reasonCode,
+              ...(takeover ? { takeover: true, previousActorId: work.actorId } : {}),
             },
           });
         }
