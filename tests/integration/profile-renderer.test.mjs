@@ -129,7 +129,7 @@ function render(
   };
 }
 
-function helmTemplate(output, extraValueFiles = [], releaseName = "oce") {
+function helmTemplate(output, extraValueFiles = [], releaseName = "oce", extraArgs = []) {
   return execFileSync(
     helm,
     [
@@ -141,6 +141,7 @@ function helmTemplate(output, extraValueFiles = [], releaseName = "oce") {
       "--values",
       join(output.directory, "values.yaml"),
       ...extraValueFiles.flatMap((path) => ["--values", path]),
+      ...extraArgs,
     ],
     {
       cwd: repository,
@@ -456,6 +457,39 @@ test("repository opt-in is explicit and keeps the two-stage placeholders separat
     output.preflight.warnings.join("\n"),
     /Active repository sessions are not restored after broker loss/,
   );
+});
+
+test("repository serviceName is left to the chart so its upgrade guard applies", () => {
+  const repositoryInput = {
+    enabled: true,
+    image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
+    backendId: "github-primary",
+    registryConfigMapName: "occ-repository-registry-v1",
+    serviceConfigSecretName: "occ-repository-service-config",
+    appKeySecretName: "occ-repository-app-key",
+    tlsSecretName: "occ-repository-tls",
+    publicCaSecretName: "occ-repository-public-ca",
+    upstreamCidrs: ["192.0.2.30/32"],
+  };
+  const omitted = render("codex", codexInput({ repository: repositoryInput }));
+  assert.doesNotMatch(omitted.values, /serviceName: git/);
+  if (!helmSkip) {
+    assert.match(helmTemplate(omitted), /name: git\n/);
+    const error = renderError(() => helmTemplate(omitted, [], "oce", ["--is-upgrade"]));
+    assert.match(
+      `${error.stdout ?? ""}${error.stderr ?? ""}`,
+      /repositoryCredentials\.serviceName must be explicit during upgrades/,
+    );
+  }
+
+  const kept = render(
+    "codex",
+    codexInput({ repository: { ...repositoryInput, serviceName: "oce-git" } }),
+  );
+  assert.match(kept.values, /serviceName: oce-git/);
+  if (!helmSkip) {
+    assert.match(helmTemplate(kept, [], "oce", ["--is-upgrade"]), /name: oce-git\n/);
+  }
 });
 
 test("preflight rejects inputs that the selected profile does not consume", () => {

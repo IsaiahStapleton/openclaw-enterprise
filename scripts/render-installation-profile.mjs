@@ -1098,7 +1098,7 @@ function buildRendered(profile, parsed, diagnostics) {
       appKeySecretName: asString(repository, ["repository", "appKeySecretName"], diagnostics),
       tlsSecretName: asString(repository, ["repository", "tlsSecretName"], diagnostics),
       publicCaSecretName: asString(repository, ["repository", "publicCaSecretName"], diagnostics),
-      serviceName: optionalString(repository, ["repository", "serviceName"], diagnostics) ?? "git",
+      serviceName: optionalString(repository, ["repository", "serviceName"], diagnostics),
       upstreamCidrs: stringArray(repository, ["repository", "upstreamCidrs"], diagnostics, {
         validate: isIpv4Cidr,
         description: "an IPv4 CIDR",
