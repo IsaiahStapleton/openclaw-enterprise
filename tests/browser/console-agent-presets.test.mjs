@@ -1042,6 +1042,59 @@ test("API-key Presets keep their credential provider fixed while allowing model 
   assert.equal(pathRequests(requests, "POST", `/namespaces/${namespace.id}/secrets`).length, 0);
 });
 
+test("Dedicated OpenClaw Presets keep their OpenClaw harness", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const root = await mkdtemp(join(tmpdir(), "occ-dedicated-openclaw-preset-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configurationDriver = new FilesystemConfigurationDriver(root);
+  fixture.controller.registerDriver(configurationDriver);
+  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const namespace = await fixture.createNamespace("Dedicated OpenClaw Preset", { ready: true });
+  const secret = await fixture.createSecret(namespace.id, "OpenAI model key", "dedicated-key");
+  const harnessAuth = { method: "api_key", source: secret.ref };
+  const values = nativeValues("dedicated-openclaw");
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: {
+      name: "Dedicated OpenClaw",
+      template: {
+        agent: { name: "Dedicated OpenClaw Agent", executionMode: "dedicated", harnessAuth },
+        configuration: { values },
+      },
+    },
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.body));
+  const { page } = await newPage(t, fixture);
+  await routeInstallationWithoutProvisioning(page, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  // The Preset's own agentRuntime, not its execution mode, selects the harness.
+  assert.equal(await page.getByLabel("Harness", { exact: true }).inputValue(), "openclaw");
+  assert.equal(await page.getByLabel("Execution mode").inputValue(), "dedicated");
+  await openAdvancedSettings(page);
+  const configuration = page.getByLabel("Configuration JSON", { exact: true });
+  assert.deepEqual(JSON.parse(await configuration.inputValue()), values);
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  const response = await createdResponse;
+  assert.equal(response.status(), 201);
+  const created = (await response.json()).data;
+  assert.equal(created.executionMode, "dedicated");
+  const saved = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${created.configurationId}`,
+  );
+  assert.equal(saved.data.values.agents.defaults.model, "openai/gpt-4.1");
+  assert.deepEqual(saved.data.values.agents.defaults.models["openai/gpt-4.1"].agentRuntime, {
+    id: "openclaw",
+  });
+});
+
 test("Presets render variables into independent Agent drafts and keep partial-save retries fixed", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
