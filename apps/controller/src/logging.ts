@@ -35,11 +35,14 @@ const ALLOWED_ATTEMPT_FIELDS = new Set([
 ]);
 
 const ALLOWED_FIELDS = new Set([
+  "activationMs",
   "agentId",
   "attempt",
   "code",
   "computeDriverId",
+  "deployPasses",
   "durationMs",
+  "elapsedMs",
   "event",
   "host",
   "message",
@@ -49,6 +52,8 @@ const ALLOWED_FIELDS = new Set([
   "outcome",
   "pending",
   "port",
+  "prepareMs",
+  "readinessWaitMs",
   "requestId",
   "result",
   "revisionId",

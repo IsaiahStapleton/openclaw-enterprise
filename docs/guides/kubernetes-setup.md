@@ -38,20 +38,20 @@ Confirm the server version, that nodes have the control-plane and Agent labels y
 
 ## 2. Prepare the inputs and install OCC
 
-Continue in the same operator shell with [Install the production control
-plane](deploy/production-installation.md). Use its recommended profile path to
-generate configuration, or its advanced manual YAML option when you need custom
-settings. Complete the runbook through authenticated API access: it owns image
-selection, system Secrets, private routing, bootstrap volume preparation, Helm
-installation, and the authentication check.
+In the same operator shell, complete [Install the production control
+plane](deploy/production-installation.md) through its authentication check. It
+covers image selection, configuration, system Secrets, private routing, the
+bootstrap volume, and Helm installation. Generate configuration with its
+recommended profile path, or use its advanced manual YAML branch when you need
+custom settings.
 
 If installation fails, follow [platform troubleshooting](operate/troubleshooting.md) and
 [bootstrap recovery](../reference/authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 
 ## 3. Deploy and verify an Agent
 
-After the runbook's [authentication check](deploy/production-installation.md#authenticate-to-the-production-api)
-passes, continue with Agent deployment. Control-plane readiness and authenticated
-API access do not prove that an Agent can answer a model request.
+A ready control plane and a passing
+[authentication check](deploy/production-installation.md#authenticate-to-the-production-api)
+do not prove that an Agent can answer a model request.
 
 Keep the same shell and temporary key copy to [prepare Namespaces and deploy Agents](deploy/production-agents.md), then [verify workspace access](deploy/production-agents.md#verify-workspace-access) and [a real model response from that Agent](deploy/production-agents.md#verify-production-workloads). These are separate completion checks; a successful deployment does not establish either one. At the end, [remove only the temporary credential copies](deploy/production-agents.md#end-the-operator-session). The [local first-Agent walkthrough](first-agent.md) uses a different installation and should not be run against this one.

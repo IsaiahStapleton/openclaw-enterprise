@@ -36,9 +36,12 @@ const {
 } = require("node:path");
 const {
   mkdirSync: pluginMkdirSync,
+  mkdtempSync: pluginMkdtempSync,
   readFileSync: pluginReadFileSync,
+  rmSync: pluginRmSync,
   writeFileSync: pluginWriteFileSync,
 } = require("node:fs");
+const { tmpdir: pluginTmpdir } = require("node:os");
 const {
   createHmac,
   timingSafeEqual: pluginTimingSafeEqual,
@@ -873,10 +876,71 @@ function openClawPluginConfiguration(runtime, failures = []) {
   return undefined;
 }
 
+class PluginApproverConfigurationError extends Error {
+  constructor() {
+    super("The selected OpenClaw gateway image cannot validate approvals.plugin.slack. Use a gateway image with Slack plugin approver support, or omit the Agent, plugin, and tool approver overrides.");
+  }
+}
+
+let validatedPluginApproverConfiguration;
+
+function validateOpenClawPluginApprovers(overlay) {
+  const candidate = JSON.stringify({ approvals: overlay.approvals });
+  if (candidate === validatedPluginApproverConfiguration) return;
+  let directory;
+  try {
+    directory = pluginMkdtempSync(pluginResolve(pluginTmpdir(), "oce-plugin-approvers-"));
+    const configPath = pluginResolve(directory, "openclaw.json");
+    pluginWriteFileSync(configPath, candidate, { mode: 0o600 });
+    // Probe only the exact generated approval policy: selected external plugins
+    // may not be installed yet, so a full-config check would reject them early.
+    const result = pluginSpawnSync("node", ["/app/openclaw.mjs", "config", "validate", "--json"], {
+      cwd: directory,
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+    });
+    if (result.error !== undefined || result.status !== 0 || JSON.parse(result.stdout)?.valid !== true) {
+      throw new PluginApproverConfigurationError();
+    }
+    validatedPluginApproverConfiguration = candidate;
+  } catch {
+    throw new PluginApproverConfigurationError();
+  } finally {
+    if (directory !== undefined) {
+      pluginRmSync(directory, { recursive: true, force: true });
+    }
+  }
+}
+
+function holdPluginApproverConfigurationFailure(error) {
+  if (!(error instanceof PluginApproverConfigurationError)) return false;
+  publishRuntimeFailure("plugin-approvers", "INCOMPATIBLE_RESPONSE");
+  console.error(error.message);
+  // Keep startup evidence available without launching an invalid gateway or
+  // discarding the admitted policy through a restart loop.
+  setInterval(() => {}, 3600000);
+  return true;
+}
+
 function applyOpenClawPluginConfiguration(runtime, failures = [], options = {}) {
   const overlay = openClawPluginConfiguration(runtime, failures);
   if (overlay === undefined) return;
   const base = readOpenClawConfig();
+  if (objectAtPath(overlay, ["approvals", "plugin", "slack"]) !== undefined) {
+    const slack = objectAtPath(base, ["channels", "slack"]);
+    if (slack === undefined || slack.enabled === false) {
+      // Stored approver policy applies when Slack is configured. Omitting this
+      // generated overlay preserves explicit deny lists in the admitted manifest.
+      delete overlay.approvals.plugin.slack;
+      if (Object.keys(overlay.approvals.plugin).length === 0) delete overlay.approvals.plugin;
+      if (Object.keys(overlay.approvals).length === 0) delete overlay.approvals;
+    } else {
+      validateOpenClawPluginApprovers(overlay);
+    }
+  }
   // Native allow and alsoAllow are mutually exclusive. Keep grants in the
   // configured policy form so both application and verification use that form.
   if (base?.tools?.allow?.length > 0 && Array.isArray(overlay?.tools?.alsoAllow)) {
@@ -1861,7 +1925,9 @@ if (pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(plug
   }, 2_000).unref();
 }
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
-})();
+})().catch((error) => {
+  if (!holdPluginApproverConfigurationFailure(error)) throw error;
+});
 }
 `;
 

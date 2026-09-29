@@ -120,9 +120,9 @@ restricted model proxy is not yet available. Before readiness, each dedicated
 revision receives its own authentication-only egress policy. Concurrent pending
 candidates cannot replace each other's grant; stop and retirement remove the
 exact revision's policy after its Harness terminates. Channels require an
-approved HTTP(S) proxy configured through `runtime.channels`: either a literal
-IP endpoint or the exact Helm-managed proxy Service paired with
-`runtime.channels.managedProxy`. Direct public channel-provider access is denied.
+approved HTTP(S) proxy in `runtime.channels`: a literal IP endpoint, or the exact
+Helm-managed proxy Service URL paired with `runtime.channels.managedProxy`.
+Direct public channel-provider access is denied.
 
 ## Explicit network profiles
 

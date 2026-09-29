@@ -453,6 +453,9 @@ separate from this browser-access check.
 
 ## Verify production workloads
 
+Verify NetworkPolicies against the
+[platform access matrix](../../testing/production-network-access.md).
+
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
 expected `activeRevisionId`, then require a real model response from that
 Agent. Use its optional loopback password to [attach with the OpenClaw
