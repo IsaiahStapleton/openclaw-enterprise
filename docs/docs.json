@@ -647,12 +647,8 @@
                     "label": "Readable Code"
                   },
                   {
-                    "page": "ARCHITECTURE",
-                    "label": "Current Architecture"
-                  },
-                  {
                     "page": "design",
-                    "label": "Target Architecture"
+                    "label": "Architecture"
                   },
                   {
                     "page": "reference/controller",
@@ -823,6 +819,7 @@
               "guides/deploy/local-repository-credentials",
               "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
+              "ARCHITECTURE",
               "design/resources",
               "design/access",
               "design/workloads",

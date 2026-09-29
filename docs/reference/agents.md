@@ -413,7 +413,7 @@ planning a deployment. Other sandbox execution combinations are rejected.
 - [Kubernetes Compute Driver](drivers/kubernetes-compute.md)
 - [IAM](authorization.md)
 - [Controller configuration](settings.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)
 - [Agent lifecycle implementation](../../packages/occ/src/index.ts)
 - [HTTP resource schemas](../../packages/contracts/src/api/resources.ts)
 - [Local testing](../testing/local.md)

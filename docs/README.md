@@ -33,4 +33,5 @@ If you are still learning the product, start with [Concepts](guides/concepts.md)
 <a id="implementation-history"></a>
 
 Contributors can start with [Contribute](contributing/README.md), which links
-the current architecture, target design, runtime flows, and historical specifications.
+the [platform architecture](design.md), remaining design work, runtime flows, and
+historical specifications.
