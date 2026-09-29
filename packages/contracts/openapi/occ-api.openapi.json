@@ -3738,7 +3738,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Start a private device login for Agent configuration",
+        "summary": "Experimental: Start a private device login for Agent configuration",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "create", "resourceKind": "agent", "scope": "namespace" },
@@ -3833,7 +3833,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Discard a local device login without upstream revocation",
+        "summary": "Experimental: Discard a local device login without upstream revocation",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "create", "resourceKind": "agent", "scope": "namespace" },
@@ -4005,7 +4005,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Complete device login without returning credential material",
+        "summary": "Experimental: Complete device login without returning credential material",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "create", "resourceKind": "agent", "scope": "namespace" },
@@ -7735,7 +7735,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Start a private device login for Agent configuration",
+        "summary": "Experimental: Start a private device login for Agent configuration",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "update", "resourceKind": "agent", "scope": "requested" },
@@ -7840,7 +7840,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Discard a local device login without upstream revocation",
+        "summary": "Experimental: Discard a local device login without upstream revocation",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "update", "resourceKind": "agent", "scope": "requested" },
@@ -8022,7 +8022,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Complete device login without returning credential material",
+        "summary": "Experimental: Complete device login without returning credential material",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "update", "resourceKind": "agent", "scope": "requested" },

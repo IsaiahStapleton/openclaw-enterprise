@@ -103,7 +103,7 @@ from the default StorageClass, mounted only by its Harness:
 
 | Subpath                                       | Harness mount                        |
 | --------------------------------------------- | ------------------------------------ |
-| `codex-home` (OAuth only)                     | `/home/node/.codex`                  |
+| `codex-home` (OAuth only, **Experimental**)   | `/home/node/.codex`                  |
 | `workspace`                                   | `/home/node/workspace`               |
 | `generated-images`                            | `/home/node/.codex/generated_images` |
 | `workspace-node-<agent-hash>-<revision-hash>` | `/home/node/.openclaw-node`          |
@@ -122,8 +122,9 @@ This version has no broker-based backup, recovery, or shared refresh ownership.
 
 ### OAuth launch limits
 
-The launch MVP targets a new Agent's first deployment with fresh private
-credential storage. The following limitations are recorded for follow-up:
+Codex OAuth login is **Experimental**. The launch MVP targets a new Agent's first
+deployment with fresh private credential storage. The following limitations are
+recorded for follow-up:
 
 - OAuth requires Compute-owned dedicated Codex without a selected Sandbox Driver.
   The current admission check can accept the unsupported Sandbox combination;
