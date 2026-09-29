@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer, isIPv4 } from "node:net";
 import {
@@ -50,6 +50,7 @@ const fixtureLanes = new Set([
   "k3d-fixture-state",
   "k3d-fixture-plugins",
 ]);
+const nativeIAMBarrierFile = "tests/integration/postgres-native-iam-policy-barrier.test.mjs";
 
 function laneDefinition(name) {
   return laneDefinitions[name] ?? {};
@@ -199,7 +200,7 @@ function runPrefix() {
 }
 
 function baseState(lane, statePath) {
-  return {
+  const state = {
     version: 1,
     repositoryRoot,
     lane,
@@ -208,6 +209,18 @@ function baseState(lane, statePath) {
     createdAt: new Date().toISOString(),
     resources: [],
   };
+  if (
+    lane === "images-packaging" &&
+    (process.env.GITHUB_RUN_ID || process.env.GITHUB_RUN_ATTEMPT)
+  ) {
+    const id = process.env.GITHUB_RUN_ID;
+    const attempt = process.env.GITHUB_RUN_ATTEMPT;
+    if (!/^[1-9][0-9]*$/.test(id ?? "") || !/^[1-9][0-9]*$/.test(attempt ?? "")) {
+      throw new Error("Image CI state requires a valid run ID and attempt.");
+    }
+    state.ciRun = { id, attempt };
+  }
+  return state;
 }
 
 async function readState(path) {
@@ -669,7 +682,14 @@ async function buildRuntimeImages(
   ]);
   const env = {};
   const resources = [];
-  const tagBase = `localhost/${ownedName("openclaw-ci-image", state.prefix, { maxLength: 48 })}`;
+  const label =
+    state.lane === "images-packaging" && state.ciRun
+      ? createHash("sha256")
+          .update(JSON.stringify([state.ciRun.id, state.ciRun.attempt, state.prefix]))
+          .digest("hex")
+          .slice(0, 17)
+      : state.prefix;
+  const tagBase = `localhost/${ownedName("openclaw-ci-image", label, { maxLength: 48 })}`;
   if (controller) {
     assertNodeBaseImage(nodeBaseImage);
     const tag = `${tagBase}/controller:local`;
@@ -1524,7 +1544,7 @@ async function prepareK3dRuntimeImages(
       codexVersion:
         env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
         process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.156.0",
+        "0.158.0",
     });
     env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
     cluster.codexSeccompProfile = seccomp.profileName;
@@ -1559,7 +1579,7 @@ async function prepareImagesPackagingCodexSeccompProfile(statePath, state, env) 
       codexVersion:
         env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
         process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.156.0",
+        "0.158.0",
     }),
   );
   if (!seccomp.dockerProfilePath || !isAbsolute(seccomp.dockerProfilePath)) {
@@ -1708,6 +1728,14 @@ async function prepareLane({ lane, statePath }) {
     case "postgres-application":
       await ensurePostgresServer(resolvedStatePath, state);
       break;
+    case "runtime-image-fixture":
+      // The test builds and owns its own unique image on the job's engine.
+      // Do not register it with generic force-removal cleanup.
+      env.OCC_RUNTIME_IMAGE_RECEIPT = join(
+        dirname(resolvedStatePath),
+        "runtime-image-fixture-receipt.json",
+      );
+      break;
     case "images-packaging":
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await commandAvailable(process.env.OCC_YQ_BIN ?? "yq", ["--version"]);
@@ -1722,6 +1750,12 @@ async function prepareLane({ lane, statePath }) {
             }),
           )
         ).env,
+      );
+      // BuildKit's base-image cache is not Docker's runnable image store.
+      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
+        state,
+        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
+        "NODE_BASE_IMAGE",
       );
       if (lanePrepare(name).codexSeccomp) {
         await prepareImagesPackagingCodexSeccompProfile(resolvedStatePath, state, env);
@@ -2071,6 +2105,11 @@ async function prepareFile({ lane, file, statePath }) {
     });
     resourceIds.push(database.resourceId);
     env.OCC_TEST_DATABASE_URL = database.appUrl;
+    if (name === "postgres-application" && relativeFile === nativeIAMBarrierFile) {
+      env.OCC_TEST_NATIVE_IAM_BARRIER_CI = "1";
+      env.OCC_TEST_NATIVE_IAM_BARRIER_DATABASE = database.name;
+      env.OCC_TEST_NATIVE_IAM_BARRIER_MIGRATION_DATABASE_URL = database.migrationUrl;
+    }
     if (relativeFile.endsWith("occ-metrics.test.mjs")) {
       env.OCC_METRICS_TEST_MIGRATION_DATABASE_URL = database.migrationUrl;
     }
@@ -2131,6 +2170,15 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.lane) {
     throw new Error("--lane is required.");
+  }
+  if (
+    args.file &&
+    toRepositoryRelative(args.file) === nativeIAMBarrierFile &&
+    (args["github-env"] || process.env.GITHUB_ENV)
+  ) {
+    throw new Error(
+      "The selected private PostgreSQL fixture must be prepared within the test runner.",
+    );
   }
   const result = args.file
     ? await prepareFile({ lane: args.lane, file: args.file, statePath: args.state })

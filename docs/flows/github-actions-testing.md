@@ -1,7 +1,7 @@
 ---
 created: 2026-09-04
-updated: 2026-09-24
-last_updated_session: codex/01a0d502-6efc-7063-a88c-4f1739da163c
+updated: 2026-09-27
+last_updated_session: authoring-run/9266dd42-e257-4e84-b7ac-d6c87ba3ed23
 ---
 
 # GitHub Actions testing flow
@@ -65,6 +65,8 @@ The PR workflow uses the event checkout and supplies no external service credent
 
 PostgreSQL migration and application suites own separate servers. Each of the three Kubernetes fixture files owns a separate cluster and PostgreSQL server. For these Kubernetes fixture lanes, the shared action enables bridge netfilter on the ephemeral runner before creating k3d nodes, which share its kernel. Missing bridge filtering fails setup rather than running with unenforced Pod network policies. The repository credential platform lane uses Blacksmith for its full-image HTTP, PostgreSQL, Unix-control and credential-material proof; NetworkPolicy enforcement remains the fixture lanes' separate responsibility. Lane state and cleanup stay local to its runner; files within each lane remain sequential. The suite map retains one owner per file in both workflow groups.
 
+The native IAM barrier test receives its own migrated PostgreSQL database through the application lane's per-file preparer. Only that test receives the matching application and migrator connection details, and the CLI refuses to write those details to `GITHUB_ENV`. The test installs its unregistered supplier only in that disposable database. This fixture does not establish that production writers participate in the barrier.
+
 Both workflows call the shared [run-ci-lane action](../../.github/actions/run-ci-lane/action.yml) after checkout. It owns tool and dependency setup, baseline checks when selected, lane preparation, execution, unconditional cleanup, and sanitized result upload. Callers keep the source revision, timeout, protected environment and explicit credentials.
 
 Ordinary PR dependency caches may be restored and saved within GitHub's PR merge-ref scope. Main jobs use main-scoped caches. Test results and credential-bearing state are not dependency caches, and protected jobs do not promote PR build artifacts.
@@ -114,6 +116,15 @@ other lanes retain their results. This prevents aggregation from selecting a
 stale failed result after a successful retry. The earlier job logs remain the
 failure record; retain a result separately before retrying when needed.
 
+For `images-packaging`, `scripts/ci/export-image-reconciliation.mjs` attempts
+to retain attempt-specific cleanup records for the two controller and runtime
+tags prepared by the lane. A planned record does not prove an image was created.
+The run-and-attempt component of each tag name is metadata, not authentication
+or permission to delete an image. Missing state is reported as unavailable;
+neither that result nor an empty inventory proves cleanup. The separate tag
+created by the runtime-images test, other resource kinds, and private environment
+values are excluded. Export or upload failure and runner loss can prevent retention.
+
 Fixture bootstrap failures also upload `diagnostics-<artifact-prefix>-<lane>`
 separately from test results. Cleanup removes the cluster and its private state;
 the diagnostic file remains available for upload and does not satisfy the
@@ -144,6 +155,8 @@ The aggregate runs after success or failure and checks expected job outcomes plu
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-27 03:44: Retain bounded CI image cleanup evidence. (authoring-run/9266dd42-e257-4e84-b7ac-d6c87ba3ed23 - 3a1acc0db234f8d018593ea3a8b2fd59ad94a4da)
 
 - 2026-09-26: Recorded the PR #445 Images and Packaging failure as a stale native-smoke seccomp hash, rejected the self-hash-only repair, and bound dynamic Docker seccomp profiles to the prepared CI state path/SHA. Local validation covered the helper case (1 pass, 11 image-dependent skips); earlier native image proof remains distinct from the changed harness.
 

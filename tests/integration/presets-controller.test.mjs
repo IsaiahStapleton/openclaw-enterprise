@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { OCCPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
@@ -136,13 +137,15 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
     variables: {
       name: { type: "string" },
       model: { type: "string", default: "openai/gpt-5.1" },
+      reviewer: { type: "string", default: "U456" },
       enabled: { type: "boolean", default: true },
       mode: { type: "string", default: "unfinished" },
     },
     agent: {
       name: "{{ vars.name }}",
       executionMode: "{{ vars.mode }}",
-      plugins: { github: { enabled: "unfinished", toolDefaults: { approval: "prompt" } } },
+      plugins: { github: { enabled: "unfinished", toolDefaults: { approval: "all_actions" } } },
+      pluginApprovers: [{ channel: "slack", id: "team:T123:user:{{ vars.reviewer }}" }],
       harnessAuth: null,
       initialWorkspaceFiles: {
         "AGENTS.md": "# {{ vars.name }}\n",
@@ -171,6 +174,9 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
     },
   };
   const preset = await createPreset(fixture, namespace.id, "Default model", template);
+  const pluginDriver = new OCCPluginDriver();
+  fixture.controller.registerDriver(pluginDriver);
+  fixture.controller.selectDriver("plugin", pluginDriver.id);
   const read = await fixture.request("GET", `${collection(namespace.id)}/${preset.id}`);
   assert.equal(read.status, 200);
   assert.deepEqual(read.data.template, template);
@@ -199,6 +205,9 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
     "IDENTITY.md": "",
     "USER.md": "Model openai/gpt-5.1",
   });
+  assert.deepEqual(rendered.agent.pluginApprovers, [
+    { channel: "slack", id: "team:T123:user:U456" },
+  ]);
   // Presets may be unfinished. The ordinary API rejects invalid launch fields
   // after Configuration creation; correcting the draft reuses that Configuration.
   const rejected = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
@@ -218,6 +227,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.data.name, 'My "Agent"');
   assert.equal(created.data.configurationId, configuration.data.id);
+  assert.deepEqual(created.data.pluginApprovers, rendered.agent.pluginApprovers);
   assert.equal(Object.hasOwn(created.data, "presetId"), false);
   const workspaceSetup = await fixture.state.read((state) =>
     state.workspaceSetups.find(namespace.id, created.data.id),
@@ -804,10 +814,10 @@ test("Community Agent Preset installs and creates a dedicated Agent with communi
   assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
   assert.equal(configuration.data.values.channels.slack.dmPolicy, "disabled");
   assert.deepEqual(configuration.data.values.channels.slack.channels, {
-    C0C49E7CS4A: { requireMention: false, users: ["*"] },
     C0C43A2QA11: { requireMention: false, users: ["*"] },
-    C0C569NN9ME: { requireMention: false, users: ["*"] },
     C0C4A0JH2BG: { requireMention: false, users: ["*"] },
+    C0C5KF0JLSC: { requireMention: false, users: ["*"] },
+    C0C5KF0DWLQ: { requireMention: false, users: ["*"] },
   });
   const created = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
     body: {

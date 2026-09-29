@@ -38,6 +38,8 @@ words are flagged for review and pages above 2,500 fail, except the approved
 generated API, site build, navigation, and links must pass. Run
 `pnpm docs:check-length` for the word-count check alone.
 
+The `checks-baseline` lane runs the [dependency policy](repository-boundaries.md).
+
 Suite Audit and the eleven PR lanes start independently on ephemeral runners.
 Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge
 netfilter support. The repository credential platform lane uses
@@ -48,8 +50,7 @@ the repository platform fixture in one job; other lanes and the audit use
 pass, including result-artifact accounting. This avoids serial runner allocation
 before test lanes without changing selection or failure handling.
 
-The repository credential platform lane uses Blacksmith and its delivered runtime
-image. It proves HTTP, PostgreSQL, Unix control and credential material inside
+The repository credential platform lane proves HTTP, PostgreSQL, Unix control and credential material inside
 Kubernetes; compatible fixture lanes prove NetworkPolicy enforcement. The images
 packaging lane uses the full tool profile so preparation can derive the reviewed
 Codex seccomp profile in an owned k3d cluster and export
@@ -136,6 +137,12 @@ Prepare infrastructure only on a disposable host or through reviewed CI helpers.
 Each run owns its Compose project, databases, cluster and temp files. CI writes
 private cleanup state under `RUNNER_TEMP` and uploads sanitized results plus
 bootstrap diagnostics; hosted-runner cleanup state disappears after the job.
+The images-packaging lane attempts to retain sanitized cleanup records for its
+prepared controller and runtime tags; a planned record does not prove an image
+exists. It does not cover the separate tag created by the runtime-images test.
+Export or upload failure and runner loss can prevent retention. Missing state or
+an empty inventory does not prove cleanup; the tag name is metadata, not
+authentication or authority to delete an image.
 Results include source commit, case outcomes, cleanup status and available image
 digests by role, excluding private registry names and prepared environment
 values. Local failures can retain cleanup state while the host and state path
@@ -247,6 +254,10 @@ testing the real helper deadline.
 
 #### No GitHub workflow entrypoint
 
+[dev-up-k3d-real.test.mjs](../../tests/integration/dev-up-k3d-real.test.mjs)
+belongs to the CLI-only `dev-up-k3d` lane, outside both workflow groups and
+Full Integration dispatch. See [run the local installation lane](README.md#run-the-local-installation-lane).
+
 [repository-credentials-k3d-real.test.mjs](../../tests/integration/repository-credentials-k3d-real.test.mjs)
 belongs to the explicitly selected `repository-credentials-installed` CLI lane.
 It is excluded from both workflow groups and Full Integration dispatch options.
@@ -281,10 +292,6 @@ and deletion without a model call. The optional `OCC_TEST_SSH_MODEL=1` selector 
 [real provider execution and runtime credential proof](ssh.md#runtime-credential-model-proof).
 Follow [SSH raw hosts](ssh.md#ssh-raw-hosts) for the disposable host, required
 environment settings, and direct test command.
-
-Every current `tests/integration/*.test.mjs` file has a suite-map owner. Ownership
-alone does not mean a workflow runs it; keep this list aligned with both the
-suite-map groups and workflow entrypoints.
 
 ## Related
 
