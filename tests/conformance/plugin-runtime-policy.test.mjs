@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import vm from "node:vm";
 import { WORKSPACE_FILE_NAMES } from "../../packages/contracts/src/index.ts";
 import {
   WORKSPACE_NODE_BINDING_PATH,
@@ -564,32 +565,55 @@ test("OpenClaw startup rejects a blocked Codex bridge before readiness", () => {
   assert.equal(calls.length, 0);
 });
 
-test("a running Gateway hot-applies its workspace node under plugins.* only, without a restart", async () => {
-  const baseConfig = {
-    gateway: { port: 8080, nodes: { commands: { allow: ["existing.command"] } } },
-    plugins: {
-      allow: ["codex"],
-      entries: {
-        codex: {
-          enabled: true,
-          config: { appServer: { transport: "websocket", url: "wss://harness.example.test" } },
-        },
+// The file-transfer entry of OpenClaw's live `plugins.list` answer.
+function pluginList(state, generation) {
+  return {
+    generation,
+    plugins: [
+      { id: "codex", runtime: { state: "active" } },
+      { id: "file-transfer", runtime: { state } },
+    ],
+  };
+}
+
+// What the wrapper's private runtime status would report.
+function workspaceNodeState(sandbox) {
+  const [nodeId, failure] = vm.runInContext(
+    "[runtimeWorkspaceNodeId, runtimeWorkspaceNodeFailure?.code]",
+    sandbox,
+  );
+  return { nodeId, failure };
+}
+
+const codexGatewayConfig = () => ({
+  gateway: { port: 8080, nodes: { commands: { allow: ["existing.command"] } } },
+  plugins: {
+    allow: ["codex"],
+    entries: {
+      codex: {
+        enabled: true,
+        config: { appServer: { transport: "websocket", url: "wss://harness.example.test" } },
       },
     },
-    tools: { alsoAllow: ["existing-tool"] },
-  };
+  },
+  tools: { alsoAllow: ["existing-tool"] },
+});
+
+test("a running Gateway hot-applies its workspace node under plugins.* and acks only OpenClaw's reload", async () => {
   const intervals = [];
   const kills = [];
-  const phases = [];
+  const lines = [];
+  let openClaw = pluginList("disabled", 1);
   // The Gateway starts before the node pairs: the optional binding file is absent.
-  const { files, calls } = await runOpenClawRuntimeHelper(undefined, [], {
-    baseConfig,
+  const { files, calls, sandbox } = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig: codexGatewayConfig(),
     env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
     workspaceNodeBindingPath: true,
     intervals,
     kills,
+    gatewayCall: (method) => (method === "plugins.list" ? openClaw : undefined),
     setTimeout: () => ({ unref() {} }),
-    console: { error: (line) => phases.push(JSON.parse(line)) },
+    console: { error: (line) => lines.push(JSON.parse(line)) },
   });
   const configPath = "/home/node/.openclaw/openclaw.json";
   const atStart = JSON.parse(files.get(configPath));
@@ -600,8 +624,10 @@ test("a running Gateway hot-applies its workspace node under plugins.* only, wit
   const poll = intervals.find(({ ms }) => ms === 1000);
   assert.ok(poll, "the wrapper polls the binding every second");
   const tick = () => poll.callback();
+  const gatewayCalls = () =>
+    calls.filter(({ args }) => args?.[1] === "gateway" && args[2] === "call");
 
-  tick();
+  await tick();
   assert.equal(files.get(configPath), JSON.stringify(atStart), "no binding, no write");
   // A partial file, one for another revision of this Agent, or a malformed
   // device ID is treated as absent.
@@ -611,12 +637,13 @@ test("a running Gateway hot-applies its workspace node under plugins.* only, wit
     workspaceNodeBinding("../escape"),
   ]) {
     files.set(WORKSPACE_NODE_BINDING_PATH, binding);
-    tick();
+    await tick();
     assert.equal(files.get(configPath), JSON.stringify(atStart));
   }
+  assert.equal(gatewayCalls().length, 0);
 
   files.set(WORKSPACE_NODE_BINDING_PATH, workspaceNodeBinding("enrolled-node"));
-  tick();
+  await tick();
   const applied = JSON.parse(files.get(configPath));
   const changedKeys = Object.keys({ ...atStart, ...applied }).filter(
     (key) => JSON.stringify(atStart[key]) !== JSON.stringify(applied[key]),
@@ -633,33 +660,137 @@ test("a running Gateway hot-applies its workspace node under plugins.* only, wit
     applied.plugins.entries.codex.config.appServer.remoteWorkspaceRoot,
     "/home/node/workspace",
   );
+  // The write was a whole-file replacement, not an in-place rewrite.
+  assert.equal(
+    [...files.keys()].some((path) => path.includes(".workspace-node-")),
+    false,
+  );
+  // Writing the file is not the ack: OpenClaw has not reloaded its plugins yet.
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: undefined, failure: undefined });
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: undefined, failure: undefined });
+
+  // OpenClaw's reload published a registry with file-transfer active.
+  openClaw = pluginList("active", 2);
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: "enrolled-node", failure: undefined });
+  assert.deepEqual(
+    gatewayCalls().map(({ args }) => args[3]),
+    ["plugins.list", "plugins.list", "plugins.list"],
+  );
   // OpenClaw watches the file it was started with; the child is not replaced.
-  assert.equal(calls.filter(({ args }) => args?.[1] === "gateway").length, 1);
+  assert.equal(calls.filter(({ args }) => args?.[1] === "gateway" && args.length === 4).length, 1);
   assert.deepEqual(kills, []);
   assert.deepEqual(
-    phases
+    lines
       .filter(({ phase }) => phase?.startsWith("workspace-node"))
       .map(({ phase, outcome }) => [phase, outcome]),
     [["workspace-node", "ok"]],
   );
 
   // The same binding again is a no-op.
-  tick();
+  await tick();
   assert.equal(files.get(configPath), JSON.stringify(applied));
+  assert.equal(gatewayCalls().length, 3);
   // Another node for this revision replaces the config from a clean start.
   files.set(WORKSPACE_NODE_BINDING_PATH, workspaceNodeBinding("other-node"));
-  tick();
+  await tick();
   assert.equal(files.get(configPath), JSON.stringify(applied));
   assert.deepEqual(kills, [{ signal: "SIGTERM" }]);
+});
+
+test("a Gateway reports why OpenClaw has not applied its workspace node and clears it on success", async () => {
+  const intervals = [];
+  const lines = [];
+  let now = 1_000_000;
+  const clock = class extends Date {
+    static now() {
+      return now;
+    }
+  };
+  let openClaw;
+  const { files, sandbox } = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig: codexGatewayConfig(),
+    env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
+    workspaceNodeBindingPath: true,
+    intervals,
+    Date: clock,
+    gatewayCall: () => openClaw,
+    setTimeout: () => ({ unref() {} }),
+    console: { error: (line) => lines.push(JSON.parse(line)) },
+  });
+  const configPath = "/home/node/.openclaw/openclaw.json";
+  const tick = () => intervals.find(({ ms }) => ms === 1000).callback();
+  const failures = () =>
+    lines.filter(({ event }) => event === "runtime.workspace_node").map(({ code }) => code);
+  files.set(WORKSPACE_NODE_BINDING_PATH, workspaceNodeBinding("enrolled-node"));
+
+  // The Gateway does not answer: nothing is written, and after the budget that is the cause.
+  await tick();
+  now += 31_000;
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), {
+    nodeId: undefined,
+    failure: "GATEWAY_UNAVAILABLE",
+  });
+  assert.equal(JSON.parse(files.get(configPath)).plugins.entries["file-transfer"], undefined);
+
+  // A config that now denies file-transfer cannot host the node.
+  openClaw = pluginList("disabled", 1);
+  const denied = JSON.parse(files.get(configPath));
+  denied.plugins.deny = ["file-transfer"];
+  files.set(configPath, JSON.stringify(denied));
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), {
+    nodeId: undefined,
+    failure: "FILE_TRANSFER_DENIED",
+  });
+  delete denied.plugins.deny;
+  files.set(configPath, JSON.stringify(denied));
+
+  // Written, but OpenClaw's file-transfer service failed to start.
+  await tick();
+  assert.equal(
+    JSON.parse(files.get(configPath)).plugins.entries["file-transfer"].config.workspaces.main
+      .nodeId,
+    "enrolled-node",
+  );
+  openClaw = pluginList("service-failed", 2);
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), {
+    nodeId: undefined,
+    failure: "FILE_TRANSFER_FAILED",
+  });
+  // Still unloaded past the budget: the reload never happened.
+  openClaw = pluginList("disabled", 1);
+  now += 31_000;
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), {
+    nodeId: undefined,
+    failure: "RELOAD_NOT_CONFIRMED",
+  });
+  // A later reload clears the cause.
+  openClaw = pluginList("active", 3);
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: "enrolled-node", failure: undefined });
+  assert.deepEqual(failures(), [
+    "GATEWAY_UNAVAILABLE",
+    "FILE_TRANSFER_DENIED",
+    "FILE_TRANSFER_FAILED",
+    "RELOAD_NOT_CONFIRMED",
+  ]);
 });
 
 test("a Gateway that starts after its node paired applies the binding before OpenClaw starts", async () => {
   const intervals = [];
   const kills = [];
-  const { files, calls } = await runOpenClawRuntimeHelper(undefined, [], {
+  let openClaw = pluginList("unloaded", 1);
+  const { files, calls, sandbox } = await runOpenClawRuntimeHelper(undefined, [], {
     workspaceNodeId: "enrolled-node",
     intervals,
     kills,
+    gatewayCall: () => openClaw,
+    setTimeout: () => ({ unref() {} }),
   });
   const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.equal(
@@ -667,9 +798,14 @@ test("a Gateway that starts after its node paired applies the binding before Ope
     "enrolled-node",
   );
   assert.equal(calls.length, 1);
-  // The poll sees the node it started with and writes nothing.
+  // The poll writes nothing and waits for OpenClaw to report file-transfer loaded.
   const written = files.get("/home/node/.openclaw/openclaw.json");
-  intervals.find(({ ms }) => ms === 1000).callback();
+  const tick = () => intervals.find(({ ms }) => ms === 1000).callback();
+  await tick();
+  assert.equal(workspaceNodeState(sandbox).nodeId, undefined);
+  openClaw = pluginList("active", 1);
+  await tick();
+  assert.equal(workspaceNodeState(sandbox).nodeId, "enrolled-node");
   assert.equal(files.get("/home/node/.openclaw/openclaw.json"), written);
   assert.deepEqual(kills, []);
 });

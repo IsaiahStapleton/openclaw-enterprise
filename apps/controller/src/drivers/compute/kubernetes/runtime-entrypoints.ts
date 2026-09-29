@@ -217,8 +217,10 @@ let pluginStatusReport = {
 };
 
 let runtimeStartupFailure;
-// The workspace node this Gateway's OpenClaw config was written with.
+// The workspace node OpenClaw itself reports applied (its file-transfer plugin
+// loaded from a config with the node), and the current reason it is not.
 let runtimeWorkspaceNodeId;
+let runtimeWorkspaceNodeFailure;
 
 function publishPluginRuntimeStatus(report) {
   if (pluginRuntimeStatusPort() === undefined) return;
@@ -280,6 +282,7 @@ function runtimeStatusReport() {
     podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
     ...(runtimeStartupFailure === undefined ? {} : { runtimeFailure: runtimeStartupFailure }),
     ...(runtimeWorkspaceNodeId === undefined ? {} : { workspaceNodeId: runtimeWorkspaceNodeId }),
+    ...(runtimeWorkspaceNodeFailure === undefined ? {} : { workspaceNodeFailure: runtimeWorkspaceNodeFailure }),
   };
 }
 
@@ -305,7 +308,7 @@ function armTimer(callback, timeoutMs) {
   return timer;
 }
 
-function runNativeRuntimeJson(args, timeoutMs, abortSignal) {
+function runNativeRuntimeJson(args, timeoutMs, abortSignal, maxBytes = 65536) {
   return new Promise((resolve) => {
     const child = pluginSpawn("node", ["/app/openclaw.mjs", ...args], {
       stdio: ["ignore", "pipe", "ignore"],
@@ -336,7 +339,7 @@ function runNativeRuntimeJson(args, timeoutMs, abortSignal) {
     child.stdout.on("data", (chunk) => {
       if (oversized) return;
       stdout += chunk.toString("utf8");
-      if (Buffer.byteLength(stdout, "utf8") > 65536) {
+      if (Buffer.byteLength(stdout, "utf8") > maxBytes) {
         oversized = true;
         child.kill("SIGKILL");
       }
@@ -1962,6 +1965,51 @@ function assertHotApplicableChange(previous, next) {
   }
 }
 
+// OpenClaw watches the config file: replace it whole so it never reads a partial write.
+function replaceOpenClawConfig(config) {
+  const { renameSync } = require("node:fs");
+  const target = writableOpenClawConfigPath();
+  const staged = target + ".workspace-node-" + process.pid;
+  pluginWriteFileSync(staged, JSON.stringify(config), { mode: 0o600 });
+  renameSync(staged, target);
+  process.env.OPENCLAW_CONFIG_PATH = target;
+}
+
+// The running Gateway's own view of file-transfer: its runtime state in the
+// live plugin registry ("active", "service-failed", "disabled", "unloaded")
+// and that registry's generation, which every plugin reload replaces.
+async function openClawFileTransferState() {
+  const result = await runNativeRuntimeJson(
+    ["gateway", "call", "plugins.list", "--params", "{}", "--json", "--timeout", "5000"],
+    8000,
+    undefined,
+    4 * 1024 * 1024,
+  );
+  if (!result.ok || !isPlainObject(result.value) || !Array.isArray(result.value.plugins)) {
+    return undefined;
+  }
+  const plugin = result.value.plugins.find((entry) => isPlainObject(entry) && entry.id === "file-transfer");
+  const state = isPlainObject(plugin?.runtime) && typeof plugin.runtime.state === "string"
+    ? plugin.runtime.state
+    : "unloaded";
+  return { state, generation: result.value.generation };
+}
+
+class WorkspaceNodeFailure extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
+function withWorkspaceNodeFailure(code, run) {
+  try {
+    return run();
+  } catch (error) {
+    throw new WorkspaceNodeFailure(code, error instanceof Error ? error.message : String(error));
+  }
+}
+
 const openClawAuthenticationFailureCode =
   process.env.OPENCLAW_HARNESS_PROBE_CONFIG === undefined
     ? undefined
@@ -2005,8 +2053,10 @@ if (peerStatus !== undefined) {
   pluginResult.successfulPluginIds = peerStatus.successfulPluginIds;
 }
 publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
-// Only a native worker profile receives its node in the environment.
+// A native worker profile, or a Gateway whose controller cannot read its runtime
+// status, receives its node in the environment; the others read the binding file.
 const environmentWorkspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
+let startWorkspaceNodeId;
 if (
   environmentWorkspaceNodeId !== undefined ||
   workspaceNodeBindingPath !== undefined ||
@@ -2022,12 +2072,11 @@ if (
     // Refuse a revision that cannot host its node now, not when the node arrives.
     requireWorkspaceNodePlugins(config);
   }
-  const startWorkspaceNodeId = environmentWorkspaceNodeId ?? readWorkspaceNodeBinding();
+  startWorkspaceNodeId = environmentWorkspaceNodeId ?? readWorkspaceNodeBinding();
   if (startWorkspaceNodeId !== undefined) {
     configureWorkspaceNodePlugins(config, startWorkspaceNodeId);
   }
   writeOpenClawConfig(config);
-  runtimeWorkspaceNodeId = startWorkspaceNodeId;
 }
 publishRuntimeReady();
 // Everything before this line delays the native Gateway process.
@@ -2039,36 +2088,80 @@ const child = spawn(
 );
 forwardTermination(child);
 if (workspaceNodeBindingPath !== undefined) {
+  // The wrapper writing the config is not the ack: OpenClaw must report the
+  // file-transfer plugin active in a plugin registry loaded after the write.
+  const WORKSPACE_NODE_APPLY_TIMEOUT_MS = 30_000;
+  let written = startWorkspaceNodeId === undefined
+    ? undefined
+    : { deviceId: startWorkspaceNodeId, at: startupPhaseOrigin, activeBefore: false };
+  let firstSeenAt;
   let stoppingForChangedWorkspaceNode = false;
-  let reportedFailure = false;
-  const workspaceNodePoll = setInterval(() => {
-    try {
-      const deviceId = readWorkspaceNodeBinding();
-      if (deviceId === undefined || deviceId === runtimeWorkspaceNodeId) return;
-      if (runtimeWorkspaceNodeId !== undefined) {
-        // Another node for this revision: replace the config from a clean start.
-        if (stoppingForChangedWorkspaceNode) return;
-        stoppingForChangedWorkspaceNode = true;
-        clearInterval(workspaceNodePoll);
-        logStartupPhase("workspace-node-changed", startupPhaseOrigin);
-        child.kill("SIGTERM");
-        setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+  let pollInFlight = false;
+  const reportFailure = (code) => {
+    if (runtimeWorkspaceNodeFailure?.code === code) return;
+    runtimeWorkspaceNodeFailure = { code, checkedAt: new Date().toISOString() };
+    // Fixed codes only; a changed cause is logged again.
+    console.error(JSON.stringify({ event: "runtime.workspace_node", container: "gateway", outcome: "failed", code }));
+  };
+  const pollWorkspaceNode = async () => {
+    const deviceId = readWorkspaceNodeBinding();
+    if (deviceId === undefined || deviceId === runtimeWorkspaceNodeId) return;
+    if (written !== undefined && written.deviceId !== deviceId) {
+      // Another node for this revision: replace the config from a clean start.
+      if (stoppingForChangedWorkspaceNode) return;
+      stoppingForChangedWorkspaceNode = true;
+      clearInterval(workspaceNodePoll);
+      logStartupPhase("workspace-node-changed", startupPhaseOrigin);
+      child.kill("SIGTERM");
+      setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+      return;
+    }
+    firstSeenAt ??= Date.now();
+    if (written === undefined) {
+      const before = await openClawFileTransferState();
+      if (before === undefined) {
+        if (Date.now() - firstSeenAt > WORKSPACE_NODE_APPLY_TIMEOUT_MS) reportFailure("GATEWAY_UNAVAILABLE");
         return;
       }
-      const startedAt = Date.now();
-      const previous = readOpenClawConfig();
+      const previous = withWorkspaceNodeFailure("CONFIG_UNREADABLE", readOpenClawConfig);
       const next = JSON.parse(JSON.stringify(previous));
-      configureWorkspaceNodePlugins(next, deviceId);
-      assertHotApplicableChange(previous, next);
-      writeOpenClawConfig(next);
+      withWorkspaceNodeFailure("FILE_TRANSFER_DENIED", () => configureWorkspaceNodePlugins(next, deviceId));
+      withWorkspaceNodeFailure("NOT_HOT_APPLICABLE", () => assertHotApplicableChange(previous, next));
+      withWorkspaceNodeFailure("CONFIG_UNWRITABLE", () => replaceOpenClawConfig(next));
+      written = {
+        deviceId,
+        at: Date.now(),
+        activeBefore: before.state === "active",
+        generationBefore: before.generation,
+      };
+      return;
+    }
+    const after = await openClawFileTransferState();
+    if (
+      after?.state === "active" &&
+      (!written.activeBefore || after.generation !== written.generationBefore)
+    ) {
       runtimeWorkspaceNodeId = deviceId;
-      logStartupPhase("workspace-node", startedAt);
-    } catch {
-      // The next poll retries; report once so a stuck binding is visible.
-      if (!reportedFailure) {
-        reportedFailure = true;
-        logStartupPhase("workspace-node", startupPhaseOrigin, "failed");
-      }
+      runtimeWorkspaceNodeFailure = undefined;
+      logStartupPhase("workspace-node", written.at);
+      return;
+    }
+    if (after?.state === "service-failed") {
+      reportFailure("FILE_TRANSFER_FAILED");
+    } else if (Date.now() - written.at > WORKSPACE_NODE_APPLY_TIMEOUT_MS) {
+      reportFailure(after === undefined ? "GATEWAY_UNAVAILABLE" : "RELOAD_NOT_CONFIRMED");
+    }
+  };
+  const workspaceNodePoll = setInterval(async () => {
+    if (pollInFlight) return;
+    pollInFlight = true;
+    try {
+      await pollWorkspaceNode();
+    } catch (error) {
+      // The next poll retries; the status carries the current cause.
+      reportFailure(error instanceof WorkspaceNodeFailure ? error.code : "UNAVAILABLE");
+    } finally {
+      pollInFlight = false;
     }
   }, 1_000);
   workspaceNodePoll.unref?.();

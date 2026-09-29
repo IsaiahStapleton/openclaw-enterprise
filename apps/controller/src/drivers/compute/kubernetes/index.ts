@@ -591,9 +591,11 @@ const WORKSPACE_NODE_BINDING_VOLUME = "openclaw-workspace-node";
 const WORKSPACE_NODE_BINDING_DIRECTORY = "/run/openclaw-workspace-node";
 const WORKSPACE_NODE_BINDING_FILE = "workspace-node.json";
 const WORKSPACE_NODE_BINDING_ANNOTATION = "openclaw.dev/workspace-node-binding";
-// Kubelet refresh after the Pod nudge (1.3-1.7 s on k3d, #612), the wrapper's
-// 1 s poll and its config write, with margin.
-const WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS = 15_000;
+// Kubelet refresh after the Pod nudge (1.3-1.7 s on k3d, #612), then the
+// wrapper's 1 s poll, its config write and OpenClaw's plugin reload, confirmed
+// through OpenClaw's plugin list (about 2.5 s from the file in the runtime
+// image test), with margin. A slower Gateway retries on the next pass.
+const WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS = 20_000;
 const WORKSPACE_NODE_BINDING_ACK_POLL_MS = 250;
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
@@ -6313,13 +6315,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
+  // Activation must read OpenClaw's ack from the Gateway's private status. An
+  // install whose controller cannot read it keeps the node in the pod spec,
+  // which OpenClaw applies before the Gateway ever becomes ready.
   private usesWorkspaceNodeBinding(revision: AgentRevision): boolean {
     return (
       revision.harness.mode === "dedicated" &&
       revision.harness.id !== "openclaw" &&
       this.nodeEnrollment !== undefined &&
       this.options.runtime !== undefined &&
-      this.getGatewayEndpoint(revision) !== undefined
+      this.getGatewayEndpoint(revision) !== undefined &&
+      this.gatewayPrivateStatusReachable()
     );
   }
 
@@ -6433,15 +6439,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
-  // The Gateway's private status reports the node its wrapper applied. It is
-  // readable only through the API server proxy, which needs its source CIDRs.
+  // The Gateway's private status reports the node OpenClaw applied. It is
+  // readable only through the control plane's API server proxy, which needs the
+  // control source CIDRs: a dedicated Gateway always runs in the control
+  // namespace. (An execution cluster's own status CIDRs are required nonempty.)
   private gatewayPrivateStatusReachable(): boolean {
-    const harness =
-      this.options.executionCluster?.network.pluginStatusProxySourceCidrs ??
-      this.options.network.pluginStatusProxySourceCidrs ??
-      [];
-    const control = this.options.network.pluginStatusProxySourceCidrs ?? [];
-    return harness.length > 0 && control.length > 0;
+    return (this.options.network.pluginStatusProxySourceCidrs ?? []).length > 0;
   }
 
   private async workspaceNodeBindingApplied(
@@ -6451,8 +6454,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   ): Promise<boolean> {
     if (
       configuration.workspaceNodeBinding === undefined ||
-      configuration.workspaceNodeId === undefined ||
-      !this.gatewayPrivateStatusReachable()
+      configuration.workspaceNodeId === undefined
     ) {
       return true;
     }
@@ -6479,6 +6481,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
         if (status.workspaceNodeId === configuration.workspaceNodeId) {
           return true;
+        }
+        if (status.workspaceNodeFailure !== undefined) {
+          const failure = asRecord(status.workspaceNodeFailure);
+          if (failure === undefined || !this.validRuntimeStatusIdentifier(failure.code)) {
+            throw new DependencyUnavailableError("Runtime status returned invalid data.");
+          }
+          // OpenClaw did not load the node: say why instead of timing out.
+          throw new DependencyUnavailableError(
+            `The exact AgentRevision gateway could not apply its workspace node (${failure.code}).`,
+          );
         }
       }
       if (Date.now() >= deadline) {
@@ -9478,11 +9490,12 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
           : `${CONFIGURATION_DIRECTORY}/${CONFIGURATION_DOCUMENT}`,
       });
       // A native worker profile is a placement control that must hold before the
-      // Gateway serves, so it stays in the pod spec. A Codex Gateway reads its
-      // node from the optional binding volume and applies it while running.
+      // Gateway serves, so it stays in the pod spec, as does the node of a Gateway
+      // whose runtime status the controller cannot read. Otherwise a Codex Gateway
+      // reads its node from the optional binding volume and applies it while running.
       if (
         configuration.workspaceNodeId !== undefined &&
-        configuration.nativeWorkerProfile !== undefined
+        configuration.workspaceNodeBinding === undefined
       ) {
         variables.push({
           name: "OPENCLAW_WORKSPACE_NODE_ID",

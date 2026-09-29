@@ -724,6 +724,8 @@ test("activation refuses a missing or foreign workspace node before changing the
         transportSecretPrefix: "transport",
         gatewayStorageClassName: "local-path",
       },
+      // The controller reads the Gateway's ack, so the node travels in the binding.
+      network: { pluginStatusProxySourceCidrs: ["192.0.2.20/32"] },
     }),
     { nodeEnrollment: {} },
   );
@@ -853,21 +855,23 @@ test("activation refuses a missing or foreign workspace node before changing the
 // A first dedicated Codex deploy with plugins, workspace node enrollment and
 // gateway routing. Only transport observations are faked; startup order and
 // readiness come from the real driver.
-function dedicatedFirstDeployFixture() {
+function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
   const state = {
     setupCalls: 0,
     connected: false,
     enrollmentAvailable: true,
-    // The node the Gateway wrapper reports it applied (runtime status).
+    // The node OpenClaw reports applied through the wrapper's runtime status,
+    // or the reason it has not.
     gatewayWorkspaceNodeId: undefined,
+    gatewayWorkspaceNodeFailure: undefined,
     gatewayAppliesBinding: true,
   };
   const driver = new KubernetesComputeDriver(
     routedOptions({
       runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
       // The API server proxy can reach private status, so activation reads the
-      // node the Gateway wrapper applied.
-      network: { pluginStatusProxySourceCidrs: ["192.0.2.20/32"] },
+      // node OpenClaw applied.
+      ...(statusProxy ? { network: { pluginStatusProxySourceCidrs: ["192.0.2.20/32"] } } : {}),
     }),
     {
       nodeEnrollment: {
@@ -1088,6 +1092,9 @@ function dedicatedFirstDeployFixture() {
         podUid: `${role}-uid`,
         ...(role === "gateway" && state.gatewayWorkspaceNodeId !== undefined
           ? { workspaceNodeId: state.gatewayWorkspaceNodeId }
+          : {}),
+        ...(role === "gateway" && state.gatewayWorkspaceNodeFailure !== undefined
+          ? { workspaceNodeFailure: state.gatewayWorkspaceNodeFailure }
           : {}),
       };
     }
@@ -1508,6 +1515,82 @@ test("a first dedicated deploy pins its serial workload starts through activatio
     .filter(({ name }) => name === agentName).length;
   assert.equal(inPodGatewayRestarts, 0);
   assert.equal(templates.length + inPodGatewayRestarts, 2, "Harness 1 + Gateway 1");
+});
+
+test("activation fails with OpenClaw's reason when the Gateway cannot apply its workspace node", async () => {
+  const { state, driver, revision, gatewayName, agentName, templates, prepare, markReady } =
+    dedicatedFirstDeployFixture();
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  assert.equal((await prepare()).ready, false);
+  markReady(gatewayName);
+  state.connected = true;
+  assert.equal((await prepare()).ready, true);
+  // The wrapper wrote the node, but OpenClaw never reported file-transfer loaded.
+  state.gatewayAppliesBinding = false;
+  state.gatewayWorkspaceNodeFailure = {
+    code: "RELOAD_NOT_CONFIRMED",
+    checkedAt: "2026-09-29T12:00:00.000Z",
+  };
+  await assert.rejects(
+    driver.activateRevision(revision, authContext(revision)),
+    /gateway could not apply its workspace node \(RELOAD_NOT_CONFIRMED\)/,
+  );
+  // A malformed cause is refused, not trusted.
+  state.gatewayWorkspaceNodeFailure = { code: "not a code" };
+  await assert.rejects(
+    driver.activateRevision(revision, authContext(revision)),
+    /Runtime status returned invalid data/,
+  );
+  // Neither failure replaced the serving Gateway.
+  assert.deepEqual(
+    templates.map(({ name }) => (name === agentName ? "harness" : name)),
+    ["harness", gatewayName],
+  );
+});
+
+test("without a status proxy a dedicated Codex Gateway keeps its workspace node in the pod spec", async () => {
+  const {
+    state,
+    driver,
+    revision,
+    gatewayName,
+    agentName,
+    objects,
+    templates,
+    prepare,
+    markReady,
+  } = dedicatedFirstDeployFixture({ statusProxy: false });
+  const environment = (template) =>
+    Object.fromEntries(template.spec.containers[0].env.map(({ name, value }) => [name, value]));
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  assert.equal((await prepare()).ready, false);
+  markReady(gatewayName);
+  state.connected = true;
+  assert.equal((await prepare()).ready, true);
+  // The controller cannot read an ack, so the node is applied at Gateway start.
+  await assert.rejects(
+    driver.activateRevision(revision, authContext(revision)),
+    /gateway is not ready/,
+  );
+  markReady(gatewayName);
+  await driver.activateRevision(revision, authContext(revision));
+  const gateways = templates.filter(({ name }) => name === gatewayName);
+  assert.equal(gateways.length, 2, "activation replaces the Gateway once");
+  const activated = gateways.at(-1).template;
+  assert.equal(environment(activated).OPENCLAW_WORKSPACE_NODE_ID, "node-1");
+  assert.equal(environment(activated).OPENCLAW_WORKSPACE_NODE_PATH, undefined);
+  assert.equal(
+    activated.spec.volumes.some(({ name }) => name === "openclaw-workspace-node"),
+    false,
+  );
+  assert.equal(
+    [...objects.values()].some(
+      (object) => object.kind === "ConfigMap" && object.metadata.name.endsWith("-workspace-node"),
+    ),
+    false,
+  );
 });
 
 test("dedicated replacement starts a candidate Gateway when the predecessor cannot enroll its workspace node", async () => {
