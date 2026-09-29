@@ -194,6 +194,18 @@ directory. The existing
 [image smoke test](images.md#images-and-helm) also loads console assets from the built
 controller image; it does not claim a live production deployment.
 
+### Browser failure diagnostics
+
+When a browser test fails in the checks-baseline lane, CI uploads a
+`browser-failures-*` artifact, kept for three days. Each failed test gets a
+directory with a screenshot of every open page and `failure.json`. That file
+holds the error, page URLs, requests still pending at failure time, and recent
+navigation, console and network events. Tests that pass write nothing. Set
+`OPENCLAW_CI_BROWSER_FAILURE_DIR` to collect the same files locally, and add
+`OPENCLAW_CI_BROWSER_FAILURE_TRACE=1` for a Playwright trace (`trace.zip`; open
+it with `pnpm exec playwright show-trace`). CI does not trace: tracing slows the
+page enough to make timing-sensitive console tests fail more often.
+
 ### Console navigation coverage
 
 `apps/controller/src/console/navigation.mjs` owns the route inventory. The shared

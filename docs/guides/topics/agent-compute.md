@@ -8,10 +8,10 @@ Agent. If you are setting up your own first installation, use the
 
 ## Choose an execution mode
 
-| Mode          | What runs                                                    | When to choose it                                                                    |
-| ------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| **Embedded**  | The Agent's OpenClaw gateway also runs the OpenClaw Harness. | Use it when you need OpenClaw's built-in Harness, or when the installation uses SSH. |
-| **Dedicated** | The Agent's gateway connects to a separate Codex Harness.    | Use it for Codex, a ChatGPT service account, or a supported external channel.        |
+| Mode          | What runs                                                          | When to choose it                                                                                         |
+| ------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| **Embedded**  | The Agent's OpenClaw gateway also runs the OpenClaw Harness.       | Use it when you need OpenClaw's built-in Harness, or when the installation uses SSH.                      |
+| **Dedicated** | The Agent's gateway connects to Codex or a native OpenClaw worker. | Use it for worker execution isolation, Codex, a ChatGPT service account, or a supported external channel. |
 
 The mode belongs to the Agent. Its [Configuration](../../reference/configuration.md)
 selects the model and Harness, and the two must agree. The HTTP API defaults a
@@ -22,15 +22,16 @@ supported model and credential combinations.
 
 ## What the bundled Drivers support
 
-| Driver                                                      | Current use                                                                                                                                                                                                                       |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Kubernetes](../../reference/drivers/kubernetes-compute.md) | Embedded OpenClaw and dedicated Codex. Embedded requires a managed OpenAI API key; dedicated also accepts an issued ChatGPT service account credential. This is the recommended first deployment.                                 |
-| [SSH](../../reference/drivers/ssh-compute.md)               | Embedded OpenClaw on operator-managed Linux hosts. The operator supplies the model credential on the host; the control plane does not check model access. Dedicated Codex and platform-managed model credentials are unavailable. |
-| [Docker](../../reference/drivers/docker-compute.md)         | Local control-plane development only with the current Agent authentication contract. Its default Docker/Podman profile cannot admit a new Agent deployment.                                                                       |
+| Driver                                                      | Current use                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Kubernetes](../../reference/drivers/kubernetes-compute.md) | Embedded OpenClaw and dedicated Codex. Dedicated native OpenClaw additionally requires a full-facet provisioning SandboxDriver; the bundled OpenShell path is verification-only until its upstream projection requirements are met. OpenClaw requires a managed OpenAI API key; dedicated Codex also accepts an issued ChatGPT service account credential. |
+| [SSH](../../reference/drivers/ssh-compute.md)               | Embedded OpenClaw on operator-managed Linux hosts. The operator supplies the model credential on the host; the control plane does not check model access. Dedicated Codex and platform-managed model credentials are unavailable.                                                                                                                          |
+| [Docker](../../reference/drivers/docker-compute.md)         | Local control-plane development only with the current Agent authentication contract. Its default Docker/Podman profile cannot admit a new Agent deployment.                                                                                                                                                                                                |
 
-An optional [Sandbox](../../reference/security/runtime-isolation.md) changes how
-a supported workload is contained; it does not replace Compute or choose an
-Agent's model.
+A [Sandbox](../../reference/security/runtime-isolation.md) changes how a
+supported workload is contained; it does not replace Compute or choose an
+Agent's model. It is optional for other topologies and mandatory for dedicated
+native OpenClaw.
 
 ## Deployment and availability
 

@@ -24,6 +24,7 @@ import {
   workspaceSetupVerifier,
 } from "../workspace-setup-runtime.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
+import { nodeProgramArguments } from "../node-program.ts";
 import { discoverHarnessModels } from "../model-discovery.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import {
@@ -1069,7 +1070,7 @@ ${WORKSPACE_SETUP_RUNTIME}`,
         User: "1000:1000",
         Env: Object.entries(input.environment).map(([name, value]) => `${name}=${value}`),
         Entrypoint: ["node"],
-        Cmd: ["-e", input.command],
+        Cmd: ["-e", ...nodeProgramArguments(input.command)],
         Labels: labels,
         ExposedPorts: { [`${input.exposedPort}/tcp`]: {} },
         Healthcheck: {

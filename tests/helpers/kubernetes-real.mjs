@@ -145,7 +145,10 @@ export function createKubernetesInstallationConfiguration({
     compute.runtime.codexSeccompProfile = codexSeccompProfile;
   }
   compute.resources.gateway = structuredClone(workload);
-  compute.resources.agent = structuredClone(workload);
+  compute.resources.agent = {
+    ...structuredClone(workload),
+    limits: { ...workload.limits, memory: "2Gi" },
+  };
   compute.resources.namespace.containerDefaults = structuredClone(workload);
   compute.network.gatewayTrustedProxyCidrs = ["127.0.0.1/32"];
   compute.network.gatewayClients = [

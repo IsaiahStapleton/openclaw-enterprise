@@ -137,7 +137,7 @@ test("gateway readiness rejects a foreign Service before accepting endpoint read
     "info",
   );
   deployment.metadata.generation = 1;
-  deployment.status = { observedGeneration: 1, readyReplicas: 1 };
+  deployment.status = { observedGeneration: 1, replicas: 1, updatedReplicas: 1, readyReplicas: 1 };
   const service = driver.service(
     "gateway",
     ownership,

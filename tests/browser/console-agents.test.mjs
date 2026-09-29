@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import test from "node:test";
 
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
@@ -2735,11 +2736,12 @@ test("Agent creation preserves unrelated edited JSON across model changes and re
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Template edits", { ready: true });
-  const { page } = await newPage(t, fixture);
+  const { page, artifacts } = await newPage(t, fixture);
 
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("heading", { name: "Create Agent" }).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
+  const mode = page.getByLabel("Execution mode");
   const harness = page.getByLabel("Harness", { exact: true });
   await openAdvancedSettings(page);
   const configuration = page.getByLabel("Configuration JSON");
@@ -2756,12 +2758,29 @@ test("Agent creation preserves unrelated edited JSON across model changes and re
   ]);
   assert.ok(dedicatedTemplate.plugins.entries.codex);
 
+  // Switching to OpenClaw defaults to Embedded; Dedicated is an explicit opt-in.
   await harness.selectOption("openclaw");
+  assert.equal(await mode.inputValue(), "embedded");
+  await page.locator(".launch-runtime:not([open]) > summary").click();
+  await mode.selectOption("dedicated");
+  assert.equal(await harness.inputValue(), "openclaw");
+
+  const nativeDedicatedTemplate = JSON.parse(await configuration.inputValue());
+  assert.equal(nativeDedicatedTemplate.agents.defaults.model, "openai/gpt-5.1");
+  assert.equal(nativeDedicatedTemplate.plugins?.entries?.codex, undefined);
+  assert.equal(nativeDedicatedTemplate.models.providers.openai.models[0].cost.input, 0);
+  await page.screenshot({
+    path: join(artifacts, "agent-create-native-harness.png"),
+    fullPage: true,
+  });
+
+  await mode.selectOption("embedded");
+  assert.equal(await harness.inputValue(), "openclaw");
+
   const embeddedTemplate = JSON.parse(await configuration.inputValue());
   assert.equal(embeddedTemplate.agents.defaults.model, "openai/gpt-5.1");
-  assert.deepEqual(embeddedTemplate.models.providers.openai.models, [
-    { id: "gpt-5.1", name: "gpt-5.1" },
-  ]);
+  assert.equal(embeddedTemplate.models.providers.openai.models[0].id, "gpt-5.1");
+  assert.equal(embeddedTemplate.models.providers.openai.models[0].name, "gpt-5.1");
   assert.equal(embeddedTemplate.plugins?.entries?.codex, undefined);
 
   const custom = nativeValues("manual-edit");
@@ -3010,8 +3029,9 @@ test("Agent creation saves explicitly selected models for both harnesses", async
     assert.deepEqual(configuration.data.values.agents.defaults.models, {
       [modelReference]: { agentRuntime: { id: harness } },
     });
-    assert.deepEqual(configuration.data.values.models.providers[provider].models, [
-      { id: selectedModel, name: selectedModel },
-    ]);
+    const [savedModel] = configuration.data.values.models.providers[provider].models;
+    assert.equal(configuration.data.values.models.providers[provider].models.length, 1);
+    assert.equal(savedModel.id, selectedModel);
+    assert.equal(savedModel.name, selectedModel);
   }
 });

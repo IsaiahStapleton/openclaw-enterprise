@@ -373,13 +373,11 @@ async function submitChatTurnWithAssistantProof(page, marker, receivedFrames) {
   await input.waitFor({ state: "visible", timeout: 60_000 });
   await input.fill(prompt);
   await page.getByRole("button", { name: "Start session", exact: true }).click();
-  await waitFor("stock UI terminal assistant session.message containing the nonce", () => {
-    const match = receivedFrames
+  return waitFor("stock UI terminal assistant session.message containing the nonce", () =>
+    receivedFrames
       .slice(firstFrame)
-      .map(textFromFrame)
-      .find((frameText) => terminalAssistantSessionMessage(frameText, marker, prompt));
-    return match === undefined ? undefined : match;
-  });
+      .find((frame) => terminalAssistantSessionMessage(textFromFrame(frame), marker, prompt)),
+  );
 }
 
 async function waitForStockUi(page) {
@@ -679,6 +677,186 @@ async function assertNativeAdminAudit(topology) {
   }
 }
 
+async function assertSharedNativeSessions(context, { topology, browser, ingress, status }) {
+  // Enrollment is a precondition: this existing Role permits Installation discovery,
+  // but no Namespace or Agent access. Sharing itself uses ordinary policy APIs.
+  const readerRoleId = `role-native-reader-${randomUUID()}`;
+  await topology.observerPool.query(
+    "INSERT INTO occ.iam_roles (id, name, permissions) VALUES ($1, $2, $3)",
+    [
+      readerRoleId,
+      "Installation reader",
+      JSON.stringify([{ action: "read", resourceKind: "installation" }]),
+    ],
+  );
+  const namespacePath = `/namespaces/${topology.agent.namespaceId}`;
+  const policyPath = `${namespacePath}/iam`;
+  const roles = [];
+  for (const [name, permissions] of [
+    ["Namespace discovery", [{ action: "read", resourceKind: "namespace" }]],
+    [
+      "Shared native administration",
+      [
+        { action: "read", resourceKind: "agent" },
+        { action: "administer", resourceKind: "agent" },
+      ],
+    ],
+  ]) {
+    const role = await topology.adminRequest("POST", `${policyPath}/roles`, { name, permissions });
+    assert.equal(role.status, 201);
+    roles.push(role.data);
+  }
+  const sibling = await topology.adminRequest("POST", `${namespacePath}/agents`, {
+    name: `private-sibling-${randomUUID()}`,
+    configurationId: topology.agent.configurationId,
+  });
+  assert.equal(sibling.status, 201);
+  const people = [];
+  for (const label of ["withdrawn", "unaffected"]) {
+    const credentials = {
+      email: `native-${label}-${randomUUID()}@example.test`,
+      password: `native-sharing-${randomUUID()}`,
+    };
+    const account = await topology.adminRequest("POST", "/api/auth/accounts", {
+      ...credentials,
+      name: label,
+      roleId: readerRoleId,
+    });
+    assert.equal(account.status, 201);
+    let agentBinding;
+    for (const [resourceKind, resourceId, roleId] of [
+      ["namespace", topology.agent.namespaceId, roles[0].id],
+      ["agent", topology.agent.id, roles[1].id],
+    ]) {
+      const binding = await topology.adminRequest("POST", `${policyPath}/access-bindings`, {
+        subjectKind: "identity",
+        subjectId: account.data.principalId,
+        resourceKind,
+        resourceId,
+        roleId,
+      });
+      assert.equal(binding.status, 201);
+      if (resourceKind === "agent") {
+        agentBinding = binding.data;
+      }
+    }
+    const personContext = await browser.newContext();
+    context.after(() => personContext.close());
+    const frames = [];
+    personContext.on("page", (observedPage) =>
+      observedPage.on("websocket", (socket) => {
+        if (new URL(socket.url()).origin === status.origin.replace(/^http/, "ws")) {
+          socket.on("framereceived", (frame) => frames.push({ ...frame, socket }));
+        }
+      }),
+    );
+    const page = await personContext.newPage();
+    await login(page, ingress.origin, credentials, agentDetailPath(topology));
+    // Login keeps the Console URL while its cookie request is pending. Observe
+    // the authenticated Agent render before sending requests as this person.
+    await page.getByRole("heading", { name: topology.agent.name, exact: true }).waitFor();
+    const request = (path) =>
+      page.evaluate(async (pathname) => {
+        const response = await fetch(pathname);
+        return { status: response.status, body: await response.json() };
+      }, path);
+    const listed = await request(`${namespacePath}/agents`);
+    assert.equal(listed.status, 200);
+    assert.deepEqual(
+      listed.body.data.map(({ id }) => id),
+      [topology.agent.id],
+    );
+    for (const path of [
+      `${namespacePath}/agents/${sibling.data.id}`,
+      `${namespacePath}/configurations/${topology.agent.configurationId}`,
+      `${policyPath}/roles`,
+    ]) {
+      assert.equal((await request(path)).status, 403);
+    }
+    // Configuration remains denied, but exact Agent administer must still launch
+    // the regular native UI. A fixture URL must not stand in for the Console link.
+    const popup = page.waitForEvent("popup");
+    await page.getByRole("link", { name: "Open native admin UI" }).click();
+    const nativePage = await popup;
+    await completeNativeLaunch(nativePage, { nativeOrigin: status.origin });
+    const terminalFrame = await submitChatTurnWithAssistantProof(
+      nativePage,
+      `sharing-${label}-${randomUUID()}`,
+      frames,
+    );
+    // Bind withdrawal to the connection that delivered the real assistant reply.
+    // Records from previous page navigations do not establish a current stream.
+    const socket = terminalFrame.socket;
+    assert.ok(socket && !socket.isClosed(), "recipient has a confirmed active native stream");
+    people.push({
+      request,
+      nativePage,
+      frames,
+      socket,
+      agentBinding,
+      principalId: account.data.principalId,
+    });
+  }
+  const [withdrawn, unaffected] = people;
+  assert.equal(withdrawn.socket.isClosed(), false);
+  assert.equal(unaffected.socket.isClosed(), false);
+  // Observe real existing sockets before policy mutation. No artificial abort,
+  // changed cookie, Gateway stop or page navigation may manufacture this close.
+  const started = performance.now();
+  await Promise.all([
+    withdrawn.socket.waitForEvent("close", { timeout: 30_000 }),
+    (async () => {
+      const revoked = await topology.adminRequest(
+        "DELETE",
+        `${policyPath}/access-bindings/${withdrawn.agentBinding.id}`,
+      );
+      assert.equal(revoked.status, 204);
+      assert.equal(
+        (await withdrawn.request(`${namespacePath}/agents/${topology.agent.id}`)).status,
+        403,
+      );
+    })(),
+  ]).catch(async (error) => {
+    const audit = await topology.observerPool.query(
+      `SELECT action, details->'nativeAdmin'->>'closeReason' AS reason
+       FROM occ.audit_events WHERE actor_id = $1 AND resource_id = $2
+       AND action LIKE 'openclaw.agents.native_admin.%' ORDER BY occurred_at`,
+      [withdrawn.principalId, topology.agent.id],
+    );
+    context.diagnostic(`withdrawal audit: ${JSON.stringify(audit.rows)}`);
+    throw error;
+  });
+  const elapsedMs = performance.now() - started;
+  assert.ok(elapsedMs <= 30_000, `policy withdrawal closed native streams in ${elapsedMs} ms`);
+  assert.ok(!unaffected.socket.isClosed(), "other person's existing streams stay open");
+  await waitFor("the withdrawn human's authorization-denied socket audit", async () => {
+    const audit = await topology.observerPool.query(
+      `SELECT id FROM occ.audit_events WHERE actor_id = $1 AND resource_id = $2
+       AND action = 'openclaw.agents.native_admin.websocket.close'
+       AND details->'nativeAdmin'->>'closeReason' = 'authorization_denied'`,
+      [withdrawn.principalId, topology.agent.id],
+    );
+    return audit.rowCount > 0 ? true : undefined;
+  });
+  assert.equal(
+    (await withdrawn.request(`${namespacePath}/agents/${topology.agent.id}`)).status,
+    403,
+  );
+  assert.equal(
+    (await unaffected.request(`${namespacePath}/agents/${topology.agent.id}`)).status,
+    200,
+  );
+  assert.equal((await withdrawn.request(namespacePath)).status, 200, "discovery grant remains");
+  await submitChatTurnWithAssistantProof(
+    unaffected.nativePage,
+    `sharing-after-withdrawal-${randomUUID()}`,
+    unaffected.frames,
+  );
+  context.diagnostic(
+    `Selective sharing withdrawal closed the confirmed native stream in ${Math.ceil(elapsedMs)} ms; the other recipient completed a subsequent real model turn.`,
+  );
+}
+
 test(
   "production native admin UI opens through OCC and preserves Agent boundaries",
   { ...requiresNativeAdminRouting, timeout: 1_200_000 },
@@ -885,5 +1063,33 @@ test(
     context.diagnostic(
       "Native admin browser proof loaded stock assets, opened a deep link, established a WebSocket, sent a real chat turn, made/reverted a native config edit, proved OCE redeploy restores managed config after native drift, denied a sibling host, preserved a workspace file across OCE stop/redeploy, wrote human connect/close audit evidence, reconnected to the current redeployed revision, and reloaded after gateway Pod replacement.",
     );
+  },
+);
+
+// Sharing is independently useful on the supported embedded topology. Keep the
+// dedicated lifecycle case above separate so neither qualification replaces it.
+test(
+  "two people share an embedded native Gateway with selective stream withdrawal",
+  { ...requiresNativeAdminRouting, timeout: 1_200_000 },
+  async (context) => {
+    const artifacts = await mkdtemp(join(tmpdir(), "openclaw-native-sharing-"));
+    context.diagnostic(`native sharing artifacts: ${artifacts}`);
+    const nativeDomain = process.env.OCC_TEST_NATIVE_ADMIN_DOMAIN ?? "native.example.test";
+    const sharedCookieDomain =
+      process.env.OCC_TEST_NATIVE_ADMIN_SHARED_COOKIE_DOMAIN ?? nativeDomain;
+    const ingress = await createNativeIngress(context, { artifacts, nativeDomain });
+    const topology = await arrangeProductionTopology(context, "embedded", undefined, {
+      publicOrigin: ingress.origin,
+      gatewayPassword: true,
+      nativeAdmin: { domain: nativeDomain, sharedCookieDomain },
+      nativeOptions: { controlUi: { enabled: true } },
+      workspaceGateway: true,
+    });
+    ingress.setUpstream(topology.controllerUrl);
+    await redeployWithNativeAdminAccess(topology, ingress.origin, nativeDomain);
+    const status = await nativeAdminStatus(topology);
+    assert.equal(status.status, "available");
+    const browser = await launchBrowser(context, ingress);
+    await assertSharedNativeSessions(context, { topology, browser, ingress, status });
   },
 );

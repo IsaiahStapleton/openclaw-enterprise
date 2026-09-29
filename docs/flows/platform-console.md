@@ -1,7 +1,7 @@
 ---
 created: 2026-09-01
-updated: 2026-09-27
-last_updated_session: 01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-09-28
+last_updated_session: authoring-run/462d5207-c3a1-4203-af4a-8db2551ccb9a
 ---
 
 # Platform console request flow
@@ -112,7 +112,7 @@ readable Agents in the selected Namespace.
 exact Agent read, resolves its active revision, then calls its Compute Driver.
 The [Compute contract](../reference/drivers/compute.md) owns workload inspection
 and Enterprise/OpenClaw provenance. Navigation preserves `debug=true`; removing it
-stops reads. Stale responses are rejected; missing provenance stays explicit.
+stops reads. Missing provenance stays explicit.
 
 ### 2. Resolve the session before private reads
 
@@ -171,7 +171,7 @@ failure return errors.
 
 `apps/controller/src/console/agents/create.mjs:renderCreateAgent` composes Provider,
 Harness, Preset, Configuration, and workspace inputs. Provider/Harness changes
-reset incompatible credentials and model choices. The
+reset incompatible credentials and model choices while retaining unrelated JSON. The
 [creation reference](../reference/console/create-and-deploy.md) owns combinations,
 Preset constraints, token handling, permissions, and recovery.
 
@@ -187,7 +187,7 @@ Secret server-side. Pagination is upstream; filtering is local. Selecting a plug
 Credential, provider, and Harness changes clear results and invalidate pending reads.
 
 `create.mjs:MODEL_CHOICES` supplies unauthenticated static model lists and manual
-entry; Provider/Harness resets retain unrelated JSON.
+entry.
 
 `configurationTemplate` enables Control UI with loopback origins on port 18789.
 Compute supplies gateway authentication; Presets replace the starter unchanged.
@@ -226,8 +226,9 @@ without fetching values.
 ### 4–6. Edit the Agent and access runtime files
 
 [Agent editing](platform-console/agent-editing.md) traces revision rendering,
-channels, credentials, workspace files, stopping, and deletion. Responses follow
-the ordering checks below.
+channels, credentials, workspace files, stopping, and deletion;
+[Agent sharing](platform-console/agent-sharing.md) traces policy writes.
+Responses follow the ordering checks below.
 
 `channels/slack.mjs:supportSlack` rejects shapes the editor cannot preserve;
 `updatedSlack` preserves untouched policies and reply overrides. The
@@ -244,7 +245,7 @@ channel/authentication edits reload fully.
 
 Completed tabs retain their DOM and draft capture callbacks within the detail view.
 Returning restores loaded controls and expanded disclosures. Pending or failed
-reads, password values, and mutations invalidate tab reuse. Each tab checks that it
+reads, password values, and mutations invalidate tab reuse. Each tab checks it
 is mounted before applying a response; late reads cannot overwrite another tab.
 Password values clear while [draft captures](platform-console/agent-editing.md#4-render-draft-revision-or-channels) retain edits. Channel
 Secret saves update the shared draft snapshot used by other tabs and deployment
@@ -261,20 +262,20 @@ revalidate retained views before reuse. Drafts keep save baselines and Namespace
 scopes separate.
 
 Authorization and dependency failures clear affected content and expose recovery;
-a current protected `401` clears all private state immediately. `pagehide` clears
+a current protected `401` clears all private state. `pagehide` clears
 private DOM, previews, and drafts even for BFCache; persisted `pageshow` performs
 a fresh load. Failure views show local reasons and bounded request IDs, never
 backend error text. Backend authorization denial clears every retained preview,
 including other Namespace selections, because the permission is Installation-wide.
 
 The [detail action flow](platform-console/agent-editing.md#stop-agent) traces
-confirmed Stop and Delete requests and their exact permission checks. Acceptance
+confirmed Stop and Delete requests and permissions. Acceptance
 is not completed shutdown or deletion. Uncertain outcomes block replay until
-readback; only confirmed absence returns to the Agents list. Deployment resumes
+readback; only confirmed absence returns to Agents. Deployment resumes
 a stopped Agent through a new revision. The [Agent reference](../reference/agents.md#deletion)
 owns asynchronous cleanup.
 
-Logout first hides private state, then calls the existing sign-out endpoint.
+Logout first hides private state, then calls the sign-out endpoint.
 Confirmed success or session inspection proving absence replaces history with
 login. An unconfirmed logout stays blocked with Retry. The
 [authentication flow](local-password-authentication.md) owns server revocation;
@@ -297,7 +298,7 @@ refresh and inspection.
 
 ## Debugging and Verification
 
-- Use the displayed request ID to associate API failures with controller logs.
+- Match the displayed request ID to controller logs.
   A Namespace-only user cannot discover Backends; check Installation authority
   before treating that denial as a configuration problem.
 - Browser suites use real Fastify, Better Auth, Native IAM, and in-memory storage.
@@ -322,6 +323,8 @@ refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 01:39: Move the sharing trace to its child flow. (authoring-run/462d5207-c3a1-4203-af4a-8db2551ccb9a - 4f32ebbca5d699296a142dfbd34c8ec46844fce7)
 
 - 2026-09-27 19:38: Preserve validated page and tab DOM in accompanying changes. (01a0b1f2-e696-7232-a439-5b668154bcd9 - 0663fa97)
 

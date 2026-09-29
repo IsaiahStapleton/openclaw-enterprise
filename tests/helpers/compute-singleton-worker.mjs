@@ -67,9 +67,14 @@ async function setup(context) {
     };
     state.setBootstrapNativeIAM(
       createDevelopmentIAMState(
-        createAuthPrincipalSeed(installation.id, "before-commit-worker-integration", {
-          id: `account-before-commit-${randomUUID()}`,
-        }),
+        createAuthPrincipalSeed(
+          installation.id,
+          "before-commit-worker-integration",
+          {
+            id: `account-before-commit-${randomUUID()}`,
+          },
+          { grant: "administrator" },
+        ),
       ),
     );
     await state.transact((unit) => unit.installations.createInstallation(installation));

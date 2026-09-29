@@ -203,6 +203,8 @@ the Gateway in its release namespace. These three settings are required when
 routing is enabled; `hostname` is optional. `envoyHttpsTargetPort` defaults to
 `10443` and must match Helm. Compute grants Harness egress only to this
 installation's Envoy Pods on that port, before waiting for node enrollment.
+`endpointPort` defaults to `443` and changes only the port in generated WSS URLs.
+When set, the external load balancer must forward that port to the HTTPS listener.
 
 When `hostname` is omitted or empty, Compute and Helm derive the same Service
 name: `occ-gateway-` followed by the first 12 hexadecimal characters of the

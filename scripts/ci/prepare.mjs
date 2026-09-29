@@ -765,28 +765,58 @@ async function buildRuntimeImages(
     env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = tag;
   }
   if (runtime) {
+    const openclawSource = process.env.OCC_K3D_OPENCLAW_SOURCE;
+    if (openclawSource !== undefined) {
+      if (
+        !isAbsolute(openclawSource) ||
+        !(await stat(join(openclawSource, "Dockerfile"))).isFile()
+      ) {
+        throw new Error("OCC_K3D_OPENCLAW_SOURCE must select an absolute OpenClaw source checkout");
+      }
+      if (!/^[a-f0-9]{40,64}$/u.test(process.env.OCC_K3D_OPENCLAW_COMMIT ?? "")) {
+        throw new Error("OCC_K3D_OPENCLAW_COMMIT must identify the selected OpenClaw source");
+      }
+    }
     const tag = `${tagBase}/runtime:local`;
     const resource = addResource(state, "image-tag", { name: tag, owner: state.prefix });
     resources.push(resource);
     await writeState(statePath, state);
-    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-      "build",
-      ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
-        ? ["--builder", "default", "--load"]
-        : []),
-      "--pull=false",
-      "-f",
-      runtimeDockerfile,
-      "-t",
-      tag,
-      repositoryRoot,
-    ]);
+    await execFile(
+      process.env.OCC_DOCKER_BIN ?? "docker",
+      openclawSource === undefined
+        ? [
+            "build",
+            ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
+              ? ["--builder", "default", "--load"]
+              : []),
+            "--pull=false",
+            "-f",
+            runtimeDockerfile,
+            "-t",
+            tag,
+            repositoryRoot,
+          ]
+        : [
+            "build",
+            ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
+              ? ["--builder", "default", "--load"]
+              : []),
+            "--build-arg",
+            "OPENCLAW_DOCKER_BUILD_SKIP_DTS=1",
+            "-t",
+            tag,
+            openclawSource,
+          ],
+    );
     await markResourceReady(statePath, state, resource);
     env.OCC_TEST_RUNTIME_IMAGE = tag;
     env.OCC_DOCKER_RUNTIME_IMAGE = tag;
     env.OCC_DOCKER_GATEWAY_IMAGE = tag;
     env.OCC_DOCKER_AGENT_IMAGE = tag;
     env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = tag;
+    if (openclawSource !== undefined) {
+      env.OCC_K3D_OPENCLAW_COMMIT = process.env.OCC_K3D_OPENCLAW_COMMIT;
+    }
   }
   return { env, resourceIds: resources.map((resource) => resource.id) };
 }
@@ -1541,7 +1571,11 @@ async function prepareK3dRuntimeImages(
   if (needsController || needsRuntime) {
     const images = [
       needsController ? "controller" : undefined,
-      needsRuntime ? "gateway and Codex runtime" : undefined,
+      needsRuntime
+        ? process.env.OCC_K3D_OPENCLAW_SOURCE === undefined
+          ? "gateway and Codex runtime"
+          : "gateway and native OpenClaw runtime"
+        : undefined,
     ]
       .filter(Boolean)
       .join(", ");
@@ -1567,7 +1601,12 @@ async function prepareK3dRuntimeImages(
       env.OCC_TEST_KUBERNETES_AGENT_IMAGE ?? process.env.OCC_TEST_KUBERNETES_AGENT_IMAGE,
   };
   requireEnv(Object.keys(inputs), inputs);
-  progress(state.lane, "Importing the gateway and Codex runtime images into k3d.");
+  progress(
+    state.lane,
+    process.env.OCC_K3D_OPENCLAW_SOURCE === undefined
+      ? "Importing the gateway and Codex runtime images into k3d."
+      : "Importing the native OpenClaw runtime image into k3d.",
+  );
   for (const [name, value] of Object.entries(inputs)) {
     const image = await registerImageInK3d(statePath, state, cluster, value, name);
     env[name] = image.reference;
@@ -1584,7 +1623,7 @@ async function prepareK3dRuntimeImages(
   }
   // Replace the build tag with its imported digest before publishing the next step's inputs.
   env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE = env.OCC_TEST_KUBERNETES_GATEWAY_IMAGE;
-  if (lanePrepare(state.lane).codexSeccomp) {
+  if (lanePrepare(state.lane).codexSeccomp && process.env.OCC_K3D_OPENCLAW_SOURCE === undefined) {
     progress(state.lane, "Deriving and installing the dedicated Codex seccomp profile.");
     const seccomp = await prepareCodexSeccompProfile({
       cluster,
@@ -2119,6 +2158,7 @@ async function prepareLane({ lane, statePath }) {
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await ensurePostgresServer(resolvedStatePath, state);
       const cluster = await prepareK3dModelLane(resolvedStatePath, state, env, {
+        buildController: true,
         buildRuntime: true,
       });
       const routing = await prepareGatewayRouting({ cluster, execFile });
@@ -2151,7 +2191,9 @@ async function prepareK3dModelLane(statePath, state, env, options) {
   const cluster = await ensureK3dCluster(statePath, state);
   env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
   env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
-  env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS = cluster.pluginStatusProxyCidrs;
+  if (cluster.pluginStatusProxyCidrs !== undefined) {
+    env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS = cluster.pluginStatusProxyCidrs;
+  }
   if (cluster.kubectl) {
     env.OCC_KUBECTL_BIN = cluster.kubectl;
   }

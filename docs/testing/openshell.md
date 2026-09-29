@@ -99,6 +99,9 @@ node scripts/ci/run-tests.mjs run openshell \
   --results "$RUNNER_TEMP/results/openshell.json"
 ```
 
+Hosted CI runs the default Codex case. To run the native case the same way,
+also export `OCC_TEST_OPENSHELL_HARNESS=openclaw`.
+
 For manual setup, prepare these inputs using the
 [OpenShell test settings](#openshell-test-environment) and
 [OpenShell requirements](../reference/drivers/openshell-sandbox.md#kubernetes-and-admission-requirements),
@@ -142,12 +145,52 @@ privileges, denied secret exposure, allowed and denied tool egress, replacement,
 and cleanup. It separately checks the OpenClaw Control Plane (OCC) Agent Service
 selector. Missing prerequisites fail rather than skip.
 
+`OCC_TEST_OPENSHELL_HARNESS` defaults to `codex`. Select `openclaw` to verify
+that the native Harness requests no inbound OpenShell service exposure and
+completes a real model turn through its outbound enrolled-worker connection.
+The selected network policy permits provider egress from the Codex executable
+for Codex or from the Node executable for native OpenClaw. Native enrollment
+egress uses the Workspace Gateway's configured endpoint port, including the
+high loopback port allocated by the Podman verification relay. The real fixture
+also gives the delegated Sandbox the same 2 GiB Harness memory limit as
+Kubernetes Compute; the cluster's 1 GiB container default is insufficient while
+the native worker installs its Gateway bundle.
+
 Use an OCE runtime image built from the OpenClaw source commit pinned by
-`deploy/runtime/Dockerfile`. The test requires the workspace-node
-`--pair-if-needed` and `--commands` CLI options. The test configures
-the private Gateway with its fully qualified `.svc.cluster.local` hostname so
-OpenShell policy DNS, the listener certificate, the HTTPRoute, and node pairing
-use the same name.
+`deploy/runtime/Dockerfile`. The native proof requires the environment-managed
+`connect --ephemeral` path; OCE supplies its one-use enrollment target through a
+private file instead of a process argument. The Codex workspace-node proof still
+requires the `node run --pair-if-needed` and `--commands` CLI options. The test
+configures the private Gateway with its fully qualified `.svc.cluster.local`
+hostname so OpenShell policy DNS, the listener certificate, the HTTPRoute, and
+node pairing use the same name.
+
+### Native OpenClaw with k3d
+
+The [k3d helper](kubernetes.md#develop-with-local-containers-and-k3d) selects
+the native case with `--harness openclaw`:
+
+```sh
+./scripts/k3d test --harness openclaw
+./scripts/k3d demo --harness openclaw
+```
+
+`test` and `demo` use the same verification-only compatibility bridge; it does
+not promote that bridge into a supported production path.
+
+This selection prepares the pinned OpenShell lane, builds the sibling
+`../openclaw` checkout, and records its commit with the prepared environment.
+Set `OCC_K3D_OPENCLAW_SOURCE` to another absolute source checkout. Codex and
+native OpenClaw use separate helper-owned state. `demo` keeps the proven topology
+running after its real turn, opens the Control UI's new-session flow and the OCC
+console on loopback, and prints its isolated integration username instead of
+using the development login. It leaves the dedicated worker slot free, so the
+first browser session uses the dedicated-native profile without the Gateway
+receiving the Harness's model credential.
+
+Without `--harness`, `copy` selects the one active demo and `down` removes both
+helper-owned Harness environments; pass `--harness codex` or
+`--harness openclaw` to select one.
 
 ### Test bridge and upstream prerequisite
 
@@ -173,7 +216,12 @@ mounts the app-server token Secret reference, immutable `runtime.json` and
 `config.toml` ConfigMap entries, and an audience-bound ServiceAccount token. It
 copies them into private PVC subpaths. The compatibility request mounts the
 credentials, plugin runtime, and workload token read-only; revision-owned node
-state, runtime assets, and the Harness workspace remain writable. Helm permits
+state, runtime assets, and the Harness workspace remain writable. For native
+OpenClaw, the bridge mounts node state at a root-level path because stock
+OpenShell runs the Agent as UID 10001 while the runtime image owns `/home/node`
+as UID 1000; this keeps secure workspace-transfer ancestry owned only by root or
+the effective Agent user. The bridge moves the native inference workspace grant
+to the same root so authorization remains exact. Helm permits
 the OpenShell supervisor Pod to reach Envoy only from the Gateway-attached
 tenant namespace because the supervisor owns the policy-enforced outbound
 socket. The verification-only Gateway enables caller driver configuration and
@@ -246,11 +294,12 @@ scoped environment file for this suite.
 | `OCC_TEST_OPENSHELL_K3D_REAL`             | Set to `1` to explicitly opt into the real OpenShell integration.                                                                                   |
 | `OCC_TEST_OPENSHELL_SECRET_PROJECTION`    | `0` selects stock fail-closed proof; `1` selects the verification-only v0.1.0 compatibility proof with exposed-route and real model-turn checks.    |
 | `OPENAI_API_KEY`                          | Existing authorized provider credential, registered as a credential source for the required real model turn.                                        |
+| `OCC_TEST_OPENSHELL_HARNESS`              | `codex` (default) selects the app-server proof; `openclaw` selects the dedicated native worker without an inbound Harness exposure.                 |
 | `OCC_TEST_OPENAI_MODEL`                   | Authorized provider model; defaults to `gpt-6-astra`.                                                                                               |
 | `OCC_TEST_KUBERNETES_KUBECONFIG`          | Absolute kubeconfig path for the dedicated disposable k3d cluster.                                                                                  |
 | `OCC_TEST_KUBERNETES_CONTEXT`             | Explicit `k3d-*` context with a verified loopback HTTPS API.                                                                                        |
 | `OCC_TEST_KUBERNETES_GATEWAY_IMAGE`       | Imported immutable real OpenClaw gateway image; `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` is accepted as a fallback.                                      |
-| `OCC_TEST_KUBERNETES_AGENT_IMAGE`         | Imported immutable real Codex image; `OCC_TEST_KUBERNETES_CODEX_IMAGE` and runtime image fallbacks are accepted.                                    |
+| `OCC_TEST_KUBERNETES_AGENT_IMAGE`         | Imported immutable Harness image; Codex and runtime-image fallbacks are accepted. The native selector uses the OpenClaw source image.               |
 | `OCC_TEST_DATABASE_URL`                   | Migrated disposable loopback PostgreSQL database named `openclaw_k8s_*`.                                                                            |
 | `OCC_TEST_OPENSHELL_HELM`                 | Helm binary used to install the namespace-scoped OpenShell gateway.                                                                                 |
 | `OCC_TEST_OPENSHELL_HELM_CHART`           | OpenShell Helm chart path or chart archive.                                                                                                         |

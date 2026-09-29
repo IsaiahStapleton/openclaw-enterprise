@@ -120,6 +120,10 @@ Helm does not rewrite the Installation Secret. The
 defines the naming rule. It does not require an existing Agent gateway.
 If you override `gatewayRouting.envoyHttpsTargetPort` (default `10443`),
 set the same value in Helm and the Installation Compute configuration.
+If the external load balancer exposes HTTPS on a port other than `443`, set
+`gatewayRouting.endpointPort` in the Installation Compute configuration and
+forward that port to the Gateway HTTPS listener. Helm does not create this
+external port mapping.
 
 To use an existing issuer instead of creating a CA, set
 `gatewayRouting.issuerRef.name`, with `kind` (default `ClusterIssuer`) and
