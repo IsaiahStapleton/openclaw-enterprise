@@ -14,7 +14,7 @@ export function harnessAuthDescription(binding) {
     return "Service Accounts · Secret configured";
   }
   if (binding.method === "oauth") {
-    return "ChatGPT OAuth · Agent login configured";
+    return "ChatGPT OAuth (Experimental) · Agent login configured";
   }
   return binding.method === "api_key"
     ? "API key · Secret configured"
@@ -31,7 +31,7 @@ export function renderHarnessAuthSummary(context, binding) {
     binding.method === "api_key"
       ? "API key · "
       : binding.method === "oauth"
-        ? "ChatGPT OAuth · "
+        ? "ChatGPT OAuth (Experimental) · "
         : "Service Accounts · ",
     renderSecretReference(context, binding.source),
   );
@@ -51,7 +51,9 @@ export function createHarnessAuthFields(
     executionMode === "dedicated"
       ? element("option", { value: "codex_pat" }, "Service Accounts")
       : null,
-    executionMode === "dedicated" ? element("option", { value: "oauth" }, "ChatGPT OAuth") : null,
+    executionMode === "dedicated"
+      ? element("option", { value: "oauth" }, "ChatGPT OAuth (Experimental)")
+      : null,
     element("option", { value: "runtime" }, "Operator-managed credentials"),
     element("option", { value: "chatgpt_service_account" }, "ChatGPT service account"),
   );

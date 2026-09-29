@@ -107,7 +107,7 @@ export function renderAgentPlugins(
           : catalogCapabilityError
             ? "Could not check plugin catalog availability. Refresh this page or edit existing plugin selections."
             : agent.harnessAuth?.method === "oauth"
-              ? "Sign in with ChatGPT below to browse plugins without changing the deployed Agent's login."
+              ? "Use experimental ChatGPT OAuth below to browse plugins without changing the deployed Agent's login."
               : "Hosted plugin browsing requires a saved Service Accounts token Secret. Select it under Credentials, or edit existing plugin selections.",
     saveHint: "Changes are saved when you choose Save plugin selections.",
     deniedMessage:

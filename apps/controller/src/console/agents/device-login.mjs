@@ -27,6 +27,12 @@ export function createDeviceLogin({ context, agentId, initial, onChange, hint })
   const section = element(
     "div",
     { className: "device-login form-field" },
+    element(
+      "p",
+      { className: "hint" },
+      element("strong", {}, "Experimental. "),
+      "Codex OAuth is intended for trying a first deployment. Reconnects, later revisions, and credential recovery have known limitations.",
+    ),
     element("p", { className: "hint" }, hint),
     instructions,
     status,

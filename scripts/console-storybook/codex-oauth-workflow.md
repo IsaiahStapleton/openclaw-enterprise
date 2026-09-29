@@ -1,4 +1,4 @@
-# Verify Codex OAuth in the console
+# Verify experimental Codex OAuth in the console
 
 Build Storybook from the changed source using the
 [Storybook instructions](../../docs/contributing/console-storybook.md).
@@ -8,18 +8,19 @@ provider login, token persistence, refresh rotation, or runtime handoff.
 
 ## Create an Agent
 
-1. Open **Pages/Create Agent → ChatGPT OAuth before sign-in**. Confirm the
-   provider is OpenAI, the harness is Codex, and authentication is ChatGPT OAuth.
+1. Open **Pages/Create Agent → ChatGPT OAuth before sign-in (Experimental)**. Confirm the
+   provider is OpenAI, the harness is Codex, and authentication is **ChatGPT OAuth (Experimental)**. Confirm the Experimental
+   notice explains first-deploy, reconnect, revision, and recovery limitations.
    The model picker remains usable; no token input appears.
-2. Open **ChatGPT device login pending**. Inspect the displayed code and the
+2. Open **ChatGPT device login pending (Experimental)**. Inspect the displayed code and the
    **Open Codex sign-in** link. Do not submit the simulated code to the provider.
    Choose **Cancel login** and confirm the sign-in button returns.
-3. Open **ChatGPT login ready for plugin discovery**. Wait for the ready status,
+3. Open **ChatGPT login ready for plugin discovery (Experimental)**. Wait for the ready status,
    choose **Configure plugins**, select Calendar, and add it. Choose a model and
    create the Agent. Inspect the simulated requests: they carry a Secret reference,
    never access or refresh tokens.
-4. Check **ChatGPT login permission denied**, **ChatGPT login exchange failed**,
-   and **ChatGPT device login expired**. Failed or expired polls stop; recovery
+4. Check **ChatGPT login permission denied (Experimental)**, **ChatGPT login exchange failed (Experimental)**,
+   and **ChatGPT device login expired (Experimental)**. Failed or expired polls stop; recovery
    requires cancelling and starting a new login. Other form choices remain usable.
 5. Switch the harness to OpenClaw. ChatGPT OAuth disappears and API-key
    authentication is selected. Switching providers also clears the selected model
@@ -27,13 +28,14 @@ provider login, token persistence, refresh rotation, or runtime handoff.
 
 ## Edit an existing Agent
 
-Open **Pages/Agent detail → Separate ChatGPT login for plugin editing**. Complete
+Open **Pages/Agent detail → Separate ChatGPT login for plugin editing (Experimental)**. Complete
 the simulated login, change a plugin policy, and save the plugin selections.
-The Agent's saved authentication source stays unchanged. **Discard staged login**
+The Experimental notice remains visible. The Agent's saved authentication source stays unchanged. **Discard staged login**
 deletes only this configuration login.
 
-Open **Components/Credentials → Explicit ChatGPT credential replacement**.
-The current source is preserved until a new login completes and the operator
+Open **Components/Credentials → Explicit ChatGPT credential replacement (Experimental)**.
+Confirm the authentication selector, saved summary, and sign-in notice show the
+experimental status. The current source is preserved until a new login completes and the operator
 chooses **Save authentication source**. Deployment remains a separate action.
 Cancelling a new login retains the current saved source.
 

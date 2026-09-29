@@ -97,7 +97,7 @@ fresh private credential storage. The normal deployment prerequisites still
 apply: configured runtime images, provisionable storage, provider connectivity,
 and access to the selected model. Readiness requires a successful native model probe.
 
-Choose **ChatGPT OAuth** with dedicated Codex when creating an Agent. Open the
+Choose **ChatGPT OAuth (Experimental)** with dedicated Codex when creating an Agent. Open the
 provided verification link, enter the displayed code, and complete sign-in.
 Device authorization must be enabled for the upstream account or workspace.
 OCE stores the resulting native bundle in its Secret backend; the browser receives

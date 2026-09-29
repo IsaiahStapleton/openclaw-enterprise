@@ -382,7 +382,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     { id: "agent-auth-method" },
     element("option", { value: "api_key" }, "OpenAI API key"),
     element("option", { value: "codex_pat" }, "Service Accounts"),
-    element("option", { value: "oauth" }, "ChatGPT OAuth"),
+    element("option", { value: "oauth" }, "ChatGPT OAuth (Experimental)"),
   );
   authMethod.value = passwordAuth?.method ?? authDefault ?? binding?.method ?? "api_key";
   if (passwordAuth) {
@@ -773,7 +773,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     unavailableMessage: () =>
       pluginDiscoveryCredential === "none"
         ? "Choose the Codex harness to browse this Installation's curated plugin catalog."
-        : "For discovery, choose ChatGPT OAuth and sign in, or choose Service Accounts with the Codex harness and select a Secret or enter a preview token.",
+        : "For discovery, choose ChatGPT OAuth (Experimental) and sign in, or choose Service Accounts with the Codex harness and select a Secret or enter a preview token.",
     availableMessage: () =>
       pluginDiscoveryCredential === "none"
         ? "Load the installation's curated plugin catalog. Access and tool availability are checked separately."
@@ -1528,7 +1528,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       (nativeProvider.value !== "openai" || mode.value !== "dedicated")
     ) {
       feedback.textContent =
-        "Service account tokens and ChatGPT OAuth require OpenAI with Dedicated execution. Update the Configuration JSON or reset the template before saving.";
+        "Service account tokens and ChatGPT OAuth (Experimental) require OpenAI with Dedicated execution. Update the Configuration JSON or reset the template before saving.";
       return;
     }
     if (nativeProvider.value === "anthropic" && mode.value !== "embedded") {

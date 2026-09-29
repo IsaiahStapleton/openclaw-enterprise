@@ -470,7 +470,10 @@ export function installFixture(scenario, evidence) {
             intervalSeconds: 1,
           };
           deviceLogins.set(source.id, login);
-          secrets.set(source.id, secretMetadata(source.id, "Codex OAuth login (simulated)"));
+          secrets.set(
+            source.id,
+            secretMetadata(source.id, "Codex OAuth login (Experimental, simulated)"),
+          );
           return response(login);
         }
         const login = deviceLogins.get(id);

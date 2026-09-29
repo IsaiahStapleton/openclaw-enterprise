@@ -1712,17 +1712,17 @@ export const scenarios = {
   },
   createOAuth: {
     group: "Pages/Create Agent",
-    name: "ChatGPT OAuth before sign-in",
+    name: "ChatGPT OAuth before sign-in (Experimental)",
     path: create,
     pluginDiscovery,
     pluginCapabilities,
     actions: [...form, { selector: "#agent-auth-method", value: "oauth" }],
     description:
-      "Connect a ChatGPT login for a dedicated Codex Agent. The model picker remains available; credentials never enter the browser.",
+      "Experimental first-deploy login for a dedicated Codex Agent. The limitations notice stays visible throughout login and recovery. The model picker remains available; credentials never enter the browser.",
   },
   createOAuthPending: {
     group: "Pages/Create Agent",
-    name: "ChatGPT device login pending",
+    name: "ChatGPT device login pending (Experimental)",
     path: create,
     oauthPending: true,
     actions: [
@@ -1735,7 +1735,7 @@ export const scenarios = {
   },
   createOAuthReady: {
     group: "Pages/Create Agent",
-    name: "ChatGPT login ready for plugin discovery",
+    name: "ChatGPT login ready for plugin discovery (Experimental)",
     path: create,
     pluginDiscovery,
     pluginCapabilities,
@@ -1753,7 +1753,7 @@ export const scenarios = {
   },
   createOAuthDenied: {
     group: "Pages/Create Agent",
-    name: "ChatGPT login permission denied",
+    name: "ChatGPT login permission denied (Experimental)",
     path: create,
     rules: [{ suffix: "/device-authorizations", method: "POST", status: 403 }],
     actions: [
@@ -1766,7 +1766,7 @@ export const scenarios = {
   },
   createOAuthError: {
     group: "Pages/Create Agent",
-    name: "ChatGPT login exchange failed",
+    name: "ChatGPT login exchange failed (Experimental)",
     path: create,
     rules: [{ suffix: "/poll", method: "POST", status: 503 }],
     actions: [
@@ -1779,7 +1779,7 @@ export const scenarios = {
   },
   createOAuthExpired: {
     group: "Pages/Create Agent",
-    name: "ChatGPT device login expired",
+    name: "ChatGPT device login expired (Experimental)",
     path: create,
     oauthExpired: true,
     actions: [
@@ -1792,7 +1792,7 @@ export const scenarios = {
   },
   pluginsOAuthRevision: {
     group: "Pages/Agent detail",
-    name: "Separate ChatGPT login for plugin editing",
+    name: "Separate ChatGPT login for plugin editing (Experimental)",
     path: `${draft}&tab=plugins`,
     deployed: true,
     auth: "oauth",
@@ -1805,7 +1805,7 @@ export const scenarios = {
   },
   authOAuthReconnect: {
     group: "Components/Credentials",
-    name: "Explicit ChatGPT credential replacement",
+    name: "Explicit ChatGPT credential replacement (Experimental)",
     path: `${draft}&tab=credentials`,
     deployed: true,
     auth: "oauth",
