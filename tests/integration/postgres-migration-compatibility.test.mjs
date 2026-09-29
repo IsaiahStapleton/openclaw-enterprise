@@ -1389,7 +1389,8 @@ test(
       [31, "backendCompleted"],
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
-      [34, "preOAuth"],
+      [34, "preBrokerReceipts"],
+      [35, "preOAuth"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1473,6 +1474,7 @@ test(
       before.map(({ value }) => ({
         value: {
           ...value,
+          broker_protocol: 0,
           live_revision_id: revisionId,
           cleanup_context: { driver: snapshot.driver, binding: snapshot.bindings[0] },
         },
@@ -1629,7 +1631,8 @@ test(
     for (const [prefix, history] of [
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
-      [34, "preOAuth"],
+      [34, "preBrokerReceipts"],
+      [35, "preOAuth"],
     ]) {
       await context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1692,7 +1695,8 @@ test(
       [31, "backendCompleted"],
       [32, "backendTerminology"],
       [33, "prePluginApprovers"],
-      [34, "preOAuth"],
+      [34, "preBrokerReceipts"],
+      [35, "preOAuth"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });

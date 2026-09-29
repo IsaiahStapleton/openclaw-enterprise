@@ -20,6 +20,8 @@ and checks workspace-write and outside-write behavior inside its real sandbox.
 It does not run a model or prove Codex WebSocket tool execution. If cleanup fails, it preserves the recorded state directory for
 recovery with `occ dev down`.
 
+See [two-cluster validation](two-cluster-local.md).
+
 ## Kubernetes HTTP fixture
 
 Requires Docker, k3d, `kubectl`, and the migrated `openclaw_k8s_local` database
@@ -256,7 +258,7 @@ it reaches Envoy through the normal ClusterIP Service endpoint; its worker and
 test coordinator remain in the Node test process. Neither suite installs the
 controller with Helm. Missing selected-suite
 prerequisites fail; an unselected suite skips. Default Codex version expectation
-is `0.156.0`; see [runtime settings](#kubernetes-real-runtime-test-environment)
+is `0.158.0`; see [runtime settings](#kubernetes-real-runtime-test-environment)
 for version assertions and alternate image variables.
 
 ### Transcript persistence
@@ -341,7 +343,7 @@ Codex custom tools.
 | `OCC_TEST_KUBERNETES_CODEX_IMAGE`           | Optional legacy fallback for the Agent image when the explicit Agent image is absent.                                                                                                                      |
 | `OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE` | Optional CI-published kubelet Localhost seccomp profile path for dedicated Codex Agents; generated from each selected k3d node's effective `RuntimeDefault` profile and installed only on run-owned nodes. |
 | `OCC_TEST_KUBERNETES_OPENCLAW_VERSION`      | Optional exact OpenClaw version expectation for the selected real gateway image.                                                                                                                           |
-| `OCC_TEST_KUBERNETES_CODEX_VERSION`         | Optional Codex image version expectation; defaults to `0.156.0`.                                                                                                                                           |
+| `OCC_TEST_KUBERNETES_CODEX_VERSION`         | Optional Codex image version expectation; defaults to `0.158.0`.                                                                                                                                           |
 | `OCC_TEST_DATABASE_URL`                     | Migrated disposable loopback database named `openclaw_k8s_*`; the ordinary development database fails.                                                                                                     |
 | `OPENAI_API_KEY`                            | Existing authorized provider credential for real embedded and dedicated model turns.                                                                                                                       |
 | `OCC_TEST_OPENAI_MODEL`                     | Authorized provider model; defaults to `gpt-6-astra`.                                                                                                                                                      |

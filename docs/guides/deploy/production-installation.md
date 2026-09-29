@@ -8,44 +8,51 @@ first. Workspace access is required: install the
 and keep routing enabled in both example files. Control UI is enabled in the
 production values; complete [native admin prerequisites](native-admin.md#requirements).
 
-Run from the repository root; retain this shell and protected files for
-[Agent deployment](production-agents.md).
+Run from a clean checkout at the image source revision so the chart, examples,
+and helpers match. See [Deliver images to a private registry](private-registry-images.md)
+for provenance, copying verified images to ECR, and chart selection. Retain this
+shell and protected files for [Agent deployment](production-agents.md).
 
 ## Use published images
 
-For an authorized trial on `linux/amd64` or `linux/arm64`, use the private images
-below instead of building them. Both were built from source
-`e3b28515f30523eede3cd905e589c1ab9063dbda`, passed image startup checks, and had
-their remote digests verified in [publication run 35680912119](https://github.com/openclaw/openclaw-enterprise/actions/runs/35680912119).
-Both digest references select multi-platform indexes; Docker and Kubernetes
-pull the variant matching the host or node. Startup checks passed for both
-architectures, with ARM64 checked under QEMU. Publication does not establish
-production deployment readiness. To change the image contents,
-[build your own images](#build-and-publish-production-images).
+To install the current example, select a verified release or custom controller
+image supporting `catalogSource: openai-curated` and the
+[origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
+plus a compatible runtime. Export their immutable digests as `CONTROLLER_IMAGE`
+and `RUNTIME_IMAGE` for installation, or [build and publish images](#build-and-publish-production-images)
+from this checkout.
 
-You need read access to both GHCR packages. At publication, they inherited access
-from `openclaw/openclaw-enterprise`. Authenticate locally with a GitHub personal
-access token **(classic)** with `read:packages`; authorize it for organization
-SSO if required. Replace the username below and enter the token at Docker's
-password prompt. Do not paste the token into the command itself. See
+The published controller supports the curated catalog but predates the origin
+check. No current production-ready release is verified here. Use these images
+only for image tests or workflows targeting their source revision.
+
+Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
+matching-architecture startup and remote digest checks in
+[publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
+Their multi-platform indexes select the host or node variant; publication does
+not establish production readiness.
+
+Both GHCR packages require read access; at publication, they inherited access
+from `openclaw/openclaw-enterprise`. Authenticate with a GitHub personal access
+token **(classic)** with `read:packages` and organization SSO if required.
+Replace the username and enter the token at Docker's password prompt, not in the
+command. See
 [GitHub's registry authentication instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry).
 
 ```bash
 docker login ghcr.io --username '<your-github-username>'
-
-export CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:9aa430eb19553a35ccafd5dafff58984ec1264e7c77b1440f56a893cf8e993e1'
-export RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:792f0ffe88ec9f935b55c36f41ee646a828e3d83df21427cf7955a5beef52460'
 ```
 
-Use the controller image for API, worker, migration, and bootstrap, and one
-runtime image for gateways and Agents. Keep the tested digest references.
+For historical [image tests](../../testing/images.md#check-published-images), export:
 
-For Kubernetes, configure approved cluster/node pull credentials for **both
-control-plane and tenant Pods**. Local `docker login` does not authenticate
-cluster nodes. Both images support amd64 and arm64 nodes. Continue at [Configure the Installation](#configure-the-installation)
-with these exports; skip the build-and-publish block below. Local quickstart and
-image-test readers should return to their calling guide after authentication
-and exporting the image references.
+```bash
+export HISTORICAL_CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
+export HISTORICAL_RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
+```
+
+Configure approved pull credentials for **control-plane and tenant Pods**;
+`docker login` does not authenticate nodes. Install with the verified current
+pair at [Configure the Installation](#configure-the-installation).
 
 ## Build and publish production images
 
@@ -59,54 +66,58 @@ Build these images for a registry your cluster can access:
 | Runtime    | [`deploy/runtime/Dockerfile`](../../../deploy/runtime/Dockerfile), assembling pinned OpenClaw source and Codex | Gateways and Agents (the same image serves both) |
 
 With Docker Buildx and registry push access, replace the example registry and
-repository and select your Kubernetes nodes’ platform. The base image below
-matches the [runtime recipe](../../../deploy/runtime/README.md).
+repository and select your nodes’ platform. The base image matches the
+[runtime recipe](../../../deploy/runtime/README.md).
 
 Authenticate the builder before running the build block. For a standard registry,
 run `docker login <registry-host>` using your approved credentials; for private
 ECR, follow [ECR authentication](eks.md#authenticate-the-image-builder-to-ecr).
 Keep any registry and platform exports from that step.
 
-The runtime must include the channel plugins its Agents enable, with their
-runtime dependencies available from a fresh home directory. The standard recipe
-packages Slack and Codex. Verify plugin loading and the gateway's supported
-Codex app-server version before publishing; use the
-[runtime image checks](../../../deploy/runtime/README.md#verify-the-local-image).
-Use the same verified runtime image for both slots unless you have separately
-verified the gateway/Codex image pair. Runtime package installation at gateway
-startup is not part of this deployment procedure.
+These commands push candidate images. Run the block alone in a fresh Bash shell,
+stop on failure, and retain the metadata. Verify the images before installation.
+The standard runtime packages Slack and Codex; use it for both slots unless you
+have separately verified a gateway/Codex pair. Installing packages at gateway
+startup is unsupported.
 
 ```bash
 # Build from a clean checkout.
 export OCC_IMAGE_REGISTRY="${OCC_IMAGE_REGISTRY:-registry.example.com}"
 export OCC_IMAGE_REPOSITORY="${OCC_IMAGE_REPOSITORY:-$OCC_IMAGE_REGISTRY/your-team/openclaw-enterprise}"
-export OCC_IMAGE_TAG="$(git rev-parse HEAD)"
 export OCC_IMAGE_PLATFORM="${OCC_IMAGE_PLATFORM:-linux/amd64}"
 export NODE_BASE_IMAGE='docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584'
-
-docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
-  --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
-  --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
-  --label "org.opencontainers.image.revision=$OCC_IMAGE_TAG" \
-  -t "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" .
-docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" \
-  --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
-  -f deploy/runtime/Dockerfile \
-  -t "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" .
-
-CONTROLLER_DIGEST="$(docker buildx imagetools inspect \
-  "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" \
-  --format '{{json .Manifest}}' | yq -p=json -r '.digest')"
-RUNTIME_DIGEST="$(docker buildx imagetools inspect \
-  "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" \
-  --format '{{json .Manifest}}' | yq -p=json -r '.digest')"
-export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
-export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
+if unset CONTROLLER_IMAGE RUNTIME_IMAGE OCC_IMAGE_METADATA &&
+  OCC_IMAGE_TAG="$(git rev-parse HEAD)" &&
+  OCC_IMAGE_METADATA="$(mktemp -d)" &&
+  export OCC_IMAGE_TAG &&
+  docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" --target runtime \
+    --metadata-file "$OCC_IMAGE_METADATA/controller.json" \
+    --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
+    --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
+    --label "org.opencontainers.image.revision=$OCC_IMAGE_TAG" \
+    -t "$OCC_IMAGE_REPOSITORY/controller:$OCC_IMAGE_TAG" . &&
+  docker buildx build --push --platform "$OCC_IMAGE_PLATFORM" \
+    --metadata-file "$OCC_IMAGE_METADATA/runtime.json" \
+    --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" \
+    --build-arg OCC_BUILD_REVISION="$OCC_IMAGE_TAG" \
+    -f deploy/runtime/Dockerfile \
+    -t "$OCC_IMAGE_REPOSITORY/runtime:$OCC_IMAGE_TAG" . &&
+  CONTROLLER_DIGEST="$(yq -p=json -e -r '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' "$OCC_IMAGE_METADATA/controller.json")" &&
+  RUNTIME_DIGEST="$(yq -p=json -e -r '."containerimage.digest" | select(test("^sha256:[a-f0-9]{64}$"))' "$OCC_IMAGE_METADATA/runtime.json")" &&
+  [[ "$CONTROLLER_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] &&
+  [[ "$RUNTIME_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+  export CONTROLLER_IMAGE="$OCC_IMAGE_REPOSITORY/controller@$CONTROLLER_DIGEST"
+  export RUNTIME_IMAGE="$OCC_IMAGE_REPOSITORY/runtime@$RUNTIME_DIGEST"
+else
+  printf 'Build or digest extraction failed; stop. Metadata: %s\n' "${OCC_IMAGE_METADATA:-unavailable}" >&2
+  false
+fi
 ```
 
-Continue after both builds and digest lookups succeed; retain the exported
-digests for YAML configuration. For private registries, configure cluster/node pull credentials for both
-control-plane and tenant Pods; `docker login` only authenticates your builder.
+Before installation, run the [image checks](../../testing/images.md#check-published-images)
+against these exact digests on a native host for each target architecture; all checks must pass
+without skips. Use these digests in YAML. Configure private registry pull
+credentials for control-plane and tenant Pods; builder login does not authenticate nodes.
 
 ## Configure the Installation
 
@@ -114,9 +125,8 @@ Set the production shell inputs before the first Kubernetes command. For a local
 Kubernetes trial, [build and import the test images](local-operations.md#build-images-for-local-kubernetes)
 to produce YAML copies with real image digests, then set
 `OCC_INPUT_DIRECTORY` to that generated directory and keep those files.
-For a registry-backed installation, keep the digest exports from either
-[Use published images](#use-published-images) or
-[Build and publish production images](#build-and-publish-production-images).
+For registry-backed installations, [check the selected image digests](../../testing/images.md#check-published-images)
+on native hosts for their target architectures and retain their exports.
 
 ```bash
 umask 077
@@ -145,13 +155,13 @@ Older servers continue but remain unsupported; API and worker emit
 `compute.preflight-warning`.
 
 The examples use native API keys. Helm values configure OCC; Installation YAML
-configures Drivers, runtime images, identity, networking, storage, and logging.
+configures Drivers, images, identity, networking, storage, and logging.
 
-For `logging.level`, follow [Choose the log level](../observability.md#1-choose-the-log-level),
-including when to restart OCC and deploy a new AgentRevision.
+For `logging.level` and restart requirements, see
+[Choose the log level](../observability.md#1-choose-the-log-level).
 
-If you built the production images above, write their digest references into
-the protected copies (skip this block for the local Kubernetes import path):
+For registry-backed images, write their digest references into the protected
+copies (skip this block for the local Kubernetes import path):
 
 ```bash
 : "${CONTROLLER_IMAGE:?Set the controller digest reference}"
@@ -181,9 +191,10 @@ Edit the protected YAML copies:
   to disjoint Ready pools; Helm does not place runtimes.
   Do not set `network.gatewayClients` with routing enabled; Compute derives the
   Envoy peer from `gatewayRouting`.
-  If enabling Agent plugins, set one compatible bundled `drivers.plugin` selector
-  and any required Codex catalog-reader configuration. See the
-  [PluginDriver reference](../../reference/drivers/plugin.md#selection-and-catalogs).
+  The example selects the curated Codex PluginDriver catalog. To select another,
+  see the [PluginDriver reference](../../reference/drivers/plugin.md#selection-and-catalogs).
+  For Slack Agents, configure the separate gateway and API proxy inputs in the
+  [Slack guide](../integrations/slack.md#configure-both-slack-proxies).
   If the default syscall policy blocks Codex user namespaces, follow
   [Codex sandbox setup](codex-sandbox.md): install a reviewed profile on every
   eligible node, set `runtime.codexSeccompProfile` to its relative kubelet path,
@@ -192,6 +203,9 @@ Edit the protected YAML copies:
   [bundled Presets](../../reference/presets.md#installation-defaults).
 - `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
   namespace, size, and protected `storageClassName` for the cluster.
+
+For registry-backed installations, [compare the edited images](../../testing/images.md#verify-installation-image-selections)
+with the checked digests; skip this for local imports.
 
 Run every check below, including Helm rendering, before provisioning.
 API startup checks shared-cookie domain compatibility:
@@ -262,7 +276,7 @@ fi
 ```
 
 Keep these values out of Helm values, Installation YAML, Configurations, shell
-history, and this repository.
+history, and the repository.
 
 ## Prepare workspace access
 
@@ -279,7 +293,7 @@ Agent's authentication during [Agent deployment](production-agents.md#configure-
 
 ## Provision system Secrets and install
 
-Create the remaining system Secrets from protected files:
+Create system Secrets from protected files:
 
 ```bash
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
@@ -299,8 +313,7 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
   create secret generic occ-auth --from-file=secret=/secure/occ/occ-auth-secret
 ```
 
-These commands provision operator-owned inputs; they are not a recurring Secret
-synchronizer. When `database.caSecretName` is set, the chart mounts that Secret
+These commands provision operator-owned inputs, not recurring Secret synchronization. When `database.caSecretName` is set, the chart mounts that Secret
 read-only into migration, bootstrap, API, and worker containers at
 `database.caMountPath`; the PostgreSQL URLs still own `sslrootcert` selection.
 
@@ -343,8 +356,8 @@ minting, provider reachability, or an Agent's Git workflow.
 
 For [Azure workload-identity database authentication](../../reference/settings/operations.md#postgresql-connection-authentication),
 use password-free URLs with verified TLS in the database URL files above.
-Prepare the identity environment variables and a renewed federation-token
-projection for each connecting process: migration, bootstrap, API, and worker.
+Prepare identity environment variables and a renewed federation-token projection
+for each connecting process: migration, bootstrap, API, and worker.
 Provision federation and database grants for separate application and migrator
 identities; keep the migrator privileges confined to migration. Use
 `node scripts/migrate-production.mjs` for this authentication mode.

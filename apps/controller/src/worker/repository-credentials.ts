@@ -63,6 +63,28 @@ function sameGrant(
   );
 }
 
+function assertRepositorySessionCanOpen(attempts: readonly Attempt[], repositoryRef: string): void {
+  // A known session may have exposed material. Authority closure alone does
+  // not settle its provider obligations or make replacement safe.
+  if (
+    attempts.some(
+      (attempt) =>
+        attempt.repositoryRef === repositoryRef &&
+        attempt.sessionId !== undefined &&
+        attempt.phase === "invalidated",
+    )
+  ) {
+    throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
+  }
+  if (
+    attempts.some(
+      (attempt) => attempt.repositoryRef === repositoryRef && attempt.phase === "closing",
+    )
+  ) {
+    throw new Error("REPOSITORY_CLEANUP_PENDING");
+  }
+}
+
 /** Owns only persisted session correlations; material remains ephemeral until Compute accepts it. */
 export class RepositoryCredentialLifecycle {
   private readonly dependencies: Dependencies;
@@ -147,24 +169,7 @@ export class RepositoryCredentialLifecycle {
           view.repositorySessions.listRevisionAttempts(owner(revision)),
         );
       }
-      if (
-        attempts.some(
-          (attempt) =>
-            attempt.repositoryRef === binding.repositoryRef &&
-            attempt.sessionId !== undefined &&
-            attempt.phase === "invalidated",
-        )
-      ) {
-        throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
-      }
-      if (
-        attempts.some(
-          (attempt) =>
-            attempt.repositoryRef === binding.repositoryRef && attempt.phase === "closing",
-        )
-      ) {
-        throw new Error("REPOSITORY_CLEANUP_PENDING");
-      }
+      assertRepositorySessionCanOpen(attempts, binding.repositoryRef);
       const existing = attempts.find(
         (attempt) =>
           attempt.repositoryRef === binding.repositoryRef &&
@@ -185,6 +190,7 @@ export class RepositoryCredentialLifecycle {
               repositoryRef: binding.repositoryRef,
               sessionId: status.sessionId,
               deadlineWallMs: status.deadlineWallMs,
+              admissionId: existing.admissionId,
             });
             continue;
           }
@@ -386,27 +392,15 @@ export class RepositoryCredentialLifecycle {
     revision: Revision,
     binding: AdmittedRepositoryBinding,
   ): Promise<RepositoryCredentialRuntimeBinding> {
+    const driver = this.driver(revision);
+    if (driver.checkAdmissionReady !== undefined) {
+      await this.dependencies.effect(claim, (signal) =>
+        driver.checkAdmissionReady!(AbortSignal.any([signal, AbortSignal.timeout(2000)])),
+      );
+    }
     const attempt = await this.authorizedTransaction(claim, revision, async (unit) => {
       const attempts = await unit.repositorySessions.listRevisionAttempts(owner(revision));
-      // A known session may have exposed material. Authority closure alone does
-      // not settle its provider obligations or make replacement safe.
-      if (
-        attempts.some(
-          (prior) =>
-            prior.repositoryRef === binding.repositoryRef &&
-            prior.sessionId !== undefined &&
-            prior.phase === "invalidated",
-        )
-      ) {
-        throw new RepositoryCredentialAuthorityError("REPOSITORY_SESSION_RECOVERY_UNSAFE");
-      }
-      if (
-        attempts.some(
-          (prior) => prior.repositoryRef === binding.repositoryRef && prior.phase === "closing",
-        )
-      ) {
-        throw new Error("REPOSITORY_CLEANUP_PENDING");
-      }
+      assertRepositorySessionCanOpen(attempts, binding.repositoryRef);
       const deadlineWallMs = revision.repositoryCredentials!.deadlineWallMs;
       const durationSeconds = Math.min(
         this.validate(revision)!,
@@ -422,6 +416,9 @@ export class RepositoryCredentialLifecycle {
         durationSeconds,
         deadlineWallMs,
         createdAt: new Date().toISOString(),
+        ...(this.driver(revision).durableBrokerReceipts === true
+          ? { brokerProtocol: 1 as const }
+          : {}),
       });
     });
     await this.authorize(claim, revision);
@@ -476,6 +473,7 @@ export class RepositoryCredentialLifecycle {
       repositoryRef: binding.repositoryRef,
       sessionId: opened.session.sessionId,
       deadlineWallMs: opened.session.deadlineWallMs,
+      admissionId: attempt.admissionId,
       files: opened.files,
     };
   }

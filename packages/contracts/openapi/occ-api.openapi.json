@@ -5911,7 +5911,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Begin deletion of an exact Namespace-owned Agent and its AgentRevisions",
+        "summary": "Begin or retry deletion of an exact Namespace-owned Agent and its AgentRevisions",
         "tags": ["Agents"],
         "x-openclaw-permissions": [
           { "action": "delete", "resourceKind": "agent", "scope": "requested" }

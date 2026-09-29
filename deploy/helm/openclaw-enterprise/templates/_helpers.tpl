@@ -73,6 +73,20 @@
 {{- if eq .Values.database.secretName .Values.auth.secretName -}}
 {{- fail "Better Auth signing material must use a dedicated Secret" -}}
 {{- end -}}
+{{- if .Values.executionCluster.enabled -}}
+{{- $execution := .Values.executionCluster -}}
+{{- if or (not $execution.apiKubeconfigSecretName) (not $execution.workerKubeconfigSecretName) (eq $execution.apiKubeconfigSecretName $execution.workerKubeconfigSecretName) -}}
+{{- fail "executionCluster requires separate API and worker kubeconfig Secrets" -}}
+{{- end -}}
+{{- if or (not $execution.apiCidrs) (not $execution.kubeconfigKey) -}}
+{{- fail "executionCluster requires explicit API CIDRs and kubeconfig key" -}}
+{{- end -}}
+{{- range $name := list $execution.apiKubeconfigSecretName $execution.workerKubeconfigSecretName -}}
+{{- if has $name (list $.Values.installation.secretName $.Values.database.secretName $.Values.auth.secretName $.Values.gatewayRouting.apiKeySecretName) -}}
+{{- fail "executionCluster kubeconfigs require dedicated Secrets distinct from platform credentials" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.repositoryCredentials.enabled -}}
 {{- $credentials := .Values.repositoryCredentials -}}
 {{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-fA-F0-9]{64}$" $credentials.image) -}}
@@ -113,6 +127,10 @@
 {{- end -}}
 {{- $secrets := dict "installation" .Values.installation.secretName "database" .Values.database.secretName "auth" .Values.auth.secretName -}}
 {{- if .Values.backend.chatgpt.enabled -}}{{- $_ := set $secrets "chatgpt" .Values.backend.chatgpt.secretName -}}{{- end -}}
+{{- if .Values.executionCluster.enabled -}}
+{{- $_ := set $secrets "executionApi" .Values.executionCluster.apiKubeconfigSecretName -}}
+{{- $_ := set $secrets "executionWorker" .Values.executionCluster.workerKubeconfigSecretName -}}
+{{- end -}}
 {{- if .Values.gatewayRouting.enabled -}}
 {{- $_ := set $secrets "gatewayApiKey" .Values.gatewayRouting.apiKeySecretName -}}
 {{- $_ := set $secrets "gatewayTls" (include "openclaw.gatewayRouting.tlsSecretName" .) -}}
@@ -136,6 +154,7 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.gatewayRouting.sandbox.enabled (not .Values.gatewayRouting.enabled) -}}{{- fail "gatewayRouting.sandbox requires gatewayRouting.enabled" -}}{{- end -}}
 {{- if .Values.gatewayRouting.enabled -}}
 {{- $routing := .Values.gatewayRouting -}}
 {{- $tlsSecretName := include "openclaw.gatewayRouting.tlsSecretName" . -}}
@@ -177,6 +196,15 @@
 {{- fail "gatewayRouting.envoyHttpsTargetPort must be a valid TCP port" -}}
 {{- end -}}
 {{- if not $routing.envoyGatewayPodLabels -}}{{- fail "gatewayRouting.envoyGatewayPodLabels must select the Envoy Gateway control-plane Pods for xDS egress" -}}{{- end -}}
+{{- if $routing.sandbox.enabled -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\.[a-z0-9-]+$" $routing.sandbox.domain) -}}{{- fail "gatewayRouting.sandbox.domain must be a DNS hostname without wildcard, scheme, port or path" -}}{{- end -}}
+{{- if not $routing.sandbox.tlsSecretName -}}{{- fail "gatewayRouting.sandbox.tlsSecretName must reference a wildcard certificate Secret" -}}{{- end -}}
+{{- if or (lt (int $routing.sandbox.listenerPort) 1024) (gt (int $routing.sandbox.listenerPort) 65535) (eq (int $routing.sandbox.listenerPort) (int $routing.envoyHttpsTargetPort)) -}}{{- fail "gatewayRouting.sandbox.listenerPort must be an unprivileged port distinct from private Envoy HTTPS" -}}{{- end -}}
+{{- if ge (int $routing.tenantGatewayPort) 65535 -}}{{- fail "gatewayRouting.tenantGatewayPort must leave room for the adjacent sandbox port" -}}{{- end -}}
+{{- if not $routing.sandbox.ingressPeers -}}{{- fail "gatewayRouting.sandbox.ingressPeers must explicitly select public ingress sources" -}}{{- end -}}
+{{- $cookieDomain := trimPrefix "." (lower .Values.agentNativeAdmin.sharedCookieDomain) -}}
+{{- if and $cookieDomain (or (eq $routing.sandbox.domain $cookieDomain) (hasSuffix (printf ".%s" $cookieDomain) $routing.sandbox.domain) (hasSuffix (printf ".%s" $routing.sandbox.domain) $cookieDomain)) -}}{{- fail "gatewayRouting.sandbox.domain must be outside the OCE shared session cookie domain" -}}{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

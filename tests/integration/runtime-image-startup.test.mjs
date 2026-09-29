@@ -34,7 +34,7 @@ const runtimeImageModel = defaultAgentModel;
 const syntheticCodexApiKey = "sk-openclaw-runtime-image-smoke-synthetic";
 const manualReviewedCodexSeccompProfileSha256 =
   "71a2871a066a696a171049a15db3f065122c153cd11ef451cee3341ddbd9697f";
-const reviewedCodexSeccompProfileFilePattern = /^codex-0\.156\.0-([a-f0-9]{64})\.json$/;
+const reviewedCodexSeccompProfileFilePattern = /^codex-0\.158\.0-([a-f0-9]{64})\.json$/;
 const imageTestOptions =
   image === undefined
     ? {
@@ -99,7 +99,7 @@ test("runtime image seccomp option requires the CI-prepared profile record", asy
   t.after(() => rm(directory, { recursive: true, force: true }));
   const contents = Buffer.from(`${JSON.stringify({ defaultAction: "SCMP_ACT_ERRNO" })}\n`);
   const digest = createHash("sha256").update(contents).digest("hex");
-  const profile = join(directory, `codex-0.156.0-${digest}.json`);
+  const profile = join(directory, `codex-0.158.0-${digest}.json`);
   const statePath = join(directory, "state.json");
   await writeFile(profile, contents);
   await writeFile(
@@ -598,7 +598,7 @@ async function reviewedCodexSeccompSecurityOptions({
   const expected = basename(profile).match(reviewedCodexSeccompProfileFilePattern)?.[1];
   assert.ok(
     expected,
-    "OCC_TEST_CODEX_SECCOMP_PROFILE must point to codex-0.156.0-<profile-sha256>.json.",
+    "OCC_TEST_CODEX_SECCOMP_PROFILE must point to codex-0.158.0-<profile-sha256>.json.",
   );
 
   let contents;
@@ -615,7 +615,7 @@ async function reviewedCodexSeccompSecurityOptions({
   assert.equal(
     actual,
     expected,
-    `OCC_TEST_CODEX_SECCOMP_PROFILE digest ${actual} did not match the Codex 0.156.0 profile filename digest ${expected}.`,
+    `OCC_TEST_CODEX_SECCOMP_PROFILE digest ${actual} did not match the Codex 0.158.0 profile filename digest ${expected}.`,
   );
 
   const prepared = await ciPreparedCodexSeccompProfile(ciStatePath);
@@ -1939,7 +1939,7 @@ const timeout = setTimeout(() => {
 );
 
 test(
-  "runtime image shares Codex 0.156.0 between the plugin and Dedicated command",
+  "runtime image shares Codex 0.158.0 between the plugin and Dedicated command",
   imageTestOptions,
   async () => {
     const script = String.raw`
@@ -1951,17 +1951,17 @@ const { realpathSync, readFileSync } = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const plugin = createRequire("/app/dist/extensions/codex/package.json");
 const installed = plugin.resolve("@openai/codex/package.json");
-assert.equal(JSON.parse(readFileSync(installed, "utf8")).version, "0.156.0");
+assert.equal(JSON.parse(readFileSync(installed, "utf8")).version, "0.158.0");
 const bundledCommand = plugin.resolve("@openai/codex/bin/codex.js");
 assert.equal(realpathSync("/app/node_modules/.bin/codex"), realpathSync(bundledCommand));
-assert.equal(execFileSync("codex", ["--version"], {encoding: "utf8"}).trim(), "codex-cli 0.156.0");
-assert.equal(execFileSync(process.execPath, [bundledCommand, "--version"], {encoding: "utf8"}).trim(), "codex-cli 0.156.0");
+assert.equal(execFileSync("codex", ["--version"], {encoding: "utf8"}).trim(), "codex-cli 0.158.0");
+assert.equal(execFileSync(process.execPath, [bundledCommand, "--version"], {encoding: "utf8"}).trim(), "codex-cli 0.158.0");
 const provenance = JSON.parse(readFileSync("/opt/oce/runtime/provenance.json", "utf8"));
 assert.equal(provenance.source, "https://github.com/openclaw/openclaw");
-assert.equal(provenance.commit, "000d03942c8703a4c18615ab8d1a5f18c85b5674");
-assert.equal(provenance.sourceArchiveSha256, "7fddb3787c64b8d0dc22595abc19e23862903b0349714e61dbac18240b2b5ced");
+assert.equal(provenance.commit, "9190ad7c12667af435734d4944060effd6ad0a71");
+assert.equal(provenance.sourceArchiveSha256, "5393d25ac73b98030609fa40b2c2bc3f44c62a455660b7cc3f28371fc92dc851");
 assert.equal(provenance.openclawBridgePatchSha256, "62328f7cc72ada024a97a5a7bf89e988db3f91b64b4c6d7fa6809c218fc8b72e");
-assert.equal(provenance.codex.version, "0.156.0");
+assert.equal(provenance.codex.version, "0.158.0");
 assert.equal(Object.hasOwn(provenance, "codexPatchSha256"), false);
 assert.equal(Object.hasOwn(provenance, "codexVersion"), false);
 const contents = readFileSync("/opt/oce/runtime/contents.json");
@@ -2020,7 +2020,7 @@ const platformInventoryEntry = inventory.find((entry) => entry.path === platform
 assert.ok(platformInventoryEntry, "The final runtime inventory must include the stock Codex platform binary.");
 assert.equal((platformInventoryEntry.mode & 0o111) !== 0, true, "Codex platform binary must stay executable.");
 assert.equal(platformInventoryEntry.sha256, platformBinarySha256);
-process.stdout.write("shared-codex-0.156.0-ready\n");
+process.stdout.write("shared-codex-0.158.0-ready\n");
 `;
     const { stdout } = await runDocker([
       "run",
@@ -2033,6 +2033,6 @@ process.stdout.write("shared-codex-0.156.0-ready\n");
       "-e",
       script,
     ]);
-    assert.match(stdout, /shared-codex-0.156.0-ready/);
+    assert.match(stdout, /shared-codex-0.158.0-ready/);
   },
 );

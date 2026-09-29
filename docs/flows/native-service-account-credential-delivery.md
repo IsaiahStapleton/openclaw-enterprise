@@ -1,6 +1,6 @@
 ---
 created: 2026-08-24
-updated: 2026-09-28
+updated: 2026-09-29
 last_updated_session: codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
@@ -211,6 +211,9 @@ history cannot restore historical Secret values.
 
 After dedicated predecessors stop, Compute claims the source Secret with an atomic
 resource-version update, binding its immutable UID to the Agent and PVC UID.
+Source reads and updates use the control-plane Kubernetes client. The seed Secret,
+bootstrap Deployment, and private PVC use the resolved execution-plane namespace
+and client, including during bootstrap cleanup.
 A bootstrap-only Deployment runs
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT`
 and writes native auth plus a generation receipt to the private disk. Repeating
@@ -258,6 +261,8 @@ The source seal prevents ordinary Secret updates from resetting custody.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 03:01: Keep OAuth source custody on control and bootstrap storage on execution when integrating explicit Kubernetes namespace addresses. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 7f02154e282919a033f7600daaf9f86972d21ac2)
 
 - 2026-09-28 04:28: Add device acquisition, catalog use, and one-time persistent OAuth handoff in the accompanying change. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - ae31581574744bea2745066f189eea6e826fe823)
 

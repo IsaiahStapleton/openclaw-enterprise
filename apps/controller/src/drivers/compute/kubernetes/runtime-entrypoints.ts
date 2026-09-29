@@ -41,6 +41,7 @@ const {
 } = require("node:fs");
 const {
   createHmac,
+  timingSafeEqual: pluginTimingSafeEqual,
   randomUUID: pluginRandomUUID,
 } = require("node:crypto");
 const { spawn: pluginSpawn, spawnSync: pluginSpawnSync } = require("node:child_process");
@@ -50,6 +51,7 @@ const { isDeepStrictEqual: pluginDeepEqual } = require("node:util");
 const CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS ?? "10000");
 const CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS = Number(process.env.OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS ?? "60000");
 const PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/status";
+const REMOTE_PLUGIN_STATUS_PATH = "/openclaw/plugin-runtime/remote-status";
 const RUNTIME_STATUS_PATH = "/openclaw/runtime/status";
 const RUNTIME_DIAGNOSTICS_PATH = "/openclaw/runtime/diagnostics";
 const RUNTIME_IMAGE_PATH = "/openclaw/runtime/image";
@@ -107,16 +109,9 @@ function readPluginRuntime(kind) {
 function readGatewayPluginRuntime() {
   const runtime = readRuntimePayload();
   if (runtime === undefined) return undefined;
-  if (runtime.manifest?.kind === "openclaw") return runtime;
-  if (
-    runtime.manifest?.kind === "codex" &&
-    (Object.keys(runtime.manifest.selections ?? {}).length > 0 ||
-      runtime.manifest.repositoryBrokerNetworkPolicy !== undefined ||
-      runtime.manifest.pluginApprovers !== undefined)
-  ) {
+  if (runtime.manifest?.kind === "openclaw" || runtime.manifest?.kind === "codex") {
     return runtime;
   }
-  if (runtime.manifest?.kind === "codex") return undefined;
   throw new Error("Plugin runtime artifact kind mismatch.");
 }
 
@@ -251,6 +246,12 @@ function runtimeStatusReport() {
     podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
     ...(runtimeStartupFailure === undefined ? {} : { runtimeFailure: runtimeStartupFailure }),
   };
+}
+
+function remotePluginStatusAuthorization() {
+  const token = requireNonEmptyString(pluginBaseAppServerToken, "Plugin status base token");
+  return "Bearer " + createHmac("sha256", token)
+    .update("openclaw-plugin-status/v1\\0" + pluginRuntimeRevisionId()).digest("hex");
 }
 
 function statusCheckFromBoolean(check, value, checkedAt, failureCode) {
@@ -480,9 +481,19 @@ function startPluginRuntimeStatusServer() {
   if (port === undefined) return;
   const server = pluginCreateServer(async (request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const remote = pathname === REMOTE_PLUGIN_STATUS_PATH && process.env.OPENCLAW_REMOTE_PLUGIN_STATUS === "true";
+    if (remote) {
+      const expected = Buffer.from(remotePluginStatusAuthorization());
+      const supplied = Buffer.from(typeof request.headers.authorization === "string" ? request.headers.authorization : "");
+      if (expected.length !== supplied.length || !pluginTimingSafeEqual(expected, supplied)) {
+        response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
+        response.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+    }
     if (
       request.method !== "GET" ||
-      ![
+      !remote && ![
         RUNTIME_STATUS_PATH,
         RUNTIME_DIAGNOSTICS_PATH,
         PLUGIN_STATUS_PATH,
@@ -773,13 +784,24 @@ function readPluginFailuresFromEnvironment() {
 }
 
 async function readPeerPluginRuntimeStatus() {
-  if (typeof process.env.APP_SERVER_URL !== "string" || !process.env.APP_SERVER_URL.startsWith("ws://")) {
-    return undefined;
+  let url;
+  const remote = process.env.OPENCLAW_PEER_PLUGIN_STATUS_URL;
+  if (remote !== undefined) {
+    url = new URL(remote);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+      throw new Error("Peer plugin status requires a verified HTTPS endpoint.");
+    }
+  } else {
+    if (typeof process.env.APP_SERVER_URL !== "string" || !process.env.APP_SERVER_URL.startsWith("ws://")) return undefined;
+    url = new URL(process.env.APP_SERVER_URL.replace(/^ws:/, "http:"));
+    url.port = String(pluginRuntimeStatusPort() ?? "");
+    url.pathname = PLUGIN_STATUS_PATH;
   }
-  const url = new URL(process.env.APP_SERVER_URL.replace(/^ws:/, "http:"));
-  url.port = String(pluginRuntimeStatusPort() ?? "");
-  url.pathname = PLUGIN_STATUS_PATH;
-  const response = await fetch(url, { signal: AbortSignal.timeout(CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS) });
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(CODEX_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS),
+    redirect: "error",
+    ...(remote === undefined ? {} : { headers: { authorization: remotePluginStatusAuthorization() } }),
+  });
   if (response.status !== 200) throw new Error("Peer plugin runtime status is unavailable.");
   const status = await response.json();
   if (
@@ -1213,8 +1235,47 @@ function codexAppConfigEdits(configuration) {
 }
 
 async function writeCodexAppConfiguration(configuration) {
+  const effective = await readCodexAppConfiguration();
+  const edits = codexAppConfigEdits(configuration);
+  // Replacing a user table does not erase descendants inherited from other
+  // config layers. Materialize the selection and approval policy at those keys.
+  // Native requirements still apply independently; readback below remains mandatory.
+  for (const [appId, actual] of Object.entries(effective?.apps ?? {})) {
+    if (appId === "_default") continue;
+    const app = configuration.apps?.[appId];
+    const path = "apps." + codexConfigPathSegment(appId);
+    if (app === undefined) {
+      edits.push({ keyPath: path + ".enabled", mergeStrategy: "replace", value: false });
+      continue;
+    }
+    if (app.enabled === false) continue;
+    for (const [toolName, tool] of Object.entries(actual?.tools ?? {})) {
+      for (const [field, defaultField] of [
+        ["enabled", "default_tools_enabled"],
+        ["approval_mode", "default_tools_approval_mode"],
+      ]) {
+        const expected = app.tools?.[toolName]?.[field] ?? app[defaultField];
+        if (tool[field] == null || expected === undefined) continue;
+        edits.push({
+          keyPath: path + ".tools." + codexConfigPathSegment(toolName) + "." + field,
+          mergeStrategy: "replace",
+          value: expected,
+        });
+      }
+    }
+    for (const [linkId, link] of Object.entries(actual?.links ?? {})) {
+      for (const field of ["default_tools_approval_mode", "approvals_reviewer"]) {
+        if (link[field] == null || app[field] === undefined) continue;
+        edits.push({
+          keyPath: path + ".links." + codexConfigPathSegment(linkId) + "." + field,
+          mergeStrategy: "replace",
+          value: app[field],
+        });
+      }
+    }
+  }
   await codexAppServerRequest("config/batchWrite", {
-    edits: codexAppConfigEdits(configuration),
+    edits,
     reloadUserConfig: true,
   });
 }
