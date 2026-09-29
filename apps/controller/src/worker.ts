@@ -2548,20 +2548,27 @@ export class ControllerWorker {
     claim: ClaimedWork,
     result: RevisionDispatchResult,
   ): Promise<void> {
+    const runtimeFailure =
+      result.outcome === "pending"
+        ? safeRuntimeFailureEvidence(result.data?.runtimeFailure)
+        : undefined;
     const expired =
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
-    let resolved: RevisionDispatchResult = expired
-      ? {
-          ...result,
-          outcome: "permanent",
-          code: "CONVERGENCE_DEADLINE_EXCEEDED",
-          data: convergenceDeadlineResultData(
-            this.convergenceTimeoutMs,
-            safeRuntimeFailureEvidence(result.data?.runtimeFailure),
-          ),
-        }
-      : result;
+    // Runtime entrypoints publish AUTHENTICATION_FAILED only for provider 401/403
+    // or invalid-key rejections and then hold unready until restart, so waiting
+    // for the deadline cannot change the result. Other failures may recover.
+    let resolved: RevisionDispatchResult =
+      runtimeFailure?.code === "AUTHENTICATION_FAILED"
+        ? { outcome: "permanent", code: "RUNTIME_AUTHENTICATION_FAILED" }
+        : expired
+          ? {
+              ...result,
+              outcome: "permanent",
+              code: "CONVERGENCE_DEADLINE_EXCEEDED",
+              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+            }
+          : result;
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);
