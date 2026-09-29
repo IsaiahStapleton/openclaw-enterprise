@@ -228,6 +228,39 @@ test("Plugin approver translation keeps Agent, plugin, and exact scoped tool ove
   assert.throws(() => validatePolicies("openclaw", {}, [{ channel: "slack", id: "C123" }]));
 });
 
+test("Codex Plugin Driver admits only Agent-wide approvers; OpenClaw keeps plugin and tool overrides", () => {
+  const approver = { channel: "slack", id: "team:T123:user:U123" };
+  const toolId = "asdk_app_69a089a326dc8191b32a3f2553f5be2c/repos%2Fread";
+  const codex = new CodexPluginDriver();
+  const occ = new OCCPluginDriver();
+  // Codex approval requests carry no plugin or tool identity, so OpenClaw's Slack resolver
+  // denies every Codex request once any plugin list exists. Only the Agent default works.
+  assert.deepEqual(codex.policyCapabilities.approvers, {
+    agent: true,
+    plugin: false,
+    tools: false,
+  });
+  assert.deepEqual(occ.policyCapabilities.approvers, { agent: true, plugin: true, tools: true });
+  codex.validatePolicies(codexSelection(), [approver]);
+  for (const selection of [
+    codexSelection(linearPluginId, { approvers: [] }),
+    codexSelection(linearPluginId, { tools: { [toolId]: { approvers: [approver] } } }),
+    // A disabled plugin still renders its list into approvals.plugin.slack.plugins.
+    codexSelection(linearPluginId, { enabled: false, approvers: [approver] }),
+  ]) {
+    assert.throws(
+      () => codex.validatePolicies(selection, [approver]),
+      (error) =>
+        error.name === "PluginPolicyValidationError" &&
+        /does not support plugin or tool approvers.*Agent-wide pluginApprovers/.test(error.message),
+    );
+  }
+  occ.validatePolicies(
+    occSelection({ approvers: [approver], tools: { diffs: { approvers: [] } } }),
+    [approver],
+  );
+});
+
 test("OpenClaw plugin startup translation rejects unsupported policies", () => {
   for (const selection of [
     occSelection({ toolDefaults: { approval: "all_actions" } }),

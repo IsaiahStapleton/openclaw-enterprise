@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
+import {
+  CodexPluginDriver,
+  OCCPluginDriver,
+} from "../../apps/controller/src/drivers/plugin/index.ts";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import {
   apiRequests,
@@ -16,7 +19,8 @@ import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.
 test("Agent plugin approver selectors save inheritance and workspace-qualified users", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
-  const pluginDriver = new CodexPluginDriver();
+  // Plugin and tool overrides need a Driver that advertises them; Codex offers only the default.
+  const pluginDriver = new OCCPluginDriver();
   fixture.controller.registerDriver(pluginDriver);
   fixture.controller.selectDriver("plugin", pluginDriver.id);
   const namespace = await fixture.createNamespace("Slack directory picker", { ready: true });
@@ -33,17 +37,17 @@ test("Agent plugin approver selectors save inheritance and workspace-qualified u
   const agent = await fixture.createAgent(
     namespace.id,
     "Slack Directory Agent",
-    nativeValues("slack-directory", { harnessId: "codex", channels: { slack } }),
+    nativeValues("slack-directory", { channels: { slack } }),
     {
-      executionMode: "dedicated",
+      executionMode: "embedded",
       secretBindings: {
         SLACK_APP_TOKEN: { source: appSecret.ref, delivery: { type: "env" } },
         SLACK_BOT_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
       },
     },
   );
-  const pluginId = "codex-plugin:calendar@openai-curated-remote";
-  const toolId = "app_calendar/create_event";
+  const pluginId = "occ-plugin:diffs";
+  const toolId = "diffs";
   await fixture.updateAgent(namespace.id, agent.id, {
     configurationId: agent.configurationId,
     plugins: { [pluginId]: { enabled: true, tools: { [toolId]: { enabled: true } } } },
@@ -342,4 +346,37 @@ test("Unsaved default plugin approvers block deployment after leaving Plugins", 
     .getByText("Save or discard plugin changes before deploying.", { exact: true })
     .waitFor();
   assert.equal(await deploy.isDisabled(), true);
+});
+
+test("Codex Agents offer only default plugin approvers", async (t) => {
+  const { fixture, namespace } = await createRuntimeAuthFixture(t, "Codex plugin approvers");
+  const pluginDriver = new CodexPluginDriver();
+  fixture.controller.registerDriver(pluginDriver);
+  fixture.controller.selectDriver("plugin", pluginDriver.id);
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Codex Approver Agent",
+    nativeValues("codex-approvers"),
+    { executionMode: "embedded", harnessAuth: { method: "runtime" } },
+  );
+  const pluginId = "codex-plugin:calendar@openai-curated-remote";
+  const toolId = "app_calendar/create_event";
+  await fixture.updateAgent(namespace.id, agent.id, {
+    configurationId: agent.configurationId,
+    plugins: { [pluginId]: { enabled: true, tools: { [toolId]: { enabled: true } } } },
+  });
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "plugins");
+  await login(page, fixture, url.pathname + url.search);
+  // Codex approval requests carry no plugin or tool identity, so the API refuses those
+  // overrides and the Console must not offer them. The Agent default stays available.
+  await page.getByLabel("Default plugin approvers mode").waitFor();
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  const pluginDialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  await pluginDialog.getByRole("button", { name: pluginId, exact: true }).click();
+  const toolRow = pluginDialog.locator(`details.plugin-tool-row[data-tool="${toolId}"]`);
+  await toolRow.locator("summary").click();
+  await toolRow.getByLabel(`${toolId} require approval for`).waitFor();
+  assert.equal(await pluginDialog.getByLabel(`${pluginId} plugin approvers mode`).count(), 0);
+  assert.equal(await toolRow.getByLabel(`${toolId} tool approvers mode`).count(), 0);
 });

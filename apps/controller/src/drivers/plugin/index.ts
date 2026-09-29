@@ -360,7 +360,11 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
   // TODO: gate all_actions/write_actions on enforceable session constraints before this draft ships.
   // A permissive native session can bypass app-level review despite translation.
   readonly policyCapabilities: PluginPolicyCapabilities = deepFreeze({
-    approvers: { agent: true, plugin: true, tools: true },
+    // TODO(policySubject): advertise plugin and tool approvers once upstream Codex plugin approval
+    // requests carry policySubject. Until then OpenClaw's Slack resolver returns no approvers for a
+    // subject-less request whenever approvals.plugin.slack.plugins is set, so only the Agent-wide
+    // list can approve Codex plugin calls.
+    approvers: { agent: true, plugin: false, tools: false },
     toolDefaults: {
       enabled: true,
       approval: ["provider_default", "all_actions", "write_actions", "none"],
@@ -376,6 +380,17 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
 
   validatePolicies(selections: PluginDesiredState, defaultApprovers?: PluginApprovers): void {
     this.validate("codex", selections, defaultApprovers);
+    // Admission-only check: runtime translation still renders already-admitted revisions unchanged.
+    // TODO(policySubject): remove with the capability gate above.
+    if (
+      Object.values(selections).some(
+        (selection) =>
+          selection.approvers !== undefined ||
+          Object.values(selection.tools ?? {}).some((tool) => tool.approvers !== undefined),
+      )
+    ) {
+      throw new PluginPolicyValidationError("approvers");
+    }
   }
   private readonly catalogReader: CodexPluginCatalogReader | undefined;
   private readonly catalogSource: "hosted" | "openai-curated";
