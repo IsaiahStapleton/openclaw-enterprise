@@ -333,10 +333,10 @@ and Secrets survive. Deletion releases its name;
 
 Teardown retries are bounded. After permanent failure or exhaustion, the Agent
 stays `deleting`. Once the cause is corrected, the initiating caller can repeat
-DELETE to replenish the attempt budget. OCC and the worker recheck permission;
-another actor cannot take over. Work identity and prior failure audits remain,
-and the retry adds an audit event. Namespace deletion has the same
-[recovery](namespaces.md#failure-semantics-and-limitations).
+DELETE to replenish the attempt budget. OCC and the worker recheck permission.
+Another permitted actor takes over only once the initiator lost permission.
+Prior failure audits remain; the retry adds an audit event. Namespace deletion
+has similar [recovery](namespaces.md#failure-semantics-and-limitations), without takeover.
 
 ## Editable configuration
 
