@@ -2752,10 +2752,14 @@ test("Agent creation withholds Dedicated OpenClaw unless the Installation report
   await page.getByLabel("Harness", { exact: true }).selectOption("codex");
   assert.equal(await mode.locator('option[value="dedicated"]').isDisabled(), false);
 
-  // The API refuses the same choice at deploy admission, naming the missing support.
-  const agent = await fixture.createAgent(namespace.id, "Refused native", nativeValues("refused"), {
-    executionMode: "dedicated",
-  });
+  // The API refuses the same choice at deploy admission, naming the missing support. The
+  // operator declaration is startup-only: an Agent Configuration cannot carry it in.
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Refused native",
+    { ...nativeValues("refused"), runtime: { nativeWorkerSupport: "custom-image" } },
+    { executionMode: "dedicated" },
+  );
   const deployed = await fixture.request(
     "POST",
     `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
@@ -2765,6 +2769,25 @@ test("Agent creation withholds Dedicated OpenClaw unless the Installation report
   assert.match(
     deployed.body.error.message,
     /required worker placement \(cloudWorkers\.requiredProfile\).*docs\/reference\/harness-execution\.md#native-worker-support/,
+  );
+  assert.equal(
+    (await fixture.request("GET", "/installation")).data.capabilities?.nativeWorkers,
+    undefined,
+  );
+
+  // Bootstrap, the only Installation write, cannot declare the capability either.
+  const other = await createConsoleAppFixture(t);
+  const declared = await other.request("POST", "/installation/bootstrap", {
+    body: {
+      name: "Declared runtime",
+      capabilities: { nativeWorkers: { support: "custom-image" } },
+    },
+  });
+  assert.equal(declared.status, 400, JSON.stringify(declared.body));
+  await other.bootstrap();
+  assert.equal(
+    (await other.request("GET", "/installation")).data.capabilities?.nativeWorkers,
+    undefined,
   );
 });
 
