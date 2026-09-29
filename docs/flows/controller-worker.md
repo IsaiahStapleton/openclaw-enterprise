@@ -175,12 +175,12 @@ a pending observation defers convergence.
 
 `apps/controller/src/worker.ts:ControllerWorker.prepareRevision` checks Compute's
 `requiresStoppedPredecessors` capability. When selected, it loads earlier
-snapshots, closes their credential sessions, and calls `stopRevision` under the
-claim heartbeat before preparing the candidate. This includes failed candidates;
-a release failure prevents preparation. The per-Agent queue serializes the work,
-and the dispatch guard prevents maintenance from recreating a predecessor between
-observations. Durable storage remains Driver-owned. This path accepts downtime
-and recovers through a new higher revision.
+snapshots, including failed candidates, closes their credential sessions, and
+calls `stopRevision` under the claim heartbeat before preparing the candidate; a
+release failure prevents preparation. Later passes re-stop after failures and
+doubling lease intervals. The per-Agent queue serializes work, and the dispatch
+guard keeps maintenance from recreating a predecessor. This path accepts
+downtime; recovery needs a higher revision.
 
 The worker validates Compute's startup plugin warning codes and selection keys
 against the immutable revision. Compute must verify failed selections are disabled
@@ -272,15 +272,16 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.defer`,
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
-Pending convergence requeues with backoff and refunds the attempt. Dependency
-failures consume attempts; permanent failure, exhaustion, deadline, or
-`AUTHENTICATION_FAILED` evidence terminates work. See [outcomes](../reference/controller.md) and
+Pending convergence refunds the attempt, requeuing unready revisions after 500 ms
+and others with backoff. Dependency failures consume attempts; permanent failure,
+exhaustion, deadline, or `AUTHENTICATION_FAILED` terminates work. See
+[outcomes](../reference/controller.md) and
 [timing controls](../reference/settings/operations.md#controller-worker-environment).
 
 `ControllerWorker.processRepositoryCleanup` defers every incomplete pass at the
-Driver interval, including closing sessions and failed runtime retirement.
-It releases the claim without consuming retries, freeing the worker between
-attempts. Obligations survive; lease loss aborts the pass.
+Driver interval, including closing sessions and failed runtime retirement,
+releasing the claim without consuming retries. Obligations survive; lease loss
+aborts the pass.
 
 Terminal rows store `reason_code` and optional `result_data`: `{ warnings: [...] }`
 for success; required `timeoutMs` and optional `runtimeFailure` for convergence

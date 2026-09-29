@@ -79,6 +79,12 @@ settings:
 - `readOnlyRootFilesystem: true`.
 - Explicit CPU and memory requests and limits for each container.
 
+Tenant Gateway and Agent Pods that set `fsGroup: 1000` for private state
+(including the Harness workspace and node-state claims) also set
+`fsGroupChangePolicy: OnRootMismatch`. The kubelet then changes volume ownership
+only when the volume root does not already match, instead of walking every file
+on each Pod start.
+
 Tenant gateway and Agent bounds come from `resources.gateway` and
 `resources.agent` in the selected Compute Driver configuration. Controller API,
 worker and initialization containers use the chart's explicit `resources`
