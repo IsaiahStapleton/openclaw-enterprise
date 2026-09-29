@@ -112,9 +112,28 @@ from the default StorageClass, mounted only by its Harness:
 | `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
-Container restarts replay the node Secret's setup code, which expires ten minutes
-after preparation mints it. A node with a saved device token for the same Gateway
-reconnects with that token; one without saved credentials rejects the expired code.
+The node Secret's setup code expires ten minutes after preparation mints it. A
+node with a saved device token for the same Gateway reconnects with that token;
+one without saved credentials rejects an expired code.
+
+A Deployment-backed Codex Harness renders this wiring from its first start. It
+mounts the node Secret as an optional volume at `/run/openclaw-node-setup` that
+projects only `setupCode`, so the Harness starts before the Secret exists.
+Codex starts at once; the node starts when the file holds a complete code.
+After writing the Secret, preparation annotates the running Harness Pod. That
+Pod update makes the kubelet refresh the volume within about two seconds
+instead of on its periodic resync of about a minute, so enrollment restarts
+neither the Harness nor its Gateway. The worker therefore needs `patch` on Pods
+in tenant namespaces.
+
+The file mode is `0440`. Secret volume files are root-owned and the kubelet
+grants the Pod `fsGroup` read access, so `0400` would behave the same. Codex
+runs as the same user and group and can read the code, as it can already read
+the node's command line. Once readiness records the device ID, the controller
+removes `setupCode` from the Secret and the kubelet removes the file; the node
+then reconnects with its saved device token, and preparation does not mint a
+new code for it. Native workers and SandboxDriver Harnesses receive the code in
+their environment, keep it for restarts, and are replaced to attach the node.
 Installations that enrolled one node per revision enroll a new Agent device once,
 at the first replacement; retiring each earlier revision deletes its node Secret.
 Sessions stay on the private Gateway claim. Selected generated-image bytes return

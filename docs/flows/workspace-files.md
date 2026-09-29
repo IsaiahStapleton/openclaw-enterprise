@@ -190,9 +190,9 @@ ownership and UID, then remove that revision's endpoint before its policy. See t
 `gateway/node-enrollment-client.ts:createGatewayNodeEnrollment` after Gateway
 readiness. An Agent-owned Secret per Harness kind keeps the setup code and
 device ID; preparation renews expired setup codes.
-Reconciliation attaches the node through a `Recreate` Harness deployment.
-Replacing the Harness restarts its Gateway; `prepareRevision` keeps deployment
-pending until that Gateway is ready, then queries enrollment.
+A Codex Harness Deployment reads the code from an optional Secret volume, so
+enrollment restarts neither workload ([Harness storage](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage)).
+Other Harnesses are replaced, restarting their Gateway.
 
 - Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
   `dir.list`, `workspace.memory`, and `workspace.skills`. Gateway admits these
@@ -201,8 +201,8 @@ pending until that Gateway is ready, then queries enrollment.
   (`0700`, nonroot initializer) across revisions until Agent deletion.
 - `AGENT_WITH_NODE_ENTRYPOINT` runs native `setup --baseline` before supervising
   Codex and the node under `tini`. It passes admitted bootstrap options, preserves
-  existing edits, and stops on setup failure. Only the node receives its setup
-  code; neither process receives OCC's key. Codex preserves the managed PATH.
+  existing edits, and stops on setup failure. Codex starts at once with the
+  managed PATH; the node waits for a complete code. Neither gets OCC's key.
 - Activation reads the exact revision's device ID and sets
   `file-transfer.config.workspaces.main` in runtime configuration before Gateway
   starts. Candidate preparation preserves the serving binding; losing it fails

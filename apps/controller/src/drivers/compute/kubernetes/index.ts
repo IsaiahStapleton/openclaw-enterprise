@@ -565,6 +565,14 @@ const NODE_STATE_VOLUME = "openclaw-node-state";
 // so Agent deletion removes every node Secret preparation can create.
 const WORKSPACE_NODE_HARNESS_IDS: readonly string[] = ["codex", "openclaw"];
 const NODE_STATE_PATH = "/home/node/.openclaw-node";
+// A Deployment-backed Codex Harness reads its one-shot node setup code from an
+// optional Secret volume, so the Harness can start before the Secret exists.
+const NODE_SETUP_VOLUME = "openclaw-node-setup";
+const NODE_SETUP_DIRECTORY = "/run/openclaw-node-setup";
+const NODE_SETUP_FILE = "setup-code";
+// Changing this Pod annotation is a Pod update event: the kubelet syncs the Pod
+// and refreshes its Secret volumes at once instead of on its ~1 min resync.
+const NODE_SETUP_ANNOTATION = "openclaw.dev/workspace-node-setup";
 const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
   ["state", "/home/node/.openclaw/state"],
   ["agent", "/home/node/.openclaw/agents/main/agent"],
@@ -3256,7 +3264,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
       await this.reconcileHarnessRoute(revision, namespace);
       const launch = await this.lifecycle.beforeWorkloadStart(revision);
       launchPrepared = true;
-      const node = await this.prepareWorkspaceNode(revision, namespace);
+      // A Deployment-backed Codex Harness renders its node wiring from its first
+      // start and receives the setup code through a file, so enrollment does not
+      // replace the Harness or restart its Gateway. Native workers and
+      // SandboxDriver Harnesses still add the node once the setup exists.
+      const nodeSetupFile =
+        nativeRuntime === undefined && sandboxDriver?.provisionHarness === undefined;
+      const node = nodeSetupFile
+        ? await this.workspaceNodeWiring(revision, namespace)
+        : await this.prepareWorkspaceNode(revision, namespace);
       const agentDeployment = this.deployment(
         revisionName,
         revisionOwnership,
@@ -3280,10 +3296,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
       );
       if (node !== undefined) {
         if (nativeRuntime === undefined) {
-          this.addWorkspaceNode(agentDeployment, node.name, node.ca, revision);
+          this.addWorkspaceNode(
+            agentDeployment,
+            node.name,
+            node.ca,
+            revision,
+            nodeSetupFile,
+            workspaceSetup,
+          );
         } else {
           this.addNativeWorker(agentDeployment, node.name, node.ca, revision);
         }
+      }
+      if (nodeSetupFile) {
+        await this.prepareWorkspaceNode(revision, namespace, true);
       }
       if (sandboxDriver?.provisionHarness !== undefined) {
         const sandboxContext = await this.sandboxNamespaceContext(
@@ -3696,13 +3722,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
         const launch = await this.lifecycle.beforeWorkloadStart(revision);
         try {
           const replacement = renderAgentDeployment(launch.environment);
-          const node = await this.prepareWorkspaceNode(revision, namespace);
+          const nodeSetupFile = nativeRuntime === undefined;
+          const node = nodeSetupFile
+            ? await this.workspaceNodeWiring(revision, namespace)
+            : await this.prepareWorkspaceNode(revision, namespace);
           if (node !== undefined) {
             if (nativeRuntime === undefined) {
-              this.addWorkspaceNode(replacement, node.name, node.ca, revision);
+              this.addWorkspaceNode(
+                replacement,
+                node.name,
+                node.ca,
+                revision,
+                nodeSetupFile,
+                workspaceSetup,
+              );
             } else {
               this.addNativeWorker(replacement, node.name, node.ca, revision);
             }
+          }
+          if (nodeSetupFile) {
+            await this.prepareWorkspaceNode(revision, namespace, true);
           }
           await this.reconcile(replacement, { ...ownership, revisionId: revision.id }, namespace);
         } catch (error) {
@@ -6092,17 +6131,40 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
-  private async prepareWorkspaceNode(
+  // The node wiring a Harness template carries. It depends only on the Agent
+  // and the controller trust bundle, never on the setup Secret, so a
+  // file-delivered Harness renders the same template before and after enrollment.
+  private async workspaceNodeWiring(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
   ): Promise<{ readonly name: string; readonly ca?: string } | undefined> {
-    const enrollment = this.nodeEnrollment;
-    const url = this.getGatewayEndpoint(revision);
-    if (enrollment === undefined || this.options.runtime === undefined || url === undefined) {
+    if (
+      this.nodeEnrollment === undefined ||
+      this.options.runtime === undefined ||
+      this.getGatewayEndpoint(revision) === undefined
+    ) {
       return undefined;
     }
-    const name = this.workspaceNodeName(revision);
-    const ownership = this.workspaceNodeOwnership(revision);
+    // The namespace policy lets the Harness reach its Gateway once the setup lands.
+    await this.reconcileWorkspaceNodeNetworkPolicy(revision, namespace);
+    const ca = await this.readNodeCa?.();
+    return { name: this.workspaceNodeName(revision), ...(ca === undefined ? {} : { ca }) };
+  }
+
+  // Only a Deployment-backed Codex Harness reads its setup code from a file.
+  // Native workers and SandboxDriver Harnesses keep the environment reference,
+  // which needs the key for as long as the Harness may restart.
+  private workspaceNodeSetupFile(revision: AgentRevision): boolean {
+    return (
+      revision.harness.id !== "openclaw" &&
+      this.sandboxDriverForRevision(revision)?.provisionHarness === undefined
+    );
+  }
+
+  private async reconcileWorkspaceNodeNetworkPolicy(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
     const namespaceOwnership = { namespaceId: revision.namespaceId };
     const nodePolicy = this.workspaceNodeNetworkPolicy(namespaceOwnership, namespace);
     const existingNodePolicy = await this.getOwned(
@@ -6134,12 +6196,69 @@ export class KubernetesComputeDriver implements ComputeDriver {
       namespaceOwnership,
       namespace,
     );
+  }
+
+  // Sync the running Harness Pods now so their optional setup volume shows the
+  // new code within seconds. Without this update event the kubelet refreshes
+  // the volume only on its periodic resync (measured 58-84 s on k3d, #612).
+  private async refreshWorkspaceNodeSetup(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+    setupId: string,
+  ): Promise<void> {
+    const clients = await this.clients(namespace.plane);
+    for (const pod of await this.revisionPods(revision, namespace, "agent")) {
+      const name = required(asRecord(pod.metadata)?.name, "Harness Pod name");
+      try {
+        await this.request(
+          () =>
+            clients.core.patchNamespacedPod(
+              {
+                name,
+                namespace: namespace.name,
+                // The value only has to change per setup; it names no secret.
+                body: {
+                  metadata: { annotations: { [NODE_SETUP_ANNOTATION]: sha256Hex(setupId, 12) } },
+                },
+              },
+              this.mergePatchOptions,
+            ),
+          { mutating: true },
+        );
+      } catch (error) {
+        // A Pod that is already gone mounts the current Secret when it is replaced.
+        if (numericErrorStatus(error) !== 404) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  private async prepareWorkspaceNode(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+    setupFile = false,
+  ): Promise<{ readonly name: string; readonly ca?: string } | undefined> {
+    const enrollment = this.nodeEnrollment;
+    const url = this.getGatewayEndpoint(revision);
+    if (enrollment === undefined || this.options.runtime === undefined || url === undefined) {
+      return undefined;
+    }
+    const name = this.workspaceNodeName(revision);
+    const ownership = this.workspaceNodeOwnership(revision);
+    if (!setupFile) {
+      await this.reconcileWorkspaceNodeNetworkPolicy(revision, namespace);
+    }
     const existing = await this.getOwned("Secret", name, namespace, ownership);
     const expired =
       existing !== undefined &&
       Number(Buffer.from(existing.data?.expiresAtMs ?? "", "base64").toString("utf8")) <=
         Date.now();
-    if (existing === undefined || expired) {
+    // A file-delivered node that has paired reconnects with its saved device
+    // token and no setup code (readiness removed the code), so it needs no new setup.
+    const paired =
+      setupFile && Buffer.from(existing?.data?.deviceId ?? "", "base64").toString("utf8") !== "";
+    if (existing === undefined || (expired && !paired)) {
       const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
       const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
       // Plugin initialization can precede the first Gateway. Start the Harness
@@ -6221,6 +6340,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
           { mutating: true },
         );
       }
+      if (setupFile) {
+        await this.refreshWorkspaceNodeSetup(revision, namespace, setup.setupId);
+      }
     }
     const ca = await this.readNodeCa?.();
     return { name, ...(ca === undefined ? {} : { ca }) };
@@ -6231,8 +6353,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
     name: string,
     ca: string | undefined,
     revision: AgentRevision,
+    setupFile: boolean,
+    workspaceSetup: WorkspaceSetup | undefined,
   ): void {
-    const { container, variables } = this.addNodeEnrollmentState(deployment, name, ca, revision);
+    const { container, variables } = this.addNodeEnrollmentState(
+      deployment,
+      name,
+      ca,
+      revision,
+      setupFile,
+    );
     const defaults = asRecord(asRecord(revision.configuration.agents)?.defaults);
     variables.push({
       name: "OPENCLAW_WORKSPACE_BOOTSTRAP",
@@ -6245,7 +6375,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     // Independent restarts can orphan descendants of a failed wrapper. Tini
     // reaps them, including when a Sandbox provider runs this below PID 1.
     container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
-    container.args = nodeProgramArguments(AGENT_WITH_NODE_ENTRYPOINT);
+    // Keep the workspace setup completion guard the plain Harness program runs:
+    // container restarts do not rerun the initializing initContainer.
+    container.args = nodeProgramArguments(
+      (workspaceSetup === undefined
+        ? ""
+        : workspaceSetupVerifier(workspaceSetup, "/home/node/workspace")) +
+        AGENT_WITH_NODE_ENTRYPOINT,
+    );
   }
 
   private addNativeWorker(
@@ -6254,7 +6391,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ca: string | undefined,
     revision: AgentRevision,
   ): void {
-    const { container, variables } = this.addNodeEnrollmentState(deployment, name, ca, revision);
+    const { container, variables } = this.addNodeEnrollmentState(
+      deployment,
+      name,
+      ca,
+      revision,
+      false,
+    );
     variables.push(
       { name: "TMPDIR", value: "/tmp/openclaw-native-worker" },
       { name: "NODE_COMPILE_CACHE", value: NATIVE_WORKER_COMPILE_CACHE },
@@ -6277,18 +6420,44 @@ export class KubernetesComputeDriver implements ComputeDriver {
     name: string,
     ca: string | undefined,
     revision: AgentRevision,
+    setupFile: boolean,
   ): { readonly container: KubernetesRecord; readonly variables: V1EnvVar[] } {
     const pod = asRecord(asRecord(deployment.spec?.template)?.spec)!;
     const container = (pod.containers as KubernetesRecord[])[0]!;
     const variables = container.env as V1EnvVar[];
     variables.push(
-      {
-        name: "OPENCLAW_NODE_SETUP_CODE",
-        valueFrom: { secretKeyRef: { name, key: "setupCode" } },
-      },
+      setupFile
+        ? { name: "OPENCLAW_NODE_SETUP_PATH", value: `${NODE_SETUP_DIRECTORY}/${NODE_SETUP_FILE}` }
+        : {
+            name: "OPENCLAW_NODE_SETUP_CODE",
+            valueFrom: { secretKeyRef: { name, key: "setupCode" } },
+          },
       { name: "OPENCLAW_NODE_STATE_DIR", value: NODE_STATE_PATH },
       ...(ca === undefined ? [] : [{ name: "OPENCLAW_NODE_CA_PEM", value: ca }]),
     );
+    if (setupFile) {
+      // The Secret may not exist yet: optional lets the Harness start without it,
+      // and the kubelet adds or removes the file as the key comes and goes.
+      // Only setupCode is projected; the setup and device ids stay in the API.
+      // Secret files are root-owned and the kubelet grants the Pod fsGroup read
+      // access, so 0400 would still behave as 0440; say 0440 plainly. Codex runs
+      // as the same uid and gid and can read the code. It is one-shot, expires,
+      // and readiness removes it from the Secret once the device is recorded.
+      (pod.volumes as V1Volume[]).push({
+        name: NODE_SETUP_VOLUME,
+        secret: {
+          secretName: name,
+          optional: true,
+          defaultMode: 0o440,
+          items: [{ key: "setupCode", path: NODE_SETUP_FILE }],
+        },
+      });
+      (container.volumeMounts as V1VolumeMount[]).push({
+        name: NODE_SETUP_VOLUME,
+        mountPath: NODE_SETUP_DIRECTORY,
+        readOnly: true,
+      });
+    }
     (pod.volumes as V1Volume[]).push({
       name: NODE_STATE_VOLUME,
       persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(revision.agentId) },
@@ -6358,7 +6527,37 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     }
     const read = (key: string) => Buffer.from(secret.data?.[key] ?? "", "base64").toString("utf8");
     const deviceId = read("deviceId");
+    // A file-delivered setup code is readable by every process in the Harness,
+    // Codex included. Once the device is recorded the node reconnects with its
+    // saved device token, so drop the code; the kubelet then removes the file.
+    const dropSetupCode = this.workspaceNodeSetupFile(revision);
+    const withoutSetupCode = (data: Record<string, string>) =>
+      dropSetupCode
+        ? Object.fromEntries(Object.entries(data).filter(([key]) => key !== "setupCode"))
+        : data;
+    const clients = await this.clients(namespace.plane);
+    const replaceSecret = (data: Record<string, string>) => {
+      required(secret.metadata.resourceVersion, "Workspace node Secret resource version");
+      return this.request(
+        () =>
+          clients.core.replaceNamespacedSecret({
+            name,
+            namespace: namespace.name,
+            body: {
+              apiVersion: "v1",
+              kind: "Secret",
+              metadata: secret.metadata,
+              type: "Opaque",
+              data,
+            },
+          }),
+        { mutating: true },
+      );
+    };
     if (deviceId) {
+      if (dropSetupCode && secret.data?.setupCode !== undefined) {
+        await replaceSecret(withoutSetupCode(secret.data));
+      }
       return enrollment.isConnected(url, deviceId, this.operationSignal());
     }
     const setupId = required(read("setupId"), "Workspace node setup ID");
@@ -6374,25 +6573,11 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       }
       return false;
     }
-    required(secret.metadata.resourceVersion, "Workspace node Secret resource version");
-    const clients = await this.clients(namespace.plane);
-    await this.request(
-      () =>
-        clients.core.replaceNamespacedSecret({
-          name,
-          namespace: namespace.name,
-          body: {
-            apiVersion: "v1",
-            kind: "Secret",
-            metadata: secret.metadata,
-            type: "Opaque",
-            data: {
-              ...secret.data,
-              deviceId: Buffer.from(observation.deviceId, "utf8").toString("base64"),
-            },
-          },
-        }),
-      { mutating: true },
+    await replaceSecret(
+      withoutSetupCode({
+        ...secret.data,
+        deviceId: Buffer.from(observation.deviceId, "utf8").toString("base64"),
+      }),
     );
     return observation.connected;
   }

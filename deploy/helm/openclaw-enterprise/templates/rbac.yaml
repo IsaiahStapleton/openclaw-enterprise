@@ -63,9 +63,10 @@ rules:
   - apiGroups: [""]
     resources: [configmaps, serviceaccounts, services, resourcequotas, limitranges]
     verbs: [get, list, create, patch, delete]
+  # patch: an annotation on a running Harness Pod syncs its node setup volume at once.
   - apiGroups: [""]
     resources: [pods]
-    verbs: [get, list, watch]
+    verbs: [get, list, watch, patch]
   - apiGroups: [""]
     resources: [pods/proxy]
     verbs: [get]

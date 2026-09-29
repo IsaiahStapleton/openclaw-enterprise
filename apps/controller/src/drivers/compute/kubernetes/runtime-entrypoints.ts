@@ -2314,15 +2314,24 @@ startAuthenticatedCodex();
 // It serves files while Codex restarts. Reuse Codex login/plugin initialization
 // for each Codex start; other Harnesses need their own execution composition.
 // Codex starts from bounded program pieces, like the container that runs this.
+//
+// A Deployment-backed Harness starts before its node setup exists and reads the
+// code from OPENCLAW_NODE_SETUP_PATH, an optional Secret volume. Codex starts at
+// once; the node slot starts when the file holds a complete code. The controller
+// removes the code after pairing, so a later start without it reconnects with
+// the saved device identity. No deadline here: the controller's convergence
+// deadline governs a setup that never arrives. SandboxDriver Harnesses still
+// receive OPENCLAW_NODE_SETUP_CODE in the environment.
 export const AGENT_WITH_NODE_ENTRYPOINT = String.raw`
-const { mkdirSync, writeFileSync, rmSync } = require("node:fs");
+const { mkdirSync, readFileSync, writeFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
-const { spawn, spawnSync } = require("node:child_process");
+const { execFile, spawn, spawnSync } = require("node:child_process");
 ${WORKSPACE_ASSET_HELPERS}
 ${startupPhaseHelper("agent")}
 const state = process.env.OPENCLAW_NODE_STATE_DIR;
-const setupCode = process.env.OPENCLAW_NODE_SETUP_CODE;
-if (!state || !setupCode) throw new Error("The workspace node is not provisioned.");
+const setupEnvironment = process.env.OPENCLAW_NODE_SETUP_CODE;
+const setupPath = process.env.OPENCLAW_NODE_SETUP_PATH;
+if (!state || (!setupEnvironment && !setupPath)) throw new Error("The workspace node is not provisioned.");
 mkdirSync(state, { recursive: true });
 initializeRuntimeAssets();
 publishAgentPluginSkillPath();
@@ -2360,16 +2369,55 @@ if (baseline.error) throw baseline.error;
 if (baseline.status !== 0) throw new Error("Workspace initialization failed.");
 const codexEnv = { ...process.env, PATH: harnessPath };
 delete codexEnv.OPENCLAW_NODE_SETUP_CODE;
+delete codexEnv.OPENCLAW_NODE_SETUP_PATH;
 delete codexEnv.OPENCLAW_NODE_CA_PEM;
 delete codexEnv.OPENCLAW_NODE_STATE_DIR;
 delete codexEnv.OPENCLAW_WORKSPACE_BOOTSTRAP;
+const nodeCommands = ["--commands", "file.fetch,file.stat,file.write,file.create,dir.list,workspace.memory,workspace.skills"];
+// The kubelet swaps Secret volume contents atomically, but an empty, truncated
+// or otherwise undecodable code is treated as absent and never started.
+function readSetupCode() {
+  if (setupEnvironment) return setupEnvironment;
+  let code;
+  try {
+    code = readFileSync(setupPath, "utf8").trim();
+  } catch {
+    return undefined;
+  }
+  const encoded = code.toLowerCase().startsWith("oc-pair://") ? code.slice("oc-pair://".length) : code;
+  if (!/^[A-Za-z0-9_-]+$/u.test(encoded)) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    return payload !== null && typeof payload === "object" && !Array.isArray(payload) ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+// "unknown" until checked; pairing can create the identity, so a start with a
+// code resets it. Only a missing code triggers the check.
+let savedIdentity = "unknown";
+function checkSavedIdentity() {
+  savedIdentity = "checking";
+  execFile(process.execPath, ["/app/openclaw.mjs", "node", "identity", "--json"],
+    { env: nodeEnv, timeout: 30_000 }, (error, stdout) => {
+      let deviceId;
+      try { deviceId = JSON.parse(stdout).deviceId; } catch {}
+      savedIdentity = !error && /^[a-f0-9]{64}$/u.test(deviceId ?? "") ? "present" : "absent";
+    });
+}
+let nodeSetupWait;
+function nodeArguments() {
+  const code = readSetupCode();
+  if (code !== undefined) {
+    savedIdentity = "unknown";
+    return ["/app/openclaw.mjs", "node", "run", "--pair-if-needed", code, ...nodeCommands];
+  }
+  if (savedIdentity === "present") return ["/app/openclaw.mjs", "node", "run", ...nodeCommands];
+  if (savedIdentity === "unknown") checkSavedIdentity();
+  return undefined;
+}
 const processes = [
-  {
-    name: "workspace node",
-    args: ["/app/openclaw.mjs", "node", "run", "--pair-if-needed", setupCode,
-      "--commands", "file.fetch,file.stat,file.write,file.create,dir.list,workspace.memory,workspace.skills"],
-    env: nodeEnv,
-  },
+  { name: "workspace node", args: nodeArguments, env: nodeEnv },
   { name: "Codex", args: ${JSON.stringify(["-e", ...nodeProgramArguments(AGENT_RUNTIME_ENTRYPOINT)])}, env: codexEnv },
 ];
 let stopping = false;
@@ -2380,7 +2428,16 @@ function killGroup(child, signal) {
 }
 function start(slot) {
   if (stopping) return;
-  const child = spawn(process.execPath, slot.args, {
+  const args = typeof slot.args === "function" ? slot.args() : slot.args;
+  if (args === undefined) {
+    slot.timer = setTimeout(() => start(slot), 250);
+    return;
+  }
+  if (typeof slot.args === "function" && nodeSetupWait !== undefined) {
+    logStartupPhase("node-setup", nodeSetupWait);
+    nodeSetupWait = undefined;
+  }
+  const child = spawn(process.execPath, args, {
     env: slot.env, stdio: "inherit", detached: true,
   });
   slot.child = child;
@@ -2415,7 +2472,9 @@ function stop(signal) {
 process.on("SIGTERM", () => stop("SIGTERM"));
 process.on("SIGINT", () => stop("SIGINT"));
 logStartupPhase("supervisor-spawn", startupPhaseOrigin);
-for (const slot of processes) start(slot);
+nodeSetupWait = Date.now();
+// Codex first: it does not wait for the node setup.
+for (const slot of [...processes].reverse()) start(slot);
 `;
 
 export const NATIVE_WORKER_ENTRYPOINT = String.raw`
