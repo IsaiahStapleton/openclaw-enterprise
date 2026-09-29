@@ -7161,34 +7161,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         // Preview access belongs to the Agent lifecycle, including enabling it
         // after the tenant namespace has already been provisioned.
         await this.reconcile(
-          {
-            apiVersion: "networking.k8s.io/v1",
-            kind: "NetworkPolicy",
-            metadata: { ...publicRoute.metadata },
-            spec: {
-              podSelector: {
-                matchLabels: {
-                  "openclaw.dev/agent": revision.agentId,
-                  "openclaw.dev/workload-role": "gateway",
-                },
-              },
-              policyTypes: ["Ingress"],
-              ingress: [
-                {
-                  from: [
-                    this.peer({
-                      namespace: routing.envoyNamespace,
-                      podLabels: {
-                        "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
-                        "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
-                      },
-                    }),
-                  ],
-                  ports: [{ protocol: "TCP", port: this.options.network.gatewayPort + 1 }],
-                },
-              ],
-            },
-          },
+          this.gatewaySandboxNetworkPolicy(revision, publicRoute.metadata, routing, gateway),
           ownership,
           namespace,
         );
@@ -7196,6 +7169,48 @@ export class KubernetesComputeDriver implements ComputeDriver {
       await this.reconcile(policy, ownership, namespace);
       await this.reconcile(publicRoute, ownership, namespace);
     }
+  }
+
+  /** Admits public preview traffic to the serving Gateway's sandbox listener.
+   * A serving Gateway from a pre-profile template keeps the profile-free grant
+   * until activation replaces it and this route is reconciled again. */
+  private gatewaySandboxNetworkPolicy(
+    revision: AgentRevision,
+    metadata: ManagedKubernetesObject["metadata"],
+    routing: KubernetesGatewayRoutingOptions,
+    servingGateway: ManagedKubernetesObject,
+  ): ManagedKubernetesObject {
+    const selector = ordinaryNetworkPolicySelector({
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/workload-role": "gateway",
+    });
+    const unprofiled =
+      asRecord(asRecord(asRecord(servingGateway.spec?.template)?.metadata)?.labels)?.[
+        NETWORK_PROFILE_LABEL
+      ] !== ORDINARY_NETWORK_PROFILE;
+    return {
+      apiVersion: "networking.k8s.io/v1",
+      kind: "NetworkPolicy",
+      metadata: { ...metadata },
+      spec: {
+        podSelector: unprofiled ? withoutNetworkProfile(selector) : selector,
+        policyTypes: ["Ingress"],
+        ingress: [
+          {
+            from: [
+              this.peer({
+                namespace: routing.envoyNamespace,
+                podLabels: {
+                  "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
+                  "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
+                },
+              }),
+            ],
+            ports: [{ protocol: "TCP", port: this.options.network.gatewayPort + 1 }],
+          },
+        ],
+      },
+    };
   }
 
   private codexRepositoryBrokerNetworkPolicy(

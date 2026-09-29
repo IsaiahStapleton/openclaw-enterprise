@@ -8923,6 +8923,43 @@ test("every ordinary allow policy requires the explicit network profile", () => 
   assert.deepEqual(runtime.spec.egress[1].ports, [{ protocol: "TCP", port: 8443 }]);
 });
 
+test("the sandbox preview ingress grant requires the profile once the serving Gateway carries it", () => {
+  const driver = createKubernetesComputeDriver(
+    routedOptions({
+      runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
+      gatewayRouting: {
+        ...gatewayRouting,
+        sandbox: { domain: "previews.example.test", publicPort: 9443 },
+      },
+    }),
+  );
+  const revision = profileNetworkRevision(driver, "dedicated");
+  const serving = profileNetworkWorkload(driver, revision, "gateway");
+  const labels = serving.spec.template.metadata.labels;
+  const metadata = {
+    name: "gateway-sandbox",
+    namespace: kubernetesGatewayNamespaceName(tenant.id),
+  };
+  const routing = driver.options.gatewayRouting;
+  const selector = driver.gatewaySandboxNetworkPolicy(revision, metadata, routing, serving).spec
+    .podSelector;
+  assert.equal(selector.matchLabels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+  assert.equal(selectorMatches(selector, labels), true);
+  for (const profile of UNAPPROVED_PROFILES) {
+    assert.equal(selectorMatches(selector, withProfile(labels, profile)), false);
+  }
+  // A serving Gateway from a pre-profile template keeps preview ingress until
+  // activation replaces it.
+  const legacy = structuredClone(serving);
+  legacy.spec.template.metadata.labels = withProfile(labels, undefined);
+  const legacySelector = driver.gatewaySandboxNetworkPolicy(revision, metadata, routing, legacy)
+    .spec.podSelector;
+  assert.equal(legacySelector.matchLabels[ORDINARY_PROFILE_LABEL], undefined);
+  assert.equal(selectorMatches(legacySelector, legacy.spec.template.metadata.labels), true);
+  assert.equal(legacySelector.matchLabels["openclaw.dev/workload-role"], "gateway");
+  assert.equal(legacySelector.matchLabels["openclaw.dev/agent"], revision.agentId);
+});
+
 test("ordinary embedded and dedicated policy callers retain exact model and Harness routes", () => {
   const driver = profileNetworkDriver();
   const dedicated = profileNetworkRevision(driver, "dedicated");

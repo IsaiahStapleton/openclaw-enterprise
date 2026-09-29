@@ -127,7 +127,7 @@ IP endpoint or the exact Helm-managed proxy Service paired with
 ## Explicit network profiles
 
 Ordinary DNS, model, repository-credential, authentication, channel, workspace-node,
-plugin-status and gateway/Harness allow policies require the reserved Pod label
+plugin-status, sandbox-preview ingress and gateway/Harness allow policies require the reserved Pod label
 `openclaw.dev/network-profile=broad-egress-v1`, together with their existing
 role, Agent, namespace and revision selectors. Gateway/Harness peer selectors require the
 same profile. Missing, empty or unknown profiles receive no ordinary grant;
@@ -146,8 +146,8 @@ namespace-wide versions, which select Pods with or without the profile, until
 the namespace is recreated; Compute does not narrow them in place. Per-Agent
 grants are re-rendered with the profile when that Agent's revision is prepared,
 and its new templates carry the label. Other Agents keep their grants until
-their own revisions are prepared. A serving embedded Gateway from an unprofiled
-template keeps model egress until activation replaces it. Existing OpenShell
+their own revisions are prepared. A serving Gateway from an unprofiled template
+keeps embedded model egress or dedicated preview ingress until activation replaces it. Existing OpenShell
 Sandboxes are not relabeled because Sandbox names are per revision: redeploy the
 Agent revision. For development, follow the
 [development recovery procedure](../../../guides/deploy/local-operations.md#build-images-for-local-kubernetes).
