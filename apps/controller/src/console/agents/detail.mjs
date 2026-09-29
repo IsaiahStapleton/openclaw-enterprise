@@ -7,7 +7,14 @@ import { renderAgentPlugins } from "./plugins.mjs";
 import { repositoryProfile, repositoryWriteAccessHelp } from "./repository-profiles.mjs";
 import { renderChannels } from "../channels.mjs";
 import { renderWorkspaceFiles } from "./workspace.mjs";
-import { displayDate, shortId, namespacePath, link, message } from "./list.mjs";
+import {
+  displayDate,
+  shortId,
+  namespacePath,
+  link,
+  message,
+  assertReadableConfiguration,
+} from "./list.mjs";
 import {
   createChannelSecretsPanel,
   hasRequiredChannelCredentials,
@@ -23,7 +30,13 @@ function errorPanel(error, context, retry) {
   return element(
     "section",
     { className: "state-panel", role: "alert" },
-    element("h2", {}, "Configuration unavailable"),
+    element(
+      "h2",
+      {},
+      error.code === "SAVED_CONFIGURATION_UNREADABLE"
+        ? "Saved configuration unreadable"
+        : "Configuration unavailable",
+    ),
     element("p", {}, message(error)),
     error.requestId
       ? element("p", { className: "request-id" }, `Request ID: ${error.requestId}`)
@@ -681,13 +694,15 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       if (selected !== "draft") {
         heading.append(element("p", { className: "resource-id" }, snapshot.id));
       }
-      heading.append(
-        element(
-          "p",
-          { className: "muted" },
-          `${selected === "draft" ? "Configuration" : "Source Configuration"} ${selected === "draft" ? snapshot.id : snapshot.configurationId} · generation ${selected === "draft" ? snapshot.generation : snapshot.configurationGeneration}`,
-        ),
-      );
+      if (!snapshot.configurationReadError) {
+        heading.append(
+          element(
+            "p",
+            { className: "muted" },
+            `${selected === "draft" ? "Configuration" : "Source Configuration"} ${selected === "draft" ? snapshot.id : snapshot.configurationId} · generation ${selected === "draft" ? snapshot.generation : snapshot.configurationGeneration}`,
+          ),
+        );
+      }
     }
     detailHeading.replaceChildren(
       heading,
@@ -720,6 +735,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       );
       if (revision.id === currentRevisionId) {
         control.append(element("span", { className: "version-current" }, "Current version"));
+      }
+      if (revision.configurationReadError) {
+        control.append(element("small", {}, "Saved configuration unreadable"));
       }
       trackRevisionControl(control);
       list.append(control);
@@ -933,11 +951,13 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   async function loadDetails() {
     const results = await Promise.allSettled([
       revisionsPromise,
-      request(
-        selected === "draft"
-          ? `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(agent.configurationId)}`
-          : `${path}/revisions/${encodeURIComponent(selected)}`,
-      ),
+      selected === "draft" && agent.configurationReadError
+        ? Promise.resolve(null)
+        : request(
+            selected === "draft"
+              ? `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(agent.configurationId)}`
+              : `${path}/revisions/${encodeURIComponent(selected)}`,
+          ),
     ]);
     if (!context.isCurrent() || deleting) {
       return;
@@ -952,6 +972,11 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     viewedSnapshot = snapshot;
     renderOverview(revisionResult, snapshot);
     renderDetailHeading();
+    const configurationReadError =
+      selected === "draft" ? agent.configurationReadError : snapshot?.configurationReadError;
+    if (configurationReadError) {
+      return { error: configurationReadError };
+    }
     if (!snapshot) {
       return { error: results[1].reason };
     }
@@ -1092,6 +1117,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           if (!context.isCurrent()) {
             return;
           }
+          assertReadableConfiguration(freshAgent);
           if (!freshAgent.harnessAuth) {
             deployFeedback.textContent =
               "Select a harness authentication source in Credentials before deployment.";
@@ -1300,7 +1326,11 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     state.loading = false;
     if (data?.error) {
       state.reusable = false;
-      content.append(errorPanel(data.error, tabContext, () => change(selected)));
+      content.append(
+        errorPanel(data.error, tabContext, () =>
+          context.navigate(target(selected, selectedTab), namespaceId, true),
+        ),
+      );
     } else if (data) {
       renderConfigurationTab(tabContext, tab, data);
     }
@@ -1364,6 +1394,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             if (!context.isCurrent()) {
               throw new Error("This view has changed. Reopen the Configuration before saving.");
             }
+            assertReadableConfiguration(freshAgent);
             if (
               freshAgent.configurationId !== snapshot.id ||
               freshConfig.generation !== snapshot.generation
@@ -1507,6 +1538,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           if (!context.isCurrent()) {
             return;
           }
+          assertReadableConfiguration(current);
           const expected = savedAuthentication ?? baseline;
           if (
             current.configurationId !== expected.configurationId ||
@@ -1778,6 +1810,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         if (!context.isCurrent()) {
           return;
         }
+        assertReadableConfiguration(freshAgent);
         if (
           freshAgent.configurationId !== baseline.id ||
           freshConfig.generation !== baseline.generation

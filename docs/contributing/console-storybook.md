@@ -252,14 +252,17 @@ Fixtures do not prove installation or live Agent turns.
 
 **New version in progress** shows v7 deployment work while v6 stays current;
 **Current version during deployment** opens v6 details while activity follows
-v7. Compare queued, failed, activated, and unavailable activity stories. The
-version list has only readable versions. No story proves live serving.
+v7. Compare queued, failed, activated, and unavailable activity stories.
+Version metadata remains visible when saved settings are unreadable. Follow the
+[walkthrough](../../scripts/console-storybook/unreadable-configuration-workflow.md)
+in **Unreadable Agent draft** and **Unreadable revision snapshot** to check the
+scoped banner and navigation. No story proves live serving.
 
-The default stories leave **Current observations** unrequested. Compare
+**Current observations** starts unrequested. Compare
 **Current observations for v7**, **Unknown observation for v6**, and
-**Current observation unavailable**. Each click requests the viewed version's
-diagnostics through a bodyless POST; the fixture returns timestamped checks or
-an error without changing the persisted deployment result.
+**Current observation unavailable**. Clicking requests that version's diagnostics
+through a bodyless POST, returning timestamped checks or an error; the recorded
+deployment result stays unchanged.
 
 **Create new version** opens saved settings. Edit and save native JSON or Slack,
 then select **Deploy new version** to admit a new immutable snapshot. Browsing an
@@ -269,10 +272,9 @@ Backend or execution mode. Slack channel `users` can include `["*"]` for
 everyone; DM settings remain separate. See
 [Agent revisions](../guides/topics/agent-revisions.md).
 
-The DevDay Admin UI segment starts from a deployed `oceclaw` Agent whose Slack
-fixture represents `#openclaw-feedback`. Its native Admin UI target is a
-simulated page with a chat-shaped transcript and visible reply. It does not
-connect to a gateway, Slack, credentials, or a model.
+The DevDay Admin UI segment uses a deployed `oceclaw` Agent and simulated
+`#openclaw-feedback` Slack channel. Its native Admin UI simulates a transcript
+and reply, with no gateway, Slack, credential, or model connection.
 
 ### Stop
 
