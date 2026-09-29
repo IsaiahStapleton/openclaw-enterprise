@@ -1298,10 +1298,7 @@ test(
           { action: "read", resourceKind: "agent" },
         ]),
         roles.delegate,
-        JSON.stringify([
-          { action: "administer", resourceKind: "installation" },
-          { action: "read", resourceKind: "agent" },
-        ]),
+        JSON.stringify([{ action: "administer", resourceKind: "installation" }]),
       ],
     );
     async function humanActor(roleId) {
@@ -1374,9 +1371,11 @@ test(
         (binding) => binding.id,
       );
 
-    // A concurrent removal of the delegate's Namespace read commits after admission.
+    // A concurrent removal of the delegate's Namespace read commits after admission,
+    // which reads the Namespace twice: as the policy scope and as the grant target.
+    let delegateReads = 0;
     pending = {
-      matches: namespaceRead(delegate.principalId),
+      matches: (request) => namespaceRead(delegate.principalId)(request) && ++delegateReads === 2,
       run: () =>
         controller.deleteIAMAccessBinding(admin.principalId, namespace.id, delegateRead.id),
     };
@@ -1386,9 +1385,9 @@ test(
         namespaceId: namespace.id,
         subjectKind: "identity",
         subjectId: agent.servicePrincipalId,
-        roleId: agentRole.id,
-        resourceKind: "agent",
-        resourceId: agent.id,
+        roleId: readRole.id,
+        resourceKind: "namespace",
+        resourceId: namespace.id,
       }),
       AuthorizationDeniedError,
     );

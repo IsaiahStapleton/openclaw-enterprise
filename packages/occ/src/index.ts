@@ -1315,8 +1315,9 @@ export class OpenClawController {
     }
     const namespace = await this.admitIAMPolicyOperation(principalId, input.namespaceId);
     const driver = this.iamPolicyDriver("createNamespaceRole");
-    return this.mutate((state) =>
-      this.iamPolicyOperation(() =>
+    return this.mutate(async (state) => {
+      await this.holdIAMPolicyAuthority(state, principalId, namespace.id);
+      return this.iamPolicyOperation(() =>
         driver.createNamespaceRole!(
           { policy: state.iamPolicy },
           {
@@ -1326,8 +1327,8 @@ export class OpenClawController {
             permissions,
           },
         ),
-      ),
-    );
+      );
+    });
   }
 
   async getIAMRole(
@@ -1357,11 +1358,12 @@ export class OpenClawController {
     }
     const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
     const driver = this.iamPolicyDriver("deleteNamespaceRole");
-    const deleted = await this.mutate((state) =>
-      this.iamPolicyOperation(() =>
+    const deleted = await this.mutate(async (state) => {
+      await this.holdIAMPolicyAuthority(state, principalId, namespace.id);
+      return this.iamPolicyOperation(() =>
         driver.deleteNamespaceRole!({ policy: state.iamPolicy }, namespace.id, roleId),
-      ),
-    );
+      );
+    });
     if (!deleted) {
       throw new ScopeViolationError("The IAM Role does not belong to the exact Namespace.");
     }
@@ -1402,8 +1404,13 @@ export class OpenClawController {
     });
     await this.verifyNamespacePolicyResource(namespace.id, input.resourceKind, input.resourceId);
     const driver = this.iamPolicyDriver("createNamespaceAccessBinding");
-    return this.mutate((state) =>
-      this.iamPolicyOperation(() =>
+    return this.mutate(async (state) => {
+      await this.holdIAMPolicyAuthority(state, principalId, namespace.id, {
+        kind: input.resourceKind,
+        id: input.resourceId,
+        namespaceId: namespace.id,
+      });
+      return this.iamPolicyOperation(() =>
         driver.createNamespaceAccessBinding!(
           { policy: state.iamPolicy },
           {
@@ -1416,8 +1423,8 @@ export class OpenClawController {
             resourceId: input.resourceId,
           },
         ),
-      ),
-    );
+      );
+    });
   }
 
   async getIAMAccessBinding(
@@ -1453,11 +1460,12 @@ export class OpenClawController {
     }
     const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
     const driver = this.iamPolicyDriver("deleteNamespaceAccessBinding");
-    const deleted = await this.mutate((state) =>
-      this.iamPolicyOperation(() =>
+    const deleted = await this.mutate(async (state) => {
+      await this.holdIAMPolicyAuthority(state, principalId, namespace.id);
+      return this.iamPolicyOperation(() =>
         driver.deleteNamespaceAccessBinding!({ policy: state.iamPolicy }, namespace.id, bindingId),
-      ),
-    );
+      );
+    });
     if (!deleted) {
       throw new ScopeViolationError(
         "The IAM AccessBinding does not belong to the exact Namespace.",
@@ -6416,6 +6424,33 @@ export class OpenClawController {
       namespaceId,
     });
     return this.read((state) => this.exactNamespace(state, namespaceId));
+  }
+
+  /**
+   * Re-checks the admitted actor inside the policy write's transaction and holds that
+   * authority until COMMIT. The Namespace lock orders this write after, or before, every
+   * other policy write and deletion in the Namespace, so a revocation there cannot commit
+   * in between; the account hold does the same for a disable. The actor's Installation
+   * grants have no runtime writer that removes them.
+   */
+  private async holdIAMPolicyAuthority(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    namespaceId: string,
+    target?: ResourceRef,
+  ): Promise<void> {
+    await this.lockNamespace(state, namespaceId);
+    if (!(await state.installations.holdPrincipalAccount(principalId))) {
+      throw new AuthorizationDeniedError("The acting account is disabled.");
+    }
+    await this.authorize(principalId, "administer", {
+      kind: "installation",
+      id: this.installation.id,
+    });
+    await this.authorize(principalId, "read", { kind: "namespace", id: namespaceId, namespaceId });
+    if (target !== undefined) {
+      await this.authorize(principalId, "read", target);
+    }
   }
 
   private assertNamespacePolicyResourceKind(kind: ResourceKind): void {
