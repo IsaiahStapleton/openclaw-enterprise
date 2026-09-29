@@ -264,6 +264,20 @@ func (client *Client) UpdateAgent(namespaceID, agentID string, body jsontext.Val
 	return client.send(http.MethodPatch, []string{"namespaces", namespaceID, "agents", agentID}, body)
 }
 
+// GetAgentRuntimeCredentials fetches runtime credential metadata for an Agent.
+func (client *Client) GetAgentRuntimeCredentials(namespaceID, agentID string) (any, error) {
+	return client.get("namespaces", namespaceID, "agents", agentID, "runtime-credentials")
+}
+
+// ProvisionAgentRuntimeCredentials provisions initial runtime credentials for an Agent.
+func (client *Client) ProvisionAgentRuntimeCredentials(namespaceID, agentID string) (any, error) {
+	return client.send(
+		http.MethodPost,
+		[]string{"namespaces", namespaceID, "agents", agentID, "runtime-credentials"},
+		map[string]any{},
+	)
+}
+
 // DeployAgent deploys an Agent and creates an immutable revision.
 func (client *Client) DeployAgent(namespaceID, agentID string) (any, error) {
 	return client.send(

@@ -114,8 +114,9 @@ credentialGatewayId, sourceType, loginMode }` in the revision. The source must
    attachment lets the revision activate.
 6. **Deletion.** The API refuses deletion while an Agent draft, active revision,
    or pending deployment references the source. Otherwise it marks the record
-   `deleting`, calls `removeSource`, then deletes the record. Revision
-   retirement removes attachments with the Sandbox.
+   `deleting`, calls `removeSource`, then deletes the record. Revision stop
+   and retirement remove attachments with the Sandbox. A failed Sandbox
+   cleanup leaves the stop or retirement pending for retry.
 
 Registration and removal must be idempotent for one source ID so that retries
 adopt or delete the same stored copy.
