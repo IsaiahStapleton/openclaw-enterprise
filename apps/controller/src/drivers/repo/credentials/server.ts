@@ -5,21 +5,24 @@ import type { AddressInfo, Socket } from "node:net";
 import { connect } from "node:net";
 import { chmod, lstat, realpath, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { SessionControl } from "./service-contracts.ts";
-import type { RunningListeners, TlsMaterial } from "./internal-contracts.ts";
+import type {
+  CredentialServiceOwner,
+  RunningListeners,
+  TlsMaterial,
+} from "./internal-contracts.ts";
 import { createControlAdmission, handleControl } from "./control.ts";
 import { createAgentHandler } from "./transport/agent.ts";
 import type { AgentHandlerOptions } from "./transport/agent.ts";
 import { sendError } from "./transport/errors.ts";
 
 export interface StartListenersOptions extends AgentHandlerOptions {
-  readonly service: AgentHandlerOptions["service"] & SessionControl;
+  readonly service: CredentialServiceOwner;
   readonly tls: TlsMaterial;
 }
 
 export type BoundListeners = RunningListeners & Readonly<{ address: AddressInfo }>;
 
-async function prepareControlSocket(socketPath: string, timeoutMs: number): Promise<void> {
+export async function prepareControlSocket(socketPath: string, timeoutMs: number): Promise<void> {
   let previous;
   try {
     previous = await lstat(socketPath);
@@ -111,7 +114,13 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
     socket.setTimeout(limits.headerMs, () => socket.destroy());
   });
   const onAgent = createAgentHandler(options);
-  const admissions = createControlAdmission(service, config, clock);
+  const admissions = createControlAdmission(
+    service,
+    config,
+    clock,
+    options.factory.resolveBound !== undefined,
+  );
+  const stopObserving = service.observeDisposal(admissions.observe);
   const route =
     (kind: "agent" | "control") =>
     (request: IncomingMessage, response: ServerResponse): void => {
@@ -125,7 +134,7 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
       void (
         kind === "agent"
           ? onAgent(request, response)
-          : handleControl(request, response, service, config, clock, admissions)
+          : handleControl(request, response, config, clock, admissions)
       ).catch(() => sendError(response, 503, "unavailable"));
     };
   for (const [server, handler, sockets] of [
@@ -168,6 +177,8 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
   };
   const close = async () => {
     stopAdmission();
+    await admissions.flush();
+    stopObserving();
     admissions.dispose();
     for (const sockets of [agentSockets, controlSockets]) {
       for (const socket of sockets) {

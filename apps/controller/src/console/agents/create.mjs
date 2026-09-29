@@ -6,6 +6,7 @@ import { ensureSecretOperateBinding } from "./secret-access.mjs";
 import { createSecretReferenceField } from "./secret-picker.mjs";
 import { createPresetFields } from "./presets.mjs";
 import { createPluginDiscovery } from "./plugin-discovery.mjs";
+import { createSlackApproverField } from "./slack-approvers.mjs";
 import { renderChannels } from "../channels.mjs";
 import { link, message, namespacePath } from "./list.mjs";
 
@@ -125,7 +126,7 @@ function provisioningStatusText(status) {
     case "running":
       return "Provisioning Agent…";
     case "succeeded":
-      return "Provisioning finished. Waiting for deployment activation…";
+      return "Provisioning finished. Opening Agent details…";
     case "failed":
       return "Provisioning failed.";
     case "cancelled":
@@ -139,16 +140,7 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function deploymentStatusPath(namespaceId, provisioning) {
-  return typeof provisioning?.agentId === "string" &&
-    provisioning.agentId.length > 0 &&
-    typeof provisioning?.revisionId === "string" &&
-    provisioning.revisionId.length > 0
-    ? `${namespacePath(namespaceId)}/agents/${encodeURIComponent(provisioning.agentId)}/deployments/${encodeURIComponent(provisioning.revisionId)}`
-    : null;
-}
-
-async function waitForProvisioning({ request, status, namespaceId, first }) {
+async function waitForProvisioning({ request, status, first }) {
   let current = first.provisioning ?? first;
   const jobUrl = current?.url;
   while (current?.status === "queued" || current?.status === "running") {
@@ -168,28 +160,13 @@ async function waitForProvisioning({ request, status, namespaceId, first }) {
     error.provisioningUrl = current?.url ?? jobUrl;
     throw error;
   }
-  const deploymentPath = deploymentStatusPath(namespaceId, current);
   if (typeof current.agentId !== "string" || !current.agentId) {
     throw new Error("Provisioning status did not include an Agent.");
   }
   if (typeof current.revisionId !== "string" || !current.revisionId) {
     throw new Error("Provisioning status did not include an AgentRevision.");
   }
-  if (!deploymentPath) {
-    return { agentId: current.agentId, revisionId: current.revisionId };
-  }
-  let deployment = current.deployment;
-  while (deployment?.status !== "succeeded") {
-    if (deployment?.status === "failed" || deployment?.status === "cancelled") {
-      const error = new Error(deployment.error?.message ?? "Deployment did not activate.");
-      error.provisioningTerminal = true;
-      throw error;
-    }
-    status.textContent = "Waiting for deployment activation…";
-    await wait(1_000);
-    deployment = await request(deploymentPath);
-  }
-  return { agentId: current.agentId, revisionId: deployment.revisionId ?? current.revisionId };
+  return { agentId: current.agentId, revisionId: current.revisionId };
 }
 
 async function finishProvisioningAttempt({ request, status, namespaceId, attempt }) {
@@ -212,7 +189,6 @@ async function finishProvisioningAttempt({ request, status, namespaceId, attempt
   return waitForProvisioning({
     request,
     status,
-    namespaceId,
     first: provisioned,
   });
 }
@@ -282,6 +258,12 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       !["embedded", "dedicated"].includes(agent.executionMode)) ||
     (agent.backendId != null && typeof agent.backendId !== "string") ||
     (agent.plugins !== undefined && !isObject(agent.plugins)) ||
+    (agent.pluginApprovers !== undefined &&
+      (!Array.isArray(agent.pluginApprovers) ||
+        !agent.pluginApprovers.every(
+          (entry) =>
+            isObject(entry) && typeof entry.channel === "string" && typeof entry.id === "string",
+        ))) ||
     !hasRenderableWorkspaceFiles ||
     (rendered.configuration?.secretBindings !== undefined &&
       !isObject(rendered.configuration.secretBindings))
@@ -749,10 +731,21 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
     return apiKey.value.trim() ? { accessToken: apiKey.value } : null;
   }
+  let configurationSecretBindings = structuredClone(
+    draft.configurationSecretBindings ?? rendered.configuration?.secretBindings ?? {},
+  );
+  const getSlackBotSecretId = () => {
+    const source = configurationSecretBindings.SLACK_BOT_TOKEN?.source;
+    return source?.kind === "secret" && source.namespaceId === namespaceId ? source.id : null;
+  };
   const pluginDiscovery = createPluginDiscovery({
     context,
     input: plugins,
     canDiscover: () => Boolean(discoveryCredential()),
+    canPrefetch: () =>
+      pluginDiscoveryCredential !== null &&
+      (binding?.method ?? authMethod.value) === "codex_pat" &&
+      Boolean(binding?.source ?? modelCredentialSource ?? apiKey.value.trim()),
     isPending: () => pending,
     requestBody: (body) => ({ ...discoveryCredential(), ...body }),
     unavailableMessage: () =>
@@ -763,6 +756,12 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       pluginDiscoveryCredential === "none"
         ? "Load the installation's curated plugin catalog. Access and tool availability are checked separately."
         : "Load plugins available to the selected service account credential. Your plugin selections stay unchanged.",
+    createApproverField: (options) =>
+      createSlackApproverField({
+        context,
+        getSecretId: getSlackBotSecretId,
+        ...options,
+      }),
   });
   const pluginFields = pluginDiscovery.fields;
   const updatePluginDiscovery = pluginDiscovery.update;
@@ -771,8 +770,25 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   for (const control of [nativeProvider, authMethod, harness]) {
     control.addEventListener("change", resetPluginDiscovery);
   }
-  let configurationSecretBindings = structuredClone(
-    draft.configurationSecretBindings ?? rendered.configuration?.secretBindings ?? {},
+  let pluginApprovers = structuredClone(
+    Object.hasOwn(draft, "pluginApprovers") ? draft.pluginApprovers : agent.pluginApprovers,
+  );
+  const defaultApprovers = createSlackApproverField({
+    context,
+    label: "Default plugin approvers",
+    getSecretId: getSlackBotSecretId,
+    getValue: () => pluginApprovers,
+    onChange: (value) => {
+      pluginApprovers = value;
+      edited = true;
+    },
+    inheritedLabel: "Existing OpenClaw approval routing (no Agent default set)",
+    lazyNames: true,
+  });
+  defaultApprovers.hidden = true;
+  pluginFields.section.insertBefore(
+    defaultApprovers,
+    pluginFields.section.querySelector(".plugin-json"),
   );
   const workspaceInputs = Object.entries(WORKSPACE_DEFAULTS).map(([filename, content]) => {
     const input = element("textarea", {
@@ -1011,6 +1027,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       Object.entries(draftInputs).map(([key, input]) => [key, input.value]),
     ),
     manualModel,
+    pluginApprovers,
     edited,
     pendingModelSettings,
     pendingProviderModel,
@@ -1132,6 +1149,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         if (options.secretBindings !== undefined) {
           configurationSecretBindings = structuredClone(options.secretBindings);
           stagedChannelSecrets = [...stagedChannelSecrets, ...(options.changedSecrets ?? [])];
+          defaultApprovers.refreshValue();
+          pluginDiscovery.update();
         }
         configuration.setCustomValidity("");
         setTimeout(() => {
@@ -1153,9 +1172,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     updateControls();
   }
   const shouldProvision = () =>
-    mode.value === "dedicated" &&
-    provisionableExecutionModes.has(mode.value) &&
-    !repositories.draftOnly();
+    mode.value === "dedicated" && provisionableExecutionModes.has(mode.value);
   const updateControls = () => {
     const saved = Boolean(savedConfiguration || savedAgent || provisioningAttempt);
     for (const node of form.querySelectorAll("button, input, select, textarea")) {
@@ -1324,6 +1341,11 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       pluginDiscoveryCredential =
         installation.capabilities?.pluginDiscovery?.credential ?? "required";
       pluginFields.setCapabilities(installation.capabilities?.pluginPolicies ?? null);
+      defaultApprovers.hidden =
+        installation.capabilities?.pluginPolicies?.approvers?.agent !== true;
+      if (!defaultApprovers.hidden) {
+        defaultApprovers.refreshNames();
+      }
       provisionableExecutionModes.clear();
       for (const executionMode of installation.capabilities?.agentProvisioning?.executionModes ??
         []) {
@@ -1368,7 +1390,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         return;
       }
       provisioningAttempt = null;
-      context.navigate(`agents/${agentId}?revision=${revisionId}&tab=workspace`);
+      context.navigate(`agents/${agentId}?revision=${revisionId}&tab=configuration`);
     } catch (error) {
       if (!context.isCurrent()) {
         return;
@@ -1490,6 +1512,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
       ...(repositoryBindings.length ? { repositoryBindings } : {}),
       ...(Object.keys(desiredPlugins).length ? { plugins: desiredPlugins } : {}),
+      ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
       ...(agent.backendId ? { backendId: agent.backendId } : {}),
     };
     if (!binding && !passwordAuth && modelCredentialSource?.kind !== "secret") {

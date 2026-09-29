@@ -63,7 +63,12 @@ async function createNamespaceSecret(
 
 async function createProvisioningSecrets(fixture, namespaceId) {
   const modelKey = await createNamespaceSecret(fixture, namespaceId, "model-api-key");
-  const slackBotToken = await createNamespaceSecret(fixture, namespaceId, "slack-bot-token");
+  const slackBotToken = await createNamespaceSecret(
+    fixture,
+    namespaceId,
+    "slack-bot-token",
+    `xoxb-${randomUUID()}`,
+  );
   const slackSigningSecret = await createNamespaceSecret(
     fixture,
     namespaceId,
@@ -89,8 +94,9 @@ function provisioningBody(namespaceId, secrets, overrides = {}) {
         channels: {
           slack: {
             enabled: true,
-            botTokenEnv: "SLACK_BOT_TOKEN",
-            signingSecretEnv: "SLACK_SIGNING_SECRET",
+            mode: "http",
+            botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+            signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
           },
         },
       },
@@ -245,6 +251,15 @@ function installationDrivers({ computeDriver, configurationDriver, secretDriver,
 }
 
 async function createFixture(context, options = {}) {
+  // Keep real admission and Secret access; only Slack's external response is a fixture.
+  const originalFetch = globalThis.fetch;
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    if (String(url) === "https://slack.com/api/auth.test") {
+      assert.match(init.headers.authorization, /^Bearer xoxb-/);
+      return Response.json({ ok: true, bot_id: "B0123456789", team_id: "T0123456789" });
+    }
+    return originalFetch(url, init);
+  });
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
   const state = new PostgresPlatformState(pool);
   await ensureProvisioningBootstrap(context, state);
@@ -589,7 +604,10 @@ test(
     const secretCreateCallCount = fixture.secretDriver.calls.filter(
       ({ operation }) => operation === "create",
     ).length;
-    const body = provisioningBody(namespace.id, secrets, { repositoryBindings });
+    const body = {
+      ...provisioningBody(namespace.id, secrets, { repositoryBindings }),
+      pluginApprovers: [],
+    };
     const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
       body,
     });
@@ -597,6 +615,7 @@ test(
 
     const queued = await provisioningRow(fixture.pool, namespace.id, body.requestId);
     assert.deepEqual(queued.plan.repositoryBindings, repositoryBindings);
+    assert.deepEqual(queued.plan.pluginApprovers, []);
     assert.equal(queued.agent_id, null);
     const replay = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
       body,
@@ -677,10 +696,12 @@ test(
     assert.equal(revisions.length, 1);
     assert.equal(revisions[0].id, status.revisionId);
     assert.equal(revisions[0].configurationGeneration, 1);
+    assert.deepEqual(revisions[0].pluginApprovers, []);
     const agentPath = `/namespaces/${namespace.id}/agents/${status.agentId}`;
     const agent = await fixture.request("GET", agentPath);
     assert.equal(agent.status, 200, JSON.stringify(agent.body));
     assert.deepEqual(agent.data.repositoryBindings, repositoryBindings);
+    assert.deepEqual(agent.data.pluginApprovers, []);
     const revisionPath = `${agentPath}/revisions/${status.revisionId}`;
     const revision = await fixture.request("GET", revisionPath);
     assert.equal(revision.status, 200, JSON.stringify(revision.body));
@@ -848,8 +869,8 @@ test(
     assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
     assert.deepEqual(
       secretDriver.calls.map(({ operation }) => operation),
-      ["create", "create", "create", "create"],
-      "only the explicit Secret API calls should touch the Secret backend before provisioning runs",
+      ["create", "create", "create", "create", "withValue"],
+      "admission validates the existing Slack Secret without creating provisioning resources",
     );
     const resources = await fixture.pool.query(
       `SELECT
@@ -891,6 +912,7 @@ test(
       body,
     });
     assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    const callsBeforeRevocation = structuredClone(secretDriver.calls);
 
     await fixture.revokeCurrentPrincipal();
     await fixture.startWorker();
@@ -921,9 +943,9 @@ test(
       },
     ]);
     assert.deepEqual(
-      secretDriver.calls.map(({ operation }) => operation),
-      ["create", "create", "create", "create"],
-      "revoked initiating authority must not create additional Secret backend values",
+      secretDriver.calls,
+      callsBeforeRevocation,
+      "revoked initiating authority must not perform further Secret backend operations",
     );
     const resources = await fixture.pool.query(
       `SELECT

@@ -242,12 +242,17 @@ selects the model credential. API keys use the selected OCC Secret Driver's
 exact reference; account tokens use an account-owned CP source. Compute delivers
 only the admitted fields to a revision-owned runtime Secret and selects the
 explicit login mode during workload rendering. Only the combined embedded gateway/Harness or dedicated
-Codex consumer receives it; a dedicated gateway never receives model auth.
+Codex consumer receives it; a dedicated gateway never receives model auth. A
+[credential source](../../credential-sources.md) binding is the exception: Compute
+renders no model Secret and hands the Credential Gateway's attachments to the
+OpenShell Sandbox instead.
 
 If channels are enabled, configure `runtime.channels.proxyUrl`, then store the
 Agent's channel credentials as Namespace Secrets referenced by Configuration
-`secretBindings`. Channel credentials are available only to the dedicated gateway,
-never to its Codex Harness.
+`secretBindings`. Use a literal-IP proxy URL, or pair a Helm-managed proxy
+Service URL with `runtime.channels.managedProxy` so Compute can render selector
+egress to that exact proxy Pod. Channel credentials are available only to the
+dedicated gateway, never to its Codex Harness.
 
 Repository-bearing revisions support embedded OpenClaw or dedicated Codex,
 without a Sandbox Driver. Compute delivers each immutable repository-material
@@ -274,7 +279,7 @@ Missing or incorrectly scoped credentials fail deployment.
 
 Use `runtime.codexSeccompProfile` only for a reviewed Codex compatibility
 allowlist. The optional profile exists for source-backed compatibility cases
-where Codex `0.156.0` cannot start because `RuntimeDefault` denies the
+where Codex `0.158.0` cannot start because `RuntimeDefault` denies the
 user-namespace `clone`, `unshare`, and `mount` calls used by bubblewrap. It
 does not relax filesystem or network policy: Codex and bubblewrap still own
 runtime filesystem boundaries, while Kubernetes NetworkPolicies and the

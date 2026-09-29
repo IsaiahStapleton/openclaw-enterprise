@@ -2,6 +2,7 @@ import { createPrivateKey } from "node:crypto";
 import { appModule } from "./runtime.mjs";
 import { createControlledClock } from "./clock.mjs";
 import { createGitHubServiceFactory } from "./service-resources.mjs";
+import { fixtureAppId } from "./github.mjs";
 
 const keyDisposals = [];
 let clock;
@@ -14,15 +15,44 @@ process.on("message", async ({ id, command, input }) => {
     if (command === "start" && !running) {
       clock = createControlledClock(input.wallMs);
       const { config, tls, origin } = input;
-      const factory = await createGitHubServiceFactory(
-        { after: (dispose) => keyDisposals.push(dispose) },
-        {
-          config,
-          clock,
+      let factory;
+      if (input.registryFile) {
+        const [
+          { loadGitHubRepositoryRegistry },
+          { createGitHubRegistryDriverFactory },
+          { createGitHubKeyOwner },
+        ] = await Promise.all([
+          appModule("composition/repository-credentials/registry"),
+          appModule("drivers/repo/github/credentials/registry-factory"),
+          appModule("drivers/repo/github/credentials/material"),
+        ]);
+        const key = createGitHubKeyOwner({
           privateKey: createPrivateKey(input.privateKey),
+          appId: fixtureAppId,
+          clock,
+        });
+        keyDisposals.push(() => key.close());
+        const registry = await loadGitHubRepositoryRegistry(input.registryFile, "github-fixture");
+        factory = createGitHubRegistryDriverFactory({
+          registry,
+          key,
+          privateKeyFile: input.privateKeyFile,
+          gatewayOrigin: config.gateway.publicOrigin,
+          limits: config.limits,
+          clock,
           trustedEndpoints: { apiOrigin: origin, gitOrigin: origin, ca: tls.ca },
-        },
-      );
+        });
+      } else {
+        factory = await createGitHubServiceFactory(
+          { after: (dispose) => keyDisposals.push(dispose) },
+          {
+            config,
+            clock,
+            privateKey: createPrivateKey(input.privateKey),
+            trustedEndpoints: { apiOrigin: origin, gitOrigin: origin, ca: tls.ca },
+          },
+        );
+      }
       const { runService } = await appModule("composition/repository-credentials/service");
       running = await runService(
         {
@@ -43,7 +73,7 @@ process.on("message", async ({ id, command, input }) => {
       );
       process.send({ id, result: { pid: process.pid, port: running.listeners.address.port } });
     } else if (command === "advance" && running) {
-      await clock.advance(input.milliseconds);
+      await clock.advance(input.milliseconds, input.wallDelta);
       process.send({ id, result: { wallMs: clock.wallNow() } });
     } else {
       throw new Error("invalid fixture command");

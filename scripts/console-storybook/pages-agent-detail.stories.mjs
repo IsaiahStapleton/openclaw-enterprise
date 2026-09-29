@@ -6,7 +6,17 @@ export const Draft = story("draft");
 export const NewVersion = story("newVersion");
 export const FirstDeployment = story("draftAutomaticCredentials");
 export const ConfigurationEditor = { ...story("configurationEditor"), name: "Edit Configuration" };
+export const GatewayPasswordAccess = story("gatewayPasswordAccess");
+export const GatewayPasswordEnabled = story("gatewayPasswordEnabled");
+export const GatewayPasswordSaveDenied = story("gatewayPasswordSaveDenied");
+export const GatewayPasswordSaving = story("gatewayPasswordSaving");
 export const PluginsDraft = story("pluginsDraft");
+export const PluginApproversInherited = story("pluginApproversInherited");
+export const PluginApproversOverrides = story("pluginApproversOverrides");
+export const PluginApproversLookup = story("pluginApproversLookup");
+export const PluginApproversDirectoryUnavailable501 = story(
+  "pluginApproversDirectoryUnavailable501",
+);
 export const PluginsAdmitted = story("pluginsAdmitted");
 export const InvalidConfiguration = {
   ...story("invalidConfiguration"),
@@ -22,6 +32,8 @@ export const RepositoryAdmitted = {
   name: "Repository access in current version",
 };
 export const DeploymentPending = story("deploymentPending");
+export const DeploymentDeferred = story("deploymentDeferred");
+export const DeploymentRetrying = story("deploymentRetrying");
 export const DeploymentRunning = story("deploymentRunning");
 export const CurrentVersionDuringDeployment = story("currentVersionDuringDeployment");
 export const DeploymentFailed = story("deploymentFailed");

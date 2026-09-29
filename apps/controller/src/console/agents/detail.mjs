@@ -81,18 +81,20 @@ function deploymentFailure(error) {
   );
 }
 
-function deploymentProgress(status) {
+function deploymentProgress(status, progress) {
+  const workDescriptions = {
+    queued: progress?.lastAttempt
+      ? "Waiting to continue deployment."
+      : "Waiting for a worker claim.",
+    running: "A worker claim is active.",
+    failed: "Deployment work failed; check the recorded error and current version.",
+    succeeded: "Work completed or the version was already active.",
+  };
   const stages = [
     ["Admitted", "An immutable version was created.", "complete"],
     [
       "Deployment work",
-      status === "queued"
-        ? "Waiting for a worker claim."
-        : status === "running"
-          ? "A worker claim is active."
-          : status === "failed"
-            ? "Deployment work failed; check the recorded error and current version."
-            : "Work completed or the version was already active.",
+      workDescriptions[status],
       status === "queued"
         ? "waiting"
         : status === "running"
@@ -196,7 +198,32 @@ function createDeploymentStatusPanel(context, path, revision, onAgentChange, onS
     return element(
       "div",
       {},
-      deploymentProgress(state.status.status),
+      deploymentProgress(state.status.status, state.status.progress),
+      state.status.progress
+        ? element(
+            "div",
+            { className: "deployment-pending-progress" },
+            state.status.progress.lastAttempt
+              ? element(
+                  "dl",
+                  { className: "credential-status-list" },
+                  element("dt", {}, "Last recorded result"),
+                  element("dd", {}, state.status.progress.lastAttempt.message),
+                  element("dt", {}, "Reason"),
+                  element("dd", {}, state.status.progress.lastAttempt.code),
+                  element("dt", {}, "Last checked"),
+                  element("dd", {}, displayDate(state.status.progress.lastAttempt.at)),
+                )
+              : element("p", { className: "muted" }, "No reconciliation result is available yet."),
+            state.status.progress.nextAttemptAt
+              ? element(
+                  "p",
+                  { className: "muted" },
+                  `Eligible for next attempt: ${displayDate(state.status.progress.nextAttemptAt)}. Start time depends on worker availability.`,
+                )
+              : null,
+          )
+        : null,
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
       deploymentFailure(state.status.error),
       state.status.warnings?.length
@@ -347,7 +374,7 @@ function createVersionDiagnosticsPanel(context, path, revisionId) {
     try {
       diagnostics = await context.request(
         `${path}/deployments/${encodeURIComponent(revisionId)}/diagnostics`,
-        { method: "POST" },
+        { method: "POST", readOnly: true },
       );
     } catch (cause) {
       if (!context.isCurrent()) {
@@ -619,7 +646,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     versionLayout,
   );
   let details;
-  let tabGeneration = 0;
+  const retainedTabs = new Map();
+  let mountedTab = null;
   let activityPanel = deploymentStatus;
   let activityRevisionId;
   let viewedSnapshot = null;
@@ -981,7 +1009,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     };
     const retainedPlugins = context.drafts.get("plugins");
     const pluginEditorState = {
-      dirty: Boolean(retainedPlugins && retainedPlugins.text !== retainedPlugins.initialText),
+      dirty: Boolean(retainedPlugins?.dirty),
       saving: false,
       outcomeUnknown: retainedPlugins?.outcomeUnknown ?? false,
       reloadRequired: retainedPlugins?.reloadRequired ?? false,
@@ -1222,14 +1250,24 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   }
 
   async function renderTab() {
-    context.flushDrafts();
+    const resumeDrafts = context.suspendDrafts();
+    if (mountedTab) {
+      mountedTab.resumeDrafts = resumeDrafts;
+      for (const input of content.querySelectorAll('input[type="password"]')) {
+        if (input.value) {
+          mountedTab.reusable = false;
+          input.value = "";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+      if (mountedTab.reusable && !mountedTab.loading && mountedTab.pending === 0) {
+        mountedTab.nodes = [...content.childNodes];
+        retainedTabs.set(mountedTab.id, mountedTab);
+      }
+      mountedTab = null;
+    }
     renderDetailHeading();
     versionEvidence.hidden = selectedTab === "workspace";
-    const activeTab = ++tabGeneration;
-    const tabContext = {
-      ...context,
-      isCurrent: () => context.isCurrent() && activeTab === tabGeneration,
-    };
     const tab = selectedTab;
     for (const [index, id] of tabsForSelection.entries()) {
       const control = tabs.children[index];
@@ -1240,14 +1278,43 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       }
     }
     refreshDeployControls();
-    content.querySelectorAll('input[type="password"]').forEach((input) => {
-      input.value = "";
-    });
+    const retained = retainedTabs.get(tab);
+    retainedTabs.delete(tab);
+    if (retained && retained.mutations === context.mutationVersion()) {
+      mountedTab = retained;
+      content.replaceChildren(...retained.nodes);
+      retained.resumeDrafts();
+      return;
+    }
+    const state = {
+      id: tab,
+      reusable: true,
+      loading: true,
+      pending: 0,
+      mutations: context.mutationVersion(),
+    };
+    mountedTab = state;
+    const tabContext = {
+      ...context,
+      isCurrent: () => context.isCurrent() && mountedTab === state,
+      request: async (path, options) => {
+        state.pending += 1;
+        try {
+          return await context.request(path, options);
+        } catch (error) {
+          state.reusable = false;
+          throw error;
+        } finally {
+          state.pending -= 1;
+        }
+      },
+    };
     // Retain the panel's height during reads so loading does not jump the scroll position.
     content.style.minHeight = `${content.getBoundingClientRect().height}px`;
     content.replaceChildren();
     if (tab === "workspace") {
       content.append(renderWorkspaceFiles(tabContext, agent, path));
+      state.loading = false;
       content.style.minHeight = "";
       return;
     }
@@ -1257,7 +1324,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       return;
     }
     content.replaceChildren();
+    state.loading = false;
     if (data?.error) {
+      state.reusable = false;
       content.append(errorPanel(data.error, tabContext, () => change(selected)));
     } else if (data) {
       renderConfigurationTab(tabContext, tab, data);
@@ -1300,6 +1369,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           namespaceId,
           request,
           agentName: agent.name,
+          configurationId: snapshot.id,
           secretBindings: snapshot.secretBindings,
           isCurrent: context.isCurrent,
           onExpired: context.onExpired,
@@ -1615,6 +1685,31 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       editing = true;
       render();
     });
+    const password = values.gateway?.auth?.password;
+    const usesGeneratedGatewayPassword =
+      password?.source === "env" &&
+      (password.provider === undefined || password.provider === "default") &&
+      password.id === "OPENCLAW_GATEWAY_PASSWORD";
+    const enableGatewayPassword = button("Enable Gateway password access", () => {
+      // Stage the native reference through the same draft and save checks as JSON edits.
+      // The Compute Driver delivers the generated value only after deployment.
+      editor.value = JSON.stringify(
+        {
+          ...values,
+          gateway: {
+            ...values.gateway,
+            auth: {
+              ...values.gateway?.auth,
+              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+            },
+          },
+        },
+        null,
+        2,
+      );
+      editing = true;
+      render();
+    });
     const save = button("Save Configuration", () => void saveConfiguration(), {
       className: "primary",
     });
@@ -1672,6 +1767,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       save.disabled = pending || outcomeUnknown || reloadRequired || !dirty;
       cancel.disabled = pending || outcomeUnknown || reloadRequired;
       edit.disabled = pending || outcomeUnknown;
+      enableGatewayPassword.disabled = pending || outcomeUnknown || reloadRequired;
       editor.readOnly = pending || outcomeUnknown || reloadRequired;
       if (outcomeUnknown) {
         feedback.textContent =
@@ -1780,7 +1876,19 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     function render() {
       if (!editing) {
         container.replaceChildren(
-          element("div", { className: "form-actions" }, edit),
+          element(
+            "p",
+            { className: "hint" },
+            usesGeneratedGatewayPassword
+              ? "Gateway password access is enabled in the saved Configuration. Deploy a new version to apply it."
+              : "Use generated credentials for direct Gateway password access. Enable access, save Configuration, then deploy a new version.",
+          ),
+          element(
+            "div",
+            { className: "form-actions" },
+            edit,
+            usesGeneratedGatewayPassword ? null : enableGatewayPassword,
+          ),
           nativeDocument(values, "View native Configuration"),
         );
         return;

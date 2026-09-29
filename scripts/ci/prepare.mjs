@@ -50,6 +50,7 @@ const fixtureLanes = new Set([
   "k3d-fixture-state",
   "k3d-fixture-plugins",
 ]);
+const nativeIAMBarrierFile = "tests/integration/postgres-native-iam-policy-barrier.test.mjs";
 
 function laneDefinition(name) {
   return laneDefinitions[name] ?? {};
@@ -1543,7 +1544,7 @@ async function prepareK3dRuntimeImages(
       codexVersion:
         env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
         process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.156.0",
+        "0.158.0",
     });
     env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
     cluster.codexSeccompProfile = seccomp.profileName;
@@ -1578,7 +1579,7 @@ async function prepareImagesPackagingCodexSeccompProfile(statePath, state, env) 
       codexVersion:
         env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
         process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.156.0",
+        "0.158.0",
     }),
   );
   if (!seccomp.dockerProfilePath || !isAbsolute(seccomp.dockerProfilePath)) {
@@ -1749,6 +1750,12 @@ async function prepareLane({ lane, statePath }) {
             }),
           )
         ).env,
+      );
+      // BuildKit's base-image cache is not Docker's runnable image store.
+      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
+        state,
+        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
+        "NODE_BASE_IMAGE",
       );
       if (lanePrepare(name).codexSeccomp) {
         await prepareImagesPackagingCodexSeccompProfile(resolvedStatePath, state, env);
@@ -2098,6 +2105,11 @@ async function prepareFile({ lane, file, statePath }) {
     });
     resourceIds.push(database.resourceId);
     env.OCC_TEST_DATABASE_URL = database.appUrl;
+    if (name === "postgres-application" && relativeFile === nativeIAMBarrierFile) {
+      env.OCC_TEST_NATIVE_IAM_BARRIER_CI = "1";
+      env.OCC_TEST_NATIVE_IAM_BARRIER_DATABASE = database.name;
+      env.OCC_TEST_NATIVE_IAM_BARRIER_MIGRATION_DATABASE_URL = database.migrationUrl;
+    }
     if (relativeFile.endsWith("occ-metrics.test.mjs")) {
       env.OCC_METRICS_TEST_MIGRATION_DATABASE_URL = database.migrationUrl;
     }
@@ -2158,6 +2170,15 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.lane) {
     throw new Error("--lane is required.");
+  }
+  if (
+    args.file &&
+    toRepositoryRelative(args.file) === nativeIAMBarrierFile &&
+    (args["github-env"] || process.env.GITHUB_ENV)
+  ) {
+    throw new Error(
+      "The selected private PostgreSQL fixture must be prepared within the test runner.",
+    );
   }
   const result = args.file
     ? await prepareFile({ lane: args.lane, file: args.file, statePath: args.state })

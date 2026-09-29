@@ -24,6 +24,7 @@ import type {
   NamespaceEnsureResult,
   BackendDefinition,
   SandboxDriver,
+  CredentialGatewayDriver,
   SecretBindings,
   SecretDriver,
   ResolvedHarnessAuth,
@@ -42,6 +43,7 @@ import {
   OpenClawController,
   WorkClaimLostError,
   isRepositoryCleanupWork,
+  repositoryCleanupRevisionId,
   isRepositoryRuntimeRetirementWork,
   provisioningEffectReceipt as provisioningEffectReceiptForRecord,
   provisioningPendingEffect,
@@ -73,6 +75,7 @@ export interface ControllerWorkerOptions {
   readonly drivers?: InstallationRuntimeDrivers;
   readonly computeDriver?: ComputeDriver;
   readonly sandboxDriver?: SandboxDriver;
+  readonly credentialGatewayDriver?: CredentialGatewayDriver;
   readonly pollIntervalMs?: number;
   readonly leaseDurationMs?: number;
   readonly maxAttempts?: number;
@@ -368,6 +371,7 @@ export class ControllerWorker {
   private readonly secretDriver: SecretDriver | undefined;
   private provisioningController: OpenClawController | undefined;
   private readonly sandbox: SandboxDriver | undefined;
+  private readonly credentialGateway: CredentialGatewayDriver | undefined;
   private readonly backends: readonly BackendDefinition[];
   private readonly backendMap: ReadonlyMap<string, BackendDefinition>;
   private readonly requireComputePreflight: boolean;
@@ -459,6 +463,18 @@ export class ControllerWorker {
       throw new Error("The selected Configuration Driver exposes invalid lifecycle hooks.");
     }
     this.sandbox = drivers?.sandboxDriver ?? options.sandboxDriver;
+    this.credentialGateway = drivers?.credentialGatewayDriver ?? options.credentialGatewayDriver;
+    if (
+      (drivers?.installation.drivers.credential_gateway === undefined) !==
+      (drivers?.credentialGatewayDriver === undefined)
+    ) {
+      throw new Error(
+        "The selected Credential Gateway Driver requires shared startup configuration.",
+      );
+    }
+    if (this.credentialGateway !== undefined && this.sandbox === undefined) {
+      throw new Error("The selected Credential Gateway Driver requires a paired Sandbox Driver.");
+    }
     if (
       (drivers?.installation.drivers.sandbox === undefined) !==
       (drivers?.sandboxDriver === undefined)
@@ -494,7 +510,8 @@ export class ControllerWorker {
         typeof driver.resolve !== "function" ||
         typeof driver.open !== "function" ||
         typeof driver.status !== "function" ||
-        typeof driver.close !== "function"
+        typeof driver.close !== "function" ||
+        (driver.durableBrokerReceipts === true && typeof driver.checkAdmissionReady !== "function")
       ) {
         throw new Error("The selected repository credential Driver is unavailable.");
       }
@@ -531,6 +548,7 @@ export class ControllerWorker {
     for (const driver of [
       this.configuration,
       this.sandbox,
+      this.credentialGateway,
       this.iam,
       this.secretDriver,
       this.repoDriver,
@@ -642,6 +660,7 @@ export class ControllerWorker {
     this.lastHealthAt = now;
     this.pendingHealth = (async () => {
       const pending = await this.queue.pending();
+      await this.repoDriver?.checkAdmissionReady?.(AbortSignal.timeout(2000));
       await this.onHealthy?.();
       this.emit({ event: "worker.health", status: "ready", pending });
     })()
@@ -934,10 +953,18 @@ export class ControllerWorker {
 
   private async processRepositoryCleanup(claim: ClaimedWork): Promise<void> {
     let complete = false;
+    const cleanupRevisionId = repositoryCleanupRevisionId(claim);
+    if (cleanupRevisionId === undefined) {
+      await this.finalize(claim, undefined, { outcome: "permanent", code: "INVALID_TARGET" });
+      return;
+    }
     try {
-      const revision = await this.state.read((view) =>
-        view.revisions.findRevision(claim.namespaceId, claim.agentId!, claim.revisionId!),
-      );
+      const revision = await this.state.read(async (view) => {
+        if (claim.agentId === undefined) {
+          return undefined;
+        }
+        return view.revisions.findRevision(claim.namespaceId, claim.agentId, cleanupRevisionId);
+      });
       if (revision !== undefined) {
         const retireRuntime = isRepositoryRuntimeRetirementWork(claim);
         complete = await this.repositoryCredentials.cleanup(claim, revision, { retireRuntime });
@@ -967,6 +994,13 @@ export class ControllerWorker {
           // Session service outages cannot delay exact workload/material retirement.
           await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
         }
+      } else {
+        const attempts = await this.state.read(async (view) =>
+          (await view.repositorySessions.listNamespaceAttempts(claim.namespaceId)).filter(
+            (attempt) => attempt.revisionId === cleanupRevisionId,
+          ),
+        );
+        complete = await this.repositoryCredentials.cleanupRetained(claim, attempts);
       }
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
@@ -978,11 +1012,16 @@ export class ControllerWorker {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
-      const attempts = await unit.repositorySessions.listRevisionAttempts({
-        namespaceId: claim.namespaceId,
-        agentId: claim.agentId!,
-        revisionId: claim.revisionId!,
-      });
+      const attempts =
+        claim.agentId === undefined
+          ? (await unit.repositorySessions.listNamespaceAttempts(claim.namespaceId)).filter(
+              (attempt) => attempt.revisionId === cleanupRevisionId,
+            )
+          : await unit.repositorySessions.listRevisionAttempts({
+              namespaceId: claim.namespaceId,
+              agentId: claim.agentId,
+              revisionId: cleanupRevisionId,
+            });
       if (complete) {
         complete = !attempts.some(
           (attempt) => attempt.phase === "closing" || attempt.phase === "invalidated",
@@ -994,9 +1033,7 @@ export class ControllerWorker {
         await queue.defer(
           claim,
           { code: "REPOSITORY_CLEANUP_PENDING" },
-          attempts.some((attempt) => attempt.phase === "invalidated")
-            ? { delayMs: this.repositoryCleanupRetryMs }
-            : undefined,
+          { delayMs: this.repositoryCleanupRetryMs },
         );
       }
     }, this.queueOptions);
@@ -1005,7 +1042,7 @@ export class ControllerWorker {
       ...workLogFields(claim),
       namespaceId: claim.namespaceId,
       agentId: claim.agentId,
-      revisionId: claim.revisionId,
+      revisionId: cleanupRevisionId,
       outcome: complete ? "success" : "pending",
       code: complete ? "REPOSITORY_CLEANUP_COMPLETE" : "REPOSITORY_CLEANUP_PENDING",
     });
@@ -1014,10 +1051,11 @@ export class ControllerWorker {
   private async closeRevisionCredentials(
     claim: ClaimedWork,
     revision: Readonly<AgentRevision>,
+    options: { readonly awaitCleanup?: boolean } = {},
   ): Promise<void> {
     if (revision.repositoryCredentials !== undefined) {
       // An unavailable service leaves durable cleanup work; workload shutdown continues.
-      await this.repositoryCredentials.closeRevision(claim, revision);
+      await this.repositoryCredentials.closeRevision(claim, revision, options);
     }
   }
 
@@ -1378,7 +1416,7 @@ export class ControllerWorker {
         });
       }
       for (const revision of revisions) {
-        await this.closeRevisionCredentials(claim, revision);
+        await this.closeRevisionCredentials(claim, revision, { awaitCleanup: false });
         await this.withClaimHeartbeat(claim, () => this.compute.retireRevision(revision));
       }
       if (this.compute.deleteAgentRuntimeCredentials !== undefined) {
@@ -2012,8 +2050,35 @@ export class ControllerWorker {
       ) {
         refs.push(auth.source);
       }
-    } else if (auth.method !== "chatgpt_service_account" && auth.method !== "runtime") {
+    } else if (
+      auth.method !== "chatgpt_service_account" &&
+      auth.method !== "credential_source" &&
+      auth.method !== "runtime"
+    ) {
       return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
+    }
+    if (auth.method === "credential_source") {
+      // Both the deploying actor and the Agent principal must still operate the source.
+      for (const principalId of [claim.actorId, revision.servicePrincipalId]) {
+        const sourceAuthorization: AuthorizationRequest = {
+          principalId,
+          action: "operate",
+          resource: {
+            kind: "credential_source",
+            id: auth.sourceId,
+            namespaceId: revision.namespaceId,
+          },
+        };
+        const sourceDecision = await this.iamDecision(driver, sourceAuthorization);
+        if (!sourceDecision.allowed) {
+          return {
+            outcome: "permanent",
+            code: "AUTHORIZATION_DENIED",
+            authorization: sourceAuthorization,
+            decision: sourceDecision,
+          };
+        }
+      }
     }
     for (const ref of refs) {
       for (const principalId of [claim.actorId, revision.servicePrincipalId]) {
@@ -2239,6 +2304,27 @@ export class ControllerWorker {
       // Admission verifies the physical source. Workers project authoritative
       // OCC metadata without requiring permission to read backend Secret values.
       harnessAuth = { ...auth, backendRef: secret.backendRef };
+    } else if (revision.harnessAuth.method === "credential_source") {
+      const auth = revision.harnessAuth;
+      if (
+        this.credentialGateway === undefined ||
+        auth.credentialGatewayId !== this.credentialGateway.id
+      ) {
+        return { result: { outcome: "permanent", code: "CREDENTIAL_GATEWAY_MISMATCH" } };
+      }
+      const source = await this.state.read((view) =>
+        view.credentialSources.findCredentialSource(revision.namespaceId, auth.sourceId),
+      );
+      // A deleting source can no longer be attached, even to an admitted revision.
+      if (
+        source === undefined ||
+        source.state !== "ready" ||
+        source.driverId !== auth.credentialGatewayId ||
+        source.type !== auth.sourceType
+      ) {
+        return { result: { outcome: "permanent", code: "HARNESS_AUTH_SOURCE_UNAVAILABLE" } };
+      }
+      harnessAuth = { ...auth, source };
     } else {
       harnessAuth = revision.harnessAuth;
     }

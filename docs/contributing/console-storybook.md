@@ -78,6 +78,13 @@ Stories reach error states through real controls after loading fixture data.
 Pending-read stories use the real client's 15-second timeout; reset them to replay
 loading.
 
+## Return navigation
+
+Use **Pages/Navigation → Return to loaded pages** and **Return to Agent panels**.
+Search, expanded configuration, native admin access, and Credentials should survive
+Back/Forward and tab changes. Refresh reloads. **Return access denied** and
+**Return session expired** must clear retained content.
+
 ## Agent flows and UI gaps
 
 In **Components → Navigation → Namespace switcher**, use the header selector to
@@ -87,17 +94,20 @@ selector** checks long-name truncation before the chevron and switching without 
 drawer. Existing no-readable, unavailable, loading, and denied stories cover
 restricted selector states.
 
-Saved simulated UI examples show the [desktop selector](../assets/console-namespace-selector/desktop.png),
+Simulated examples: [desktop selector](../assets/console-namespace-selector/desktop.png),
 [mobile empty collection](../assets/console-namespace-selector/mobile.png),
 [Namespaces page without a selector](../assets/console-namespace-selector/namespaces.png),
 and a [switching walkthrough](../assets/console-namespace-selector/namespace-switching.webm).
 
 ### Create and deploy
 
-In **Pages/Agent detail → First deployment creates credentials**, deploy a draft
-with **Deploy new version**. The fixture accepts it without a separate credential
-action and does not label the initial state a Stop request. Storybook does not
-test OCC generation.
+Compare **New version queued**, **Deployment waiting for runtime**, and
+**Deployment retry after dependency failure**; switch versions and check
+**Last checked**.
+
+**First deployment creates credentials** accepts **Deploy new version** without
+a separate credential action. Its initial state is not a Stop request; OCC
+generation is simulated.
 
 Choose a Preset, fill its variables, review seeded workspace files, and create
 an Agent with the Codex harness. The Console submits its inline Configuration
@@ -109,7 +119,7 @@ OpenClaw and unsupported-runtime stories retain the draft workflow: provision
 credentials and deploy from Agent detail.
 
 DevDay previews SWE, Community, Q&A, Oncall, and standard presets with models,
-workspace templates, four Slack channels, model Secrets, Linear, and repository
+workspace templates, six Slack channels, model Secrets, Linear, and repository
 choices. The simulated catalog works with any Preset or Secret choice.
 **Plugins Curated** exercises token-free discovery with simulated Driver responses;
 actual access remains unverified. Hosted discovery requires an eligible Codex
@@ -139,7 +149,7 @@ for the supported installation workflow and prerequisites.
 Repository previews cover shared access levels, empty or pending discovery,
 setup guidance when choices are unavailable, denied or unverified authorization,
 and reselection after a rejected save. In **Repository choices unavailable**, follow
-the setup link or retry discovery; a draft without repositories remains available.
+the setup link or retry discovery; creation without repository access remains available.
 The recovery story retains its saved Configuration and
 requires a current nonempty repository selection before retrying. GitHub App
 setup, Namespace approvals, runtime images, and credential-service networking
@@ -200,24 +210,31 @@ switch to **Configuration** for Harness authentication. Values never appear.
 
 ### Discover and configure plugins
 
-**Create Agent / Discover plugins with a service account token** uses a dummy
-token and simulated OCC discovery. Open **Configure plugins** and select Calendar
-to load its details. **Add Calendar** exposes policies; expand a tool to edit an
-override. **Done** returns to the form; **Plugin selections JSON** shows the draft.
-**Filter this page** searches plugins; **Filter tools** narrows tool rows without
-moving the caret. Credential, provider, or Harness changes clear the catalog but
-preserve selections. Companion stories cover empty,
-loading, rejection, failure, and pagination states.
+**Create Agent / Discover plugins with a service account token** uses simulated
+discovery. Open **Configure plugins**, select Calendar, then **Add Calendar**;
+expand a tool to edit its policy. **Done** returns to the form;
+**Plugin selections JSON** shows the draft. **Search plugins** queries the
+catalog; **Filter tools** filters locally. Credential, provider, or Harness
+changes clear the catalog and preserve selections.
 
-**Create Agent / Discover plugins with a selected PAT Secret** uses simulated
-Secret metadata and discovery responses. Choose Calendar to inspect details, then
-change the selected Secret to clear the catalog. **Selected PAT Secret discovery
-denied** shows a simulated permission failure. Preset PAT Secrets enable discovery;
-API keys do not. Catalog visibility does not prove a plugin can be invoked.
+**Preload plugins after entering a service account token** starts with the picker
+closed. Open it to reuse the background request. **Plugin search loading** holds
+the search response: loading should start while typing, preserve input focus,
+and replace empty-result feedback. **Plugin tools loading** holds Calendar's
+details: check its loading status and disabled **Add Calendar**. Reset to replay
+pending states before timeout.
 
-**Components/Plugins** covers the modal with simulated catalogs and capabilities:
-available plugins, selected overrides, unknown tools, and empty, loading, denied,
-and capability-unavailable states. Expand a tool to inspect inherited enablement
+**Discover plugins with a selected PAT Secret** uses simulated Secret metadata.
+Choose Calendar, then change the Secret to clear discovery.
+**Selected PAT Secret discovery denied** previews permission failure.
+Preset PAT Secrets enable discovery; API keys do not. Catalog visibility does
+not prove invocation access.
+
+**Components/Plugins → Unavailable reason popover** covers keyboard access,
+dismissal, compact rows, help links, detail guidance, and disabled **Add**.
+
+**Components/Plugins** uses simulated catalogs and capabilities.
+Expand a tool to inspect inherited enablement
 and approval. Its reviewer shortcut opens the plugin default when per-tool review
 is unsupported. New plugins omit tool defaults; an omitted reviewer inherits the
 Harness reviewer. Codex offers reviewer selection at the plugin default scope
@@ -227,12 +244,11 @@ inherit. Tool IDs under names match the JSON keys.
 **Create Agent / Edit existing plugin policies** exercises the form with simulated
 policy capabilities; it does not verify installation or runtime enforcement.
 
-**Pages/Agent detail → Edit plugins in new revision** starts with Calendar saved
-on a deployed Agent. Open **Plugins** and load the catalog using its saved
-Service Accounts Secret. Add Documents and change Calendar's policy in
-**Configure plugins**, then save and deploy. **Plugins in admitted revision**
-shows the frozen snapshot. The fixture does not prove installation or a live
-Agent turn.
+**Pages/Agent detail → Edit plugins in new version** starts with Calendar saved.
+Opening **Plugins** preloads the catalog using its Service Accounts Secret.
+In **Configure plugins**, add Documents and change Calendar's policy, then save
+and deploy. **Plugins in admitted revision** shows the frozen snapshot.
+Fixtures do not prove installation or live Agent turns.
 
 ### Update
 
@@ -247,13 +263,16 @@ The default stories leave **Current observations** unrequested. Compare
 diagnostics through a bodyless POST; the fixture returns timestamped checks or
 an error without changing the persisted deployment result.
 
-**Create new version** opens saved settings. Edit and save native JSON or Slack,
-then select **Deploy new version** to admit a new immutable snapshot. Browsing an
-older version does not deploy it. Credential edits also need deployment;
-workspace-file writes apply immediately. Native JSON does not edit Agent-owned
-Backend or execution mode. Slack channel `users` can include `["*"]` for
-everyone; DM settings remain separate. See
+**Create new version** opens saved settings. Save edits, then **Deploy new version**
+to admit an immutable snapshot. Browsing does not deploy. Credentials need deployment;
+workspace writes apply immediately. Native JSON excludes Agent-owned Backend and
+execution mode. Slack channel `users: ["*"]` allows everyone; DMs remain separate. See
 [Agent revisions](../guides/topics/agent-revisions.md).
+
+**Enable Gateway password access** stages a reference. Cancel discards it; Save
+Configuration, then Deploy new version applies it. Compare **Gateway password access configured**, **Gateway
+password save denied**, and **Gateway password save in progress**. These simulated
+Agent detail stories do not prove credential delivery or login.
 
 The DevDay Admin UI segment starts from a deployed `oceclaw` Agent whose Slack
 fixture represents `#openclaw-feedback`. Its native Admin UI target is a
@@ -264,8 +283,7 @@ connect to a gateway, Slack, credentials, or a model.
 
 Open **Stop Agent**, inspect or cancel the confirmation, and confirm the stop.
 The fixture records the requested stopped state; **Refresh stop status** rereads
-it. This demonstrates the controls and request handling; it does not run a Compute
-Driver or prove live shutdown.
+it. It does not prove live shutdown.
 
 Resume with **Create new version** → **Deploy new version**, creating a new revision.
 Disabling Slack does not stop an Agent. See
@@ -285,9 +303,8 @@ model responses require runtime verification outside Storybook. The console disp
 
 ## Maintain coverage
 
-The isolated tool in `scripts/console-storybook/` has its own manifest, lockfile,
-and dependency installation. It uses the repository's seven-day dependency
-release-age policy. Root workspace dependencies are unchanged.
+`scripts/console-storybook/` installs from its own manifest and lockfile under the
+repository's seven-day release-age policy, independently of root dependencies.
 
 - `prepare-assets.mjs` copies the current console assets and the shared contract
   modules served by the controller into ignored `dist/assets/`. Run the build
@@ -303,14 +320,9 @@ release-age policy. Root workspace dependencies are unchanged.
 - `*.stories.mjs` exports named stories by group; `story.mjs` adds instructions,
   UI-gap notices, the preview, and Reset story.
 
-When changing console pages, shared components, or lifecycle controls, update the
-corresponding scenarios and flow instructions in the same PR. Add an export to
-the owning story file for a new scenario. Keep visible failure messages owned by
-the console; configure API responses instead of writing replacement UI markup.
-
-Build Storybook, inspect the affected previews, and walk through changed flows.
-Keep backend and runtime verification in the existing code suites; a successful
-storybook fixture is not evidence that the real API or infrastructure works.
+Update scenarios and instructions alongside console changes. Export new scenarios
+from their owning story file. Configure API responses; the console owns failure
+messages and UI markup.
 
 ## Debug image walkthrough
 

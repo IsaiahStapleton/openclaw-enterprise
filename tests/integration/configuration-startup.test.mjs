@@ -415,7 +415,7 @@ test("ChatGPT startup rejects retired integrations and unsafe backend configurat
         duplicate.id = "other-openai";
         value.backend.push(duplicate);
       },
-      /ServiceAccount Driver cannot belong to multiple Backends/,
+      /A Driver cannot belong to multiple Backends/,
     ],
     [
       (value) => (value.drivers.service_account.configuration.backendId = "openai"),
@@ -512,7 +512,7 @@ test("production embedded replacements preserve their active Service across fail
   const service = computeDriver.service(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     structuredClone(activeSelector),
   );
   assert.equal(service.spec.ports[0].name, "http");
@@ -605,7 +605,7 @@ test("production embedded replacements preserve their active Service across fail
   const newerGateway = computeDriver.deployment(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     "openclaw-enterprise/gateway-fixture:local",
     `agent-${shortHash(agentId, 12)}`,
     "gateway",
@@ -614,11 +614,10 @@ test("production embedded replacements preserve their active Service across fail
     computeDriver.gatewayConfiguration(candidate),
     true,
     servicePrincipalId,
-    computeDriver.harnessAuthForRevision(
-      candidate,
-      authContext,
-      kubernetesGatewayNamespaceName(namespaceId),
-    ),
+    computeDriver.harnessAuthForRevision(candidate, authContext, {
+      name: kubernetesGatewayNamespaceName(namespaceId),
+      plane: "control",
+    }),
   );
   const originalGet = computeDriver.get;
   computeDriver.get = async (kind, requestedName) => {
@@ -641,7 +640,7 @@ test("production embedded replacements preserve their active Service across fail
   service.spec.selector = computeDriver.service(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     inactiveSelector,
   ).spec.selector;
   const initial = await worker.observeRevision(claim, candidate, undefined, undefined);
