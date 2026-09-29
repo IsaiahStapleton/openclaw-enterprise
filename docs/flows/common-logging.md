@@ -131,7 +131,10 @@ for isolation limits.
 
 `k8sattributes` maps identity before `transform/kubernetes-resource` removes
 internal Pod labels; removing shared labels per record would lose identity for
-later records in the batch.
+later records in the batch. It also blocks pipeline start until its Pod cache
+syncs: `filelog` reads existing CRI files immediately, and a record processed
+without Pod identity is filtered out while its offset is still committed, so
+startup events such as `worker.started` would otherwise be lost for good.
 
 The chart validates one exporter destination: an IPv4 `/32` or paired namespace/Pod
 selectors, with a bounded TCP port. It renders exporter egress alongside DNS/API

@@ -863,6 +863,16 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
       "    throw error;",
       "  }",
       "});",
+      'test("allowlisted observability log export diagnostic", () => {',
+      `  const error = new Error("${secret}-message");`,
+      `  error.openclawCiDiagnostic = { kind: "observability-log-export", api: true, worker: false, records: ["${secret}-record"] };`,
+      "  throw error;",
+      "});",
+      'test("rejects unsafe observability log export diagnostic", () => {',
+      `  const error = new Error("${secret}-message");`,
+      `  error.openclawCiDiagnostic = { kind: "observability-log-export", api: "${secret}", worker: false };`,
+      "  throw error;",
+      "});",
       'test("rejects unsafe controller HTTP diagnostic", () => {',
       "  try {",
       "    assert.equal(500, 201);",
@@ -1050,6 +1060,18 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     (entry) => entry.name === "rejects unsafe controller HTTP diagnostic",
   );
   assert.equal(unsafeFailure.error.diagnostic, undefined);
+  const logExportFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "allowlisted observability log export diagnostic",
+  );
+  assert.deepEqual(logExportFailure.error.diagnostic, {
+    kind: "observability-log-export",
+    api: true,
+    worker: false,
+  });
+  const unsafeLogExportFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "rejects unsafe observability log export diagnostic",
+  );
+  assert.equal(unsafeLogExportFailure.error.diagnostic, undefined);
   // Keep the failed wait identifiable without exposing arbitrary runtime output.
   for (const stage of ["ready-status", "warning-status", "initial-rollout"]) {
     const failure = summary.files[0].tests.find((entry) => entry.name === stage);
