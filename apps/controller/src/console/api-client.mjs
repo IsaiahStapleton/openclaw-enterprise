@@ -24,6 +24,9 @@ export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = 
     if (response.status === 401 && hasSession() && lifetime.isCurrent(active)) {
       onExpired();
     }
+    if (response.status === 204 && response.ok && expectedStatus === 204) {
+      return undefined;
+    }
     let payload;
     try {
       payload = await response.json();

@@ -6,6 +6,7 @@ import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs
 import { kubernetesHash, validateExplicitK3dLoopbackContext } from "../helpers/kubernetes-real.mjs";
 import {
   codexRepositoryEvidenceScript,
+  completedToolResult,
   sessionEvidenceScript,
 } from "../helpers/normal-agent-tools.mjs";
 import {
@@ -1167,48 +1168,9 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
       assert.equal(trace.assistantMarkerSeen, true);
       assert.equal(trace.terminalAssistantMarkerSeen, true);
       assert.equal(trace.assistantError, false);
-      const succeeded = (result) =>
-        !result.isError && result.status === "completed" && result.exitCode === 0;
-      const completionFor = (call) => {
-        const result = trace.results.find(
-          (result) => result.toolCallId === call.id && result.seq > call.seq,
-        );
-        if (!result || result.isError) {
-          return undefined;
-        }
-        if (succeeded(result)) {
-          return result;
-        }
-        // A running exec is proved only by a later successful poll of the exact
-        // returned process session. Its output stays attached to that exec call.
-        if (result.status !== "running" || typeof result.processSessionId !== "string") {
-          return undefined;
-        }
-        for (const poll of trace.calls) {
-          if (
-            poll.name !== "process" ||
-            poll.processAction !== "poll" ||
-            poll.processSessionId !== result.processSessionId ||
-            poll.seq <= result.seq
-          ) {
-            continue;
-          }
-          const completed = trace.results.find(
-            (done) =>
-              done.toolCallId === poll.id &&
-              done.processSessionId === result.processSessionId &&
-              done.seq > poll.seq &&
-              succeeded(done),
-          );
-          if (completed) {
-            return completed;
-          }
-        }
-        return undefined;
-      };
       let paired = trace.calls
         .filter((call) => call.name === "exec")
-        .map((call) => ({ ...call, completion: completionFor(call) }))
+        .map((call) => ({ ...call, completion: completedToolResult(trace, call) }))
         .filter((call) => call.completion);
       if (dedicated) {
         assert.equal(nativeTrace.status, "completed");
@@ -1255,7 +1217,7 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
           (call) =>
             call.operations.includes("readBase") && call.completion.commitShas.includes(baseSha),
         ),
-        "the fetch must be followed by a successful read of the independently observed base",
+        "a successful read identifies the independently observed base",
       );
       assert.ok(
         paired.some(

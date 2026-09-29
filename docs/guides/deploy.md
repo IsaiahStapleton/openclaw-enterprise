@@ -68,12 +68,10 @@ hosting does not select the Agent model provider.
 Follow these pages in order in the same operator shell:
 
 1. [Build images and install the control plane](deploy/production-installation.md).
-   Generate the recommended profile configuration or choose the advanced manual
-   YAML branch, create system Secrets, prepare the fresh bootstrap PVC, install
-   the chart, and authenticate to the production API. The
-   [installation profiles](deploy/installation-profiles.md) page owns profile
-   choice, input schema, defaults, and rendering semantics; the production
-   runbook owns every Kubernetes mutation and bootstrap step.
+   Generate configuration from an
+   [installation profile](deploy/installation-profiles.md) (recommended) or copy
+   the manual YAML examples, then create system Secrets, prepare the fresh
+   bootstrap PVC, install the chart, and authenticate to the production API.
 2. [Prepare Namespaces and deploy Agents](deploy/production-agents.md).
    Grant tenant RoleBindings, choose embedded OpenClaw or dedicated Codex,
    provision exact-Agent credentials, and deploy an immutable revision.

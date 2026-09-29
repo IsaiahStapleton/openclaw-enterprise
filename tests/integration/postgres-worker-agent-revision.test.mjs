@@ -63,6 +63,12 @@ async function setup(
     "persisted IAM must contain a Principal authorized for Agent lifecycle and Secret cleanup",
   );
 
+  const namespace = {
+    id: `ns_${randomUUID()}`,
+    name: `revision-worker-${randomUUID()}`,
+    status: "ready",
+    createdAt: new Date().toISOString(),
+  };
   let worker;
   context.after(async () => {
     if (worker === undefined) {
@@ -70,15 +76,25 @@ async function setup(
     } else {
       await worker.stop();
     }
+    // Every case in this file shares one database, and every worker claims from
+    // the whole queue. Close this case's unfinished work (deferred repository
+    // cleanup, retries, abandoned claims) so a later case's worker cannot run it
+    // through that case's recording Compute and repository doubles.
+    await observerPool.query(
+      `UPDATE occ.controller_work
+       SET state = 'failed_permanent',
+           claim_token = NULL,
+           lease_expires_at = NULL,
+           completed_at = clock_timestamp(),
+           reason_code = 'TEST_FIXTURE_CLEANUP',
+           result_data = NULL,
+           updated_at = clock_timestamp()
+       WHERE namespace_id = $1 AND state IN ('queued', 'claimed')`,
+      [namespace.id],
+    );
     await observerPool.end();
   });
 
-  const namespace = {
-    id: `ns_${randomUUID()}`,
-    name: `revision-worker-${randomUUID()}`,
-    status: "ready",
-    createdAt: new Date().toISOString(),
-  };
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = {
     ...createDevelopmentComputeDriver(),
@@ -3021,20 +3037,27 @@ test(
     );
     assert.deepEqual(retainedCounts.rows, [{ attempts: 3, revisions: 0, work: 2 }]);
     cleanupBarrier.resolve();
+    let missing;
     await waitFor("retained repository cleanup to run after Agent deletion", async () => {
       const afterCleanup = await repositoryAttempts(fixture, pendingRevision);
-      return afterCleanup.some(
-        ({ phase, repositoryRef, liveRevisionId }) =>
-          repositoryRef === repository.snapshot.bindings[1].repositoryRef &&
-          phase === "disposed" &&
-          liveRevisionId === null,
-      )
-        ? true
-        : undefined;
+      missing = await fixture.state.read((view) =>
+        view.repositorySessions.findAttempt(missingAdmissionId),
+      );
+      if (
+        missing.phase !== "closing" &&
+        afterCleanup.some(
+          ({ phase, repositoryRef, liveRevisionId }) =>
+            repositoryRef === repository.snapshot.bindings[1].repositoryRef &&
+            phase === "disposed" &&
+            liveRevisionId === null,
+        )
+      ) {
+        return true;
+      }
+      // Incomplete cleanup defers by the boundary Driver's hourly interval.
+      await advanceCleanupRetries(fixture, pendingRevision);
+      return undefined;
     });
-    const missing = await fixture.state.read((view) =>
-      view.repositorySessions.findAttempt(missingAdmissionId),
-    );
     assert.equal(missing.phase, "invalidated");
     assert.equal(missing.liveRevisionId, null);
     assert.equal(missing.sessionId, undefined);

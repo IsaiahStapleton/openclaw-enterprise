@@ -149,7 +149,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
     return account;
   }
 
-  function namespaceSelector() {
+  function namespaceSelector(label = "Namespace") {
     namespaceSelect = element("select", {
       id: "namespace-selector",
       disabled: !session || namespaces.length === 0,
@@ -174,7 +174,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
     return element(
       "div",
       { className: "namespace-selector" },
-      element("label", { for: "namespace-selector" }, "Namespace"),
+      element("label", { for: "namespace-selector" }, label),
       namespaceSelect,
     );
   }
@@ -299,14 +299,25 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
     const view = element("div", { "aria-live": "polite", "aria-busy": "true" });
     main.append(header);
     if (session && feature !== "agents" && namespaceId !== null && !selected) {
-      main.append(
-        element(
-          "p",
-          { className: "scope" },
-          "Namespace unavailable. ",
-          button("Switch Namespace", switchNamespace),
-        ),
-      );
+      if (feature === "namespaces" && namespaces.length) {
+        main.append(
+          element(
+            "section",
+            { className: "state-panel namespace-recovery", role: "status" },
+            element("h2", {}, "Namespace unavailable"),
+            namespaceSelector("Choose a valid namespace"),
+          ),
+        );
+      } else if (feature !== "namespaces") {
+        main.append(
+          element(
+            "p",
+            { className: "scope" },
+            "Namespace unavailable. ",
+            button("Switch Namespace", switchNamespace),
+          ),
+        );
+      }
     }
     main.append(view);
     const mobileToggle = button("Open navigation", () => openDrawer(), {

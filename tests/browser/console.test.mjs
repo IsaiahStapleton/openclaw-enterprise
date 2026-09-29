@@ -844,6 +844,74 @@ test("header Namespace selection leaves Agent detail and creation for the select
   );
 });
 
+test("Namespaces recovers stale selection inline and handles losing all readable scopes", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const alpha = await fixture.createNamespace("Alpha", { ready: true });
+  const beta = await fixture.createNamespace("Beta", { ready: true });
+  const missingId = "ns_00000000-0000-4000-8000-000000000099";
+  const { page } = await newMobilePage(t, fixture);
+  await login(page, fixture, `/console/namespaces?namespace=${missingId}`);
+  await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
+
+  // A stale bookmark must offer recovery on this page without opening the drawer.
+  const selector = page.getByRole("combobox", { name: "Choose a valid namespace", exact: true });
+  assert.equal(await selector.isVisible(), true);
+  assert.equal(await page.locator(".page-header select").count(), 0);
+  await selector.selectOption({ label: "Alpha" });
+  await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/console/namespaces");
+  assert.equal(new URL(page.url()).searchParams.get("namespace"), alpha.id);
+  assert.equal(
+    await page.getByRole("heading", { name: "Namespace unavailable", exact: true }).count(),
+    0,
+  );
+  assert.equal(await page.getByRole("combobox").count(), 0);
+
+  await page.goBack();
+  await selector.waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("namespace"), missingId);
+  await selector.selectOption({ label: "Alpha" });
+  await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
+
+  // Revocation comes from the real IAM Driver; the recovery must never offer that scope.
+  fixture.policy.restrictions.push({
+    id: "deny-alpha-read",
+    namespaceId: alpha.id,
+    resourceKind: "namespace",
+    action: "read",
+    effect: "deny",
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await selector.waitFor();
+  assert.equal(await page.getByRole("option", { name: "Alpha", exact: true }).count(), 0);
+  await selector.selectOption({ label: "Beta" });
+  await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/console/namespaces");
+  assert.equal(new URL(page.url()).searchParams.get("namespace"), beta.id);
+
+  // Include the bootstrapped default Namespace when revoking every remaining scope.
+  // With no alternatives, recovery must explain the access requirement.
+  fixture.policy.restrictions.push({
+    id: "deny-all-namespace-read",
+    resourceKind: "namespace",
+    action: "read",
+    effect: "deny",
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.getByRole("heading", { name: "No accessible namespaces", exact: true }).waitFor();
+  await page
+    .getByText("Ask an administrator to provision resources or grant access, then refresh.", {
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(await page.getByRole("combobox").count(), 0);
+  assert.equal(
+    await page.getByRole("button", { name: "Switch Namespace", exact: true }).count(),
+    0,
+  );
+});
+
 test("console clears private content after session expiry, access revocation, and failed logout", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

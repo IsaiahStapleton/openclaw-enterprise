@@ -16,6 +16,9 @@
       "path": "tests/conformance/configuration-occ.test.mjs"
     },
     {
+      "path": "tests/conformance/console-api-client.test.mjs"
+    },
+    {
       "path": "tests/conformance/contracts.test.mjs"
     },
     {
@@ -253,6 +256,12 @@
       "path": "tests/integration/container-release.test.mjs"
     },
     {
+      "path": "tests/integration/cli-release.test.mjs",
+      "expectedTests": [
+        "CLI release builds four installable platform binaries and rejects changed assets"
+      ]
+    },
+    {
       "path": "tests/integration/container-resume.test.mjs"
     },
     {
@@ -330,6 +339,9 @@
     },
     {
       "path": "tests/conformance/repository-credentials-ownership-boundaries.test.mjs"
+    },
+    {
+      "path": "tests/conformance/repository-credentials-tool-evidence.test.mjs"
     },
     {
       "path": "tests/conformance/repository-credentials-fixture-ownership.test.mjs",

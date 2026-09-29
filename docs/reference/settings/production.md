@@ -28,17 +28,17 @@ session cookie before forwarding to the native gateway.
 | `OCC_AUTH_BASE_URL`                        | Absolute controller base URL.                                                                                      | Defines the production Better Auth base URL and cookie origin.                                                          |
 | `OCC_GATEWAY_API_KEY_PATH`                 | Optional absolute path to the private gateway service-key file.                                                    | API only; validates at startup and reads each operation for rotation. Requires Compute endpoint resolution.             |
 | `OCC_CHANNEL_DIRECTORY_PROXY_URL`          | Optional HTTP(S) proxy URL with one literal IPv4 address and explicit port, or the exact Helm-managed Service URL. | API only; routes Slack lookup and credential validation through an HTTP CONNECT tunnel. Invalid values fail startup.    |
-| `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST` | Optional exact Helm-managed proxy Service host.                                                                    | API only; pairs the managed Service URL with the one DNS host accepted by the Slack directory Driver.                   |
+| `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST` | Optional exact Helm-managed proxy Service host.                                                                    | API only; the one DNS host the Slack directory Driver accepts in the proxy URL instead of an IPv4 address.              |
 | `NODE_EXTRA_CA_CERTS`                      | Optional PEM bundle for a private gateway CA.                                                                      | Node reads it at process startup. Normal leaf renewal under that CA does not require a restart; root-bundle changes do. |
 
-For the Helm deployment, prefer `slackProxy.enabled`. The chart passes the managed Service URL only to the API Pod, passes the
-matching managed host, and grants API egress only to the proxy Pod selector.
-For an external proxy, set `api.channelDirectoryProxyUrl` to the approved proxy
-IP and port; the chart grants egress only to that exact IPv4 `/32` and TCP port.
-The proxy must allow CONNECT to `slack.com:443`; restrict its other destinations
-at the proxy. An empty value
-renders no proxy egress rule; Slack lookup and credential validation require
-another approved network route. See the
+For the Helm deployment, prefer `slackProxy.enabled`. The chart then passes the
+managed Service URL and its matching host only to the API Pod and grants API
+egress only to the proxy Pods. For an external proxy, set
+`api.channelDirectoryProxyUrl` to the approved proxy IP and port; the chart grants
+egress only to that exact IPv4 `/32` and TCP port. The proxy must allow CONNECT to
+`slack.com:443`; restrict its other destinations at the proxy. When neither
+setting is used, the chart renders no proxy egress rule, and Slack lookup and
+credential validation require another approved network route. See the
 [Slack Channel Driver](../drivers/slack-channel.md#enable-lookup-in-production).
 
 When the native admin pilot is enabled, the API also requires:
