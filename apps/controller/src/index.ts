@@ -3811,7 +3811,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: recoveryReplaceOperation.operationId,
           summary: recoveryReplaceOperation.summary,
           description:
-            "Requires a current human Native IAM Installation administrator and trusted Origin. The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.",
+            "Requires a current human Native IAM Installation administrator and trusted Origin who holds every IAM grant of the current holder's Principal (else 403). The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.",
           tags: ["Authentication"],
           security: [{ sessionCookie: [] }],
           "x-openclaw-permissions": [
@@ -3846,12 +3846,20 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         if (!context || !options.auth.replaceRecovery) {
           throw dependencyUnavailable();
         }
-        const actor = await humanAccountActor(request, recoveryReplaceOperation, context);
         const { userId, expectedCurrentUserId, expectedVersion } = request.body as {
           userId: string;
           expectedCurrentUserId: string;
           expectedVersion: number;
         };
+        // Taking the designation acts against its holder, which then cannot be disabled, so the
+        // actor must hold every grant of the holder's Principal. State commits only when the
+        // expected holder is still current.
+        const actor = await humanAccountActor(
+          request,
+          recoveryReplaceOperation,
+          context,
+          expectedCurrentUserId,
+        );
         // The new holder must administer the Installation, as startup requires of the seed. This
         // check runs before the State transaction. That is sound because Installation-scoped access
         // bindings have no online revocation path (deleteAccessBinding is Namespace-scoped), and
