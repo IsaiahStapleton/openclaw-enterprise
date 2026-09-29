@@ -107,13 +107,13 @@ startup cannot carry this init container and rejects workspace setup rather than
 dropping initialization.
 
 The runner validates identity, paths, OpenClaw `2026.9.6`, and the rendered
-template digest against Console defaults before initialization. Submitted
-defaults identities must match; links and conflicts fail. Without a completion
+template digest against Console defaults.
+Defaults identities must match; links and conflicts fail. Without a completion
 marker, native `setup` initializes the workspace and Git without starting the Gateway.
 The Kubernetes initializer uses the configured Gateway resource budget because it
 loads the native CLI, even when it runs in the dedicated Harness Pod.
-It atomically replaces supplied files, including empty strings, only if the
-existing value is absent, stock, or already submitted. It runs native setup
+It atomically replaces supplied files, including empty strings, when existing
+content is absent, stock, or already submitted. It runs native setup
 again so native `BOOTSTRAP.md` lifecycle sees the submitted profile, verifies
 the results, then atomically writes `.oce-workspace-setup.json`.
 
@@ -318,7 +318,7 @@ replays it. The native client closes in the operation's cleanup path.
 
 ## Changelog
 
-- 2026-09-29 08:09: Align the workspace version with the selected OpenClaw main source; template contents are unchanged. (authoring-run/5e3ebbae-97b8-4709-8c03-6a032657e102 - 395c735c3915135e4d5fe533041b3d2c04e995ea)
+- 2026-09-29 08:09: Align the documented workspace version. (authoring-run/5e3ebbae-97b8-4709-8c03-6a032657e102 - 395c735c3915135e4d5fe533041b3d2c04e995ea)
 
 - 2026-09-28 21:47: Defer enrollment checks until Gateway readiness. (authoring-run/1b67a5da-eea7-4eb4-a91f-38abd1fb5792 - 1365d9b33eec2de2452bd3142f57a1729cccd559)
 
