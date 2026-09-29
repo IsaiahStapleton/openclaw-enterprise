@@ -1,0 +1,46 @@
+# Share an existing Agent in the console
+
+Installation administrators can share one Agent with a person who already has an
+account. Follow the [sharing procedure](../../guides/console/agent-sharing.md);
+this page defines the grants, limits, and uncertain outcomes. See the
+[console reference](../console.md) for the rest of Agent detail.
+
+## Grants
+
+Installation administrators share an Agent using an existing person's Principal ID.
+The console reuses or creates Namespace-scoped Roles for `namespace:read` and,
+separately, `agent:read` plus `agent:administer`, bound to the exact Namespace and
+Agent. Role reuse requires matching scope and permissions, regardless of name.
+Namespace read enables discovery without granting child access. The API validates
+subjects and targets. Sharing does not provision or search for accounts.
+
+The acknowledgment covers full native administration of the shared Agent,
+including its conversations, settings, tools and accessible credentials. This is
+not restricted chat or automatic personal identity for each chat. Sharing does
+not grant OCE Configuration, deployment, Secret or Agent stop permissions. The
+[native launcher](../agent-native-admin.md) still requires its Installation setup and a supported runtime.
+
+## Direct grants and removal
+
+**Direct Agent grants** lists explicit bindings to this Agent and their Role
+permissions. It is not an effective-access report. **Remove binding** deletes
+only that binding and preserves Namespace discovery. Other grants, groups and
+Installation administration can still provide access; accounts, Roles and
+Agents are retained.
+
+## Failures and uncertain outcomes
+
+Policy mutations run sequentially. Confirmed steps remain visible after a later
+failure. After an uncertain response, **Refresh sharing** reads current Roles
+and bindings before another change is allowed; writes never retry automatically.
+A matching binding proves present configuration, not the outcome of an earlier
+request. Policy read denial affects only the sharing panel; Agent detail, native
+admission and stop retain their own authorization checks. An expired session
+clears the private view as usual.
+
+## Related
+
+- [Sharing procedure](../../guides/console/agent-sharing.md)
+- [Native admin UI access](../agent-native-admin.md)
+- [Authorization](../authorization.md)
+- [Sharing request flow](../../flows/platform-console/agent-sharing.md)

@@ -978,6 +978,7 @@ export interface IAMPolicyManagementContext {
 }
 
 export type ManagedIAMResourceKind =
+  | "namespace"
   | "agent"
   | "agent_revision"
   | "configuration"

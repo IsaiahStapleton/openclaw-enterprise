@@ -659,7 +659,13 @@ test("bound Slack credential fields show Secret references without reading value
   assert.equal(await appToken.evaluate((node) => node.value), secretOptionLabel(appSecret));
   assert.equal(await botToken.evaluate((node) => node.value), secretOptionLabel(botSecret));
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
-  assert.deepEqual(channelApi.requests, []);
+  // The Agent sharing panel reads current policy; no credential or policy write occurs.
+  assert.deepEqual(
+    channelApi.requests.filter(
+      ({ operation }) => operation !== "roles-get" && operation !== "bindings-get",
+    ),
+    [],
+  );
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), false);
 });
 

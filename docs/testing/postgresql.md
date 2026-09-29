@@ -119,6 +119,15 @@ file selection. Broad `test:postgres`, `test:integration`, and `test` commands
 include the revision-worker suite, which requires prepared ownership when
 selected with a database URL.
 
+The production bootstrap test also exercises existing-person Agent sharing through
+real cookie-authenticated HTTP, native IAM and restricted PostgreSQL State. It
+checks initial denial, exact Namespace/Agent grants, sibling and Configuration
+denial, persisted sessions and policy after application restart, and selective
+revocation while another person retains access. The fixture seeds an existing
+Installation-reader Role; account creation and password sign-in use ordinary APIs.
+This is not atomic-enrollment proof. Its passive Compute and test Configuration/Secret
+Drivers do not establish native Gateway execution or closure of open streams.
+
 Four optional live Configuration cases additionally require
 `OCC_TEST_KUBERNETES_CONFIGURATION=1` and an already configured live Kubernetes
 Configuration Driver in the subprocess startup environment. The flag alone

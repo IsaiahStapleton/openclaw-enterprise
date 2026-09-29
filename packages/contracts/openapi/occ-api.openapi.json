@@ -13647,6 +13647,7 @@
                   "resourceId": { "maxLength": 200, "minLength": 1, "type": "string" },
                   "resourceKind": {
                     "anyOf": [
+                      { "const": "namespace", "type": "string" },
                       { "const": "agent", "type": "string" },
                       { "const": "agent_revision", "type": "string" },
                       { "const": "configuration", "type": "string" },
@@ -14267,6 +14268,7 @@
                         },
                         "resourceKind": {
                           "anyOf": [
+                            { "const": "namespace", "type": "string" },
                             { "const": "agent", "type": "string" },
                             { "const": "agent_revision", "type": "string" },
                             { "const": "configuration", "type": "string" },

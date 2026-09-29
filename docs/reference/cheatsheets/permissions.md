@@ -86,10 +86,12 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
   `installation:administer`. The configured external service enforces its own access.
 
 The [Namespace policy API](../authorization.md#manage-namespace-policy) accepts
-all seven action names on `agent`, `agent_revision`, `configuration`,
+every action name on `agent`, `agent_revision`, `configuration`,
 `credential_source`, `preset`, `secret`, and `service_account`, including
-combinations no current operation checks.
-It can create bindings only for an identity and an existing exact resource.
+combinations no current operation checks. On `namespace` it accepts only `read`.
+It can bind an existing human Principal or a Namespace-local ServicePrincipal
+to an existing exact resource, including the path Namespace itself. Exact
+Namespace access does not grant access to child resources.
 It cannot create Installation or Namespace-wide grants, including the collection
 permission needed to create resources. Existing Namespace-wide and Group
 bindings can still be listed or deleted. Groups and Restrictions cannot be

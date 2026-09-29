@@ -93,6 +93,7 @@ import {
 import {
   assertHarnessAuthAvailable,
   harnessAuthMatches,
+  namespaceRoleGrantsBeyondRead,
   validHarnessAuthSnapshot,
 } from "./platform-state.ts";
 import {
@@ -2964,6 +2965,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       resourceId: string,
     ): Promise<boolean> => {
       const queryByKind: Record<string, string> = {
+        namespace: "SELECT 1 FROM occ.namespaces WHERE id = $1 AND id = $2 FOR KEY SHARE",
         // Status can change without changing a key. SHARE also fences the
         // active -> deleting transition until the policy transaction settles.
         agent:
@@ -3019,6 +3021,9 @@ export class PostgresPlatformState implements PlatformStateStore {
           role.permissions.length === 0
         ) {
           throw new ScopeViolationError("The IAM Role must belong to an available Namespace.");
+        }
+        if (namespaceRoleGrantsBeyondRead(role)) {
+          throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
         }
         await client.query(
           "INSERT INTO occ.iam_roles (id, namespace_id, name, permissions) VALUES ($1, $2, $3, $4::jsonb)",
@@ -3087,9 +3092,21 @@ export class PostgresPlatformState implements PlatformStateStore {
             "The IAM AccessBinding must belong to an available Namespace.",
           );
         }
+        // Same subject rule as the in-memory adapter: a human without a Namespace, a
+        // non-Agent ServicePrincipal of the exact Namespace, or the ServicePrincipal of a
+        // live Agent there. The Agent owner key is deferred, so it cannot vouch mid-unit.
         const identity = await client.query(
-          `SELECT 1 FROM occ.iam_identities
-           WHERE namespace_id = $1 AND id = $2 AND kind = 'service_principal'`,
+          `SELECT 1 FROM occ.iam_identities AS i
+           WHERE i.id = $2 AND (
+             (i.kind = 'principal' AND i.namespace_id IS NULL) OR
+             (i.kind = 'service_principal' AND i.namespace_id = $1 AND (
+               i.agent_id IS NULL OR EXISTS (
+                 SELECT 1 FROM occ.agents AS a
+                 WHERE a.namespace_id = $1 AND a.id = i.agent_id
+                   AND a.service_principal_id = i.id
+               )
+             ))
+           )`,
           [namespace.id, binding.subjectId],
         );
         if (identity.rowCount !== 1) {
@@ -3097,8 +3114,12 @@ export class PostgresPlatformState implements PlatformStateStore {
             "The IAM AccessBinding subject does not belong to the exact Namespace.",
           );
         }
-        if ((await iamPolicy.getRole(namespace.id, binding.roleId)) === undefined) {
+        const role = await iamPolicy.getRole(namespace.id, binding.roleId);
+        if (role === undefined) {
           throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+        }
+        if (binding.resourceKind === "namespace" && namespaceRoleGrantsBeyondRead(role)) {
+          throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
         }
         if (!(await lockTarget(namespace.id, binding.resourceKind, binding.resourceId))) {
           throw new ScopeViolationError(
