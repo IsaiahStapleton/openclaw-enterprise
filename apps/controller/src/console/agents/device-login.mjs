@@ -143,6 +143,8 @@ export function createDeviceLogin({ context, agentId, initial, onChange, hint })
     }
   }
 
+  // TODO(oauth-cancellation): Clear the selectable source or block owner submission
+  // while discard is pending. Deferred beyond the first-deploy MVP.
   async function discard() {
     if (busy || disabled || !login) {
       return;

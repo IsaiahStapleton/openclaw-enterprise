@@ -124,6 +124,11 @@ logins, then delete their unreferenced Secrets through the normal Secret API.
 An interrupted token exchange requires a fresh login; a controller crash during
 polling can leave the old login pending until expiry.
 
+Wait for **Discard staged login** to finish before choosing **Create Agent** or
+**Save authentication source**. Those controls currently remain available during
+cancellation; submitting immediately can save a cancelled source that fails
+at deployment. Coordinating these controls is deferred beyond the first-deploy MVP.
+
 If private storage or its credential file is lost, use the Agent credential
 editor to connect again, save the new source, and deploy. An explicit replacement
 source installs a new bundle after the previous workload stops. An unchanged
