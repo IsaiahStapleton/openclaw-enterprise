@@ -353,6 +353,45 @@ test(
           bindings: 0,
           enrolled: 0,
         });
+
+        // A lost COMMIT reply reports an unknown outcome, never a rollback. The
+        // login and its Principal share the transaction, so they cannot diverge.
+        const uncertain = await preparedAccount("uncertain");
+        const uncertainSeed = auth.principalSeed(uncertain, { roleId });
+        let commits = 0;
+        const lostAckState = new PostgresPlatformState(
+          transportPool(pool, async (client, sql, parameters) => {
+            const result = await client.query(sql, parameters);
+            if (sql === "COMMIT") {
+              commits++;
+              throw new Error("Simulated lost provisioning commit acknowledgement");
+            }
+            return result;
+          }),
+        );
+        await assert.rejects(
+          new PostgresHumanAuthentication(
+            lostAckState,
+            installation.id,
+            issuer,
+          ).provisionPasswordAccount(uncertain, uncertainSeed),
+          { name: "PostgresCommitOutcomeUnknownError" },
+        );
+        assert.equal(commits, 1, "an uncertain provisioning is never replayed");
+        assert.deepEqual(await rowCounts(uncertain.id, uncertainSeed.principal.id), {
+          users: 1,
+          methods: 1,
+          principals: 1,
+          bindings: 1,
+          enrolled: 1,
+        });
+        // Retrying the same email converges on the committed account.
+        const retry = { ...(await preparedAccount("uncertain-retry")), email: uncertain.email };
+        await assert.rejects(
+          persistence.provisionPasswordAccount(retry, auth.principalSeed(retry, { roleId })),
+          { name: "UserAlreadyExistsError" },
+        );
+        assert.equal((await persistence.snapshotPassword(uncertain.email)).user.id, uncertain.id);
       },
     );
 

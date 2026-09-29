@@ -15,6 +15,7 @@ import { createTestConfigurationDriver } from "../helpers/configuration-driver.m
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
+import { commitAckProxy } from "../fixtures/postgres-commit-ack-proxy.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "postgres-admin@openclaw.local";
@@ -666,5 +667,144 @@ test(
       [auditId],
     );
     assert.equal(duplicateAuditRows.rowCount, 1);
+  },
+);
+
+test(
+  "PostgreSQL auth account create with a lost COMMIT reply keeps the whole account and converges on retry",
+  requiresPostgres,
+  async (context) => {
+    const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+    const apps = [];
+    let proxy;
+    context.after(async () => {
+      for (const app of apps.reverse()) {
+        await app.close();
+      }
+      await proxy?.close();
+      await observerPool.end();
+    });
+
+    const config = {
+      mode: "development",
+      host: "127.0.0.1",
+      databaseUrl,
+      authBaseURL: "http://127.0.0.1",
+      authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
+    };
+    await ensureDevelopmentBootstrap(context, {
+      databaseUrl,
+      email: adminEmail,
+      password: adminPassword,
+      authSecret: config.authSecret,
+      authBaseURL: config.authBaseURL,
+      installationName: "PostgreSQL account unknown commit",
+    });
+    const drivers = () => ({
+      computeDriver: createDevelopmentComputeDriver(),
+      configurationDriver: createTestConfigurationDriver(),
+    });
+    const ordinary = await composePostgresDevelopment(config, drivers());
+    apps.push(ordinary);
+    proxy = await commitAckProxy(databaseUrl);
+    const faulted = await composePostgresDevelopment(
+      { ...config, databaseUrl: proxy.url },
+      drivers(),
+    );
+    apps.push(faulted);
+    await faulted.ready();
+
+    const session = await signInWithEmailPassword({
+      fetch: (request) => fetchFromInjectedApp(ordinary, request),
+      email: adminEmail,
+      password: adminPassword,
+    });
+    const state = new PostgresPlatformState(observerPool);
+    const installation = await state.loadInstallation();
+    assert.ok(installation);
+    const iamBefore = await state.loadNativeIAMState(installation.id);
+    const role = iamBefore.roles.find((candidate) =>
+      candidate.permissions.some(
+        (permission) => permission.action === "read" && permission.resourceKind === "installation",
+      ),
+    );
+    assert.ok(role, "the persisted Installation must have an account-bindable Role");
+
+    const email = `postgres-unknown-commit-${randomUUID()}@example.com`;
+    const password = `generated-password-${randomUUID()}`;
+    const payload = { email, password, name: "Postgres Unknown Commit", roleId: role.id };
+    async function persisted() {
+      const { rows } = await observerPool.query(
+        `SELECT u.id AS user_id, h.principal_id,
+           (SELECT count(*)::int FROM occ.account a
+             WHERE a.user_id = u.id AND a.provider_id = 'credential') AS passwords,
+           (SELECT count(*)::int FROM occ.iam_identities i WHERE i.id = h.principal_id) AS principals,
+           (SELECT count(*)::int FROM occ.iam_access_bindings b
+             WHERE b.identity_subject_id = h.principal_id) AS bindings,
+           (SELECT count(*)::int FROM occ.audit_events e
+             WHERE e.action = 'openclaw.auth.accounts.create'
+               AND e.details->>'principalId' = h.principal_id) AS audits
+         FROM occ."user" u
+         LEFT JOIN occ.human_authentication_accounts h ON h.user_id = u.id
+         WHERE u.email = $1`,
+        [email],
+      );
+      return rows;
+    }
+
+    // The request's three earlier read transactions commit first. Drop the reply to
+    // the provisioning COMMIT, after PostgreSQL has committed the account, Principal,
+    // binding and audit.
+    proxy.arm({ skipCommits: 3 });
+    const unknown = await faulted.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload,
+    });
+    assert.equal(proxy.observedCommit, true);
+    assert.equal(unknown.statusCode, 503, unknown.body);
+    assert.equal(unknown.json().error.code, "DEPENDENCY_UNAVAILABLE");
+    assert.match(unknown.json().error.message, /outcome is unknown/i);
+
+    // Nothing was compensated: the login and its Principal committed together.
+    const committed = await persisted();
+    assert.equal(committed.length, 1);
+    assert.ok(committed[0].principal_id);
+    assert.deepEqual(
+      {
+        passwords: committed[0].passwords,
+        principals: committed[0].principals,
+        bindings: committed[0].bindings,
+        audits: committed[0].audits,
+      },
+      { passwords: 1, principals: 1, bindings: 1, audits: 1 },
+    );
+    const provisionedSession = await signInWithEmailPassword({
+      fetch: (request) => fetchFromInjectedApp(ordinary, request),
+      email,
+      password,
+    });
+    const authorized = await ordinary.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(provisionedSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(authorized.statusCode, 200, authorized.body);
+
+    // A deliberate retry of the same request converges on the committed account:
+    // the email conflicts and no second login, Principal or audit event appears.
+    const retry = await ordinary.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload,
+    });
+    assert.equal(retry.statusCode, 409, retry.body);
+    assert.equal(retry.json().error.code, "RESOURCE_CONFLICT");
+    assert.deepEqual(await persisted(), committed);
+    const iamAfter = await state.loadNativeIAMState(installation.id);
+    assert.equal(iamAfter.identities.length, iamBefore.identities.length + 1);
+    assert.equal(iamAfter.bindings.length, iamBefore.bindings.length + 1);
   },
 );

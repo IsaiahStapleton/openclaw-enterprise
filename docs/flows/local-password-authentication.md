@@ -240,6 +240,10 @@ sign-in. `prepareAccount` validates and hashes the password without writing; the
 PostgreSQL composition then calls `provisionPasswordAccount`, which writes the
 user, password method, Principal, explicit existing-role binding, enrollment,
 and audit in one State transaction, so a failure leaves no partial account.
+Nothing is compensated after the transaction. A lost COMMIT reply returns `503`
+stating that the outcome is unknown; the account is either complete or absent,
+so a deliberate retry with the same email creates it only if the first attempt
+did not commit, and otherwise returns `409`.
 Account creation issues no session and infers no grants.
 
 ## Debugging and Verification
@@ -250,7 +254,8 @@ Account creation issues no session and infers no grants.
   `OCC_PRODUCTION_WIREUP_DATABASE_URL` proves actual bootstrap, protected random
   password/key delivery, human sign-in, service-key access, and no reissue on rerun.
 - `node --test tests/integration/postgres-auth-accounts.test.mjs` with
-  `OCC_TEST_DATABASE_URL` covers account provisioning and transactional rollback.
+  `OCC_TEST_DATABASE_URL` covers account provisioning, transactional rollback, and
+  a lost provisioning COMMIT reply.
   Its fresh development bootstrap case additionally verifies the service identity,
   protected output, and key access; it skips when an Installation already exists.
 - `node --test tests/integration/bootstrap-output.test.mjs` covers exclusive
