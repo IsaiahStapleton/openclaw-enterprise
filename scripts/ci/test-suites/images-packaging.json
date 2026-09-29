@@ -1,5 +1,6 @@
 {
   "env": {
+    "OCC_TEST_CONTAINER_REGISTRY": "1",
     "OCC_TEST_DOCKER_TOKEN_RETRY": "1"
   },
   "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE", "OCC_TEST_PRODUCTION_IMAGE"],
@@ -100,8 +101,5 @@
         "termination during backoff exits without another probe"
       ]
     }
-  ],
-  "env": {
-    "OCC_TEST_CONTAINER_REGISTRY": "1"
-  }
+  ]
 }
