@@ -3037,20 +3037,27 @@ test(
     );
     assert.deepEqual(retainedCounts.rows, [{ attempts: 3, revisions: 0, work: 2 }]);
     cleanupBarrier.resolve();
+    let missing;
     await waitFor("retained repository cleanup to run after Agent deletion", async () => {
       const afterCleanup = await repositoryAttempts(fixture, pendingRevision);
-      return afterCleanup.some(
-        ({ phase, repositoryRef, liveRevisionId }) =>
-          repositoryRef === repository.snapshot.bindings[1].repositoryRef &&
-          phase === "disposed" &&
-          liveRevisionId === null,
-      )
-        ? true
-        : undefined;
+      missing = await fixture.state.read((view) =>
+        view.repositorySessions.findAttempt(missingAdmissionId),
+      );
+      if (
+        missing.phase !== "closing" &&
+        afterCleanup.some(
+          ({ phase, repositoryRef, liveRevisionId }) =>
+            repositoryRef === repository.snapshot.bindings[1].repositoryRef &&
+            phase === "disposed" &&
+            liveRevisionId === null,
+        )
+      ) {
+        return true;
+      }
+      // Incomplete cleanup defers by the boundary Driver's hourly interval.
+      await advanceCleanupRetries(fixture, pendingRevision);
+      return undefined;
     });
-    const missing = await fixture.state.read((view) =>
-      view.repositorySessions.findAttempt(missingAdmissionId),
-    );
     assert.equal(missing.phase, "invalidated");
     assert.equal(missing.liveRevisionId, null);
     assert.equal(missing.sessionId, undefined);
