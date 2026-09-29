@@ -253,6 +253,22 @@ async function readState(path) {
 
 const stateWrites = new Map();
 
+// The Codex version the runtime image pins; seccomp preparation verifies the
+// image's `codex --version` against it, so it must not drift from the Dockerfile.
+async function kubernetesCodexVersion(env) {
+  const override =
+    env.OCC_TEST_KUBERNETES_CODEX_VERSION ?? process.env.OCC_TEST_KUBERNETES_CODEX_VERSION;
+  if (override) {
+    return override;
+  }
+  const dockerfile = await readFile(runtimeDockerfile, "utf8");
+  const match = /^ENV OPENAI_CODEX_VERSION=(\S+)$/m.exec(dockerfile);
+  if (!match) {
+    throw new Error(`${runtimeDockerfile} does not pin OPENAI_CODEX_VERSION.`);
+  }
+  return match[1];
+}
+
 async function writeState(path, state) {
   // Concurrent preparation must never publish an older cleanup inventory after
   // a newer one. A failed write still lets subsequent cleanup record its state.
@@ -1575,10 +1591,7 @@ async function prepareK3dRuntimeImages(
       image: env.OCC_TEST_KUBERNETES_AGENT_IMAGE,
       execFile,
       kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
-      codexVersion:
-        env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.158.0",
+      codexVersion: await kubernetesCodexVersion(env),
     });
     env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
     cluster.codexSeccompProfile = seccomp.profileName;
@@ -1604,16 +1617,14 @@ async function prepareImagesPackagingCodexSeccompProfile(statePath, state, env) 
     state.lane,
     "Deriving the reviewed Codex seccomp profile for native runtime image smoke tests.",
   );
+  const codexVersion = await kubernetesCodexVersion(env);
   const seccomp = await timedPreparation(state.lane, "codex-seccomp-profile", () =>
     prepareCodexSeccompProfile({
       cluster,
       image: runtimeImage.reference,
       execFile,
       kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
-      codexVersion:
-        env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.158.0",
+      codexVersion,
     }),
   );
   if (!seccomp.dockerProfilePath || !isAbsolute(seccomp.dockerProfilePath)) {
@@ -2026,10 +2037,7 @@ async function prepareLane({ lane, statePath }) {
         image: env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
         execFile,
         kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
-        codexVersion:
-          env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-          process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-          "0.156.0",
+        codexVersion: await kubernetesCodexVersion(env),
       });
       env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
       cluster.codexSeccompProfile = seccomp.profileName;
