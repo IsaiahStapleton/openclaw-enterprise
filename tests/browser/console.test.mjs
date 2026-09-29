@@ -1100,7 +1100,7 @@ for (const trigger of ["Refresh", "Back with a replacement session"]) {
       // Disabled controls can still receive programmatic events; admission must reject them.
       const navigation = await selector.evaluate((element, staleNamespaceId) => {
         const before = globalThis.location.href;
-        const staleOption = document.createElement("option");
+        const staleOption = element.ownerDocument.createElement("option");
         staleOption.value = staleNamespaceId;
         element.append(staleOption);
         element.value = staleNamespaceId;
