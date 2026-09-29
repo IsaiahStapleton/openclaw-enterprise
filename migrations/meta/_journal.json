@@ -253,6 +253,13 @@
       "when": 1787000000035,
       "tag": "0035_agent_deletion_repository_session_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1787000000036,
+      "tag": "0036_deployment_progress",
+      "breakpoints": true
     }
   ]
 }

@@ -8,6 +8,7 @@ import {
   validateSuccessResultData,
   type ClaimedWork,
   type ControllerWork,
+  type ControllerWorkAttempt,
   type ControllerWorkKind,
   type ControllerWorkState,
   type EnqueueWork,
@@ -412,7 +413,8 @@ const INSERT_EVIDENCE_CTE_SQL = `
         transitioned.namespace_id
       ),
       $3::text,
-      jsonb_build_object('reasonCode', $4::text, 'attemptCount', transitioned.attempt_count)
+      jsonb_build_object('reasonCode', $4::text, 'attemptCount', transitioned.attempt_count,
+        'workId', transitioned.idempotency_key)
     FROM evidence_targets AS transitioned
     RETURNING id
   )`;
@@ -774,6 +776,28 @@ export class PostgresWorkQueue {
       [nonempty(idempotencyKey, "Controller work idempotency key")],
     );
     return found.rows[0] === undefined ? undefined : asWork(found.rows[0]);
+  }
+
+  async findWorkAttempt(idempotencyKey: string): Promise<ControllerWorkAttempt | undefined> {
+    // A revision can also have maintenance and cleanup work. Only evidence bound
+    // to this exact work item can explain its progress; unbound history is unknown.
+    const found = await this.client.query(
+      `SELECT event.occurred_at, event.details->>'reasonCode' AS reason_code
+       FROM occ.controller_work AS work
+       JOIN occ.audit_events AS event
+         ON event.namespace_id = work.namespace_id AND event.actor_id = work.actor_id
+         AND event.resource_kind = 'agent_revision' AND event.resource_id = work.revision_id
+         AND event.kind = 'mutation' AND event.action = 'reconcile'
+         AND event.details->>'workId' = work.idempotency_key
+         AND event.occurred_at >= work.created_at
+       WHERE work.idempotency_key = $1
+       ORDER BY event.occurred_at DESC, event.id DESC LIMIT 1`,
+      [nonempty(idempotencyKey, "Controller work idempotency key")],
+    );
+    const row = found.rows[0] as { occurred_at: Date | string; reason_code: string } | undefined;
+    return row === undefined
+      ? undefined
+      : Object.freeze({ at: asDate(row.occurred_at), code: row.reason_code });
   }
 
   async complete(claim: WorkClaim, result: WorkResult = {}): Promise<void> {

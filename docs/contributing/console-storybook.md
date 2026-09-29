@@ -102,10 +102,13 @@ and a [switching walkthrough](../assets/console-namespace-selector/namespace-swi
 
 ### Create and deploy
 
-In **Pages/Agent detail → First deployment creates credentials**, deploy a draft
-with **Deploy new version**. The fixture accepts it without a separate credential
-action and does not label the initial state a Stop request. Storybook does not
-test OCC generation.
+Compare **New version queued**, **Deployment waiting for runtime**, and
+**Deployment retry after dependency failure**; switch versions and check
+**Last checked**.
+
+**First deployment creates credentials** accepts **Deploy new version** without
+a separate credential action. Its initial state is not a Stop request; OCC
+generation is simulated.
 
 Choose a Preset, fill its variables, review seeded workspace files, and create
 an Agent with the Codex harness. The Console submits its inline Configuration

@@ -121,6 +121,9 @@ function classifyReceipts(receipts, manifest) {
       if (receipts.length === 34) {
         return "preBrokerReceipts";
       }
+      if (receipts.length === 36) {
+        return "preDeploymentProgress";
+      }
       if (receipts.length === 35) {
         return "preAgentDeletion";
       }
@@ -167,6 +170,9 @@ function classifyReceipts(receipts, manifest) {
   }
   if (receipts.length === 34) {
     return "preBrokerReceipts";
+  }
+  if (receipts.length === 36) {
+    return "preDeploymentProgress";
   }
   if (receipts.length === 35) {
     return "preAgentDeletion";

@@ -50,8 +50,8 @@ Public status contains only `sessionId`, `state`, `deadlineWallMs` and `binding`
 snapshot after complete private validation. Cleanup counters and configuration
 decoding remain private. Status cannot regenerate the closed-schema Git/gh files.
 
-`maintenanceIntervalMs` schedules worker reconciliation; it is not a measured
-withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
+`maintenanceIntervalMs` schedules worker reconciliation and retries of incomplete
+repository cleanup; it is not a measured withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
 persisted `admitted_spec.repository_credentials` retain their meaning.
 
 State derives immutable Driver, Backend, profile and grant context from the

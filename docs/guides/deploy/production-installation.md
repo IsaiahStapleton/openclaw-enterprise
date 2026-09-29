@@ -5,8 +5,11 @@ authenticated API access. Prepare [standard Kubernetes](kubernetes.md) or
 [Amazon EKS](eks.md) and complete the [production prerequisites](../deploy.md#production-prerequisites)
 first. Workspace access is required: install the
 [routing prerequisites](workspace-routing.md#requirements), provide a GatewayClass,
-and keep routing enabled in both example files. Control UI is enabled in the
+and keep private routing enabled. Control UI is enabled in the
 production values; complete [native admin prerequisites](native-admin.md#requirements).
+
+Use [profiles](#recommended-generate-profile-configuration) for configuration, or
+[manual YAML](#advanced-copy-manual-yaml-examples) for advanced customization.
 
 Run from a clean checkout at the image source revision so the chart, examples,
 and helpers match. See [Deliver images to a private registry](private-registry-images.md)
@@ -15,16 +18,16 @@ shell and protected files for [Agent deployment](production-agents.md).
 
 ## Use published images
 
-To install the current example, select a verified release or custom controller
-image supporting `catalogSource: openai-curated` and the
-[origin check for cookie-authenticated mutations](../../reference/authentication.md#browser-request-origin),
-plus a compatible runtime. Export their immutable digests as `CONTROLLER_IMAGE`
-and `RUNTIME_IMAGE` for installation, or [build and publish images](#build-and-publish-production-images)
+Select a verified release or custom controller image that matches this chart and
+supports the generated configuration: native admin, private routing, the selected
+PluginDriver catalog or hosted discovery path, and any optional managed proxy or
+repository wiring. Select a compatible runtime image. Export immutable digests as
+`CONTROLLER_IMAGE` and `RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images)
 from this checkout.
 
-The published controller supports the curated catalog but predates the origin
-check. No current production-ready release is verified here. Use these images
-only for image tests or workflows targeting their source revision.
+The historical published controller below supports the curated catalog but
+predates the origin check and profile-generated configuration. Use it only for
+image tests or workflows targeting its source revision.
 
 Both images from source `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed
 matching-architecture startup and remote digest checks in
@@ -121,94 +124,132 @@ credentials for control-plane and tenant Pods; builder login does not authentica
 
 ## Configure the Installation
 
-Set the production shell inputs before the first Kubernetes command. For a local
-Kubernetes trial, [build and import the test images](local-operations.md#build-images-for-local-kubernetes)
-to produce YAML copies with real image digests, then set
-`OCC_INPUT_DIRECTORY` to that generated directory and keep those files.
-For registry-backed installations, [check the selected image digests](../../testing/images.md#check-published-images)
-on native hosts for their target architectures and retain their exports.
+Set the production shell before the first Kubernetes command. This runbook uses
+Helm release `oce` in Namespace `openclaw-system`. Keep one protected handoff
+directory for generated configuration and the bootstrap PVC YAML. Secret input
+files stay under `/secure/occ`, even when `OCC_INPUT_DIRECTORY` points elsewhere.
+
+For existing profile output or verified YAML from
+[local operations](local-operations.md#build-images-for-local-kubernetes), set
+`OCC_INPUT_DIRECTORY` to that directory before this setup. Then skip both
+generation branches and continue with the
+[shared checks](#shared-bootstrap-pvc-and-configuration-checks).
 
 ```bash
 umask 077
 export OCC_INPUT_DIRECTORY="${OCC_INPUT_DIRECTORY:-/secure/occ}"
 export KUBECONFIG_FILE="$OCC_INPUT_DIRECTORY/kubeconfig"
 : "${CONTEXT:?Set the reviewed Kubernetes context from your cluster guide}"
-install -d -m 700 "$OCC_INPUT_DIRECTORY"
-install -d -m 700 /secure/occ
-test -e "$OCC_INPUT_DIRECTORY/values.yaml" || \
-  install -m 600 deploy/examples/production/values.yaml "$OCC_INPUT_DIRECTORY/values.yaml"
-test -e "$OCC_INPUT_DIRECTORY/installation.yaml" || \
-  install -m 600 deploy/examples/production/installation.yaml "$OCC_INPUT_DIRECTORY/installation.yaml"
-test -e "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml" || \
-  install -m 600 deploy/examples/production/bootstrap-pvc.yaml "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml"
-chmod 600 "$KUBECONFIG_FILE" "$OCC_INPUT_DIRECTORY/values.yaml" \
-  "$OCC_INPUT_DIRECTORY/installation.yaml" "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml"
-```
-
-Verify Kubernetes 1.35+:
-
-```bash
+install -d -m 700 /secure/occ "$OCC_INPUT_DIRECTORY"
+chmod 600 "$KUBECONFIG_FILE"
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" version
 ```
 
-Older servers continue but remain unsupported; API and worker emit
+Kubernetes older than 1.35 remains unsupported; API and worker emit
 `compute.preflight-warning`.
 
-The examples use native API keys. Helm values configure OCC; Installation YAML
-configures Drivers, images, identity, networking, storage, and logging.
+### Recommended: generate profile configuration
 
-For `logging.level` and restart requirements, see
-[Choose the log level](../observability.md#1-choose-the-log-level).
+Choose `openclaw` or `codex` from the [profile options](installation-profiles.md#choose-a-profile).
+Generation requires Node.js 24 or newer on the operator host; manual YAML does not.
 
-For registry-backed images, write their digest references into the protected
-copies (skip this block for the local Kubernetes import path):
+Create `$OCC_INPUT_DIRECTORY/profile-input.json` from the schema in
+[Render installation profiles](installation-profiles.md#prepare-inputs). Keep the
+input JSON separate from renderer-owned `values.yaml`, `installation.yaml`, and
+`preflight.json`; reruns clear those three output files. For this runbook, set
+`controlPlane.releaseName` to `oce`, `controlPlane.namespace` to
+`openclaw-system`, `controlPlane.controllerImage` to `$CONTROLLER_IMAGE`, and
+`runtime.image` to `$RUNTIME_IMAGE`. Keep credentials and tokens out of the
+input JSON.
 
 ```bash
-: "${CONTROLLER_IMAGE:?Set the controller digest reference}"
-: "${RUNTIME_IMAGE:?Set the runtime digest reference}"
-yq -i '.images.controller = strenv(CONTROLLER_IMAGE)' "$OCC_INPUT_DIRECTORY/values.yaml"
-yq -i '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
-  .drivers.compute.configuration.images.agent = strenv(RUNTIME_IMAGE)' \
-  "$OCC_INPUT_DIRECTORY/installation.yaml"
+export OCC_PROFILE="${OCC_PROFILE:-codex}"
+export OCC_PROFILE_INPUT="${OCC_PROFILE_INPUT:-$OCC_INPUT_DIRECTORY/profile-input.json}"
+(
+  set -e
+  : "${CONTROLLER_IMAGE:?Set the controller digest reference}"
+  : "${RUNTIME_IMAGE:?Set the runtime digest reference}"
+  test -s "$OCC_PROFILE_INPUT"
+  yq -e '.controlPlane.releaseName == "oce" and .controlPlane.namespace == "openclaw-system"' \
+    "$OCC_PROFILE_INPUT" >/dev/null
+  node scripts/render-installation-profile.mjs \
+    --profile "$OCC_PROFILE" \
+    --input "$OCC_PROFILE_INPUT" \
+    --out-dir "$OCC_INPUT_DIRECTORY"
+  test -s "$OCC_INPUT_DIRECTORY/values.yaml"
+  test -s "$OCC_INPUT_DIRECTORY/installation.yaml"
+)
 ```
 
-Edit the protected YAML copies:
+If rendering fails, stop and fix the input. Do not fall back to example YAML or
+copy manual files over failed profile output. Update the input and rerender so
+`values.yaml`, `installation.yaml`, and `controlPlane.installationChecksum` stay
+paired.
 
-- `$OCC_INPUT_DIRECTORY/values.yaml`: set `images.controller`,
-  `auth.baseUrl`, `bootstrap.adminEmail`, `database.cidrs`, `cluster.cidrs`,
-  `controlPlane.nodeSelector`, `database.caSecretName`, `dns`, `api.clients`, and
-  `bootstrap.password.claimName`. Configure `agentNativeAdmin` domains and ingress
-  through [native admin setup](native-admin.md#steps), retaining `enabled: true`.
-  Keep `gatewayRouting.enabled: true`, set
-  `gatewayRouting.gatewayClassName` to your GatewayClass, and retain the example
-  Secret names and keys; otherwise update the Secret creation commands below.
-- `$OCC_INPUT_DIRECTORY/installation.yaml`: set `occ.cluster`, `logging.level`,
-  `drivers.compute.configuration.images` digests, DNS selectors, matching
-  `gatewayRouting` settings, service-principal token settings, Secret
-  prefixes, and `runtime.gatewayStorageClassName`. Keep
-  `drivers.compute.configuration.images.requireImmutableDigest: true`.
-  Set `runtime.gatewayNodeSelector` (trusted) and `runtime.nodeSelector` (Harness)
-  to disjoint Ready pools; Helm does not place runtimes.
-  Do not set `network.gatewayClients` with routing enabled; Compute derives the
-  Envoy peer from `gatewayRouting`.
-  The example selects the curated Codex PluginDriver catalog. To select another,
-  see the [PluginDriver reference](../../reference/drivers/plugin.md#selection-and-catalogs).
-  For Slack Agents, configure the separate gateway and API proxy inputs in the
-  [Slack guide](../integrations/slack.md#configure-both-slack-proxies).
-  If the default syscall policy blocks Codex user namespaces, follow
-  [Codex sandbox setup](codex-sandbox.md): install a reviewed profile on every
-  eligible node, set `runtime.codexSeccompProfile` to its relative kubelet path,
-  and verify sandbox enforcement.
-  Set `presets.includeDefaults: false` to disable the example's
-  [bundled Presets](../../reference/presets.md#installation-defaults).
-- `$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml`: set the bootstrap PVC name,
-  namespace, size, and protected `storageClassName` for the cluster.
+### Advanced: copy manual YAML examples
 
-For registry-backed installations, [compare the edited images](../../testing/images.md#verify-installation-image-selections)
-with the checked digests; skip this for local imports.
+Use this branch only when you are deliberately not using an installation profile.
+It refuses to overwrite profile output. The manual production example is not the
+`codex` profile: it selects the curated Codex PluginDriver catalog, while the
+`codex` profile defaults to hosted PAT-backed discovery.
 
-Run every check below, including Helm rendering, before provisioning.
-API startup checks shared-cookie domain compatibility:
+```bash
+(
+  set -e
+  test ! -e "$OCC_INPUT_DIRECTORY/values.yaml"
+  test ! -e "$OCC_INPUT_DIRECTORY/installation.yaml"
+  install -m 600 deploy/examples/production/values.yaml "$OCC_INPUT_DIRECTORY/values.yaml"
+  install -m 600 deploy/examples/production/installation.yaml "$OCC_INPUT_DIRECTORY/installation.yaml"
+  : "${CONTROLLER_IMAGE:?Set the controller digest reference}"
+  : "${RUNTIME_IMAGE:?Set the runtime digest reference}"
+  yq -i '.images.controller = strenv(CONTROLLER_IMAGE)' "$OCC_INPUT_DIRECTORY/values.yaml"
+  yq -i '.drivers.compute.configuration.images.gateway = strenv(RUNTIME_IMAGE) |
+    .drivers.compute.configuration.images.agent = strenv(RUNTIME_IMAGE)' \
+    "$OCC_INPUT_DIRECTORY/installation.yaml"
+)
+```
+
+For registry-backed installs, compare the selected images with the checked
+digests before continuing: profile-generated installs compare the image fields
+in the input JSON before rendering; manual installs compare the edited YAML with
+[Verify installation image selections](../../testing/images.md#verify-installation-image-selections).
+
+### Shared bootstrap PVC and configuration checks
+
+Create the bootstrap PVC manifest if it is not already in the handoff directory:
+
+```bash
+test -e "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml" || \
+  install -m 600 deploy/examples/production/bootstrap-pvc.yaml "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml"
+chmod 600 "$OCC_INPUT_DIRECTORY/values.yaml" \
+  "$OCC_INPUT_DIRECTORY/installation.yaml" \
+  "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml"
+```
+
+For profile installs, change `$OCC_PROFILE_INPUT` and rerender; do not hand-edit
+`values.yaml` or `installation.yaml`. For manual installs, edit the copied YAML
+before validation:
+
+- `values.yaml`: set auth URL, admin email, database and cluster CIDRs,
+  control-plane node selector, database CA, DNS, API clients, and bootstrap
+  password claim. Keep native admin and gateway routing enabled with the reviewed
+  GatewayClass and Secret names.
+- `installation.yaml`: set cluster name, log level, DNS selectors,
+  service-principal token settings, Secret prefixes, runtime storage class,
+  immutable runtime image digests, and PluginDriver catalog.
+
+For both branches, set `bootstrap-pvc.yaml` name, namespace, size, and protected
+`storageClassName`.
+
+For `logging.level`, see [Choose the log level](../observability.md#1-choose-the-log-level).
+Configure native admin domains through [native admin setup](native-admin.md#steps).
+For Slack Agents, configure both proxy paths in the
+[Slack guide](../integrations/slack.md#configure-both-slack-proxies). For Codex
+sandboxing, follow [Codex sandbox setup](codex-sandbox.md): install a reviewed
+profile on every eligible node, set `runtime.codexSeccompProfile`, and verify
+enforcement.
+
+Run every check below before provisioning:
 
 ```bash
 yq e -e '.images.controller | test("@sha256:[a-f0-9]{64}$")' \
@@ -250,12 +291,13 @@ without quotes or a variable assignment.
 | `occ-auth-secret`     | A random secret used to sign and verify user sessions. Generate it once for this Installation with the command below, then retain it across redeployments. It is separate from the administrator password, service API key, and model-provider key.                             |
 
 Save both database URLs in protected files, replacing placeholders and preserving
-required TLS options. For managed PostgreSQL roots supplied through `database.caSecretName`,
-set `sslmode=verify-full` and `sslrootcert` to the mounted CA file in both URLs.
-With the example mount settings, the path is `/etc/openclaw/database-ca/ca.pem`;
-if you change them, use `<database.caMountPath>/<database.caKey>`. Introduce URL
-query parameters with `?`, or join them to existing parameters with `&`. Generate the auth secret for a new Installation; this command refuses
-to overwrite an existing file:
+required TLS options. For managed PostgreSQL roots supplied through
+`database.caSecretName`, set `sslmode=verify-full` and `sslrootcert` to the
+mounted CA file in both URLs. With the example mount settings, the path is
+`/etc/openclaw/database-ca/ca.pem`; if you change them, use
+`<database.caMountPath>/<database.caKey>`. Introduce URL query parameters with
+`?`, or join them to existing parameters with `&`. Generate the auth secret for a
+new Installation; this command refuses to overwrite an existing file:
 
 ```bash
 (
@@ -320,37 +362,19 @@ read-only into migration, bootstrap, API, and worker containers at
 ### Optional repository credential service
 
 Enable repository credentials only after preparing the
-[repository service inputs](../repository-credentials/installation.md) and the matching
+[repository service inputs](../repository-credentials/installation.md) and
 [GitHub Backend selection](../../reference/backends.md#github-repository-credentials).
-The feature defaults disabled. It requires a separately built, immutable service
-image, an immutable registry ConfigMap, private service configuration, App key,
-TLS certificate/key for the exact internal Service hostname, and a separate
-public-CA Secret. Mount the same registry version into API, worker, and service.
-The Installation's Compute network peer must select this release's worker Pod on
-port `8443`; the Service exposes HTTPS port `443`.
+Keep the feature disabled until you have the immutable service image, registry
+ConfigMap, private service configuration, App key, internal-Service TLS Secret,
+public CA Secret, worker peer on port `8443`, and Service HTTPS on port `443`.
+Mount one registry version into API, worker, and service.
 
-When enabled, the chart keeps one worker Pod with `Recreate` and a credential
-sidecar. The sidecar alone mounts App and TLS private inputs and copies them into
-private regular files before loading them. It receives no Kubernetes API token;
-the worker's token is explicitly projected only into the worker container. API
-and worker receive the registry and public CA. Only worker and service share the
-private Unix control socket.
-
-The service's `limits.shutdownGraceMs` must be at most `60000` (the default).
-Projected startup rejects longer drains so the service can report unresolved
-cleanup before the Pod's fixed 75-second termination grace expires.
-
-Tenant-worker RoleBindings grant Secret `get/list/create/delete` for owned
-runtime material. Kubernetes RBAC does not restrict those verbs by the labels
-used by Compute, so the worker remains trusted within each bound tenant
-namespace. Agent service accounts receive no Secret API permission.
-NetworkPolicies allow managed Agent gateways to reach the service and allow
-the worker Pod to reach approved provider CIDRs. These policies apply to the
-whole Pod; registry/session checks enforce exact Namespace and repository scope.
-
-Restart API and worker together after replacing a registry version or service
-inputs. Readiness checks private control availability but does not prove token
-minting, provider reachability, or an Agent's Git workflow.
+The chart runs one `Recreate` worker Pod with a sidecar for private inputs. The
+sidecar has no Kubernetes API token; the worker token owns tenant Secret verbs.
+NetworkPolicies admit managed gateways and approved provider CIDRs, while
+registry and session checks enforce exact scope. Keep `limits.shutdownGraceMs` at
+or below `60000`. Restart API and worker together after registry or service input
+changes; readiness does not prove token minting or Agent Git workflows.
 
 ### Azure PostgreSQL workload identity
 
@@ -394,12 +418,11 @@ Replace `--node-selector oce-role=control` with the same labels selected by
 `controlPlane.nodeSelector`; repeat the option for multiple labels so preparation
 and initialization can use the same volume topology.
 
-The helper refuses any nonfresh mounted root except filesystem-owned
-`lost+found`, schedules the preparation Pod with any supplied `--node-selector`
-labels before storage binds, reports `Prepared bootstrap volume claim ... with
-UID/GID 1000 mode 0700.` on success, and retains a failed Pod for diagnosis. If policy
-forbids the preparation Pod, have the storage administrator create the same root
-state through the approved storage workflow.
+The helper refuses any nonfresh mounted root except `lost+found`, schedules with
+the supplied node selector before storage binds, reports `Prepared bootstrap
+volume claim ... with UID/GID 1000 mode 0700.`, and retains failed Pods for
+diagnosis. If policy forbids the preparation Pod, have the storage administrator
+create the same root state.
 
 Install the chart with native values:
 
