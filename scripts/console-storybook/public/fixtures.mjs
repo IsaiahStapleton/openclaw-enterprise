@@ -683,9 +683,12 @@ export function installFixture(scenario, evidence) {
           deploymentId: revision.id,
           namespaceId,
           agentId: saved.id,
-          status: "queued",
-          reads: 0,
-          error: null,
+          status: scenario.provisionedDeploymentStatus ?? "queued",
+          reads: scenario.provisionedDeploymentStatus === undefined ? 0 : undefined,
+          error:
+            scenario.provisionedDeploymentStatus === "failed"
+              ? { code: "DEPENDENCY_UNAVAILABLE", message: "Deployment reconciliation failed." }
+              : null,
           warnings: [],
         });
         provisioning.set(saved.id, {

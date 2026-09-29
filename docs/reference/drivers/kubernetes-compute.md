@@ -4,6 +4,9 @@ The Kubernetes Compute Driver runs OpenClaw Agents on Kubernetes. It provisions
 or adopts a data-plane namespace for each tenant and creates an OpenClaw gateway
 for each deployed Agent. Dedicated Gateways run in a separate managed control-plane
 runtime namespace; embedded OpenClaw remains in the data plane.
+The experimental `executionCluster` configuration selects a second Kubernetes
+API for dedicated Harness resources. See the [two-cluster validation profile](../../testing/two-cluster-local.md)
+before using it; cloud deployment and complete runtime acceptance remain pending.
 Kubernetes supports a managed model API key for both modes and a managed
 ChatGPT service-account credential for dedicated Codex only.
 
@@ -156,7 +159,7 @@ drivers:
         gatewayNodeSelector: { oce-role: control-plane }
         transportSecretPrefix: openclaw-agent-transport
         # Optional; first install this reviewed profile on every eligible node.
-        codexSeccompProfile: profiles/codex-0.156.0.json
+        codexSeccompProfile: profiles/codex-0.158.0.json
 ```
 
 This example shows only the Compute Driver portion of the Installation
@@ -295,8 +298,11 @@ for additional execution details.
   readiness marker at process start so a marker left in the Pod's temporary
   volume by a previous container attempt cannot make a restarted runtime ready.
   Access-token login retries only native process timeouts, up to three 30-second
-  attempts. Credential refusals and model probes are not retried; exhausted
-  startup remains unready until an explicit restart.
+  attempts. The dedicated Codex model probe separately retries a confirmed timeout
+  once within a 61-second budget; refusals are not retried. Exhausted startup
+  remains unready until an explicit restart. See the
+  [authentication probe contract](../harness-execution.md#harness-authentication)
+  for retry limits and sanitized attempt logs.
   Native plugin startup, authentication, transport, and installation failures
   remain generic workload startup failures unless the Compute-owned runtime
   reports a verified current-startup warning for an admitted selected plugin.

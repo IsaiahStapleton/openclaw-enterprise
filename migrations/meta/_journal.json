@@ -244,7 +244,21 @@
       "idx": 34,
       "version": "7",
       "when": 1787000000034,
-      "tag": "0034_oauth_harness_auth",
+      "tag": "0034_repository_broker_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1787000000035,
+      "tag": "0035_agent_deletion_repository_session_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1787000000036,
+      "tag": "0036_oauth_harness_auth",
       "breakpoints": true
     }
   ]
