@@ -262,7 +262,7 @@ revalidate retained views before reuse. Drafts keep save baselines and Namespace
 scopes separate.
 
 Authorization and dependency failures clear affected content and expose recovery;
-a current protected `401` clears all private state immediately. `pagehide` clears
+a current protected `401` clears all private state. `pagehide` clears
 private DOM, previews, and drafts even for BFCache; persisted `pageshow` performs
 a fresh load. Failure views show local reasons and bounded request IDs, never
 backend error text. Backend authorization denial clears every retained preview,
@@ -271,11 +271,11 @@ including other Namespace selections, because the permission is Installation-wid
 The [detail action flow](platform-console/agent-editing.md#stop-agent) traces
 confirmed Stop and Delete requests and permissions. Acceptance
 is not completed shutdown or deletion. Uncertain outcomes block replay until
-readback; only confirmed absence returns to the Agents list. Deployment resumes
+readback; only confirmed absence returns to Agents. Deployment resumes
 a stopped Agent through a new revision. The [Agent reference](../reference/agents.md#deletion)
 owns asynchronous cleanup.
 
-Logout first hides private state, then calls the existing sign-out endpoint.
+Logout first hides private state, then calls the sign-out endpoint.
 Confirmed success or session inspection proving absence replaces history with
 login. An unconfirmed logout stays blocked with Retry. The
 [authentication flow](local-password-authentication.md) owns server revocation;
