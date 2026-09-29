@@ -113,8 +113,7 @@ block creation, expiry signs out, and obsolete completions cannot mutate the vie
 Unknown outcomes require stored Agent and Configuration reads.
 
 `packages/occ/src/index.ts:OpenClawController.repositoryBindingSelections`
-uses `resolveRepositoryBindings` after existing authorization. The public input
-contains distinct opaque references and optional profiles, not provider tokens
+uses `resolveRepositoryBindings` after existing authorization. Inputs contain distinct opaque references and optional profiles, never provider tokens
 or caller-selected grant identities. The concrete
 `apps/controller/src/drivers/repo/github/driver.ts:GitHubRepoDriver.resolve`
 uses local registry policy, defaulting to Contributor (`git-write`), without
@@ -124,8 +123,7 @@ control-socket or GitHub calls.
 requires the exact Namespace/reference/profile combination. Its fingerprint
 binds provider/App/installation/repository identity, duration policy and the
 Namespace's complete profile policy, exact permissions and optional normalized
-push-ref allowlist. Each binding has one grant; an installation can supply several
-repositories. OCC stores normalized Agent selections; an omitted update array
+push-ref allowlist. Each binding has one grant; installations can supply several repositories. OCC stores normalized Agent selections; an omitted update array
 preserves them and an empty array clears them.
 
 ### 2. Freeze a deployable revision
@@ -280,13 +278,11 @@ runtime retirement; later workers cannot remint for that revision. An authorized
 deploy a new revision without settling old cleanup.
 
 `apps/controller/src/worker.ts:ControllerWorker.finalizeActiveRevision`
-can fail a bounded observation and enqueue its successor atomically while the
-active revision remains authorized. Stop, policy drift, expiry and revoked authority
+atomically fails bounded observations and enqueues successors while the active revision remains authorized. Stop, policy drift, expiry and revoked authority
 cannot use this continuation to reopen sessions.
 
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.enqueueRepositoryCleanup`
-and terminal queue transitions persist exact revision-owned obligations. Direct
-registration checks claim and owner; recovery transfers eligible failed sources.
+and terminal queue transitions persist exact revision-owned obligations. Registration checks claim and owner; recovery transfers eligible failures.
 New Work is coalesced by revision and purpose, retaining its creating actor;
 source failures retain their audit evidence. Queued or claimed Work keeps its
 schedule and claim; later obligations requeue succeeded Work. Previously queued
