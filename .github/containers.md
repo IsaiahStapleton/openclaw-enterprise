@@ -1,5 +1,8 @@
 # Enterprise container publication
 
+The [OCC CLI release](cli-publication.md) publishes matching versioned command
+line binaries through a separate protected workflow.
+
 [`container-publish.yml`](workflows/container-publish.yml) prepares the existing
 controller (`Dockerfile`, target `runtime`) and combined gateway/Agent runtime
 (`deploy/runtime/Dockerfile`) as OCI archives containing both `linux/amd64` and
