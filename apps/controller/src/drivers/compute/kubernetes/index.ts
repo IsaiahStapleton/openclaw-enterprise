@@ -9391,7 +9391,9 @@ for (const path of ${JSON.stringify(
               runAsNonRoot: true,
               runAsUser: 1000,
               runAsGroup: 1000,
-              ...(privateHome ? { fsGroup: 1000 } : {}),
+              // OnRootMismatch skips the recursive ownership walk of 10-40Gi claims on
+              // every start once the volume root already carries fsGroup ownership.
+              ...(privateHome ? { fsGroup: 1000, fsGroupChangePolicy: "OnRootMismatch" } : {}),
               seccompProfile: { type: "RuntimeDefault" },
             },
             containers: [

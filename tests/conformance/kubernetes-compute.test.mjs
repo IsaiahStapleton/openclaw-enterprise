@@ -6902,6 +6902,8 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
     assert.equal(pod.initContainers[0].env, undefined);
     assert.equal(pod.securityContext.runAsUser, 1000);
     assert.equal(pod.securityContext.fsGroup, 1000);
+    // Cloud block disks otherwise chown the whole claim recursively on every Gateway start.
+    assert.equal(pod.securityContext.fsGroupChangePolicy, "OnRootMismatch");
     assert.equal(gateway.spec.strategy.type, "Recreate");
     assert.equal(
       pod.volumes.some(({ name }) => name === "openclaw-workspace"),
@@ -6924,6 +6926,8 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
   );
   assert.equal(JSON.stringify(harness).includes(claim.metadata.name), false);
   assert.equal(JSON.stringify(harness).includes("openclaw-gateway-state"), false);
+  assert.equal(harness.spec.template.spec.securityContext.fsGroup, 1000);
+  assert.equal(harness.spec.template.spec.securityContext.fsGroupChangePolicy, "OnRootMismatch");
   // The Harness retains task files and generated images; it cannot mount Gateway transcripts.
   const workspaceMounts = harness.spec.template.spec.containers[0].volumeMounts.filter(
     ({ name }) => name === "openclaw-workspace",
@@ -6978,6 +6982,8 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
     const workload = structuredClone(harness);
     driver.addWorkspaceNode(workload, driver.workspaceNodeName(candidate), undefined, candidate);
     const pod = workload.spec.template.spec;
+    // The node-state claim keeps the Harness policy: ownership is fixed only on a root mismatch.
+    assert.deepEqual(pod.securityContext, harness.spec.template.spec.securityContext);
     return driver.sandboxWorkspaceMounts(pod.volumes, pod.containers[0].volumeMounts);
   };
   const mounts = withNode(revision);

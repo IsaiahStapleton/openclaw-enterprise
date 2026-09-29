@@ -4856,6 +4856,66 @@ test(
 );
 
 test(
+  "real PostgreSQL rechecks a not-ready runtime on a short fixed delay after transient failures",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("readiness-recheck");
+    const candidate = await fixture.revision(owner, 1);
+    const recheckDelaysMs = [];
+    let observations = 0;
+
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        if (revision.id !== candidate.id) {
+          return fixture.compute.prepareRevision(revision);
+        }
+        observations += 1;
+        // Two dependency failures raise the attempt count, so the queue's
+        // exponential retry backoff would now allow up to 4 s per recheck.
+        if (observations <= 2) {
+          throw new Error("transient Compute dependency failure");
+        }
+        if (observations > 3) {
+          // The claimed row keeps the due time chosen by the previous deferral;
+          // its audit evidence records when that deferral committed.
+          const deferred = await fixture.observerPool.query(
+            `SELECT EXTRACT(EPOCH FROM (work.available_at - evidence.occurred_at)) * 1000
+                AS delay_ms
+             FROM occ.controller_work AS work
+             CROSS JOIN LATERAL (
+               SELECT occurred_at FROM occ.audit_events
+               WHERE resource_id = work.revision_id
+                 AND details->>'workId' = work.idempotency_key
+                 AND details->>'reasonCode' = 'REVISION_INCOMPLETE'
+               ORDER BY occurred_at DESC LIMIT 1
+             ) AS evidence
+             WHERE work.idempotency_key = $1`,
+            [candidate.idempotencyKey],
+          );
+          recheckDelaysMs.push(Number(deferred.rows[0].delay_ms));
+        }
+        const observation = await fixture.compute.prepareRevision(revision);
+        return observations <= 5 ? { ...observation, ready: false } : observation;
+      },
+    });
+
+    const completed = await fixture.work(candidate, "succeeded", 30_000);
+    assert.equal(observations, 6);
+    // Failures consumed two attempts; readiness rechecks refunded theirs.
+    assert.equal(completed.attempt_count, 3);
+    assert.equal(recheckDelaysMs.length, 3);
+    for (const delayMs of recheckDelaysMs) {
+      assert.ok(
+        delayMs > 450 && delayMs <= 500,
+        `readiness recheck must wait about 500 ms, not the retry backoff (${delayMs} ms)`,
+      );
+    }
+  },
+);
+
+test(
   "an overdue Agent runtime fails closed without activating its incomplete revision",
   requiresPostgres,
   async (context) => {
