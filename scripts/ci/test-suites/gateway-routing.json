@@ -36,7 +36,8 @@
     {
       "path": "tests/integration/native-admin-k3d-real.test.mjs",
       "expectedTests": [
-        "production native admin UI opens through OCC and preserves Agent boundaries"
+        "production native admin UI opens through OCC and preserves Agent boundaries",
+        "two people share an embedded native Gateway with selective stream withdrawal"
       ]
     }
   ]

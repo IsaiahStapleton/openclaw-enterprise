@@ -104,7 +104,7 @@ export async function createTestAuthPrincipal({
     secureCookies,
   });
   const account = await auth.createAccount({ email, password, name });
-  const seed = auth.principalSeed(account);
+  const seed = auth.principalSeed(account, { grant: "administrator" });
   return { auth, account, seed, installationId, email, password, name };
 }
 

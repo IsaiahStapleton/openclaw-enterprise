@@ -62,6 +62,7 @@ export interface PostgresDevelopmentConfig {
   readonly poolMax?: number;
   readonly logger?: OccLogger;
   readonly logging?: LoggingConfiguration;
+  readonly observabilityUrl?: string;
   readonly trustedDevelopmentBridgeCidr?: string;
   readonly trustedDevelopmentForwarderCidr?: string;
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
@@ -248,6 +249,7 @@ export async function composePostgresDevelopment(
       throw new Error("Native admin UI access requires OCC_GATEWAY_API_KEY_PATH.");
     }
 
+    const observabilityUrl = config.observabilityUrl ?? drivers?.installation.observability?.url;
     const app = createFastifyApp({
       ...(config.metrics === undefined ? {} : { metrics: config.metrics }),
       controller,
@@ -265,6 +267,7 @@ export async function composePostgresDevelopment(
       ...(drivers === undefined
         ? {}
         : { backendSummaries: backendSummariesFromDefinitions(drivers.installation.backend) }),
+      ...(observabilityUrl === undefined ? {} : { observabilityUrl }),
       auth,
       ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,

@@ -468,6 +468,58 @@ test(
         attemptId,
       };
     }
+    async function countRows(table) {
+      return (await pool.query(`SELECT count(*)::integer AS count FROM occ.${table}`)).rows[0]
+        .count;
+    }
+
+    // Start is a browser request: a missing or foreign Origin gets the documented
+    // 403 before any attempt row or browser-binding cookie exists.
+    const attemptsBeforeRefusedStarts = await countRows("human_authentication_attempts");
+    for (const [label, requestHeaders] of [
+      ["missing Origin", {}],
+      ["foreign Origin", { origin: "https://github-sign-in.attacker.example" }],
+      ["another host name for the same address", { origin: `http://localhost:${port}` }],
+    ]) {
+      const refused = await app.inject({
+        method: "POST",
+        url: "/api/auth/providers/github/start",
+        headers: requestHeaders,
+      });
+      assert.equal(refused.statusCode, 403, `${label}: ${refused.body}`);
+      assert.equal(refused.json().error.code, "FORBIDDEN", label);
+      assert.equal(refused.headers["set-cookie"], undefined, label);
+    }
+    assert.equal(
+      await countRows("human_authentication_attempts"),
+      attemptsBeforeRefusedStarts,
+      "a refused start creates no sign-in attempt",
+    );
+
+    // A provider-reported error (the user denied the GitHub prompt) fails closed:
+    // no provider exchange, no session and no cookie. The attempt is spent, so a
+    // code presented later for the same state cannot redeem it.
+    const providerErrorAttempt = await start();
+    const sessionsBeforeProviderError = await countRows("session");
+    const providerError = await app.inject({
+      url:
+        `/api/auth/providers/github/callback?state=${providerErrorAttempt.state}` +
+        "&error=access_denied&error_description=The+user+has+denied+your+application+access.",
+      headers: { cookie: providerErrorAttempt.cookie },
+    });
+    assert.equal(providerError.statusCode, 302, providerError.body);
+    assert.equal(providerError.headers.location, "/console/?authError=github");
+    assert.equal(providerError.headers["set-cookie"], undefined);
+    assert.equal(await countRows("session"), sessionsBeforeProviderError);
+    const redeemAfterProviderError = await app.inject({
+      url: `/api/auth/providers/github/callback?state=${providerErrorAttempt.state}&code=fixture-code`,
+      headers: { cookie: providerErrorAttempt.cookie },
+    });
+    assert.equal(redeemAfterProviderError.headers.location, "/console/?authError=github");
+    assert.equal(redeemAfterProviderError.headers["set-cookie"], undefined);
+    assert.equal(await countRows("session"), sessionsBeforeProviderError);
+    assert.equal(providerRequestCount, 0, "a provider error never reaches code exchange");
+
     const attempt = await start();
     // Use a live attempt and authorized enrollment inputs so these requests prove
     // route rejection before provider work or account changes, not invalid input.
@@ -657,7 +709,8 @@ test(
       headers,
       payload: { expectedVersion: (await readAccount(recovery, headers)).version },
     });
-    assert.equal(recoveryDisable.statusCode, 404);
+    assert.equal(recoveryDisable.statusCode, 409, recoveryDisable.body);
+    assert.equal(recoveryDisable.json().error.code, "RESOURCE_CONFLICT");
 
     const stale = await start();
     assert.equal(
@@ -1257,7 +1310,7 @@ test(
           payload: { expectedVersion: limitedVersion },
         })
       ).statusCode,
-      404,
+      409,
       "the new recovery account cannot be disabled",
     );
     // A stale environment id does not skip the startup checks: they run against the

@@ -1,15 +1,15 @@
 ---
 created: "2026-09-21"
 updated: 2026-09-28
-last_updated_session: 01a0e441-02f9-70b2-ad45-0a1a5049954a
+last_updated_session: oce-pr-440-sync
 ---
 
 # OpenShell Sandbox provisioning flow
 
 ## Overview
 
-The Kubernetes Compute Driver delegates a dedicated Codex Harness to the
-selected OpenShell Sandbox Driver. One deployment-paired OpenShell Gateway uses
+The Kubernetes Compute Driver delegates dedicated Codex and native OpenClaw
+Harnesses to the selected OpenShell Sandbox Driver. One deployment-paired OpenShell Gateway uses
 an explicitly configured workspace mode. Operator mode is implemented: for each
 OCC Namespace, the Driver labels the Kubernetes namespace, reconciles rendered
 workspace-chart resources, and creates or adopts an OpenShell Workspace with
@@ -22,7 +22,7 @@ provider to the Sandbox, and the supervisor proxy injects the key. The regular
 Agent workflow with stock OpenShell still stops before Sandbox creation because
 `v0.1.0` cannot accept the Secret-backed app-server token or projected workload
 identity. The verification-only compatibility path stages those inputs without
-changing the production fail-closed contract and completes a real model turn
+changing the production fail-closed contract and completes real model turns
 inside the Sandbox.
 
 The local Kubernetes development profile installs the pinned Gateway and
@@ -58,13 +58,17 @@ graph TD
   G -- "no" --> H["<b>Create Sandbox</b><br/>Providers and exposure"]
   H --> I{"<b>Native projections</b><br/>Supported?"}
   I -- "no: stock v0.1.0" --> R
-  I -. "verification bridge" .-> J["<b>Sandbox ready</b><br/>App-server route"]
+  I -. "verification bridge" .-> V{"<b>Harness</b>"}
+  V -- "Codex" --> J["<b>Sandbox ready</b><br/>App-server route"]
   J --> K["<b>Verify route</b><br/>Protected 401"]
   K --> L["<b>Run model turn</b><br/>Sandbox loopback"]
+  V -- "OpenClaw" --> T["<b>Sandbox ready</b><br/>No inbound exposure"]
+  T --> U["<b>Run two sessions</b>"]
   J --> M["<b>Wait for Harness</b><br/>Compute readiness"]
   M --> S{"<b>Attachment status</b><br/>All ready?"}
   S -- "failed, withheld, revoked" --> R
   S -- "ready" --> N["<b>Delete Sandbox</b><br/>Revision cleanup"]
+  T --> M
   N --> O["<b>Delete Workspace</b><br/>Namespace cleanup"]
   O --> P["<b>Delete Namespace</b><br/>Compute cleanup"]
 
@@ -73,8 +77,8 @@ graph TD
   classDef gate fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
   classDef blocked fill:#F3F4F6,stroke:#98A2AE,color:#44505F,stroke-width:1px
   class A,B,F state
-  class D,E,Q,H,J,K,L,M,N,O,P operation
-  class C,G,I,S gate
+  class D,E,Q,H,J,K,L,M,N,O,P,T,U operation
+  class C,G,I,S,V gate
   class X,R blocked
   linkStyle default stroke:#8B949E,stroke-width:1px
 ```
@@ -177,7 +181,7 @@ immutable revision to OpenShell instead of creating the Deployment itself.
 
 `apps/controller/src/drivers/sandbox/openshell.ts:provisionHarness`
 
-OpenShell accepts only dedicated Codex revisions pinned to the selected Driver.
+OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the selected Driver.
 It builds filesystem, process, and network policy plus Kubernetes driver config.
 Network TLS, enforcement, and access spellings must be own keys in the Driver's
 allowlists before they are converted to the exact `v0.1.0` protobuf enums.
@@ -185,7 +189,7 @@ It rejects inherited object names and the old `passthrough` TLS spelling,
 which v0.1.0 defines as an automatic inspection alias; use `skip` instead. Each network policy also requires at
 least one executable path and sends those binary identities with its endpoints.
 
-The regular Codex requirements still contain the Secret-backed
+The regular Harness requirements still contain the Secret-backed
 `APP_SERVER_TOKEN`. `environment` rejects it before any gateway mutation, so the
 candidate revision remains inactive. Requests without such entries continue.
 `sandboxProviders` appends each attachment to the static `providers` list and
@@ -202,18 +206,19 @@ limits the request to the Harness mounts approved by Kubernetes Compute. The
 stock fail-closed path never reaches this Gateway setting, and production does
 not use this compatibility configuration.
 
+Native OpenClaw trusts OpenShell's interception CA and the Gateway
+enrollment CA.
+
 ### 4. Call the versioned gateway contract
 
 `apps/controller/src/drivers/sandbox/openshell-gateway-client.ts:createSandbox`
 
-The client sends the stable Sandbox name, labels, annotations, spec, and a
-`workspace_scope` containing the Namespace Workspace. It also sends the
-revision's UUID as `request_id` and an unnamed `service_exposures` entry for the
-literal `APP_SERVER_PORT`. OpenShell registers the endpoint during Create and
-returns its URL in `service_urls`; replaying the same Create request returns the
-same result. The Driver requires a valid route for the unnamed exposure before
-it returns the stable Sandbox reference. A Sandbox that predates the replayable
-request fails explicitly rather than receiving a separate post-create mutation.
+The client sends the Sandbox identity, spec, Namespace Workspace scope, and
+revision UUID as `request_id`. Codex requests one unnamed exposure for
+`APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
+outbound, so it requests no exposure and rejects any returned URL. A replay
+returns the same result; a Sandbox that predates replayable creation fails.
+
 Stock `v0.1.0` still lacks the exact projected identity and volume support
 required by the request, including the immutable plugin-runtime ConfigMap
 mounted by Kubernetes Compute. Any request that reaches
@@ -287,10 +292,13 @@ Kubernetes Compute delete the Kubernetes namespace.
   enforcement, exposed-route reachability, and lifecycle behavior. It does not
   prove native workload projection or an authenticated model turn through the
   exposed route. The tested runtime uses the OpenClaw source commit pinned by
-  `deploy/runtime/Dockerfile`; that source provides the workspace-node
+  `deploy/runtime/Dockerfile`; that source provides the native worker's
+  `connect --ephemeral` path and the workspace-node
   `--pair-if-needed` and `--commands` options required by the test.
 - `OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
   identifies the current fail-closed boundary.
+- `OCC_TEST_OPENSHELL_HARNESS=openclaw` runs two native sessions over one
+  outbound connection with no inbound Harness service.
 
 ## Related docs
 
@@ -305,6 +313,8 @@ Kubernetes Compute delete the Kubernetes namespace.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 02:55: Added outbound-only native OpenClaw with broker CA trust. (oce-pr-440-sync - e2b739f51f89)
 
 - 2026-09-28 00:34: Restored Compose defaults and explicit Kubernetes-only startup. (01a0e441-02f9-70b2-ad45-0a1a5049954a - 201f31d511464133f06e0526bb5545ed1cb27e25)
 

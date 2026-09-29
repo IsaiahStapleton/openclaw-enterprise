@@ -6,6 +6,12 @@ import test from "node:test";
 
 import { chromium } from "playwright";
 
+import {
+  describePendingBrowserRequests,
+  noteBrowserEvent,
+  watchBrowserContext,
+} from "../helpers/browser-failure-diagnostics.mjs";
+import { keepRequestInterceptionEnabled } from "../helpers/browser-request-interception.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 
 const routeHoldTimeoutMs = 30_000;
@@ -37,9 +43,11 @@ async function newPage(t, fixture) {
   const artifacts = await artifactDirectory(t);
   const browser = await launchBrowser();
   let context;
+  let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
+      await diagnostics?.capture();
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
@@ -55,15 +63,19 @@ async function newPage(t, fixture) {
     }
   });
   context = await browser.newContext();
+  diagnostics = await watchBrowserContext(t, context);
+  await keepRequestInterceptionEnabled(context);
   return { page: await context.newPage(), artifacts };
 }
 
 async function newMobilePage(t, fixture) {
   const browser = await launchBrowser();
   let context;
+  let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
+      await diagnostics?.capture();
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
@@ -83,6 +95,8 @@ async function newMobilePage(t, fixture) {
     isMobile: true,
     viewport: { width: 390, height: 844 },
   });
+  diagnostics = await watchBrowserContext(t, context);
+  await keepRequestInterceptionEnabled(context);
   return { page: await context.newPage() };
 }
 
@@ -112,13 +126,17 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function waitForRoutePhase(promise, description, release, signal) {
+async function waitForRoutePhase(promise, description, release, signal, describeState) {
   let timeout;
   let onAbort;
   const deadline = new Promise((_, reject) => {
     function fail(reason) {
+      // Read the hold's state before release() changes it.
+      const state = describeState?.();
       release();
-      const error = new Error(`${description} did not finish within ${routeHoldTimeoutMs}ms`);
+      const error = new Error(
+        `${description} did not finish within ${routeHoldTimeoutMs}ms${state ? ` (${state})` : ""}`,
+      );
       if (reason !== undefined) {
         error.cause = reason;
       }
@@ -150,23 +168,36 @@ async function holdRoute(t, page, pattern, continueRoute) {
   const completed = deferred();
   let released = false;
   let releaseWatchdog;
+  let intercepted = 0;
 
   function release() {
     if (released) {
       return;
     }
     released = true;
+    noteBrowserEvent(page, `held route ${pattern} released`);
     clearTimeout(releaseWatchdog);
     releaseGate.resolve();
   }
 
+  function describeState() {
+    try {
+      return `intercepted ${intercepted}, released ${released}, page ${page.url()}, pending requests: ${describePendingBrowserRequests(page)}`;
+    } catch (error) {
+      return `state unavailable: ${error.message}`;
+    }
+  }
+
   t.signal?.addEventListener("abort", release, { once: true });
   await page.route(pattern, async (route) => {
+    intercepted += 1;
     let response;
     try {
       response = await route.fetch();
-    } catch {
+      noteBrowserEvent(page, `held route ${pattern} upstream status ${response.status()}`);
+    } catch (error) {
       response = undefined;
+      noteBrowserEvent(page, `held route ${pattern} upstream fetch failed: ${error.message}`);
     }
     captured.resolve();
     if (!released && releaseWatchdog === undefined) {
@@ -176,8 +207,10 @@ async function holdRoute(t, page, pattern, continueRoute) {
     await releaseGate.promise;
     try {
       await continueRoute(route, response);
-    } catch {
+      noteBrowserEvent(page, `held route ${pattern} continued`);
+    } catch (error) {
       /* The page may already have aborted the obsolete read. */
+      noteBrowserEvent(page, `held route ${pattern} continue failed: ${error.message}`);
     } finally {
       completed.resolve();
     }
@@ -186,9 +219,21 @@ async function holdRoute(t, page, pattern, continueRoute) {
   return {
     release,
     waitForRelease: () =>
-      waitForRoutePhase(captured.promise, `route ${pattern} capture`, release, t.signal),
+      waitForRoutePhase(
+        captured.promise,
+        `route ${pattern} capture`,
+        release,
+        t.signal,
+        describeState,
+      ),
     waitForCompletion: () =>
-      waitForRoutePhase(completed.promise, `route ${pattern} completion`, release, t.signal),
+      waitForRoutePhase(
+        completed.promise,
+        `route ${pattern} completion`,
+        release,
+        t.signal,
+        describeState,
+      ),
   };
 }
 
@@ -327,6 +372,64 @@ test("console browser flow keeps Namespace URL state across global pages and log
     requests.some((request) => /\/deploy|\/agents\/agt_/.test(request.path)),
     false,
   );
+});
+
+test("console shows the external observability link only to Installation administrators", async (t) => {
+  const url = "https://metrics.example.test/d/operations";
+  const fixture = await createConsoleAppFixture(t, { observabilityUrl: url });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Observability access", { ready: true });
+  // The second account can open the console but has no Installation grant.
+  const limited = await fixture.createAccountWithPolicy("observability-limited", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-browser-observability-reader",
+      namespaceId: namespace.id,
+      permissions: [{ action: "read", resourceKind: "namespace" }],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-browser-observability-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-browser-observability-reader",
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  let probes = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/observability") {
+      probes += 1;
+    }
+  });
+  await login(page, fixture);
+  const link = page.getByRole("link", { name: "Observability" });
+  await link.waitFor();
+  assert.equal(await link.getAttribute("href"), url);
+  assert.equal(await link.getAttribute("target"), "_blank");
+  assert.equal(await link.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(await link.locator("svg.external-link-icon[aria-hidden='true']").count(), 1);
+  // Navigation reuses the settled read and keeps the link.
+  await page.getByRole("link", { name: "Namespaces" }).click();
+  await page.getByRole("list", { name: "Namespaces" }).getByText("Observability access").waitFor();
+  await link.waitFor();
+  assert.equal(probes, 1);
+
+  await openShellMenu(page);
+  await page.getByRole("menuitem", { name: "Logout" }).click();
+  await login(page, { ...fixture, credentials: limited.credentials });
+  await page.getByRole("heading", { name: "Agents" }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  // A denied read is audited, so navigation must not repeat it.
+  await page.getByRole("link", { name: "Namespaces" }).click();
+  await page.getByRole("list", { name: "Namespaces" }).getByText("Observability access").waitFor();
+  const namespacesRead = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/namespaces",
+  );
+  await page.getByRole("link", { name: "Agents" }).click();
+  await namespacesRead;
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  assert.equal(probes, 2);
 });
 
 test("console ignores stale collection successes and errors while switching Namespaces", async (t) => {

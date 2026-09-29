@@ -155,7 +155,7 @@ OpenClaw gateway, or a Codex model turn.
 
 The [console](../reference/console.md) uses real controller routes in
 `tests/integration/console-api.test.mjs`, `tests/browser/console.test.mjs`, and
-`tests/browser/console-agents.test.mjs`. The shared browser fixture runs
+the `tests/browser/console-agent*.test.mjs` files. The shared browser fixture runs
 Fastify, Better Auth memory storage, Native IAM, and in-memory platform storage
 on an ephemeral loopback port. Configuration and Compute helpers are test-only.
 The Agent browser suite seeds active revision pointers only to render admitted
@@ -193,6 +193,18 @@ retain screenshots at a chosen path; otherwise the suite uses a temporary
 directory. The existing
 [image smoke test](images.md#images-and-helm) also loads console assets from the built
 controller image; it does not claim a live production deployment.
+
+### Browser failure diagnostics
+
+When a browser test fails in the checks-baseline lane, CI uploads a
+`browser-failures-*` artifact, kept for three days. Each failed test gets a
+directory with a screenshot of every open page and `failure.json`. That file
+holds the error, page URLs, requests still pending at failure time, and recent
+navigation, console and network events. Tests that pass write nothing. Set
+`OPENCLAW_CI_BROWSER_FAILURE_DIR` to collect the same files locally, and add
+`OPENCLAW_CI_BROWSER_FAILURE_TRACE=1` for a Playwright trace (`trace.zip`; open
+it with `pnpm exec playwright show-trace`). CI does not trace: tracing slows the
+page enough to make timing-sensitive console tests fail more often.
 
 ### Console navigation coverage
 
@@ -274,7 +286,7 @@ Preset case posts the shipped JSON through Fastify with native IAM, reads it
 from the Namespace catalog, renders variables, and creates a Configuration
 and dedicated Agent. It checks credential references, native policy retention,
 and rejection of a cross-Namespace model credential. The password workflow in
-`tests/browser/console-agents.test.mjs` exercises the real chooser, masked input,
+`tests/browser/console-agent-presets.test.mjs` exercises the real chooser, masked input,
 same-Namespace Secret creation, credential grant, and retry after a name conflict.
 The API suite also loads Installation YAML and checks default seeding, preserved
 customizations, and authorization rollback. The

@@ -3,7 +3,71 @@
 Verify persistence, authentication, queue behavior, and bootstrap against
 disposable PostgreSQL databases. Start with the [shared requirements](README.md#requirements-and-credentials).
 
-## PostgreSQL
+## Revision-worker tests
+
+Run the revision-worker suite with an owned PostgreSQL
+fixture. It allocates disposable databases under that run's owner so another
+test cannot consume its queue. Four cross-Namespace cases explicitly share
+a database within their test. Tests still connect as `occ_app`; preparation
+uses the existing administrator and migrator paths. The suite rejects a standalone
+`OCC_TEST_DATABASE_URL` without prepared ownership before changing that database.
+Other direct PostgreSQL suites retain their application-role URL setup below.
+
+From the repository root, after the shared requirements, run the complete
+application lane:
+
+```sh
+(
+  set -eu
+  umask 077
+  PG_APPLICATION_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/oce-postgres-application.XXXXXX")"
+  printf 'PostgreSQL run directory: %s\n' "$PG_APPLICATION_RUN_DIR"
+  trap 'pg_run_status=$?; node scripts/ci/cleanup.mjs --state "$PG_APPLICATION_RUN_DIR/state.json" || pg_run_status=1; exit "$pg_run_status"' EXIT
+
+  node scripts/ci/prepare.mjs --lane postgres-application \
+    --state "$PG_APPLICATION_RUN_DIR/state.json" \
+    --github-env "$PG_APPLICATION_RUN_DIR/owner.env"
+  node scripts/ci/run-tests.mjs run postgres-application \
+    --state "$PG_APPLICATION_RUN_DIR/state.json" \
+    --results "$PG_APPLICATION_RUN_DIR/results.json"
+)
+```
+
+For only the revision-worker file, use a fresh run directory:
+
+```sh
+(
+  set -eu
+  umask 077
+  PG_WORKER_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/oce-postgres-worker.XXXXXX")"
+  printf 'PostgreSQL run directory: %s\n' "$PG_WORKER_RUN_DIR"
+  trap 'pg_run_status=$?; node scripts/ci/cleanup.mjs --state "$PG_WORKER_RUN_DIR/state.json" || pg_run_status=1; exit "$pg_run_status"' EXIT
+
+  node scripts/ci/prepare.mjs --lane postgres-application \
+    --state "$PG_WORKER_RUN_DIR/state.json" \
+    --github-env "$PG_WORKER_RUN_DIR/owner.env"
+  node scripts/ci/prepare.mjs --lane postgres-application \
+    --file tests/integration/postgres-worker-agent-revision.test.mjs \
+    --state "$PG_WORKER_RUN_DIR/state.json" \
+    --github-env "$PG_WORKER_RUN_DIR/test.env"
+  env -u OCC_TEST_DATABASE_URL -u OPENCLAW_ENTERPRISE_CI_STATE \
+    -u OPENCLAW_ENTERPRISE_CI_PREFIX \
+    node --env-file="$PG_WORKER_RUN_DIR/test.env" --test \
+    tests/integration/postgres-worker-agent-revision.test.mjs
+)
+```
+
+Each invocation needs its own state file; do not run two commands against the
+same prepared state concurrently. The commands clean up that run's databases
+and Compose server when they finish, including after a test failure. The
+application lane writes its result JSON in the printed run directory. If the
+shell is interrupted before cleanup completes, rerun
+`node scripts/ci/cleanup.mjs --state /printed/run/directory/state.json`.
+Retain failed-run output and result JSON while investigating.
+
+<a id="postgresql"></a>
+
+## Other PostgreSQL suites
 
 Requires Docker Compose. Use disposable databases: tests can initialize or
 change singleton platform state. The production bootstrap database must be
@@ -40,15 +104,29 @@ production bootstrap still needs its own URL:
 (
   export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_test_local
   export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_bootstrap_local
-  pnpm test:postgres
-  node --test tests/integration/compute-singleton-worker-postgres.test.mjs
+  node --test --test-concurrency=1 \
+    tests/integration/postgres-platform-state.test.mjs \
+    tests/integration/postgres-production-wireup.test.mjs \
+    tests/integration/compute-singleton-worker-postgres.test.mjs
 )
 ```
 
-The two PostgreSQL URLs select different coverage. Omitting the general URL
-skips most persistence tests, including queue coverage; omitting
-`OCC_PRODUCTION_WIREUP_DATABASE_URL` skips production bootstrap. `test:postgres`
-does not include the singleton-worker file, hence the second command.
+This example selects platform persistence, production bootstrap, and
+singleton-worker coverage. Omitting the general URL skips most persistence and
+queue cases; omitting `OCC_PRODUCTION_WIREUP_DATABASE_URL` skips production
+bootstrap. Use the prepared `postgres-application` lane above for its complete
+file selection. Broad `test:postgres`, `test:integration`, and `test` commands
+include the revision-worker suite, which requires prepared ownership when
+selected with a database URL.
+
+The production bootstrap test also exercises existing-person Agent sharing through
+real cookie-authenticated HTTP, native IAM and restricted PostgreSQL State. It
+checks initial denial, exact Namespace/Agent grants, sibling and Configuration
+denial, persisted sessions and policy after application restart, and selective
+revocation while another person retains access. The fixture seeds an existing
+Installation-reader Role; account creation and password sign-in use ordinary APIs.
+This is not atomic-enrollment proof. Its passive Compute and test Configuration/Secret
+Drivers do not establish native Gateway execution or closure of open streams.
 
 Four optional live Configuration cases additionally require
 `OCC_TEST_KUBERNETES_CONFIGURATION=1` and an already configured live Kubernetes
@@ -191,7 +269,7 @@ provider operation. Developer recovery is documented under
 
 | Variable                                       | Required by                                | Behavior                                                                                                                                                                                   |
 | ---------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OCC_TEST_DATABASE_URL`                        | Real PostgreSQL integration tests.         | Must use an initialized application-role database. General PostgreSQL and queue cases are skipped when absent.                                                                             |
+| `OCC_TEST_DATABASE_URL`                        | Real PostgreSQL integration tests.         | Must use an initialized application-role database. Skipped when absent; [revision-worker tests](#revision-worker-tests) additionally require prepared ownership.                           |
 | `OCC_MIGRATION_DATABASE_URL`                   | `db:migrate` setup before tests.           | Uses the separate migrator role for schema and migration-history ownership; the test process should use application-role URLs.                                                             |
 | `OCC_PRODUCTION_WIREUP_DATABASE_URL`           | Production bootstrap integration.          | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent.                                                             |
 | `OCC_BOOTSTRAP_FAILURE_DATABASE_URL`           | Bootstrap race and uncertain-commit tests. | Application-role URL for a migrated, disposable loopback database named `openclaw_failures_*`. The suite resets its tables; skipped when absent.                                           |

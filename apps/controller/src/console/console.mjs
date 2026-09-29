@@ -12,6 +12,9 @@ const lifetime = createViewLifetime();
 let session = null;
 let namespaces = [];
 let namespaceId = null;
+let observabilityUrl = null;
+// Session owner whose Installation-admin observability read has settled.
+let observabilityOwner = null;
 let loggingOut = false;
 let navigateAgentTab = null;
 let discardCreationOnExit = null;
@@ -252,13 +255,15 @@ function resetReads({ retainView = false } = {}) {
 }
 
 function renderShell(feature) {
-  return shellUI.renderShell(feature, { session, namespaces, namespaceId });
+  return shellUI.renderShell(feature, { session, namespaces, namespaceId, observabilityUrl });
 }
 
 function clearPrivate() {
   session = null;
   namespaces = [];
   namespaceId = null;
+  observabilityUrl = null;
+  observabilityOwner = null;
   clearRetainedViews();
 }
 
@@ -541,6 +546,8 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     if (!owner || previousOwner !== owner || draftUserId !== owner) {
       clearDrafts();
       clearRetainedViews();
+      observabilityUrl = null;
+      observabilityOwner = null;
       draftUserId = owner;
       if (retained) {
         retained = false;
@@ -557,7 +564,22 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       void loadPage();
       return;
     }
-    const readable = await request("/namespaces");
+    // Read the admin-only destination once per session owner. Non-administrators
+    // get 403, which the API audits as a denial, so do not repeat it per navigation.
+    const [readable, observability] = await Promise.all([
+      request("/namespaces"),
+      owner && observabilityOwner === owner
+        ? null
+        : request("/observability").then(
+            (data) => ({ url: typeof data?.url === "string" ? data.url : null, settled: true }),
+            (error) => {
+              if (error.status === 401) {
+                throw error;
+              }
+              return { url: null, settled: error.status === 403 };
+            },
+          ),
+    ]);
     if (!lifetime.isCurrent(active)) {
       return;
     }
@@ -567,6 +589,10 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     clearRetainedViewsOutsideNamespaces(readable);
     namespaces = sorted(readable);
     accessResolved = true;
+    if (observability) {
+      observabilityUrl = observability.url;
+      observabilityOwner = observability.settled ? owner : null;
+    }
     namespaceId =
       current.namespace ??
       (namespaces.find((item) => item.status === "ready") ?? namespaces[0])?.id ??
@@ -1038,8 +1064,23 @@ async function revalidateMountedAgent(current) {
   }
 }
 
+// A pristine sharing form is always mounted on Agent detail; it must not disable
+// the access recheck. Any other form, or a sharing form with input, still does.
+function hasUnfinishedForm() {
+  if (app.querySelector("dialog[open]")) {
+    return true;
+  }
+  return Array.from(app.querySelectorAll("form")).some(
+    (form) =>
+      !form.classList.contains("agent-access-form") ||
+      Array.from(form.elements).some((field) =>
+        field.type === "checkbox" ? field.checked : Boolean(field.value),
+      ),
+  );
+}
+
 function resumePage() {
-  if (document.hidden || !session || loggingOut || app.querySelector("form, dialog[open]")) {
+  if (document.hidden || !session || loggingOut || hasUnfinishedForm()) {
     return;
   }
   if (resumePending) {

@@ -17,7 +17,11 @@ import swagger from "@fastify/swagger";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import ajvFormats from "ajv-formats";
 import { AuditEventFactory, type AuditSink } from "@openclaw-enterprise/audit";
-import { AuthAccountRoleNotFoundError, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
+import {
+  AuthAccountRoleInvalidError,
+  AuthAccountRoleNotFoundError,
+  type AuthPrincipalSeed,
+} from "@openclaw-enterprise/iam";
 import {
   harnessAuthBindingFromSnapshot,
   WORKSPACE_DEFAULTS_ID,
@@ -149,6 +153,7 @@ export interface ControllerAppOptions {
   readonly resolveHarness: HarnessResolver;
   readonly auditSink: AuditSink;
   readonly backendSummaries?: readonly BackendSummary[];
+  readonly observabilityUrl?: string;
   readonly development: DevelopmentAdmission;
   readonly maxBodyBytes?: number;
   readonly auth: ControllerAuth;
@@ -544,6 +549,12 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
       {
         action: "read",
         resourceKind: "configuration",
+        scope: "request_body",
+        condition: "iam_binding_target",
+      },
+      {
+        action: "read",
+        resourceKind: "namespace",
         scope: "request_body",
         condition: "iam_binding_target",
       },
@@ -1056,7 +1067,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       body: {
         type: "object",
         additionalProperties: false,
-        required: ["email", "password", "roleId"],
+        required: ["email", "password"],
         properties: {
           email: { type: "string", minLength: 3, maxLength: 320 },
           password: { type: "string", minLength: 12, maxLength: 128 },
@@ -2057,6 +2068,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       }
       reply.send({
         data: backends.map((backend) => ({ id: backend.id, type: backend.type })),
+        meta: { requestId: request.id },
+      });
+      return;
+    }
+
+    if (operation.operationId === "getObservability") {
+      await requireInstallationAdmin(request, operation, context);
+      reply.send({
+        data: { url: options.observabilityUrl ?? null },
         meta: { requestId: request.id },
       });
       return;
@@ -3971,7 +3991,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: createAuthAccountOperation.operationId,
           summary: createAuthAccountOperation.summary,
           description:
-            "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
+            "Requires administer permission on the Installation. Creates a Better Auth account and an explicit IAM Principal in one transaction. Supplying roleId also creates a binding to that existing IAM Role; omitting roleId creates no grants. Public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
           tags: [...createAuthAccountOperation.tags],
           security: [{ sessionCookie: [] }],
           "x-openclaw-permissions": [
@@ -4013,7 +4033,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         if (
           !isNonEmptyString(email) ||
           !isNonEmptyString(password) ||
-          !isNonEmptyString(roleId) ||
+          (roleId !== undefined && !isNonEmptyString(roleId)) ||
           (name !== undefined && !isNonEmptyString(name)) ||
           (github !== undefined && !isNonEmptyString(github.subject))
         ) {
@@ -4045,8 +4065,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           password,
           ...(name === undefined ? {} : { name }),
         });
-        const seed = options.auth.principalSeed(prepared, { roleId });
-        const auditEvent = event(
+        const seed = options.auth.principalSeed(
+          prepared,
+          roleId === undefined ? { grant: "none" } : { roleId },
+        );
+        const baseAuditEvent = event(
           createAuthAccountOperation,
           request,
           target,
@@ -4054,6 +4077,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           context,
           decision.evidence,
         );
+        // Record who was enrolled and what they were granted; never the email or password.
+        const auditEvent: AuditEvent = {
+          ...baseAuditEvent,
+          details: {
+            ...baseAuditEvent.details,
+            principalId: seed.principal.id,
+            ...(roleId === undefined ? { grant: "none" } : { roleId }),
+          },
+        };
         try {
           await options.provisionAuthAccount(seed, auditEvent, prepared, external);
         } catch (error) {
@@ -4063,7 +4095,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               ? failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.")
               : external !== undefined && error instanceof ResourceConflictError
                 ? failure(409, "RESOURCE_CONFLICT", "The external identity is already assigned.")
-                : error instanceof AuthAccountRoleNotFoundError
+                : error instanceof AuthAccountRoleNotFoundError ||
+                    error instanceof AuthAccountRoleInvalidError
                   ? failure(
                       400,
                       "INVALID_REQUEST",

@@ -723,6 +723,17 @@ export const RepositoryOptionListResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const ObservabilityResponse = Type.Object(
+  {
+    data: Type.Object(
+      { url: Type.Union([Type.String({ format: "uri" }), Type.Null()]) },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
+  { additionalProperties: false },
+);
+
 /** Public revision projection excludes provider grant identities and material. */
 export const RepositoryRevisionStateSchema = Type.Object(
   {

@@ -107,6 +107,10 @@
                     "label": "Console Walkthrough"
                   },
                   {
+                    "page": "guides/console/agent-sharing",
+                    "label": "Share Agents"
+                  },
+                  {
                     "page": "reference/console/create-and-deploy",
                     "label": "Create and Deploy in the Console"
                   },
@@ -212,6 +216,7 @@
             ],
             "hidden": [
               "reference/console/debug-fields",
+              "reference/console/agent-sharing",
               "reference/configuration/secrets",
               "reference/security/runtime-isolation",
               "reference/agents",
@@ -832,6 +837,8 @@
               "flows/agent-deployment-diagnostics",
               "flows/platform-console",
               "flows/platform-console/agent-editing",
+              "flows/platform-console/agent-sharing",
+              "flows/platform-console/observability-link",
               "flows/configuration-driver",
               "flows/configuration-driver/persistence-and-revisions",
               "flows/local-password-authentication",

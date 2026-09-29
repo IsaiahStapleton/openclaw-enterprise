@@ -15,6 +15,7 @@ import {
   NativeIAMDriver,
   createAuthPrincipalSeed,
   type AuthPrincipalSeed,
+  type AuthPrincipalSeedOptions,
 } from "@openclaw-enterprise/iam";
 import {
   PostgresHumanAuthentication,
@@ -160,11 +161,12 @@ export interface ProvisionAuthAccountInput {
   readonly name?: string;
 }
 
-export { AuthAccountRoleNotFoundError, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
-
-export interface AuthPrincipalSeedOptions {
-  readonly roleId?: string;
-}
+export {
+  AuthAccountRoleInvalidError,
+  AuthAccountRoleNotFoundError,
+  type AuthPrincipalSeed,
+  type AuthPrincipalSeedOptions,
+} from "@openclaw-enterprise/iam";
 
 export interface ControllerAuth {
   readonly auth: ControllerBetterAuth;
@@ -234,7 +236,7 @@ export interface ControllerAuth {
   deleteAccount(account: Pick<AuthenticatedAccount, "id">): Promise<void>;
   principalSeed(
     account: Pick<AuthenticatedAccount, "id">,
-    options?: AuthPrincipalSeedOptions,
+    options: AuthPrincipalSeedOptions,
   ): AuthPrincipalSeed;
   signInEmail(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   signOut(request: FastifyRequest, reply: FastifyReply): Promise<void>;
@@ -1230,7 +1232,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     deleteAccount,
     principalSeed: (
       account: Pick<AuthenticatedAccount, "id">,
-      seedOptions?: AuthPrincipalSeedOptions,
+      seedOptions: AuthPrincipalSeedOptions,
     ) =>
       createAuthPrincipalSeed(
         options.installationId,

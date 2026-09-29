@@ -1,4 +1,4 @@
-ARG OPENCLAW_COMMIT=9190ad7c12667af435734d4944060effd6ad0a71
+ARG OPENCLAW_COMMIT=01d7131999ca4805242ed8b0d8037f4544a9d7b0
 ARG NODE_BASE_IMAGE=docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
 ARG NODE_RUNTIME_BASE_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
 
@@ -38,7 +38,7 @@ FROM ${NODE_BASE_IMAGE} AS openclaw-source
 # Keep the source identity separate from its unreleased package version.
 ARG OPENCLAW_COMMIT
 ENV GIT_COMMIT=${OPENCLAW_COMMIT}
-ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-28T21:38:10Z
+ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-29T06:57:39Z
 ENV OPENCLAW_PREFER_PNPM=1
 WORKDIR /source
 RUN --mount=type=secret,id=build-ca,required=false \
@@ -46,20 +46,25 @@ RUN --mount=type=secret,id=build-ca,required=false \
     if [ -f /run/secrets/build-ca ]; then export CURL_CA_BUNDLE=/run/secrets/build-ca; fi; \
     curl --fail --location --silent --show-error \
       "https://codeload.github.com/openclaw/openclaw/tar.gz/${GIT_COMMIT}" -o /tmp/openclaw-source.tar.gz; \
-    echo '5393d25ac73b98030609fa40b2c2bc3f44c62a455660b7cc3f28371fc92dc851  /tmp/openclaw-source.tar.gz' | sha256sum --check --strict; \
+    echo 'e51b4e37b4cec2c449bb3588d4a72cdb4c684765b7867490f0cc6f2ecb864b84  /tmp/openclaw-source.tar.gz' | sha256sum --check --strict; \
     tar -xzf /tmp/openclaw-source.tar.gz --strip-components=1; \
     rm /tmp/openclaw-source.tar.gz
 # TODO: Remove this bridge patch when OpenClaw supports networkProxy.readOnlyPaths.
 COPY deploy/runtime/openclaw-codex-read-only-paths.patch /tmp/openclaw-codex-read-only-paths.patch
 RUN echo '62328f7cc72ada024a97a5a7bf89e988db3f91b64b4c6d7fa6809c218fc8b72e  /tmp/openclaw-codex-read-only-paths.patch' | sha256sum --check --strict \
     && git apply /tmp/openclaw-codex-read-only-paths.patch
+# TODO: Remove this bridge patch when OpenClaw `connect --ephemeral` accepts an expired
+# replayed setup code for a node whose saved device token can reconnect.
+COPY deploy/runtime/openclaw-connect-ephemeral-expired-setup.patch /tmp/openclaw-connect-ephemeral-expired-setup.patch
+RUN echo 'c57722da9a88ec4295577ab9a9ba6e2ca37fceda11ce8b51b08ee1425e00851f  /tmp/openclaw-connect-ephemeral-expired-setup.patch' | sha256sum --check --strict \
+    && git apply /tmp/openclaw-connect-ephemeral-expired-setup.patch
 COPY scripts/build-runtime-assets.mjs /tmp/build-runtime-assets.mjs
 RUN node /tmp/build-runtime-assets.mjs inputs /source /inputs
 
 FROM ${NODE_BASE_IMAGE} AS openclaw-dependency-inputs
 ARG OPENCLAW_COMMIT
 ENV GIT_COMMIT=${OPENCLAW_COMMIT}
-ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-28T21:38:10Z
+ENV OPENCLAW_BUILD_TIMESTAMP=2026-09-29T06:57:39Z
 ENV OPENCLAW_PREFER_PNPM=1
 WORKDIR /source
 COPY --from=openclaw-source /inputs/ ./
