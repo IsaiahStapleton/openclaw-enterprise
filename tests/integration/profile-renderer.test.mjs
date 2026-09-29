@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { loadStartupConfigurationSnapshot } from "../../apps/controller/src/composition/installation-config.ts";
 
 const digestA = "a".repeat(64);
 const digestB = "b".repeat(64);
@@ -544,4 +545,35 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
     }),
     /controlPlane.agentNativeAdminDomain must be inside controlPlane.sharedCookieDomain/,
   );
+});
+
+test("profiles pass an optional observability URL to Installation startup YAML", async () => {
+  const url = "https://grafana.oce.example.internal/d/occ-observability";
+  const withoutUrl = render("openclaw", baseInput());
+  assert.doesNotMatch(withoutUrl.installation, /observability:/);
+
+  const output = render(
+    "codex",
+    codexInput({ controlPlane: { ...baseInput().controlPlane, observabilityUrl: url } }),
+  );
+  assert.equal(output.summary.ok, true);
+  // The controller's own startup parser must accept the rendered block.
+  const snapshot = await loadStartupConfigurationSnapshot({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: join(output.directory, "installation.yaml") },
+  });
+  assert.equal(snapshot.observability.url, url);
+
+  for (const invalid of [
+    "javascript:alert(1)",
+    "https://user:pass@grafana.example.internal",
+    "https://grafana.example.internal/#fragment",
+    "grafana.example.internal",
+  ]) {
+    assertPreflightFailure(
+      "openclaw",
+      baseInput({ controlPlane: { ...baseInput().controlPlane, observabilityUrl: invalid } }),
+      /controlPlane.observabilityUrl must be an absolute HTTP or HTTPS URL/,
+    );
+  }
 });
