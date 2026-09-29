@@ -12,6 +12,7 @@ import {
   NamespaceNotReadyError,
   NotImplementedError,
   PluginPolicyValidationError,
+  PostgresCommitOutcomeUnknownError,
   ResourceConflictError,
   ScopeViolationError,
 } from "@openclaw-enterprise/occ";
@@ -271,6 +272,13 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof NotImplementedError) {
     return failure(501, "NOT_IMPLEMENTED", error.message);
+  }
+  if (error instanceof PostgresCommitOutcomeUnknownError) {
+    return failure(
+      503,
+      "DEPENDENCY_UNAVAILABLE",
+      "The operation outcome is unknown. Do not retry automatically; inspect current state before a deliberate new action.",
+    );
   }
   if (isDependencyUnavailable(error)) {
     return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");

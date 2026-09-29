@@ -31,7 +31,7 @@ Startup fails on a partial variable set, an activated database without the GitHu
 
 One account version and one disablement flag cover both methods. Password sign-in for every enabled account survives a GitHub outage, a blocked egress route or a misconfigured provider. After a client ID rotation, detach the stale GitHub methods (M1); M1.1 also rejects GitHub-issued sessions of any other provider instance.
 
-M1: a controller older than PR #305 ignores disablement and session bindings. After activation the database refuses every session it tries to create, through a deferred constraint trigger in migration 0034. Sessions bound earlier expire within eight hours. Rollback to such an image is unsupported; it fails closed instead of silently re-admitting users.
+M1: a controller older than PR #305 ignores disablement and session bindings. After activation the database refuses every session it tries to create, through a deferred constraint trigger in migration 0037. Sessions bound earlier expire within eight hours. Rollback to such an image is unsupported; it fails closed instead of silently re-admitting users.
 
 ## Contract
 
@@ -144,7 +144,7 @@ State commits local effects and audit together, not IAM reads, GitHub calls or b
 
 ## Milestones
 
-**M1, launch.** PR #305 plus: the keyed limiter with the trusted-proxy presets; Helm values, `Recreate` and GitHub egress; migration 0034 with the session fence and the recovery `UPDATE` grant; atomic account creation with relaxed activation; detach and enable.
+**M1, launch.** PR #305 plus: the keyed limiter with the trusted-proxy presets; Helm values, `Recreate` and GitHub egress; migration 0037 with the session fence and the recovery `UPDATE` grant; atomic account creation with relaxed activation; detach and enable.
 
 **M1.1, GitHub off.** Deferred: the guarded profile keyed on the recorded designation, startup without the GitHub variables, provider-instance-scoped GitHub sessions, attach `409` while the lane is off.
 
@@ -158,7 +158,7 @@ State commits local effects and audit together, not IAM reads, GitHub calls or b
 
 ## Implementation and verification
 
-Migration `0034_human_authentication`, renumbered from PR #305's original number and amended with the fence trigger and the recovery `UPDATE` grant before merge (M1). Suites: `github-login-transport`, `postgres-human-authentication`, `postgres-github-*`, `production-kubernetes-packaging` and `postgres-migration-compatibility`. Documentation stays within the word caps.
+Migration `0037_human_authentication`, renumbered from PR #305's original number and amended with the fence trigger and the recovery `UPDATE` grant before merge (M1). Suites: `github-login-transport`, `postgres-human-authentication`, `postgres-github-*`, `production-kubernetes-packaging` and `postgres-migration-compatibility`. Documentation stays within the word caps.
 
 ## References
 
