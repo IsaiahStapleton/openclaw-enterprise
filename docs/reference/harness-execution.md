@@ -132,9 +132,20 @@ and model fallback. Codex ignores user configuration and rules, disables executi
 and external tools, and uses read-only filesystem policy without approval grants;
 a tool event cannot satisfy its success check. The Codex probe runs with a minimal
 environment that keeps only the runtime's TLS trust variables (`SSL_CERT_FILE`,
-`SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Each probe has a process timeout
-and captures native output, emitting only a fixed failure message if unsuccessful.
-A failed Codex probe also holds the process unready until restart.
+`SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Each probe captures
+native output without logging its contents. Dedicated Codex retries a confirmed
+subprocess timeout once after one second. Each attempt has a 30-second cap within
+one 61-second budget, including the delay. Authentication rejection, malformed
+output, tool events, and external signals without timeout evidence do not retry.
+Termination during the delay exits without starting another probe. Exhausted or
+nonretryable failure holds the process unready until restart; readiness polling
+never starts another model call. Embedded OpenClaw continues to probe once.
+
+Codex emits a structured `codex.model_probe` log for each attempt with its number,
+elapsed milliseconds, exit code, recognized termination signal, and final code
+(`READY`, `MODEL_PROBE_TIMEOUT`, `MODEL_PROBE_FAILED`, or `UNAVAILABLE`). Logs omit
+credentials and raw provider output. The existing runtime failure status is
+published only after retries end.
 
 These startup checks make provider requests and may incur model usage charges.
 They do not verify access to every other configured model or guarantee continued validity
