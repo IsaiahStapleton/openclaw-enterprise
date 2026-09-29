@@ -195,7 +195,9 @@ example Helm values render, after the real production bootstrap:
 The same composition covers the GitHub profile against the fixture provider:
 
 - `postgres-github-admin-attach.test.mjs`: administrators attach, detach and
-  re-attach GitHub identities, and disable and enable accounts.
+  re-attach GitHub identities, and disable and enable accounts. A session without
+  Installation `administer` gets `403` on every account and recovery route, and two
+  administrators attaching one GitHub identity at once get one `200` and one `409`.
 - `postgres-github-tab-binding.test.mjs`: Playwright over the HTTPS Origin. A tab
   signed in with GitHub signs out after another tab's password sign-in, and the
   login receipt is one-use and needs the exact Origin.
