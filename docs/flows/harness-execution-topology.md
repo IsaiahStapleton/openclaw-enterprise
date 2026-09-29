@@ -152,12 +152,10 @@ The selected Sandbox consumes the same rendered projections and explicit login
 mode in `HarnessWorkloadRequirements`. Unsupported upstream projection fails
 without a test-only credential bridge.
 
-The shared Kubernetes Deployment builder assigns the explicit ordinary
-[network profile](../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
-to each Pod template. Ordinary allow-policy targets, including workspace-node and
-plugin-status access, and gateway/Harness peers across their namespaces require
-that profile; a missing classification cannot inherit ordinary grants.
-Deployment readiness checks the template profile before accepting Ready counters.
+Every Pod template Kubernetes Compute renders carries the ordinary
+[network profile](../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles).
+Ordinary allow policies and Gateway/Harness peers require it, and readiness
+rejects a template without it.
 
 When a selected SandboxDriver provisions the dedicated Harness,
 `providerHarnessReady` lists Pods using the same Agent/revision/role labels as
@@ -186,11 +184,9 @@ Old reconciliation and maintenance cannot restart a predecessor after a newer
 exclusive revision is admitted. Both PVCs survive this downtime window; a failed
 candidate is recovered by retry or a new revision, not automatic rollback.
 Dedicated Codex and dedicated OpenClaw must complete a bounded native
-authentication/model probe before their Harness becomes ready. If the predecessor Gateway cannot serve node enrollment,
-Kubernetes Compute starts the candidate Gateway during preparation after the candidate Harness is
-otherwise ready, then keeps the revision incomplete until the node setup is redeemed and connected.
-This repair path does not change unrelated Gateways or activate a revision without its exact
-workspace node.
+authentication/model probe before their Harness becomes ready. The candidate
+Gateway repair in step 2 changes no unrelated Gateway and never activates a
+revision without its exact workspace node.
 Embedded preparation does not validate the replacement's credentials. See the
 [authentication flow](native-service-account-credential-delivery.md#5-authenticate-during-runtime-startup).
 

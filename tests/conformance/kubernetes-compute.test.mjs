@@ -597,6 +597,11 @@ test("preparation renews an expired workspace node setup and keeps the enrolled 
         writes.push(["create", request.body.metadata.name]);
       },
     },
+    networking: {
+      async readNamespacedNetworkPolicy() {
+        throw Object.assign(new Error("not found"), { statusCode: 404 });
+      },
+    },
   });
   const replacement = { ...revision, id: "revision-routed-2", revision: 2 };
   assert.deepEqual(await driver.prepareWorkspaceNode(replacement, namespace), { name });
@@ -662,6 +667,11 @@ test("preparation records a device redeemed on an expired setup before renewing 
         async replaceNamespacedSecret(request) {
           writes.push(request.body.metadata.resourceVersion);
           secret = structuredClone(request.body);
+        },
+      },
+      networking: {
+        async readNamespacedNetworkPolicy() {
+          throw Object.assign(new Error("not found"), { statusCode: 404 });
         },
       },
     });
