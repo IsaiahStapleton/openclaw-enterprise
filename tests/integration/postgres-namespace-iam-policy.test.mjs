@@ -446,7 +446,7 @@ test(
     const createState = new PostgresPlatformState(createPool);
     const deleteState = new PostgresPlatformState(deletePool);
     const iam = new NativeIAMDriver(createState, { id: "postgres-namespace-iam-create-race" });
-    const { namespace, secret } = await createNamespaceAgentState(createState);
+    const { namespace, secret, agent } = await createNamespaceAgentState(createState);
     const principal = await createHumanPrincipal(createState);
     let role;
     let binding;
