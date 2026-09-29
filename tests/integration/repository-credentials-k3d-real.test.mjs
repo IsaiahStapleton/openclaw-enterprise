@@ -394,8 +394,8 @@ function installedRepositoryJourney(mode, profile = "git-full") {
           },
           sessionPolicy: {
             maximumDurationSeconds: 3600,
-            defaultProfile: "git-full",
-            allowedProfiles: ["git-full"],
+            defaultProfile: profile,
+            allowedProfiles: [profile],
           },
           limits: {},
           backend: {
