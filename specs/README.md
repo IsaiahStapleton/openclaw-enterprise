@@ -48,6 +48,9 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Repository credential recovery](39-repository-credential-recovery.md) — Implementing;
+explore cleanup evidence across broker loss without retaining provider tokens.
+
 [Two-cluster Gateway execution](37-two-cluster-gateway-execution-plan.md) — Experimental implementation;
 complete local OCE setup across separate CP and DP clusters, with explicit
 cluster access and TLS transport. Broader runtime and failure-path qualification

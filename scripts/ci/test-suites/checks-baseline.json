@@ -356,7 +356,10 @@
       "expectedTests": [
         "TEST-001: SIGKILL after confirmed GitHub issuance loses session inventory",
         "TEST-002: lost GitHub issuance response stays charged while service survives",
-        "TEST-002: SIGKILL before GitHub issuance response loses local reservation"
+        "TEST-002: SIGKILL before GitHub issuance response loses local reservation",
+        "a lost revocation response is not proof of disposal across broker loss",
+        "captured GitHub authority expires by elapsed time when revocation is unconfirmed",
+        "a broker restart cannot accept bound admissions without durable fencing"
       ]
     },
     {

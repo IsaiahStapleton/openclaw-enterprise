@@ -31,6 +31,9 @@ async function readManifest() {
   ) {
     refuse("the journal differs from the reviewed source manifest");
   }
+  if (typeof manifest.catalogs.completed !== "string") {
+    refuse("the completed catalog has not been qualified");
+  }
   const migrations = readMigrationFiles({ migrationsFolder: directory });
   if (migrations.length !== manifest.entries.length) {
     refuse("the migration source set differs");
@@ -119,6 +122,12 @@ function classifyReceipts(receipts, manifest) {
         return "prePluginApprovers";
       }
       if (receipts.length === 34) {
+        return "preBrokerReceipts";
+      }
+      if (receipts.length === 35) {
+        return "preAgentDeletion";
+      }
+      if (receipts.length === 36) {
         return "preHumanAuthentication";
       }
       return "providerCompleted";
@@ -163,6 +172,12 @@ function classifyReceipts(receipts, manifest) {
     return "prePluginApprovers";
   }
   if (receipts.length === 34) {
+    return "preBrokerReceipts";
+  }
+  if (receipts.length === 35) {
+    return "preAgentDeletion";
+  }
+  if (receipts.length === 36) {
     return "preHumanAuthentication";
   }
   refuse("an incomplete or unsupported development history is installed");

@@ -231,6 +231,7 @@ export type {
 export { createPostgresPool } from "./state/postgres-pool.ts";
 export type {
   RepositoryRevisionOwner,
+  RepositoryBrokerReceipt,
   RepositorySessionAttempt,
   RepositorySessionPhase,
   RepositorySessionReadRepository,
@@ -248,6 +249,7 @@ export {
   PostgresWorkQueue,
   WorkClaimLostError,
   isRepositoryCleanupWork,
+  repositoryCleanupRevisionId,
   isRepositoryRuntimeRetirementWork,
   type ClaimedWork,
   type ClaimRequest,

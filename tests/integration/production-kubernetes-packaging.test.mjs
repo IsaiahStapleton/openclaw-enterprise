@@ -124,6 +124,53 @@ async function resources(manifests) {
   return parsed.trim().split("\n").map(JSON.parse);
 }
 
+test("sandbox ingress uses a separate listener outside OCE cookie scope", tooling, async () => {
+  const sandboxValues = {
+    ...agentNativeAdminValues,
+    "gatewayRouting.sandbox.enabled": "true",
+    "gatewayRouting.sandbox.domain": "previews.example.test",
+    "gatewayRouting.sandbox.tlsSecretName": "preview-wildcard",
+    "gatewayRouting.sandbox.ingressPeers[0].namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name":
+      "public-ingress",
+  };
+  const rendered = await resources((await render(sandboxValues)).stdout);
+  const gateway = rendered.find((item) => item.kind === "Gateway");
+  const listener = gateway.spec.listeners.find((item) => item.name === "sandbox");
+  assert.equal(listener.hostname, "*.previews.example.test");
+  assert.equal(listener.port, 8443);
+  assert.equal(listener.tls.certificateRefs[0].name, "preview-wildcard");
+  assert.equal(gateway.spec.listeners.find((item) => item.name === "https").port, 443);
+  const policy = rendered.find(
+    (item) => item.kind === "NetworkPolicy" && item.metadata.namespace === "envoy-gateway-system",
+  );
+  const publicRule = policy.spec.ingress.find((rule) =>
+    rule.ports.some((port) => port.port === 8443),
+  );
+  assert.equal(
+    publicRule.from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],
+    "public-ingress",
+  );
+  assert.deepEqual(publicRule.ports, [{ protocol: "TCP", port: 8443 }]);
+  for (const domain of ["example.invalid", "preview.example.invalid"]) {
+    await assert.rejects(
+      render({ ...sandboxValues, "gatewayRouting.sandbox.domain": domain }),
+      /outside the OCE shared session cookie domain/,
+    );
+  }
+  await assert.rejects(
+    render({ ...sandboxValues, "gatewayRouting.sandbox.listenerPort": "10443" }),
+    /distinct from private Envoy HTTPS/,
+  );
+  await assert.rejects(
+    render({
+      ...sandboxValues,
+      "agentNativeAdmin.enabled": "false",
+      "gatewayRouting.enabled": "false",
+    }),
+    /sandbox requires gatewayRouting.enabled/,
+  );
+});
+
 // Evaluate the selector-only, numeric-port ingress rules rendered by this chart.
 // This checks additive policy semantics, not live CNI enforcement.
 function matchesPolicySelector(selector = {}, labels = {}) {
@@ -578,7 +625,7 @@ test(
     const api = named("Deployment", "openclaw-enterprise-api");
     const worker = named("Deployment", "openclaw-enterprise-worker");
     const workerPod = worker.spec.template.spec;
-    const controller = workerPod.containers.find(({ name }) => name === "worker");
+    const controller = workerPod.initContainers.find(({ name }) => name === "worker");
     const service = workerPod.containers.find(({ name }) => name === "repository-credentials");
     const mounts = (container) => container.volumeMounts.map(({ name }) => name);
 
@@ -628,7 +675,12 @@ test(
     assert.equal(workerPod.securityContext.runAsUser, 1000);
     assert.equal(workerPod.securityContext.runAsGroup, 1000);
     assert.equal(workerPod.securityContext.fsGroup, 1000);
-    assert.equal(workerPod.initContainers, undefined);
+    // Native sidecar termination follows broker termination, keeping receipt writes available.
+    assert.equal(controller.restartPolicy, "Always");
+    assert.deepEqual(
+      workerPod.initContainers.map(({ name }) => name),
+      ["worker"],
+    );
     const apiAccess = workerPod.volumes.find(({ name }) => name === "worker-api-access");
     assert.equal(apiAccess.projected.defaultMode, 0o440);
     assert.deepEqual(apiAccess.projected.sources, [
@@ -662,7 +714,7 @@ test(
         secretName: "repository-public-ca",
         items: [{ key: "ca.crt", path: "ca.crt" }],
       });
-      for (const container of pod.containers) {
+      for (const container of [...(pod.initContainers ?? []), ...pod.containers]) {
         assert.deepEqual(
           container.volumeMounts.find(({ name }) => name === "repository-registry"),
           {
@@ -672,7 +724,7 @@ test(
           },
         );
       }
-      const main = pod.containers[0];
+      const main = deployment === worker ? controller : pod.containers[0];
       assert.deepEqual(
         main.volumeMounts.find(({ name }) => name === "repository-public-ca"),
         {

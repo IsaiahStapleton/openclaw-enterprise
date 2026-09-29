@@ -26,7 +26,7 @@ This profile uses the pinned K3s image and installs PostgreSQL and OCE in
 the private state directory. It does not install OpenShell.
 
 Before bootstrapping, startup checks the dedicated Codex sandbox with the exact
-imported runtime image and the supported Codex `0.156.0` version. If the node's
+imported runtime image and the supported Codex `0.158.0` version. If the node's
 `RuntimeDefault` blocks it, the launcher
 derives the [reviewed compatibility profile](codex-sandbox.md) from that node's
 actual policy, installs it only on the owned k3d node, and verifies workspace

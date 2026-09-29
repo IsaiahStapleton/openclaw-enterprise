@@ -174,8 +174,16 @@ spec:
           emptyDir:
             sizeLimit: 1Mi
         {{- end }}
+      {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+      # The receipt server must remain available while the broker drains.
+      initContainers:
+      {{- else }}
       containers:
+      {{- end }}
         - name: {{ $component }}
+          {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+          restartPolicy: Always
+          {{- end }}
           image: {{ $.Values.images.controller | quote }}
           args:
             - apps/controller/src/{{ ternary "server" "worker" (eq $component "api") }}.mjs
@@ -337,6 +345,7 @@ spec:
               command: [node, scripts/production-healthcheck.mjs, worker]
           {{- end }}
         {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+      containers:
         - name: repository-credentials
           image: {{ $.Values.repositoryCredentials.image | quote }}
           command: [node, /app/dist/composition/repository-credentials/projected-inputs.js]

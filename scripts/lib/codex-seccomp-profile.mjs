@@ -257,7 +257,7 @@ function validateRuntimeDefaultSeccompProfile(
   );
 }
 
-function deriveCodexBwrapProfile(baseline, { codexVersion = "0.156.0" } = {}) {
+function deriveCodexBwrapProfile(baseline, { codexVersion = "0.158.0" } = {}) {
   assertReviewedCodexVersion(codexVersion);
   validateRuntimeDefaultSeccompProfile(baseline);
   const profile = structuredClone(baseline);
