@@ -2772,39 +2772,30 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayAccountOwnership,
       gatewayNamespace,
     );
+    // Preparation observes the serving Gateway of another revision and never
+    // re-renders it; activation replaces it and re-applies these policies
+    // strictly. Until then a Gateway from a pre-profile template keeps its
+    // Gateway-side grants (model and repository egress when embedded; Harness
+    // transport and plugin status when dedicated).
+    const unprofiledGateway =
+      existingGateway !== undefined &&
+      existingGatewayRevisionId !== revision.id &&
+      asRecord(asRecord(asRecord(existingGateway.spec?.template)?.metadata)?.labels)?.[
+        NETWORK_PROFILE_LABEL
+      ] !== ORDINARY_NETWORK_PROFILE;
     if (embedded) {
-      // The serving embedded Gateway is replaced only on activation, which then
-      // re-applies these policies. Until then a Gateway from a pre-profile
-      // template keeps its model and repository egress.
-      const unprofiledGateway =
-        existingGateway !== undefined &&
-        existingGatewayRevisionId !== revision.id &&
-        asRecord(asRecord(asRecord(existingGateway.spec?.template)?.metadata)?.labels)?.[
-          NETWORK_PROFILE_LABEL
-        ] !== ORDINARY_NETWORK_PROFILE;
-      const runtimePolicy = `allow-agent-runtime-${sha256Hex(revision.agentId, 12)}`;
       for (const { resource: policy, namespace: target } of this.agentNetworkPolicies(
         revision,
         namespace,
+        unprofiledGateway,
       )) {
-        await this.reconcile(
-          unprofiledGateway && policy.metadata.name === runtimePolicy
-            ? {
-                ...policy,
-                spec: {
-                  ...policy.spec,
-                  podSelector: withoutNetworkProfile(asRecord(policy.spec?.podSelector)),
-                },
-              }
-            : policy,
-          gatewayOwnership,
-          target,
-        );
+        await this.reconcile(policy, gatewayOwnership, target);
       }
     } else if (this.options.runtime !== undefined) {
       for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
         revision,
         namespace,
+        unprofiledGateway,
       )) {
         await this.reconcile(policy, gatewayOwnership, target);
       }
@@ -2976,7 +2967,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         );
       }
       if (this.options.runtime !== undefined) {
-        for (const policy of this.agentNetworkPolicies(revision, namespace)) {
+        for (const policy of this.agentNetworkPolicies(revision, namespace, unprofiledGateway)) {
           await this.reconcile(policy.resource, gatewayOwnership, policy.namespace);
         }
         await this.reconcile(
@@ -3093,6 +3084,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
         revision,
         namespace,
+        unprofiledGateway,
       )) {
         await this.reconcile(policy, gatewayOwnership, target);
       }
@@ -3106,7 +3098,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
           : incomplete();
       }
       if (existingGatewayRevisionId !== undefined && existingGatewayRevisionId !== revision.id) {
-        if (!(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))) {
+        // The serving predecessor is observed like the embedded one: only a
+        // genuinely unready Gateway is repaired with the successor's template.
+        if (
+          !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace, revision.id))
+        ) {
           await reconcileGatewayDeployment({});
           return incomplete();
         }
@@ -5827,6 +5823,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayOwnership,
           gatewayName,
           this.gatewayNamespace(revision, namespace),
+          revision.id,
         ))
       ) {
         return undefined;
@@ -6151,8 +6148,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   /**
    * With `preparingRevisionId`, a Gateway Deployment annotated for another
-   * revision is the serving predecessor: embedded preparation observes it but
-   * does not re-render it, and activation replaces it. It may predate the
+   * revision is the serving predecessor: preparation (embedded or dedicated)
+   * observes it but does not re-render it, and activation replaces it. It may predate the
    * explicit network profile, so it is judged without the profile requirement.
    * Every template rendered for the revision itself still needs the profile.
    */
@@ -7190,8 +7187,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   /** Admits public preview traffic to the serving Gateway's sandbox listener.
    * A serving Gateway from a pre-profile template keeps the profile-free grant
-   * until it is replaced (at activation for an embedded Gateway, at the first
-   * successor preparation for a dedicated one) and this route is reconciled again. */
+   * until activation replaces it and this route is reconciled again. */
   private gatewaySandboxNetworkPolicy(
     revision: AgentRevision,
     metadata: ManagedKubernetesObject["metadata"],
@@ -7830,9 +7826,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     await this.reconcile(policy, ownership, namespace);
   }
 
+  /** `unprofiledGateway` widens every Gateway-side selector to the Agent's
+   * Gateway Pods with or without the profile. Only preparation passes it, while
+   * a pre-profile Gateway of another revision serves. */
   private pluginStatusNetworkPolicies(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
+    unprofiledGateway = false,
   ): TargetedKubernetesResource[] {
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
@@ -7843,11 +7843,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       "openclaw.dev/agent": revision.agentId,
       "openclaw.dev/revision": revision.id,
     });
-    const gateway = ordinaryNetworkPolicySelector({
+    const profiledGateway = ordinaryNetworkPolicySelector({
       "openclaw.dev/namespace": revision.namespaceId,
       "openclaw.dev/workload-role": "gateway",
       "openclaw.dev/agent": revision.agentId,
     });
+    const gateway = unprofiledGateway ? withoutNetworkProfile(profiledGateway) : profiledGateway;
     const policy = (name: string, spec: KubernetesRecord): TargetedKubernetesResource => {
       const target =
         name === "allow-gateway-agent" || name === "allow-plugin-status-gateway"
@@ -7967,6 +7968,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private agentNetworkPolicies(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
+    unprofiledGateway = false,
   ): TargetedKubernetesResource[] {
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
@@ -7977,11 +7979,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       "openclaw.dev/agent": revision.agentId,
       "openclaw.dev/revision": revision.id,
     });
-    const gateway = ordinaryNetworkPolicySelector({
+    const profiledGateway = ordinaryNetworkPolicySelector({
       "openclaw.dev/namespace": revision.namespaceId,
       "openclaw.dev/workload-role": "gateway",
       "openclaw.dev/agent": revision.agentId,
     });
+    const gateway = unprofiledGateway ? withoutNetworkProfile(profiledGateway) : profiledGateway;
     const policy = (name: string, spec: KubernetesRecord): TargetedKubernetesResource => {
       const target =
         name === "allow-gateway-agent" || name === "allow-plugin-status-gateway"
@@ -8001,7 +8004,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         },
       };
     };
-    const statusPolicies = this.pluginStatusNetworkPolicies(revision, namespace);
+    const statusPolicies = this.pluginStatusNetworkPolicies(revision, namespace, unprofiledGateway);
     const runtime = this.options.runtime;
     if (runtime === undefined) {
       return statusPolicies;

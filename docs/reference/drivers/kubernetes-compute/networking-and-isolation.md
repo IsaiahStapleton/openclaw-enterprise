@@ -149,13 +149,9 @@ their Agent:
 - Preparing a revision re-renders that Agent's grants and templates with the
   profile; other Agents are untouched. Re-preparing an active revision (as
   repository-credential maintenance does) rolls its Pods once.
-- An unprofiled embedded Gateway keeps serving, with model egress, during the
-  next preparation, which exempts that predecessor from the profile check;
-  activation replaces it.
-- An unprofiled dedicated Gateway counts as not ready, so the first preparation
-  of a new revision replaces it with that revision's template. It restarts once
-  and serves the new revision before activation, keeping preview ingress until
-  replaced.
+- An unprofiled embedded or dedicated Gateway keeps serving, with its Gateway
+  grants, during the next preparation, which exempts that predecessor from the
+  profile check and leaves the stable Agent Service alone. Activation replaces it.
 
 Existing OpenShell Sandboxes are not relabeled because Sandbox names are per
 revision: redeploy the Agent revision. For development, follow the

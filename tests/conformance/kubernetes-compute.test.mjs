@@ -9383,15 +9383,19 @@ test("embedded preparation keeps model egress for a serving pre-profile Gateway 
 
 // Upgrade: a revision was prepared and activated before the explicit profile
 // existed, so its serving Gateway template lacks the label. Preparing the next
-// revision must still converge. The embedded Gateway is observed without the
-// profile requirement and is replaced only by activation; the dedicated Gateway
-// is replaced once, at the first preparation, by the successor's profiled template.
+// revision must still converge without touching the serving Gateway (or, for a
+// dedicated Agent, the stable Agent Service): both topologies observe it
+// without the profile requirement and only activation replaces it.
 for (const embedded of [true, false]) {
   test(`${embedded ? "embedded" : "dedicated"} upgrade prepares a successor while a pre-profile Gateway serves`, async () => {
-    const { driver, revision, namespace, objects, state, context } =
+    const { driver, revision, namespace, objects, records, state, context } =
       workspaceSetupFixture(embedded);
     const gatewayNamespace = embedded ? namespace : kubernetesGatewayNamespaceName(tenant.id);
-    const gatewayKey = `Deployment:${gatewayNamespace}:gateway-${digest(revision.agentId)}`;
+    const gatewayName = `gateway-${digest(revision.agentId)}`;
+    const gatewayKey = `Deployment:${gatewayNamespace}:${gatewayName}`;
+    const agentServiceKey = `Service:${namespace}:agent-${digest(revision.agentId)}`;
+    const gatewayAgentKey = `NetworkPolicy:${gatewayNamespace}:allow-gateway-agent-${digest(revision.agentId)}`;
+    const runtimeKey = `NetworkPolicy:${namespace}:allow-agent-runtime-${digest(revision.agentId)}`;
     state.ready = true;
     assert.equal(await prepareUntilReady(driver, revision, context), 1);
     await driver.activateRevision(revision, context);
@@ -9401,28 +9405,62 @@ for (const embedded of [true, false]) {
       serving.spec.template.metadata.labels,
       undefined,
     );
+    const servingLabels = structuredClone(serving.spec.template.metadata.labels);
     const servingTemplate = structuredClone(serving.spec.template);
+    const stableSelector = embedded
+      ? undefined
+      : structuredClone(objects.get(agentServiceKey).spec.selector);
+    if (!embedded) {
+      assert.equal(stableSelector["openclaw.dev/revision"], revision.id);
+    }
 
     const successor = { ...revision, id: "upgrade-successor", revision: revision.revision + 1 };
     // The pending workspace setup keeps embedded preparation on the Gateway readiness path.
     const successorContext = { ...context, ...authContext(successor) };
     assert.equal(successorContext.workspaceSetup.completed, false);
-    const passes = await prepareUntilReady(driver, successor, successorContext);
+    records.length = 0;
+    assert.equal(await prepareUntilReady(driver, successor, successorContext), 1);
     const gateway = objects.get(gatewayKey);
-    if (embedded) {
-      assert.equal(passes, 1);
-      assert.deepEqual(gateway.spec.template, servingTemplate, "preparation must not restart it");
-      assert.equal(gateway.metadata.annotations["openclaw.dev/agent-revision-id"], revision.id);
-    } else {
-      assert.equal(passes, 2);
-      assert.equal(gateway.metadata.annotations["openclaw.dev/agent-revision-id"], successor.id);
-      assert.equal(gateway.spec.template.metadata.labels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+    assert.deepEqual(gateway.spec.template, servingTemplate, "preparation must not restart it");
+    assert.equal(gateway.metadata.annotations["openclaw.dev/agent-revision-id"], revision.id);
+    assert.equal(
+      records.some(({ kind, metadata }) => kind === "Deployment" && metadata.name === gatewayName),
+      false,
+      "preparation must not re-render the serving Gateway",
+    );
+    if (!embedded) {
+      // The stable Agent Service keeps selecting the predecessor Harness.
+      assert.deepEqual(objects.get(agentServiceKey).spec.selector, stableSelector);
+      const harness = objects.get(
+        `Deployment:${namespace}:agent-${digest(revision.agentId)}-rev-${digest(successor.id)}`,
+      );
+      assert.equal(harness.spec.template.metadata.labels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+      // The pre-profile Gateway keeps its Harness transport grants until activation.
+      const gatewayAgent = objects.get(gatewayAgentKey);
+      assert.equal(gatewayAgent.spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL], undefined);
+      assert.equal(selectorMatches(gatewayAgent.spec.podSelector, servingLabels), true);
+      const runtimePeer = objects.get(runtimeKey).spec.ingress[0].from[0].podSelector;
+      assert.equal(runtimePeer.matchLabels[ORDINARY_PROFILE_LABEL], undefined);
+      assert.equal(selectorMatches(runtimePeer, servingLabels), true);
     }
 
     await driver.activateRevision(successor, successorContext);
     const activated = objects.get(gatewayKey);
     assert.equal(activated.metadata.annotations["openclaw.dev/agent-revision-id"], successor.id);
     assert.equal(activated.spec.template.metadata.labels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
+    if (!embedded) {
+      assert.equal(objects.get(agentServiceKey).spec.selector["openclaw.dev/revision"], successor.id);
+      assert.equal(
+        objects.get(gatewayAgentKey).spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL],
+        ORDINARY_PROFILE,
+      );
+      assert.equal(
+        objects.get(runtimeKey).spec.ingress[0].from[0].podSelector.matchLabels[
+          ORDINARY_PROFILE_LABEL
+        ],
+        ORDINARY_PROFILE,
+      );
+    }
     // Once the profiled Gateway serves, the next preparation is ready at once.
     const next = { ...successor, id: "upgrade-next", revision: successor.revision + 1 };
     assert.equal(await prepareUntilReady(driver, next, { ...context, ...authContext(next) }), 1);

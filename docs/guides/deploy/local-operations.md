@@ -88,10 +88,8 @@ The upgrade restarts nothing: running Pods keep their templates and grants until
 Compute next prepares a revision of their Agent. To move an Agent onto the
 profile, rebuild the controller and deploy a new revision. Preparing it
 re-renders that Agent's grants with the profile, and its new templates carry the
-label. An embedded Gateway from an earlier template keeps serving until
-activation replaces it. A dedicated Gateway from an earlier template is replaced
-once, at the first preparation, by the new revision's template, so it restarts
-and serves that revision before activation. Re-preparing an active revision, for
+label. A Gateway from an earlier template, embedded or dedicated, keeps serving
+until activation replaces it. Re-preparing an active revision, for
 example during repository-credential maintenance, rolls its Pods once onto
 profiled templates. Namespace-wide `allow-dns`,
 `allow-gateway-ingress` and `allow-node-gateway` are narrowed only in namespaces
