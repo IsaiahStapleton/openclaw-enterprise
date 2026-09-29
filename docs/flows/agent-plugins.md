@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-28
-last_updated_session: 01a0d4f7-8085-70e0-9d0c-69a465a81fe3
+last_updated_session: authoring-run/7c8bff1b-a2d1-48f6-a996-1be6a06719fa
 ---
 
 # Agent Plugin Deployment Flow
@@ -158,37 +158,35 @@ recorded integrity, and the runtime source's containment in the install path.
 Verification failure prevents gateway readiness. Confirmed install rejection
 disables the optional selection and removes its managed tool allowance before startup.
 
-For nonempty selections, dedicated Codex enables apps, plugins, and remote plugins
-in isolated `CODEX_HOME`; Compute configures its OpenClaw bridge with
+Selected Codex plugins enable apps/plugins/remote_plugin in isolated `CODEX_HOME`
+and configure the bridge with
 `codexPlugins.enabled:true`, `allow_all_plugins:false`, and an entry per selection.
-`apps._default.enabled:false` always applies. Disabled selections cannot execute
-hosted app tools.
+`apps._default.enabled:false` applies; disabled selections cannot execute app tools.
 
-`plugin/list` discovers the marketplace; `plugin/read` resolves selections.
+After `plugin/list`, `runtime-entrypoints.ts:readCodexPluginDetails` batches up to four
+concurrent reads, preserving selection order. Batches drain before retries.
+Installation/configuration writes stay sequential; post-install reads use the same
+batching before final policy verification.
 `codexRuntimeArtifact` uses concrete `detail.apps`, excluding `appTemplates`.
-`codexInstallPlan` validates policy and [component support](../reference/drivers/plugin-bundled.md)
-before `plugin/install`. Codex loads bundled skills. Account-wide skill
-restrictions require native default enablement and OCE integration.
+`codexInstallPlan` validates [component support](../reference/drivers/plugin-bundled.md)
+and policy before installation. Account-wide skill restrictions remain unsupported.
 Install rejections or missing app authentication warn. Explicit tool policies
 require `mcpServerStatus/list`'s `codex_apps` inventory; `codexAppToolSettings`
 binds catalog action IDs through `_meta._codex_apps.resource_uri`. Native IDs
 work. Unknown, unowned, ambiguous, or duplicate IDs fail startup.
 
-`codexRuntimeArtifact` writes defaults and explicit tools:
-`provider_default`/`all_actions`/`write_actions`/`none` map to Codex
-`auto`/`prompt`/`writes`/`approve`. Defaults cover future actions; overrides
-require owned IDs. `driverPolicy.destructiveEnabled`
-maps to `destructive_enabled` independently. `toolDefaults.reviewer` maps
-`human`/`auto` to app `approvals_reviewer` values `user`/`auto_review`;
-omission inherits the Harness reviewer. Unsupported scopes fail at save.
-`config/batchWrite` replaces managed app subtrees, clearing stale tool/link
-settings; installation readback checks identity, version, and app mapping.
-Failed-only bindings disable apps; disabled selections skip installation/status.
-`config/read` loads workspace layers. Before readiness,
-`verifyCodexAppConfiguration` rejects app/tool/account conflicts and unselected
-enabled apps. Disabled failed apps may retain inherited fields. Category defaults
-resolve app → global → native `true`; equivalent values and nulls pass. Tool
-enablement stays strict because it bypasses categories; omitted reviewers inherit.
+`codexRuntimeArtifact` applies the [native policy mappings](../reference/drivers/plugin-bundled.md).
+
+`writeCodexAppConfiguration` reads merged workspace settings, disables unselected apps,
+and writes inherited tool/account approvals; table replacement leaves lower-layer
+descendants. Unspecified tool enablement stays unset; native requirements
+remain enforced. `config/batchWrite` replaces local app subtrees. Readback checks
+identity/version/app mapping; failed apps are disabled and disabled selections skip
+installation/status.
+
+Workspace-aware readback rejects policy conflicts before readiness. Disabled apps may
+retain inherited fields. Categories resolve app → global → native `true`; equivalent
+values/nulls pass. Tool enablement cannot bypass categories.
 
 `runtime-entrypoints.ts:verifyCodexReviewerConfiguration` checks explicit app/link
 reviewers and `configRequirements/read`, rejecting forbidden reviewers, incompatible
@@ -196,7 +194,6 @@ automatic-review settings, or conflicting model requirements. Startup checks do 
 cover later workspace/session/model changes or strict review. Codex 0.156 readback
 omits managed app/tool requirements applied during execution; native effective-policy
 introspection remains required. See [remaining proof](../testing/plugins.md#current-proof-notes).
-Codex owns cache integrity and health.
 
 For Compute-owned Kubernetes workloads, a selected OpenClaw install command's
 normal nonzero exit, a matching Codex `plugin/install` error response, or a
@@ -209,6 +206,8 @@ existing startup path.
 After configuration verification, the runtime exposes private startup status.
 Kubernetes Compute validates workload, revision, startup instance, selection keys,
 and warning codes before returning readiness. Status is recomputed on restart.
+
+Dedicated Codex receives runtime-binary reads, including without plugins.
 
 Dedicated Codex runs separately. Startup symlinks
 `/home/node/.openclaw/plugin-skills` to
@@ -293,6 +292,10 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 21:26: Batch Codex metadata reads; preserve ordered writes and verification. (authoring-run/7c8bff1b-a2d1-48f6-a996-1be6a06719fa - 8352c0932bcbde43e88b44c6975496ca5431ff55)
+
+- 2026-09-28 10:46: Materialize inherited app policy; native proof pending. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 44ed2405)
 
 - 2026-09-28 00:02: Reconciled Codex startup policy verification with approval scopes. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - b96eadc1)
 

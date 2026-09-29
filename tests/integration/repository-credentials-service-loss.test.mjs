@@ -136,3 +136,118 @@ test(
     );
   },
 );
+
+test(
+  "a lost revocation response is not proof of disposal across broker loss",
+  { timeout: 20000 },
+  async (t) => {
+    const fixture = await startServiceProcessFixture(t);
+    const opened = await fixture.open();
+    assert.equal((await fixture.request(opened)).status, 200);
+    assert.equal(outstandingToken(fixture).uses, 1);
+
+    // The provider revokes the exact issued token, then loses the 204 response.
+    // Broker cleanup must remain uncertain because it never observed that result.
+    fixture.github.disconnectAfterMutation("DELETE", "/installation/token");
+    await fixture.close(opened.session.sessionId);
+    const deadline = Date.now() + 5000;
+    let status;
+    do {
+      status = await fixture.status(opened.session.sessionId);
+      if (status.cleanup.uncertain === 1) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } while (Date.now() < deadline);
+    assert.equal(status.state, "CLOSED");
+    assert.equal(status.cleanup.uncertain, 1);
+    assert.equal(status.cleanup.revoked, 0);
+    assert.equal(fixture.github.tokenState()[0].revoked, true);
+    const beforeRestart = fixture.github.trace.filter(
+      (entry) => entry.method === "DELETE" && entry.target === "/installation/token",
+    ).length;
+    assert.equal(beforeRestart, 1);
+
+    // After restart, the provider cannot confirm another retirement and no
+    // cleanup lifetime has elapsed. Neither fact permits a disposal claim.
+    await fixture.kill();
+    fixture.github.setRevokeStatus(503);
+    await fixture.start();
+    const recovered = await fixture.status(opened.session.sessionId);
+    if (recovered.error === undefined) {
+      assert.equal(recovered.sessionId, opened.session.sessionId);
+      assert.equal(recovered.state, "CLOSED");
+    } else {
+      assert.equal(recovered.error, "not-found");
+    }
+    assert.equal(fixture.github.tokenState()[0].revoked, true);
+    assert.deepEqual(fixture.github.errors, []);
+  },
+);
+
+test(
+  "captured GitHub authority expires by elapsed time when revocation is unconfirmed",
+  { timeout: 20000 },
+  async (t) => {
+    const fixture = await startServiceProcessFixture(t, { revokeStatus: 503 });
+    const opened = await fixture.open();
+    assert.equal((await fixture.request(opened)).status, 200);
+    await fixture.close(opened.session.sessionId);
+
+    // A provider error cannot be reported as a successful revocation.
+    const deadline = Date.now() + 5000;
+    let status;
+    do {
+      status = await fixture.status(opened.session.sessionId);
+      if (status.cleanup.uncertain === 1) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } while (Date.now() < deadline);
+    assert.equal(status.state, "CLOSED");
+    assert.equal(status.cleanup.uncertain, 1);
+    assert.equal(status.cleanup.revoked, 0);
+    assert.equal(fixture.github.tokenState()[0].revoked, false);
+
+    // A forward wall-clock jump cannot settle cleanup without monotonic elapsed
+    // time, even if the controlled provider already considers the token expired.
+    await fixture.advance(0, 7200000);
+    status = await fixture.status(opened.session.sessionId);
+    assert.equal(status.state, "CLOSED");
+    assert.equal(status.cleanup.expired, 0);
+
+    // Only the captured token's full elapsed provider lifetime settles cleanup;
+    // a revision deadline or unconfirmed DELETE would not establish that fact.
+    await fixture.advance(3599999, 0);
+    status = await fixture.status(opened.session.sessionId);
+    assert.equal(status.state, "CLOSED");
+    await fixture.advance(1, 0);
+    status = await fixture.status(opened.session.sessionId);
+    assert.equal(status.state, "DISPOSED");
+    assert.equal(status.cleanup.revoked, 0);
+    assert.equal(status.cleanup.expired, 1);
+    assert.equal(fixture.github.tokenState()[0].revoked, false);
+    assert.ok(fixture.github.tokenState()[0].expires <= fixture.clock.wallNow());
+    assert.deepEqual(fixture.github.errors, []);
+  },
+);
+
+// The registry-backed broker must fail closed when its durable journal is absent.
+test(
+  "a broker restart cannot accept bound admissions without durable fencing",
+  { timeout: 20000 },
+  async (t) => {
+    const fixture = await startServiceProcessFixture(t, { bound: true });
+    const admissionId = fixture.admissionId();
+
+    // An older caller does not advertise durable admission, and the new caller
+    // cannot reserve authority while the worker's journal is unavailable.
+    assert.deepEqual(await fixture.open(admissionId, true), { error: "invalid-request" });
+    assert.deepEqual(await fixture.open(admissionId, false, true), { error: "unavailable" });
+    await fixture.kill();
+    await fixture.start();
+    assert.deepEqual(await fixture.open(admissionId, false, true), { error: "unavailable" });
+    assert.deepEqual(fixture.github.tokenState(), []);
+    assert.deepEqual(fixture.github.errors, []);
+  },
+);

@@ -124,7 +124,13 @@ function provisioningRequestBody({ modelSecretRef, slackBotSecretRef, authMethod
             models: { [model]: { agentRuntime: { id: "codex" } } },
           },
         },
-        channels: { slack: { enabled: true, botTokenEnv: "SLACK_BOT_TOKEN" } },
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+          },
+        },
       },
       secretBindings: {
         SLACK_BOT_TOKEN: {
@@ -181,6 +187,15 @@ async function privateBootstrapDirectory(context) {
 }
 
 async function createProvisioningApiFixture(context, computeDriver, authentication) {
+  // Exercise real admission with Kubernetes Secrets; fixture credentials never reach Slack.
+  const originalFetch = globalThis.fetch;
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    if (String(url) === "https://slack.com/api/auth.test") {
+      assert.match(init.headers.authorization, /^Bearer xoxb-/);
+      return Response.json({ ok: true, bot_id: "B0123456789", team_id: "T0123456789" });
+    }
+    return originalFetch(url, init);
+  });
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
   let workerPool;
   const state = new PostgresPlatformState(pool);
@@ -2622,7 +2637,7 @@ test(
       };
       const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
         kind: "agent",
-        values: boundSecret === undefined ? baseValues : missingChannelBindingValues,
+        values: baseValues,
       });
       assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
       const created = await request("POST", `/namespaces/${namespaceId}/agents`, {
@@ -2659,15 +2674,23 @@ test(
       await assertDeployDenied(namespaceId, created.data.id, `${label} before model Secret grant`);
       await grantSecretOperate(namespaceId, created.data.servicePrincipalId, secret.data.id, label);
       if (boundSecret !== undefined) {
+        // Isolate missing channel credentials from the model permission denial above.
+        const missingConfiguration = await request(
+          "PATCH",
+          `/namespaces/${namespaceId}/configurations/${configuration.data.id}`,
+          { values: missingChannelBindingValues },
+        );
+        assert.equal(missingConfiguration.status, 200, JSON.stringify(missingConfiguration.error));
         const missingBindings = await request(
           "POST",
           `/namespaces/${namespaceId}/agents/${created.data.id}/deploy`,
         );
         assert.equal(
           missingBindings.status,
-          409,
+          400,
           `${label} before channel Secret bindings: ${JSON.stringify(missingBindings.error)}`,
         );
+        assert.equal(missingBindings.error.code, "CHANNEL_CREDENTIAL_BINDING_REQUIRED");
         // This k3d fixture has no runtime.channels proxy and uses the fixture image,
         // so successful deployment proves generic API/IAM/admission/gateway Secret
         // projection. Real Slack channel runtime proof belongs to the real-runtime suite.

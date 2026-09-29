@@ -757,6 +757,41 @@ export const AgentDeploymentStatusSchema = Type.Object(
       Type.Literal("succeeded"),
       Type.Literal("failed"),
     ]),
+    progress: Type.Union(
+      [
+        Type.Null(),
+        Type.Object(
+          {
+            lastAttempt: Type.Union(
+              [
+                Type.Null(),
+                Type.Object(
+                  {
+                    at: Timestamp,
+                    code: Type.String({ minLength: 1, maxLength: 64 }),
+                    message: Type.String({ minLength: 1 }),
+                  },
+                  { additionalProperties: false },
+                ),
+              ],
+              {
+                description:
+                  "Latest reconciliation result bound to this exact deployment work item. Null means no bound result is available, not proof that work never ran. Codes and messages are allowlisted; provider text is not exposed.",
+              },
+            ),
+            nextAttemptAt: Type.Union([Timestamp, Type.Null()], {
+              description:
+                "Earliest time queued work is eligible to run, not a promised start time. Null while claimed.",
+            }),
+          },
+          { additionalProperties: false },
+        ),
+      ],
+      {
+        description:
+          "Pending deployment progress. Null for terminal outcomes. A last attempt describes a recorded result, not current runtime health.",
+      },
+    ),
     error: Type.Union(
       [
         Type.Null(),
