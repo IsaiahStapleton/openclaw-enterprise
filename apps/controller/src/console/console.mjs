@@ -13,6 +13,8 @@ let session = null;
 let namespaces = [];
 let namespaceId = null;
 let observabilityUrl = null;
+// Session owner whose Installation-admin observability read has settled.
+let observabilityOwner = null;
 let loggingOut = false;
 let navigateAgentTab = null;
 let discardCreationOnExit = null;
@@ -207,6 +209,7 @@ function clearPrivate() {
   namespaces = [];
   namespaceId = null;
   observabilityUrl = null;
+  observabilityOwner = null;
   clearRetainedViews();
 }
 
@@ -382,6 +385,8 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     if (!owner || previousOwner !== owner || draftUserId !== owner) {
       clearDrafts();
       clearRetainedViews();
+      observabilityUrl = null;
+      observabilityOwner = null;
       draftUserId = owner;
       if (retained) {
         retained = false;
@@ -398,14 +403,21 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       void loadPage();
       return;
     }
+    // Read the admin-only destination once per session owner. Non-administrators
+    // get 403, which the API audits as a denial, so do not repeat it per navigation.
     const [readable, observability] = await Promise.all([
       request("/namespaces"),
-      request("/observability").catch((error) => {
-        if (error.status === 401) {
-          throw error;
-        }
-        return null;
-      }),
+      owner && observabilityOwner === owner
+        ? null
+        : request("/observability").then(
+            (data) => ({ url: typeof data?.url === "string" ? data.url : null, settled: true }),
+            (error) => {
+              if (error.status === 401) {
+                throw error;
+              }
+              return { url: null, settled: error.status === 403 };
+            },
+          ),
     ]);
     if (!lifetime.isCurrent(active)) {
       return;
@@ -416,7 +428,10 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     clearRetainedViewsOutsideNamespaces(readable);
     namespaces = sorted(readable);
     accessResolved = true;
-    observabilityUrl = typeof observability?.url === "string" ? observability.url : null;
+    if (observability) {
+      observabilityUrl = observability.url;
+      observabilityOwner = observability.settled ? owner : null;
+    }
     namespaceId =
       current.namespace ??
       (namespaces.find((item) => item.status === "ready") ?? namespaces[0])?.id ??

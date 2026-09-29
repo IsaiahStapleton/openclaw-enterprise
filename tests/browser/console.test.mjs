@@ -350,6 +350,12 @@ test("console shows the external observability link only to Installation adminis
     });
   });
   const { page } = await newPage(t, fixture);
+  let probes = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/observability") {
+      probes += 1;
+    }
+  });
   await login(page, fixture);
   const link = page.getByRole("link", { name: "Observability" });
   await link.waitFor();
@@ -357,12 +363,28 @@ test("console shows the external observability link only to Installation adminis
   assert.equal(await link.getAttribute("target"), "_blank");
   assert.equal(await link.getAttribute("rel"), "noopener noreferrer");
   assert.equal(await link.locator("svg.external-link-icon[aria-hidden='true']").count(), 1);
+  // Navigation reuses the settled read and keeps the link.
+  await page.getByRole("link", { name: "Namespaces" }).click();
+  await page.getByRole("list", { name: "Namespaces" }).getByText("Observability access").waitFor();
+  await link.waitFor();
+  assert.equal(probes, 1);
 
   await openShellMenu(page);
   await page.getByRole("menuitem", { name: "Logout" }).click();
   await login(page, { ...fixture, credentials: limited.credentials });
   await page.getByRole("heading", { name: "Agents" }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  // A denied read is audited, so navigation must not repeat it.
+  await page.getByRole("link", { name: "Namespaces" }).click();
+  await page.getByRole("list", { name: "Namespaces" }).getByText("Observability access").waitFor();
+  const namespacesRead = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/namespaces",
+  );
+  await page.getByRole("link", { name: "Agents" }).click();
+  await namespacesRead;
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  assert.equal(probes, 2);
 });
 
 test("console ignores stale collection successes and errors while switching Namespaces", async (t) => {
