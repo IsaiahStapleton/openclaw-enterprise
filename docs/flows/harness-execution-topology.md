@@ -162,6 +162,12 @@ for candidate rules and the limits of this observation.
 For dedicated Kubernetes execution, Compute declares
 `requiresStoppedPredecessors`. `ControllerWorker.prepareRevision` stops every
 earlier runtime and waits for Pod termination before preparing the replacement.
+The worker records each predecessor it stopped and skips it on later pending
+passes and maintenance, which avoids repeating every stop on each readiness poll.
+Compute reports a predecessor that came back (for example, a lost claim's late
+write) as an unready successor, not an error, so the worker stops each recorded
+predecessor again after one claim lease, then after two, four and so on. A failed
+preparation pass, or preparing or activating that predecessor, drops the record.
 Old reconciliation and maintenance cannot restart a predecessor after a newer
 exclusive revision is admitted. Both PVCs survive this downtime window; a failed
 candidate is recovered by retry or a new revision, not automatic rollback.
