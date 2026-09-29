@@ -3916,6 +3916,117 @@ test(
 );
 
 test(
+  "another authorized actor takes over failed Namespace deletion once the initiator loses permission",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const namespace = {
+      id: `ns_${randomUUID()}`,
+      name: `delete-takeover-${randomUUID()}`,
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    await fixture.state.transact((unit) => unit.namespaces.createNamespace(namespace));
+    // A stuck finalizer keeps the Namespace terminating past the deadline.
+    let terminating = true;
+    let deleteAttempts = 0;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async deleteNamespace(target) {
+          assert.equal(target.id, namespace.id);
+          deleteAttempts += 1;
+          return { namespaceId: target.id, namespaceDeleted: !terminating };
+        },
+      },
+      () => {},
+      1,
+    );
+    const deletion = {
+      id: namespace.id,
+      idempotencyKey: `namespace:${namespace.id}:reconcile:deleted`,
+    };
+    const observe = () =>
+      fixture.state.read((view) => view.operations.findWork(deletion.idempotencyKey));
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(deletion, "failed_permanent");
+    const exhausted = await observe();
+    assert.equal(exhausted.actorId, fixture.actor.id);
+
+    const otherActor = `delete-successor-${randomUUID()}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_identities (id, kind, issuer, subject)
+       SELECT $1, kind, issuer, $1 FROM occ.iam_identities WHERE id = $2`,
+      [otherActor, fixture.actor.id],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+       SELECT 'binding-' || gen_random_uuid(), namespace_id, $1, role_id,
+              resource_kind, resource_id
+       FROM occ.iam_access_bindings WHERE identity_subject_id = $2`,
+      [otherActor, fixture.actor.id],
+    );
+    // While the initiator still holds delete permission, it keeps ownership.
+    await assert.rejects(fixture.controller.deleteNamespace(otherActor, namespace.id), {
+      message: "Only the initiating actor can retry deletion.",
+    });
+    assert.deepEqual(await observe(), exhausted);
+
+    // The initiator is offboarded: it no longer holds any access.
+    await fixture.observerPool.query(
+      `DELETE FROM occ.iam_access_bindings WHERE identity_subject_id = $1`,
+      [fixture.actor.id],
+    );
+    // A caller without delete permission still cannot take over.
+    await assert.rejects(
+      fixture.controller.deleteNamespace(`unprivileged-${randomUUID()}`, namespace.id),
+    );
+    assert.deepEqual(await observe(), exhausted);
+
+    terminating = false;
+    const repeated = await fixture.controller.deleteNamespace(otherActor, namespace.id);
+    assert.equal(repeated.status, "deleting");
+    const retried = await observe();
+    assert.ok(
+      retried === undefined || ["queued", "claimed", "succeeded"].includes(retried.state),
+      "an authorized takeover must requeue the exhausted teardown",
+    );
+    if (retried !== undefined) {
+      assert.equal(retried.actorId, otherActor);
+      assert.equal(retried.idempotencyKey, exhausted.idempotencyKey);
+    }
+    await fixture.work(deletion, "succeeded");
+    assert.equal(deleteAttempts, 2);
+    assert.equal(
+      await fixture.state.read((view) => view.namespaces.findNamespace(namespace.id)),
+      undefined,
+    );
+    const { rows: retryAudit } = await fixture.observerPool.query(
+      `SELECT actor_id AS "actorId", outcome, details FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.namespaces.delete.retry'`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      retryAudit.map(({ actorId, outcome, details }) => ({
+        actorId,
+        outcome,
+        takeover: details.takeover,
+        previousActorId: details.previousActorId,
+      })),
+      [
+        {
+          actorId: otherActor,
+          outcome: "success",
+          takeover: true,
+          previousActorId: fixture.actor.id,
+        },
+      ],
+    );
+  },
+);
+
+test(
   "Agent deletion fails closed when a credential-provisioning Driver cannot delete credentials",
   requiresPostgres,
   async (context) => {

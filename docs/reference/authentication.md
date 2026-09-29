@@ -36,7 +36,7 @@ audit commit together. Worker provisioning remains asynchronous.
 Bootstrap issues a 30-day service API key named `bootstrap-admin` and writes its
 one-time response to `OCC_BOOTSTRAP_SERVICE_KEY_FILE`. The JSON contains
 `data.id`, `data.servicePrincipalId`, `data.name`, `data.expiresAt`, `data.key`,
-and `meta.installationId`; it is usable with the existing service-key examples.
+and `meta.installationId`.
 Better Auth keeps only the hash; there is no server-side plaintext retrieval.
 
 Production also creates the configured `OCC_BOOTSTRAP_ADMIN_EMAIL` account with
