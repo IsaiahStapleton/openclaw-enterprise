@@ -253,11 +253,14 @@ entry keeps `channel: "slack"`; `id` accepts `team:T123:user:U456` or raw
 replaces the plugin list. Omission inherits; an explicit empty array denies
 Slack approval. Tool keys use the plugin catalog's exact composite tool ID.
 
-Without this policy, OpenClaw uses account-level Slack destinations (`allowFrom`
-and `defaultTo`), never an implicit OCE-owner mapping. Console defaults remain
-omitted until explicitly selected. Slack approval requires an authorized
-destination. This policy routes runtime plugin approval requests; it creates no
-review prompts and leaves exec approvals unchanged.
+Omission uses native account destinations (`allowFrom` and `defaultTo`).
+Console defaults stay omitted. This policy selects authorized reviewers for
+existing plugin prompts; it leaves exec approvals unchanged.
+
+Docker and Kubernetes omit Slack policy when Slack is absent or disabled.
+Otherwise the gateway validates it before launch; incompatibility prevents
+launch. See the
+[compatibility check](../flows/agent-plugin-approvals.md#3-check-the-selected-gateway-before-launch).
 
 The Console resolves display names with the selected same-Namespace bot Secret
 and stores IDs. Lookup requires Agent edit and Secret `operate` permission.

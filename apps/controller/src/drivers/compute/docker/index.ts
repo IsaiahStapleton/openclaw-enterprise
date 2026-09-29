@@ -222,6 +222,7 @@ writeFileSync(process.env.OPENCLAW_CONFIG_PATH, process.env.OPENCLAW_CONFIG_JSON
 delete process.env.OPENCLAW_CONFIG_JSON;
 delete process.env.OPENCLAW_LOG_LEVEL;
 const pluginRuntime = readGatewayPluginRuntime();
+try {
 if (pluginRuntime !== undefined) installOpenClawPlugins(pluginRuntime);
 const child = spawn(
   "node",
@@ -230,6 +231,9 @@ const child = spawn(
 );
 forwardTermination(child);
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
+} catch (error) {
+  if (!holdPluginApproverConfigurationFailure(error)) throw error;
+}
 `;
 
 function required(value: unknown, description: string): string {

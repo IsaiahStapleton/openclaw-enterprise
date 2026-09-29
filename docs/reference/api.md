@@ -42,7 +42,7 @@ Each operation lists its supported status codes.
 
 | Resource | Operations |
 | --- | --- |
-| [Authentication](#authentication) | 6 operations |
+| [Authentication](#authentication) | 19 operations |
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 3 operations |
 | [Namespaces](#namespaces) | 4 operations |
@@ -65,6 +65,19 @@ Each operation lists its supported status codes.
 | Operation | Summary |
 | --- | --- |
 | [`POST /api/auth/accounts`](#post-apiauthaccounts) | Create an administrator-controlled local auth account |
+| [`GET /api/auth/accounts/{userId}`](#get-apiauthaccountsuserid) | Inspect current human account state |
+| [`POST /api/auth/accounts/{userId}/disable`](#post-apiauthaccountsuseriddisable) | Disable a human account |
+| [`POST /api/auth/accounts/{userId}/enable`](#post-apiauthaccountsuseridenable) | Re-enable a disabled human account |
+| [`POST /api/auth/accounts/{userId}/enrol`](#post-apiauthaccountsuseridenrol) | Enrol an existing account that activation skipped |
+| [`POST /api/auth/accounts/{userId}/methods/{methodId}/detach`](#post-apiauthaccountsuseridmethodsmethodiddetach) | Detach an external sign-in identity from an account |
+| [`POST /api/auth/accounts/{userId}/providers/github`](#post-apiauthaccountsuseridprovidersgithub) | Attach an exact GitHub identity to an existing account |
+| [`POST /api/auth/accounts/{userId}/revoke`](#post-apiauthaccountsuseridrevoke) | Revoke all sessions for a human account |
+| [`GET /api/auth/providers`](#get-apiauthproviders) | List configured browser sign-in methods |
+| [`GET /api/auth/providers/github/callback`](#get-apiauthprovidersgithubcallback) | Complete an enrolled GitHub sign-in |
+| [`POST /api/auth/providers/github/result`](#post-apiauthprovidersgithubresult) | Confirm which session a GitHub sign-in created |
+| [`POST /api/auth/providers/github/start`](#post-apiauthprovidersgithubstart) | Start GitHub sign-in for an enrolled account |
+| [`GET /api/auth/recovery`](#get-apiauthrecovery) | Inspect the recovery account designation |
+| [`POST /api/auth/recovery`](#post-apiauthrecovery) | Move the recovery designation to another administrator |
 | [`POST /api/auth/service-keys`](#post-apiauthservicekeys) | Issue a service API key |
 | [`DELETE /api/auth/service-keys/{keyId}`](#delete-apiauthservicekeyskeyid) | Revoke a service API key |
 | [`GET /api/auth/session`](#get-apiauthsession) | Inspect authentication without revealing session tokens |
@@ -79,7 +92,7 @@ Create an administrator-controlled local auth account
 
 **Operation ID:** `createAuthAccount`
 
-**Permissions:** Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role; public signup remains disabled.
+**Permissions:** Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -94,6 +107,8 @@ Create an administrator-controlled local auth account
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `email` | `string` | Yes | min length: 3; max length: 320 |
+| `github` | `object` | No | — |
+| `github.subject` | `string` | Yes | pattern: `^[1-9][0-9]{0,19}$` |
 | `name` | `string` | No | min length: 1; max length: 200 |
 | `password` | `string` | Yes | min length: 12; max length: 128 |
 | `roleId` | `string` | Yes | min length: 1; max length: 200 |
@@ -118,6 +133,542 @@ Create an administrator-controlled local auth account
 | `data.id` | `string` | Yes | — |
 | `data.name` | `string` | Yes | — |
 | `data.principalId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `GET /api/auth/accounts/{userId}`
+
+<span id="get-apiauthaccountsuserid"></span>
+
+Inspect current human account state
+
+**Operation ID:** `getAuthAccount`
+
+**Permissions:** Requires a current human Native IAM Installation administrator and trusted Origin. Returns guarded present state, not a receipt for any prior operation.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.disabled` | `boolean` | Yes | — |
+| `data.methods` | `array<object>` | Yes | — |
+| `data.methods[].methodId` | `string` | Yes | — |
+| `data.methods[].providerId` | `string` | Yes | — |
+| `data.methods[].subject` | `string` | Yes | — |
+| `data.principalId` | `string` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `data.version` | `integer` | Yes | minimum: 1 |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/disable`
+
+<span id="post-apiauthaccountsuseriddisable"></span>
+
+Disable a human account
+
+**Operation ID:** `disableAuthAccount`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/enable`
+
+<span id="post-apiauthaccountsuseridenable"></span>
+
+Re-enable a disabled human account
+
+**Operation ID:** `enableAuthAccount`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/enrol`
+
+<span id="post-apiauthaccountsuseridenrol"></span>
+
+Enrol an existing account that activation skipped
+
+**Operation ID:** `enrolAuthAccount`
+
+**Permissions:** Requires a current human Native IAM Installation administrator and trusted Origin. The account must already have its IAM Principal and exactly one password. Idempotent; enrolment grants no access beyond the account's existing IAM bindings.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.created` | `boolean` | Yes | — |
+| `data.principalId` | `string` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `data.version` | `integer` | Yes | minimum: 1 |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/methods/{methodId}/detach`
+
+<span id="post-apiauthaccountsuseridmethodsmethodiddetach"></span>
+
+Detach an external sign-in identity from an account
+
+**Operation ID:** `detachAuthMethod`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+| `methodId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/providers/github`
+
+<span id="post-apiauthaccountsuseridprovidersgithub"></span>
+
+Attach an exact GitHub identity to an existing account
+
+**Operation ID:** `attachGitHubIdentity`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+| `subject` | `string` | Yes | pattern: `^[1-9][0-9]{0,19}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/revoke`
+
+<span id="post-apiauthaccountsuseridrevoke"></span>
+
+Revoke all sessions for a human account
+
+**Operation ID:** `revokeAuthAccountSessions`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `GET /api/auth/providers`
+
+<span id="get-apiauthproviders"></span>
+
+List configured browser sign-in methods
+
+**Operation ID:** `getAuthProviders`
+
+**Permissions:** No IAM permission required.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.github` | `boolean` | Yes | — |
+| `data.sessionBinding` | `boolean` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `GET /api/auth/providers/github/callback`
+
+<span id="get-apiauthprovidersgithubcallback"></span>
+
+Complete an enrolled GitHub sign-in
+
+**Operation ID:** `completeGitHubSignIn`
+
+**Permissions:** Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `302` | Redirect to Console |
+
+#### `POST /api/auth/providers/github/result`
+
+<span id="post-apiauthprovidersgithubresult"></span>
+
+Confirm which session a GitHub sign-in created
+
+**Operation ID:** `confirmGitHubSignIn`
+
+**Permissions:** Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `attemptId` | `string` | Yes | pattern: `^[A-Za-z0-9_-]{43}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.sessionKey` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/providers/github/start`
+
+<span id="post-apiauthprovidersgithubstart"></span>
+
+Start GitHub sign-in for an enrolled account
+
+**Operation ID:** `startGitHubSignIn`
+
+**Permissions:** Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.attemptId` | `string` | Yes | pattern: `^[A-Za-z0-9_-]{43}$` |
+| `data.url` | `string (uri)` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `GET /api/auth/recovery`
+
+<span id="get-apiauthrecovery"></span>
+
+Inspect the recovery account designation
+
+**Operation ID:** `getAuthRecovery`
+
+**Permissions:** Requires a current human Native IAM Installation administrator and trusted Origin. Returns the present designation, whose password the database protects; not a receipt for any prior operation.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.methodId` | `string` | Yes | — |
+| `data.principalId` | `string` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/recovery`
+
+<span id="post-apiauthrecovery"></span>
+
+Move the recovery designation to another administrator
+
+**Operation ID:** `replaceAuthRecovery`
+
+**Permissions:** Requires a current human Native IAM Installation administrator and trusted Origin. The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedCurrentUserId` | `string` | Yes | min length: 1; max length: 200 |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+| `userId` | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.changed` | `boolean` | Yes | — |
+| `data.methodId` | `string` | Yes | — |
+| `data.principalId` | `string` | Yes | — |
+| `data.userId` | `string` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
@@ -276,6 +827,7 @@ Sign in with email and password
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
 | `data.authenticated` | `true` | Yes | — |
+| `data.sessionKey` | `string` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
@@ -797,26 +1349,7 @@ List authorized Agents in one exact Namespace
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
-| `data` | `array<object>` | Yes | — |
-| `data[].activeRevisionId` | `string` | No | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].backendId` | `string or null` | Yes | — |
-| `data[].configurationId` | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
-| `data[].desiredRuntimeState` | `"running" or "stopped"` | Yes | — |
-| `data[].executionMode` | `"embedded" or "dedicated"` | Yes | — |
-| `data[].harnessAuth` | `object or object or object or object or object or null` | Yes | — |
-| `data[].id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
-| `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].pluginApprovers` | `PluginApprovers` | No | max items: 64 |
-| `data[].pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
-| `data[].pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
-| `data[].plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
-| `data[].repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
-| `data[].repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
-| `data[].repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
-| `data[].servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
-| `data[].status` | `"active" or "deleting"` | Yes | — |
+| `data` | `array<object or object>` | Yes | An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth. |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -1455,26 +1988,7 @@ Get an exact Namespace-owned Agent
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
-| `data` | `object` | Yes | — |
-| `data.activeRevisionId` | `string` | No | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.backendId` | `string or null` | Yes | — |
-| `data.configurationId` | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
-| `data.desiredRuntimeState` | `"running" or "stopped"` | Yes | — |
-| `data.executionMode` | `"embedded" or "dedicated"` | Yes | — |
-| `data.harnessAuth` | `object or object or object or object or object or null` | Yes | — |
-| `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
-| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
-| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
-| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
-| `data.plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
-| `data.repositoryBindings` | `array<object>` | No | min items: 1; max items: 16 |
-| `data.repositoryBindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
-| `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
-| `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
-| `data.status` | `"active" or "deleting"` | Yes | — |
+| `data` | `object or object` | Yes | An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth. |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -2437,43 +2951,7 @@ List authorized immutable revisions for one exact Agent
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
-| `data` | `array<object>` | Yes | — |
-| `data[].agentId` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].backendId` | `string or null` | Yes | — |
-| `data[].compute` | `object` | Yes | — |
-| `data[].compute.id` | `string` | Yes | min length: 1 |
-| `data[].compute.implementation` | `string` | Yes | min length: 1 |
-| `data[].configuration` | `object<string, SafeJsonValue>` | Yes | A native OpenClaw configuration document. |
-| `data[].configurationGeneration` | `integer` | Yes | minimum: 1; maximum: 9007199254740991 |
-| `data[].configurationId` | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].configurationKind` | `"agent"` | Yes | — |
-| `data[].createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
-| `data[].harness` | `object` | Yes | — |
-| `data[].harness.id` | `string` | Yes | min length: 1 |
-| `data[].harness.mode` | `"embedded" or "dedicated"` | Yes | — |
-| `data[].harness.version` | `string` | Yes | min length: 1 |
-| `data[].harnessAuth` | `object or object or object or object or object` | Yes | — |
-| `data[].id` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data[].pluginApprovers` | `PluginApprovers` | No | max items: 64 |
-| `data[].pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
-| `data[].pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
-| `data[].plugins` | `object` | No | — |
-| `data[].plugins.driver` | `PluginDriverIdentity` | Yes | — |
-| `data[].plugins.driver.id` | `string` | Yes | min length: 1 |
-| `data[].plugins.driver.implementation` | `string` | Yes | min length: 1 |
-| `data[].plugins.plugins` | `PluginDesiredState` | Yes | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
-| `data[].repositoryCredentials` | `object` | No | — |
-| `data[].repositoryCredentials.bindings` | `array<object>` | Yes | min items: 1; max items: 16 |
-| `data[].repositoryCredentials.bindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
-| `data[].repositoryCredentials.bindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
-| `data[].repositoryCredentials.deadlineWallMs` | `integer` | Yes | minimum: 1; maximum: 9007199254740991 |
-| `data[].repositoryCredentials.driver` | `object` | Yes | — |
-| `data[].repositoryCredentials.driver.id` | `string` | Yes | min length: 1 |
-| `data[].repositoryCredentials.driver.implementation` | `string` | Yes | min length: 1 |
-| `data[].revision` | `integer` | Yes | minimum: 1 |
-| `data[].secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `ANTHROPIC_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
-| `data[].secretDriverId` | `string` | No | min length: 1 |
+| `data` | `array<object or object>` | Yes | An immutable revision with readable saved settings, or revision metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits saved configuration fields. |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -2515,43 +2993,7 @@ Get an exact authorized immutable Agent revision
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
-| `data` | `object` | Yes | — |
-| `data.agentId` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.backendId` | `string or null` | Yes | — |
-| `data.compute` | `object` | Yes | — |
-| `data.compute.id` | `string` | Yes | min length: 1 |
-| `data.compute.implementation` | `string` | Yes | min length: 1 |
-| `data.configuration` | `object<string, SafeJsonValue>` | Yes | A native OpenClaw configuration document. |
-| `data.configurationGeneration` | `integer` | Yes | minimum: 1; maximum: 9007199254740991 |
-| `data.configurationId` | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.configurationKind` | `"agent"` | Yes | — |
-| `data.createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
-| `data.harness` | `object` | Yes | — |
-| `data.harness.id` | `string` | Yes | min length: 1 |
-| `data.harness.mode` | `"embedded" or "dedicated"` | Yes | — |
-| `data.harness.version` | `string` | Yes | min length: 1 |
-| `data.harnessAuth` | `object or object or object or object or object` | Yes | — |
-| `data.id` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
-| `data.pluginApprovers[].channel` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9_-]*$` |
-| `data.pluginApprovers[].id` | `string` | Yes | min length: 1; max length: 200; pattern: `^[^\u0000-\u0020\u007f]+$` |
-| `data.plugins` | `object` | No | — |
-| `data.plugins.driver` | `PluginDriverIdentity` | Yes | — |
-| `data.plugins.driver.id` | `string` | Yes | min length: 1 |
-| `data.plugins.driver.implementation` | `string` | Yes | min length: 1 |
-| `data.plugins.plugins` | `PluginDesiredState` | Yes | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
-| `data.repositoryCredentials` | `object` | No | — |
-| `data.repositoryCredentials.bindings` | `array<object>` | Yes | min items: 1; max items: 16 |
-| `data.repositoryCredentials.bindings[].profile` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
-| `data.repositoryCredentials.bindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
-| `data.repositoryCredentials.deadlineWallMs` | `integer` | Yes | minimum: 1; maximum: 9007199254740991 |
-| `data.repositoryCredentials.driver` | `object` | Yes | — |
-| `data.repositoryCredentials.driver.id` | `string` | Yes | min length: 1 |
-| `data.repositoryCredentials.driver.implementation` | `string` | Yes | min length: 1 |
-| `data.revision` | `integer` | Yes | minimum: 1 |
-| `data.secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `ANTHROPIC_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
-| `data.secretDriverId` | `string` | No | min length: 1 |
+| `data` | `object or object` | Yes | An immutable revision with readable saved settings, or revision metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits saved configuration fields. |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 

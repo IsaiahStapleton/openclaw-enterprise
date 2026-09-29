@@ -90,6 +90,12 @@ create-only Console and API input, applied once before first runtime execution.
 [Agent presets](33-agent-presets.md) — Implementing; reusable, partial Agent launch
 templates with variables, CRUD APIs, and console selection.
 
+[Agent egress for 0.x](40-agent-egress-0x.md) — Deferred custom proxy; 0.x uses
+OpenShell, OpenClaw secret proxy and Codex sandbox controls instead.
+
+[GitHub sign-in for existing accounts](31-human-federated-sign-in.md) — Proposed;
+administrator-provisioned password accounts with an optional GitHub identity; implemented by PR #305 and its M1 follow-ups.
+
 [Basic role-based access control](31-basic-rbac.md) — Direction; deferred past 0.x.
 Personal and team Agent access, exact grants, and withdrawal; see the current-source amendment.
 
@@ -154,5 +160,6 @@ Use the linked current references for supported behavior.
 | [Proposal: SandboxDriver Provisioning and Lifecycle](.archive/13-sandbox-driver-provisioning.md)                                                         | draft                                                                                                     | [SandboxDriver](../docs/reference/drivers/sandbox.md)                                                                                               |
 | [Feature Spec: Service API keys](.archive/13-service-api-keys.md)                                                                                        | Implementation complete                                                                                   | [Authentication](../docs/reference/authentication/service-api-keys.md#service-api-keys)                                                             |
 | [Feature Spec: SecretDriver storage and delivery](.archive/14-secret-driver.md)                                                                          | Implemented and verified for Namespace-owned Secret storage and delivery; broader runtime limits recorded | [Kubernetes Secret Driver](../docs/reference/drivers/kubernetes-secret.md)                                                                          |
+| [Basic egress proxy (C0-C3)](.archive/31-basic-egress-proxy/architecture.md)                                                                             | Superseded; deferred for 0.x, no installed behavior                                                       | [Credential Gateway](../docs/reference/drivers/credential-gateway.md)                                                                               |
 
 [Agent native admin UI pilot](31-agent-native-admin-ui.md) — Implementing; trusted pilot operators open the stock full-admin UI through exact-Agent OCC admission.

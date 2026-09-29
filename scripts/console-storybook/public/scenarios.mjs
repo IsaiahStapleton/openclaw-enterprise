@@ -406,12 +406,69 @@ export const scenarios = {
     description:
       "The email and password form. Any nonempty demo email/password signs into this fixture.",
   },
+  githubLogin: {
+    group: "Pages/Sign in",
+    name: "GitHub enabled",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    description:
+      "Provider discovery adds Continue with GitHub beside the password form. Clicking it demonstrates an unavailable provider; this fixture never navigates to GitHub.",
+    gap: "An administrator must attach the numeric GitHub identity to an existing account through the API. Enrollment, account creation, and recovery administration have no console controls. OAuth navigation and session issuance require backend verification.",
+  },
+  githubUnavailable: {
+    group: "Pages/Sign in",
+    name: "GitHub unavailable",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    actions: [click("Continue with GitHub")],
+    description: "A failed GitHub start leaves password sign-in and a deliberate retry available.",
+  },
+  githubRateLimited: {
+    group: "Pages/Sign in",
+    name: "GitHub rate limited",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    rules: [{ path: "/api/auth/providers/github/start", method: "POST", status: 429 }],
+    actions: [click("Continue with GitHub")],
+    description: "Admission refusal asks the user to wait without automatically retrying.",
+  },
+  githubCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "GitHub callback rejected",
+    path: "/console/?authError=github",
+    signedOut: true,
+    githubEnabled: true,
+    description:
+      "A rejected callback shows the generic sign-in error and keeps password recovery available.",
+  },
+  githubResultRejected: {
+    group: "Pages/Sign in",
+    name: "GitHub result not confirmed",
+    path: "/console/",
+    pendingGithubAttempt: true,
+    githubEnabled: true,
+    rules: [{ path: "/api/auth/providers/github/result", method: "POST", status: 401 }],
+    description:
+      "The tab that started GitHub sign-in could not confirm that the current session is the one its attempt created, so it shows the sign-in error instead of adopting that session.",
+  },
+  providerDiscoveryUnavailable: {
+    group: "Pages/Sign in",
+    name: "Provider discovery unavailable",
+    path: "/console/login",
+    signedOut: true,
+    rules: [{ path: "/api/auth/providers", status: 503 }],
+    description:
+      "Failed provider discovery leaves the password form usable without a GitHub button.",
+  },
   loginError: {
     group: "Pages/Sign in",
     name: "Invalid credentials",
     path: "/console/login",
     signedOut: true,
-    rules: [{ path: "/api/auth/sign-in/email", status: 401 }],
+    rules: [{ path: "/api/auth/sign-in/email", method: "POST", status: 401 }],
     actions: [
       { selector: "#username", value: "operator@example.com" },
       { selector: "#password", value: "demo-only" },
@@ -443,7 +500,7 @@ export const scenarios = {
   logoutFailure: {
     group: "Pages/Sign in",
     name: "Logout unconfirmed",
-    rules: [{ path: "/api/auth/sign-out", status: 503 }],
+    rules: [{ path: "/api/auth/sign-out", method: "POST", status: 503 }],
     actions: [...account, click("Logout")],
     description:
       "Failed logout with a still-active session hides private content until revocation can be confirmed.",
@@ -547,6 +604,18 @@ export const scenarios = {
     emptyAgents: true,
     description: "A ready Namespace with no Agents offers creation.",
   },
+  agentsUnreadableConfiguration: {
+    group: "Pages/Agents",
+    name: "Unreadable saved configuration",
+    deployed: true,
+    unreadableAgentConfiguration: "plugins",
+    description:
+      "One Agent has unreadable saved plugin selections. Both Agents remain in the list, and the affected row shows a warning. This is simulated API data, not database recovery proof.",
+    steps: [
+      "Open Research assistant and select Create new version. Its saved settings show a repair banner without editing or deployment controls.",
+      "Select v1 to inspect the readable admitted snapshot. Return to Agents and open Documentation assistant to check that its draft remains editable.",
+    ],
+  },
   agentsSearch: {
     group: "Pages/Agents",
     name: "No search matches",
@@ -612,6 +681,30 @@ export const scenarios = {
     path: "/console/namespaces",
     description:
       "Installation-wide Namespace identity and status cards, without a Namespace selector.",
+  },
+  namespacesUnavailable: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    description: "Recover from a stale Namespace URL using the selector inside the message.",
+    steps: [
+      "Choose Engineering under Choose a valid namespace; the URL changes and the warning disappears without leaving Namespaces.",
+      "Use browser Back to return to the unavailable selection and recover again.",
+    ],
+  },
+  namespacesUnavailableMobile: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection mobile",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    mobile: true,
+    description: "Recover inline at 390px without opening navigation.",
+  },
+  namespacesUnavailableEmpty: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection without access",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    emptyNamespaces: true,
+    description: "No readable alternatives: show access guidance instead of a selection action.",
   },
   namespacesEmpty: {
     group: "Pages/Namespaces",
@@ -2287,6 +2380,33 @@ export const scenarios = {
       },
     ],
     description: "The Configuration read fails independently of the Agent header.",
+  },
+  unreadableAgentConfiguration: {
+    group: "Pages/Agent detail",
+    name: "Unreadable Agent draft",
+    path: draft,
+    deployed: true,
+    unreadableAgentConfiguration: "plugins",
+    description:
+      "Saved Agent plugin selections could not be read. The Agent header and version history remain visible; draft settings and deployment are unavailable. The admitted v1 snapshot is independently readable.",
+    steps: [
+      "Open Plugins, Channels, and Credentials. Each shows the saved-configuration banner, with no empty settings or editable defaults.",
+      "Select v1 to inspect its admitted configuration, then return to Create new version to see the unreadable draft.",
+    ],
+  },
+  unreadableRevisionConfiguration: {
+    group: "Pages/Agent detail",
+    name: "Unreadable revision snapshot",
+    path: revision,
+    deployed: true,
+    unreadableRevisionConfiguration: "plugins",
+    rules: [{ suffix: "/deployments/rev_00000000-0000-4000-8000-000000000001", status: 503 }],
+    description:
+      "An admitted revision has unreadable plugin selections. Its identity and history remain visible while its saved settings show a repair banner. Deployment activity can fail separately because it still requires a valid snapshot.",
+    steps: [
+      "Open Plugins and confirm the invalid snapshot is not shown as empty JSON.",
+      "Select Create new version. The healthy current draft remains editable independently of the unreadable historical snapshot.",
+    ],
   },
   revisionError: {
     group: "Pages/Agent detail",
