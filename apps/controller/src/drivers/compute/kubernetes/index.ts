@@ -2933,12 +2933,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayNamespace,
           gatewayOwnership,
         );
-        if (gateway === undefined || !this.deploymentReady(gateway)) {
+        if (
+          gateway === undefined ||
+          !this.deploymentReady(
+            gateway,
+            gateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id,
+          )
+        ) {
           return incomplete();
         }
       } else if (
         embedded &&
-        !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))
+        !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace, revision.id))
       ) {
         return incomplete();
       }
@@ -6143,10 +6149,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return workspaceMounts;
   }
 
+  /**
+   * With `preparingRevisionId`, a Gateway Deployment annotated for another
+   * revision is the serving predecessor: embedded preparation observes it but
+   * does not re-render it, and activation replaces it. It may predate the
+   * explicit network profile, so it is judged without the profile requirement.
+   * Every template rendered for the revision itself still needs the profile.
+   */
   private async gatewayReady(
     ownership: Ownership,
     gatewayName: string,
     namespace: KubernetesNamespaceAddress,
+    preparingRevisionId?: string,
   ): Promise<boolean> {
     const clients = await this.clients(namespace.plane);
     const deployment = await this.getOwned("Deployment", gatewayName, namespace, ownership);
@@ -6156,7 +6170,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (deployment.spec?.replicas !== 1) {
       return false;
     }
-    if (!this.deploymentReady(deployment)) {
+    const predecessor =
+      preparingRevisionId !== undefined &&
+      deployment.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== preparingRevisionId;
+    if (!this.deploymentReady(deployment, !predecessor)) {
       return false;
     }
     const service = await this.getOwned("Service", gatewayName, namespace, ownership);
@@ -6203,7 +6220,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     });
   }
 
-  private deploymentReady(deployment: ManagedKubernetesObject): boolean {
+  private deploymentReady(deployment: ManagedKubernetesObject, requireProfile = true): boolean {
     const template = asRecord(deployment.spec?.template);
     const labels = asRecord(asRecord(template?.metadata)?.labels);
     const replicas = deployment.spec?.replicas;
@@ -6211,7 +6228,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const observed = deployment.status?.observedGeneration;
     const ready = deployment.status?.readyReplicas;
     return (
-      labels?.[NETWORK_PROFILE_LABEL] === ORDINARY_NETWORK_PROFILE &&
+      (!requireProfile || labels?.[NETWORK_PROFILE_LABEL] === ORDINARY_NETWORK_PROFILE) &&
       typeof replicas === "number" &&
       replicas > 0 &&
       typeof generation === "number" &&
@@ -7173,7 +7190,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   /** Admits public preview traffic to the serving Gateway's sandbox listener.
    * A serving Gateway from a pre-profile template keeps the profile-free grant
-   * until activation replaces it and this route is reconciled again. */
+   * until it is replaced (at activation for an embedded Gateway, at the first
+   * successor preparation for a dedicated one) and this route is reconciled again. */
   private gatewaySandboxNetworkPolicy(
     revision: AgentRevision,
     metadata: ManagedKubernetesObject["metadata"],

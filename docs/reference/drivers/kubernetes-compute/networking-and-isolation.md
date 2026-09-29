@@ -139,17 +139,26 @@ passes the profile in provider-owned Harness requirements. Deployment readiness
 requires the expected template profile; provider Harness readiness and activation
 reject an otherwise matching Pod that omits or changes a required profile.
 
-Existing owned policy names remain stable. Namespaces provisioned after the
-upgrade receive the narrowed `allow-dns`, `allow-gateway-ingress` and
-`allow-node-gateway` policies. Namespaces provisioned earlier keep their previous
-namespace-wide versions, which select Pods with or without the profile, until
-the namespace is recreated; Compute does not narrow them in place. Per-Agent
-grants are re-rendered with the profile when that Agent's revision is prepared,
-and its new templates carry the label. Other Agents keep their grants until
-their own revisions are prepared. A serving Gateway from an unprofiled template
-keeps embedded model egress or dedicated preview ingress until activation replaces it. Existing OpenShell
-Sandboxes are not relabeled because Sandbox names are per revision: redeploy the
-Agent revision. For development, follow the
+Existing policy names remain stable, and the upgrade restarts no Pod. New
+namespaces receive the narrowed `allow-dns`, `allow-gateway-ingress` and
+`allow-node-gateway`. Earlier namespaces keep their previous versions, which
+ignore the profile, until recreated: Compute never narrows them in place.
+Running Pods keep their templates until Compute next prepares a revision of
+their Agent:
+
+- Preparing a revision re-renders that Agent's grants and templates with the
+  profile; other Agents are untouched. Re-preparing an active revision (as
+  repository-credential maintenance does) rolls its Pods once.
+- An unprofiled embedded Gateway keeps serving, with model egress, during the
+  next preparation, which exempts that predecessor from the profile check;
+  activation replaces it.
+- An unprofiled dedicated Gateway counts as not ready, so the first preparation
+  of a new revision replaces it with that revision's template. It restarts once
+  and serves the new revision before activation, keeping preview ingress until
+  replaced.
+
+Existing OpenShell Sandboxes are not relabeled because Sandbox names are per
+revision: redeploy the Agent revision. For development, follow the
 [development recovery procedure](../../../guides/deploy/local-operations.md#build-images-for-local-kubernetes).
 
 The separately installed OpenShell gateway needs its own scoped DNS/API and
