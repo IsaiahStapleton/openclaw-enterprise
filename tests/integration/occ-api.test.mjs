@@ -1,3 +1,4 @@
+import { SlackChannelDriver } from "../../apps/controller/src/drivers/channel/slack.ts";
 import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import assert from "node:assert/strict";
@@ -1400,6 +1401,7 @@ test("Agent deployment status polls the admitted revision work with exact read a
     status: "queued",
     error: null,
     warnings: [],
+    progress: { lastAttempt: null, nextAttemptAt: new Date(0).toISOString() },
   });
   const runtimeFailure = {
     component: "gateway",
@@ -1435,6 +1437,7 @@ test("Agent deployment status polls the admitted revision work with exact read a
       data: { timeoutMs: 900_000, runtimeFailure },
     },
     warnings: [],
+    progress: null,
   });
 
   const missing = await controller.request(
@@ -2723,6 +2726,18 @@ test("administrator-created auth accounts sign in and receive only provisioned I
 
   const email = `operator-${randomUUID()}@example.com`;
   const password = `generated-password-${randomUUID()}`;
+  const originalAuthorize = selectedIAMDriver.authorize;
+  selectedIAMDriver.authorize = async (...args) => {
+    const decision = await originalAuthorize.apply(selectedIAMDriver, args);
+    if (args[0].action !== "administer") {
+      return decision;
+    }
+    const groupIds = ["original-admin-evidence"];
+    groupIds[Symbol.iterator] = () => {
+      throw new Error("the audit event must not use the supplied iterator");
+    };
+    return { ...decision, evidence: { ...decision.evidence, groupIds } };
+  };
   const auditCount = fixture.auditSink.events.length;
   const created = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
     body: { email, password, name: "Read Only Operator", roleId: readOnlyRole.id },
@@ -2741,6 +2756,7 @@ test("administrator-created auth accounts sign in and receive only provisioned I
   assert.equal(accountEvents.length, 1);
   assert.equal(accountEvents[0].kind, "mutation");
   assert.equal(accountEvents[0].action, "openclaw.auth.accounts.create");
+  assert.deepEqual(accountEvents[0].details?.iamEvidence?.groupIds, ["original-admin-evidence"]);
   assert.deepEqual(accountEvents[0].resource, {
     kind: "installation",
     id: fixture.installationId,
@@ -3753,6 +3769,174 @@ test("bootstrap, mutations, and denials emit attributable private audit events",
   assert.equal(recorded.includes("never-log-this-request-body"), false);
 });
 
+test("authorization accepts getter-backed decisions and unrelated function properties", async () => {
+  for (const kind of ["getters", "function"]) {
+    const fixture = await createInjectedFixture();
+    const controller = {
+      request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+    };
+    await bootstrap(controller, "Decision compatibility");
+    const originalAuthorize = fixture.iamDriver.authorize;
+    fixture.iamDriver.authorize = async (...args) => {
+      const decision = await originalAuthorize.apply(fixture.iamDriver, args);
+      if (kind === "function") {
+        return { ...decision, extra: () => {} };
+      }
+      return new (class {
+        get allowed() {
+          return decision.allowed;
+        }
+        get reason() {
+          return decision.reason;
+        }
+        get driverId() {
+          return decision.driverId;
+        }
+        get evidence() {
+          return decision.evidence;
+        }
+      })();
+    };
+    const namespace = await createNamespace(controller, `decision-compatibility-${kind}`);
+    assert.ok(namespace.id);
+  }
+});
+
+test("authorization rejects sparse decision evidence", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller, "Sparse decision evidence");
+  const originalAuthorize = fixture.iamDriver.authorize;
+  fixture.iamDriver.authorize = async (...args) => {
+    const decision = await originalAuthorize.apply(fixture.iamDriver, args);
+    if (args[0].action !== "create") {
+      return decision;
+    }
+    return { ...decision, evidence: { ...decision.evidence, groupIds: Array(1) } };
+  };
+  const response = await controller.request("POST", "/namespaces", {
+    body: { name: "sparse-evidence" },
+  });
+  assert.equal(response.status, 503);
+  assert.equal(response.body.error.code, "DEPENDENCY_UNAVAILABLE");
+});
+
+test("deploy audit preserves its authorization decision and rolls back with append failure", async () => {
+  let fixture;
+  let laterIAMDriver;
+  const sharedEvidence = ["matching-restriction"];
+  sharedEvidence[Symbol.iterator] = function* () {
+    yield "forged-iterator-value";
+  };
+  const computeDriver = createProvisioningCapableComputeDriver();
+  computeDriver.validateHarnessAuth = () => {
+    if (fixture.controller.selectedDriver("iam").id === laterIAMDriver.id) {
+      return;
+    }
+    sharedEvidence.push("mutated-after-authorization");
+    fixture.controller.registerDriver(laterIAMDriver);
+    fixture.controller.selectDriver("iam", laterIAMDriver.id);
+  };
+  fixture = await createInjectedFixture({ computeDriver, recordOperations: true });
+  laterIAMDriver = new NativeIAMDriver(
+    { loadNativeIAMState: async () => fixture.state },
+    { id: "iam-selected-after-deploy-decision" },
+  );
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller, "Deploy audit provenance");
+  const namespace = await createNamespace(controller, "deploy-audit-provenance");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const agent = await createAgent(controller, namespace.id, "decision-bound-agent");
+  await bindHarnessKey(fixture, namespace.id, agent);
+  const authorizingDriverId = fixture.iamDriver.id;
+  const originalAuthorize = fixture.iamDriver.authorize;
+  fixture.iamDriver.authorize = async (...args) => {
+    const decision = await originalAuthorize.apply(fixture.iamDriver, args);
+    if (args[0].action !== "deploy") {
+      return decision;
+    }
+    return {
+      ...decision,
+      evidence: { ...decision.evidence, groupIds: sharedEvidence, restrictionIds: sharedEvidence },
+    };
+  };
+  const auditCount = fixture.auditSink.events.length;
+
+  // Harness validation runs after OCC has checked deploy authorization. Changing
+  // Driver selection here proves the audit uses that completed decision.
+  const deployed = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  );
+  assert.equal(deployed.status, 202, JSON.stringify(deployed.body));
+  assert.equal(sharedEvidence.length, 2);
+  assert.equal(sharedEvidence[0], "matching-restriction");
+  assert.equal(sharedEvidence[1], "mutated-after-authorization");
+  assert.equal(fixture.controller.selectedDriver("iam").id, laterIAMDriver.id);
+  const deployEvents = fixture.auditSink.events
+    .slice(auditCount)
+    .filter(
+      (event) => event.resource.kind === "agent_revision" && event.resource.id === deployed.data.id,
+    );
+  assert.equal(deployEvents.length, 1);
+  assert.equal(deployEvents[0].iamDriverId, authorizingDriverId);
+  assert.equal(deployEvents[0].outcome, "success");
+  assert.equal(deployEvents[0].decisionReason, undefined);
+  assert.deepEqual(deployEvents[0].authorization, {
+    principalId: fixture.principal.id,
+    action: "deploy",
+    resource: { kind: "agent", id: agent.id, namespaceId: namespace.id },
+  });
+  assert.deepEqual(deployEvents[0].details?.iamEvidence, {
+    identityId: fixture.principal.id,
+    groupIds: ["matching-restriction"],
+    bindingIds: ["binding-admin"],
+    roleIds: [fixture.state.roles[0].id],
+    restrictionIds: ["matching-restriction"],
+  });
+
+  const failedAgent = await createAgent(controller, namespace.id, "audit-failure-agent");
+  await bindHarnessKey(fixture, namespace.id, failedAgent);
+  const revisionsBefore = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${failedAgent.id}/revisions`,
+  );
+  assert.deepEqual(revisionsBefore.data, []);
+  const workCount = fixture.controller.pendingOperations().length;
+  const failureAuditCount = fixture.auditSink.events.length;
+  const originalAppend = fixture.auditSink.append;
+  fixture.auditSink.append = async () => {
+    throw new Error("deploy audit unavailable");
+  };
+  let failedDeploy;
+  try {
+    failedDeploy = await controller.request(
+      "POST",
+      `/namespaces/${namespace.id}/agents/${failedAgent.id}/deploy`,
+    );
+  } finally {
+    fixture.auditSink.append = originalAppend;
+  }
+  assert.equal(failedDeploy.status, 503);
+  assert.equal(failedDeploy.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  const unchangedRevisions = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${failedAgent.id}/revisions`,
+  );
+  assert.deepEqual(unchangedRevisions.data, []);
+  const unchangedAgent = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${failedAgent.id}`,
+  );
+  assert.equal(unchangedAgent.data.desiredRuntimeState, "stopped");
+  assert.equal(fixture.controller.pendingOperations().length, workCount);
+  assert.equal(fixture.auditSink.events.length, failureAuditCount);
+});
+
 test("IAM and audit dependency failures fail closed without orphaned state", async () => {
   const bootstrapFailure = await createInjectedFixture();
   const originalBootstrapAppend = bootstrapFailure.auditSink.append;
@@ -3920,4 +4104,134 @@ test("runtime auth admits SSH revisions without source permissions but retains d
     effect: "deny",
   });
   assert.equal((await controller.request("POST", `${path}/deploy`)).status, 403);
+});
+
+test("Slack validation rejects swapped credentials and preserves authorization", async () => {
+  const controller = await configuredController({
+    computeDriver: createProvisioningCapableComputeDriver(),
+    configurationDriver: createProvisioningCapableConfigurationDriver(),
+  });
+  const { fixture } = controller;
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "slack-admission");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const base = `/namespaces/${namespace.id}`;
+  const makeSecret = async (name, value) => {
+    const result = await controller.request("POST", `${base}/secrets`, { body: { name, value } });
+    assert.equal(result.status, 201);
+    return result.data;
+  };
+  const app = await makeSecret("app", "xapp-synthetic-app");
+  const bot = await makeSecret("bot", "xoxb-synthetic-bot");
+  const model = await makeSecret("model", "synthetic-model");
+  let calls = 0;
+  let response = { ok: true, bot_id: "B123", team_id: "T123" };
+  const channel = new SlackChannelDriver(async (url, options) => {
+    calls++;
+    assert.equal(new URL(url).pathname, "/api/auth.test");
+    assert.equal(options.method, "POST");
+    assert.equal(options.headers.authorization, "Bearer xoxb-synthetic-bot");
+    if (response instanceof Error) {
+      throw response;
+    }
+    return new Response(JSON.stringify(response));
+  });
+  fixture.controller.registerDriver(channel);
+  fixture.controller.selectDriver("channel", channel.id);
+  const configuration = {
+    kind: "agent",
+    values: {
+      channels: {
+        slack: {
+          enabled: true,
+          mode: "socket",
+          appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+          botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+        },
+      },
+    },
+    secretBindings: {
+      SLACK_APP_TOKEN: { source: bot.ref, delivery: { type: "env" } },
+      SLACK_BOT_TOKEN: { source: app.ref, delivery: { type: "env" } },
+    },
+  };
+  const provision = () =>
+    controller.request("POST", `${base}/agents/provision`, {
+      body: provisioningRequestBody(
+        namespace.id,
+        { modelApiKey: model, toolApiKey: model },
+        { configuration },
+      ),
+    });
+  const swapped = await provision();
+  assert.equal(swapped.status, 400, JSON.stringify(swapped.body));
+  assert.equal(swapped.body.error.code, "CHANNEL_CREDENTIAL_ROLE_MISMATCH");
+  assert.equal(swapped.body.error.details[0].path, "/channels/slack/appToken");
+  assert.equal(calls, 0);
+  assert.deepEqual(
+    await fixture.platformState.read((view) => view.agents.listAgents(namespace.id)),
+    [],
+  );
+  configuration.secretBindings.SLACK_APP_TOKEN.source = app.ref;
+  const wrongBotRole = await provision();
+  assert.equal(wrongBotRole.body.error.code, "CHANNEL_CREDENTIAL_ROLE_MISMATCH");
+  assert.equal(wrongBotRole.body.error.details[0].path, "/channels/slack/botToken");
+  assert.equal(calls, 0);
+  configuration.secretBindings.SLACK_BOT_TOKEN.source = bot.ref;
+  fixture.state.restrictions.push({
+    id: "deny-bot",
+    namespaceId: namespace.id,
+    resourceKind: "secret",
+    resourceId: bot.id,
+    action: "operate",
+    effect: "deny",
+  });
+  assert.equal((await provision()).status, 403);
+  assert.equal(calls, 0);
+  fixture.state.restrictions.pop();
+  response = new Error("xoxb-sensitive-provider-error");
+  const unavailable = await provision();
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.body.error.code, "CHANNEL_CREDENTIAL_UNAVAILABLE");
+  assert.equal(unavailable.body.error.details[0].path, "/channels/slack/botToken");
+  assert.doesNotMatch(JSON.stringify(unavailable.body), /xoxb|sensitive/);
+  response = { ok: false, error: "invalid_auth" };
+  assert.equal((await provision()).body.error.code, "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED");
+  response = { ok: true, bot_id: "B123", team_id: "T123" };
+  // The in-memory fixture deliberately has no durable work queue. Reaching its
+  // error proves credentials passed without substituting for the durable worker test.
+  assert.equal((await provision()).body.error.code, "DEPENDENCY_UNAVAILABLE");
+  const config = await controller.request("POST", `${base}/configurations`, {
+    body: configuration,
+  });
+  assert.equal(config.status, 201, JSON.stringify(config.body));
+  const agent = await controller.request("POST", `${base}/agents`, {
+    body: { name: "slack-agent", configurationId: config.data.id },
+  });
+  assert.equal(agent.status, 201, JSON.stringify(agent.body));
+  await bindHarnessKey(fixture, namespace.id, agent.data);
+  for (const secret of [app, bot]) {
+    fixture.state.bindings.push({
+      id: `slack-${secret.id}`,
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: agent.data.servicePrincipalId,
+      roleId: `harness-key-${agent.data.id}`,
+      resourceKind: "secret",
+      resourceId: secret.id,
+    });
+  }
+  response = { ok: false, error: "invalid_auth" };
+  const deploy = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
+  assert.equal(deploy.status, 400, JSON.stringify(deploy.body));
+  assert.equal(deploy.body.error.details[0].path, "/channels/slack/botToken");
+  response = { ok: true, bot_id: "B123", team_id: "T123" };
+  const good = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
+  assert.equal(good.status, 202, JSON.stringify(good.body));
+  const beforeDisabled = calls;
+  configuration.values.channels.slack.enabled = false;
+  configuration.secretBindings = {};
+  const disabled = await provision();
+  assert.equal(disabled.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  assert.equal(calls, beforeDisabled);
 });

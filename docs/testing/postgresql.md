@@ -7,7 +7,7 @@ disposable PostgreSQL databases. Start with the [shared requirements](README.md#
 
 Run the revision-worker suite with an owned PostgreSQL
 fixture. It allocates disposable databases under that run's owner so another
-test cannot consume its queue. Three cross-Namespace cases explicitly share
+test cannot consume its queue. Four cross-Namespace cases explicitly share
 a database within their test. Tests still connect as `occ_app`; preparation
 uses the existing administrator and migrator paths. The suite rejects a standalone
 `OCC_TEST_DATABASE_URL` without prepared ownership before changing that database.
