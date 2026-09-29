@@ -90,6 +90,7 @@ inactive history alone does not retain the source indefinitely.
 
 ## Use a personal Codex login
 
+Codex OAuth login is **Experimental** and has limited, incomplete support.
 The launch MVP covers the first deployment of a new Agent on Kubernetes with
 Compute-owned dedicated Codex, no selected Sandbox or Credential Gateway, and
 fresh private credential storage. The normal deployment prerequisites still

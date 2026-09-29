@@ -737,9 +737,9 @@ Get an exact Installation-owned Namespace
 | --- | --- |
 | [`GET /namespaces/{namespaceId}/agents`](#get-namespacesnamespaceidagents) | List authorized Agents in one exact Namespace |
 | [`POST /namespaces/{namespaceId}/agents`](#post-namespacesnamespaceidagents) | Create a Namespace-owned Agent |
-| [`POST /namespaces/{namespaceId}/agents/device-authorizations`](#post-namespacesnamespaceidagentsdeviceauthorizations) | Start a private device login for Agent configuration |
-| [`DELETE /namespaces/{namespaceId}/agents/device-authorizations/{secretId}`](#delete-namespacesnamespaceidagentsdeviceauthorizationssecretid) | Discard a local device login without upstream revocation |
-| [`POST /namespaces/{namespaceId}/agents/device-authorizations/{secretId}/poll`](#post-namespacesnamespaceidagentsdeviceauthorizationssecretidpoll) | Complete device login without returning credential material |
+| [`POST /namespaces/{namespaceId}/agents/device-authorizations`](#post-namespacesnamespaceidagentsdeviceauthorizations) | Experimental: Start a private device login for Agent configuration |
+| [`DELETE /namespaces/{namespaceId}/agents/device-authorizations/{secretId}`](#delete-namespacesnamespaceidagentsdeviceauthorizationssecretid) | Experimental: Discard a local device login without upstream revocation |
+| [`POST /namespaces/{namespaceId}/agents/device-authorizations/{secretId}/poll`](#post-namespacesnamespaceidagentsdeviceauthorizationssecretidpoll) | Experimental: Complete device login without returning credential material |
 | [`POST /namespaces/{namespaceId}/agents/models`](#post-namespacesnamespaceidagentsmodels) | List provider models for Agent creation without storing the supplied credential |
 | [`POST /namespaces/{namespaceId}/agents/plugins`](#post-namespacesnamespaceidagentsplugins) | List or search available plugins for Agent creation using the selected Driver |
 | [`POST /namespaces/{namespaceId}/agents/plugins/details`](#post-namespacesnamespaceidagentspluginsdetails) | Read plugin details using the selected Driver |
@@ -751,9 +751,9 @@ Get an exact Installation-owned Namespace
 | [`GET /namespaces/{namespaceId}/agents/{agentId}`](#get-namespacesnamespaceidagentsagentid) | Get an exact Namespace-owned Agent |
 | [`PATCH /namespaces/{namespaceId}/agents/{agentId}`](#patch-namespacesnamespaceidagentsagentid) | Replace an exact Namespace-owned Agent's editable draft |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/deploy`](#post-namespacesnamespaceidagentsagentiddeploy) | Admit an immutable revision from the Agent's saved draft |
-| [`POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations`](#post-namespacesnamespaceidagentsagentiddeviceauthorizations) | Start a private device login for Agent configuration |
-| [`DELETE /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}`](#delete-namespacesnamespaceidagentsagentiddeviceauthorizationssecretid) | Discard a local device login without upstream revocation |
-| [`POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}/poll`](#post-namespacesnamespaceidagentsagentiddeviceauthorizationssecretidpoll) | Complete device login without returning credential material |
+| [`POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations`](#post-namespacesnamespaceidagentsagentiddeviceauthorizations) | Experimental: Start a private device login for Agent configuration |
+| [`DELETE /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}`](#delete-namespacesnamespaceidagentsagentiddeviceauthorizationssecretid) | Experimental: Discard a local device login without upstream revocation |
+| [`POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}/poll`](#post-namespacesnamespaceidagentsagentiddeviceauthorizationssecretidpoll) | Experimental: Complete device login without returning credential material |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/native-admin`](#get-namespacesnamespaceidagentsagentidnativeadmin) | Resolve native admin UI launch availability for one Agent |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/plugins`](#post-namespacesnamespaceidagentsagentidplugins) | List or search plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/plugins/capabilities`](#get-namespacesnamespaceidagentsagentidpluginscapabilities) | Read selected Plugin Driver policy capabilities for an active Agent with caller Agent read/update permission |
@@ -922,7 +922,7 @@ Create a Namespace-owned Agent
 
 <span id="post-namespacesnamespaceidagentsdeviceauthorizations"></span>
 
-Start a private device login for Agent configuration
+Experimental: Start a private device login for Agent configuration
 
 **Operation ID:** `startAgentDeviceAuthorization`
 
@@ -986,7 +986,7 @@ Start a private device login for Agent configuration
 
 <span id="delete-namespacesnamespaceidagentsdeviceauthorizationssecretid"></span>
 
-Discard a local device login without upstream revocation
+Experimental: Discard a local device login without upstream revocation
 
 **Operation ID:** `cancelAgentDeviceAuthorization`
 
@@ -1024,7 +1024,7 @@ Discard a local device login without upstream revocation
 
 <span id="post-namespacesnamespaceidagentsdeviceauthorizationssecretidpoll"></span>
 
-Complete device login without returning credential material
+Experimental: Complete device login without returning credential material
 
 **Operation ID:** `pollAgentDeviceAuthorization`
 
@@ -1820,7 +1820,7 @@ Admit an immutable revision from the Agent's saved draft
 
 <span id="post-namespacesnamespaceidagentsagentiddeviceauthorizations"></span>
 
-Start a private device login for Agent configuration
+Experimental: Start a private device login for Agent configuration
 
 **Operation ID:** `startSavedAgentDeviceAuthorization`
 
@@ -1886,7 +1886,7 @@ Start a private device login for Agent configuration
 
 <span id="delete-namespacesnamespaceidagentsagentiddeviceauthorizationssecretid"></span>
 
-Discard a local device login without upstream revocation
+Experimental: Discard a local device login without upstream revocation
 
 **Operation ID:** `cancelSavedAgentDeviceAuthorization`
 
@@ -1926,7 +1926,7 @@ Discard a local device login without upstream revocation
 
 <span id="post-namespacesnamespaceidagentsagentiddeviceauthorizationssecretidpoll"></span>
 
-Complete device login without returning credential material
+Experimental: Complete device login without returning credential material
 
 **Operation ID:** `pollSavedAgentDeviceAuthorization`
 

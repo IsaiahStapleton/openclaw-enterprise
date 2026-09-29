@@ -41,6 +41,7 @@ call official model APIs without persisting credentials. Discovery requires OCC
 API egress and does not establish compatibility; unavailable discovery permits
 manual entry. See [Agent setup](../console/create-and-deploy.md).
 
+The bundled Codex OAuth device-login implementation is **Experimental**.
 Optional `startHarnessDeviceAuthorization(harnessId)` returns a public challenge
 and opaque private state; `pollHarnessDeviceAuthorization(privateState)` returns
 pending or a native credential bundle. OCC owns authorization, scope, and Secret

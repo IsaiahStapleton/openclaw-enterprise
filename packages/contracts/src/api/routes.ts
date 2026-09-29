@@ -116,7 +116,7 @@ export const occApiRoutes = [
     iamAction: "create",
     resourceKind: "agent",
     authorizationTarget: "namespace_collection",
-    summary: "Start a private device login for Agent configuration",
+    summary: "Experimental: Start a private device login for Agent configuration",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -136,7 +136,7 @@ export const occApiRoutes = [
     iamAction: "create",
     resourceKind: "agent",
     authorizationTarget: "namespace_collection",
-    summary: "Complete device login without returning credential material",
+    summary: "Experimental: Complete device login without returning credential material",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -156,7 +156,7 @@ export const occApiRoutes = [
     iamAction: "create",
     resourceKind: "agent",
     authorizationTarget: "namespace_collection",
-    summary: "Discard a local device login without upstream revocation",
+    summary: "Experimental: Discard a local device login without upstream revocation",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -175,7 +175,7 @@ export const occApiRoutes = [
     iamAction: "update",
     resourceKind: "agent",
     authorizationTarget: "agent",
-    summary: "Start a private device login for Agent configuration",
+    summary: "Experimental: Start a private device login for Agent configuration",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -198,7 +198,7 @@ export const occApiRoutes = [
     iamAction: "update",
     resourceKind: "agent",
     authorizationTarget: "agent",
-    summary: "Complete device login without returning credential material",
+    summary: "Experimental: Complete device login without returning credential material",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -218,7 +218,7 @@ export const occApiRoutes = [
     iamAction: "update",
     resourceKind: "agent",
     authorizationTarget: "agent",
-    summary: "Discard a local device login without upstream revocation",
+    summary: "Experimental: Discard a local device login without upstream revocation",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,

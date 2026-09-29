@@ -52,7 +52,7 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
 
 ## Additional checks
 
-- [Personal device login](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)
+- [Experimental personal Codex login](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)
   requires Namespace `agent:create`, or exact `agent:read` and `agent:update` for
   an existing Agent. Start also requires `secret:create`; polling, cancellation,
   and discovery require exact `secret:operate` and the initiating actor.

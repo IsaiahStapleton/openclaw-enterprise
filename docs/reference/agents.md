@@ -137,8 +137,8 @@ See [supported providers and topologies](harness-execution.md#harness-authentica
 For a service account token, use `"method": "codex_pat"` with its Secret `source`.
 This requires dedicated Codex.
 
-For personal [Codex device login](../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login),
-bind the returned `source` with `"method": "oauth"`.
+Personal [Codex OAuth device login](../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)
+is **Experimental**. Bind the returned `source` with `"method": "oauth"`.
 
 For an already issued ChatGPT account credential, use
 `{ "method": "chatgpt_service_account", "serviceAccountId": "sa_123e4567-e89b-42d3-a456-426614174000" }`.

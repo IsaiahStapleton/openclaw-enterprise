@@ -24,6 +24,8 @@ responses. Neither test verifies the live hosted provider.
 
 ## Device-login verification
 
+Codex OAuth device login is **Experimental**.
+
 `node --test tests/integration/device-authorization-api.test.mjs` exercises device
 login, authenticated discovery, and revision submission through the real HTTP/OCC
 workflow. It verifies exact actor and Agent scope, cancellation during an exchange,
