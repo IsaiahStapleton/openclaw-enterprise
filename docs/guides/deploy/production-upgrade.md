@@ -227,7 +227,7 @@ Never delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
 
 ### Roll back across human sign-in
 
-Migration `0034` adds the human sign-in state. `helm rollback` skips the
+Migration `0037` adds the human sign-in state. `helm rollback` skips the
 pre-upgrade migration Job, so it never reverses that migration.
 
 Before GitHub sign-in is activated, scale `deployment/openclaw-enterprise-api` to

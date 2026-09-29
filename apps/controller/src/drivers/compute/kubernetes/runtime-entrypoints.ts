@@ -1936,6 +1936,20 @@ delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
 
+// Codex reports an in-turn stream retry as a top-level error before retrying the
+// same sampling request. Only that exact transient shape, within Codex's small
+// retry budget, is recoverable; the turn must still complete successfully.
+const MAX_RECOVERED_STREAM_RETRIES = 10;
+function isRecoveredNativeStreamError(event) {
+  if (event.type !== "error" || typeof event.message !== "string" || event.message.length > 512) return false;
+  const match = /^Reconnecting\.\.\. ([1-9][0-9]?)\/([1-9][0-9]?)(?::| -)? (?:\()?stream disconnected (?:before completion|- retrying sampling request)(?:[:.)]|$)/.exec(event.message);
+  if (match === null) return false;
+  const attempt = Number(match[1]);
+  const limit = Number(match[2]);
+  if (attempt > limit || limit > MAX_RECOVERED_STREAM_RETRIES) return false;
+  return !/auth|unauthori[sz]ed|forbidden|credential|api.?key|\b40[13]\b/i.test(event.message);
+}
+
 function probeCodexAuthentication(timeout) {
   let result;
   const finish = (code) => ({
@@ -1991,11 +2005,24 @@ function probeCodexAuthentication(timeout) {
     const output = result.stdout?.trim() ?? "";
     const events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
     const allowed = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "item.updated", "item.completed"]);
-    // Native item.error is an advisory (for example missing catalog metadata),
-    // distinct from fatal top-level error/turn.failed. A completed model turn is
-    // still required; no tool item can satisfy this authentication check.
-    if (events.some((event) => !allowed.has(event.type) ||
-      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return finish("MODEL_PROBE_FAILED");
+    // Native item.error is advisory (for example missing catalog metadata),
+    // distinct from fatal top-level error/turn.failed. Only a bounded, known
+    // stream reconnect inside the single model turn may precede its completion;
+    // fatal errors and tool items never satisfy this authentication check.
+    let turnStarted = false;
+    let turnCompleted = false;
+    let recoveredStreamErrors = 0;
+    for (const event of events) {
+      if (event.type === "turn.started") turnStarted = true;
+      if (event.type === "error") {
+        if (!turnStarted || turnCompleted || !isRecoveredNativeStreamError(event) ||
+          ++recoveredStreamErrors > MAX_RECOVERED_STREAM_RETRIES) return finish("MODEL_PROBE_FAILED");
+        continue;
+      }
+      if (!allowed.has(event.type) ||
+        (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type))) return finish("MODEL_PROBE_FAILED");
+      if (event.type === "turn.completed") turnCompleted = true;
+    }
     // A timeout cannot make an observed tool call or protocol failure retryable.
     if (result.error?.code === "ETIMEDOUT") return finish("MODEL_PROBE_TIMEOUT");
     if (result.status !== 0 || result.error) return finish("MODEL_PROBE_FAILED");
