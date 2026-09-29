@@ -19,8 +19,8 @@ credentials are unsupported.
 
 Authentication belongs to one bootstrapped Installation. The controller requires
 `OCC_AUTH_SECRET` and `OCC_AUTH_BASE_URL` (see [settings](settings.md)). An account's immutable Better Auth user ID
-and Installation-specific trusted issuer identify its IAM Principal. Email
-addresses and display names do not grant access.
+and Installation-specific trusted issuer identify its IAM Principal. Neither
+email nor display name grants access.
 
 Fresh native-IAM bootstrap creates the first human administrator and one
 Installation-scoped, non-Agent ServicePrincipal. Both have separate bindings to
@@ -31,12 +31,12 @@ its authority does not depend on the human account remaining present.
 Fresh bootstrap also creates the initial [`default` Namespace](namespaces.md#initial-namespace)
 under the bootstrap Principal's ordinary Namespace creation permission.
 Installation/IAM state, the Namespace, its queued reconciliation, and bootstrap
-audit commit together. Worker provisioning remains asynchronous.
+audit commit together. Worker provisioning is asynchronous.
 
 Bootstrap issues a 30-day service API key named `bootstrap-admin` and writes its
 one-time response to `OCC_BOOTSTRAP_SERVICE_KEY_FILE`. The JSON contains
 `data.id`, `data.servicePrincipalId`, `data.name`, `data.expiresAt`, `data.key`,
-and `meta.installationId`; it is usable with the existing service-key examples.
+and `meta.installationId`; it works with the service-key examples.
 Better Auth keeps only the hash; there is no server-side plaintext retrieval.
 
 Production also creates the configured `OCC_BOOTSTRAP_ADMIN_EMAIL` account with
