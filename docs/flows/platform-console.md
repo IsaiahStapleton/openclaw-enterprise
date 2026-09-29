@@ -257,8 +257,8 @@ preflight.
 
 Navigation, Namespace changes, and logout invalidate reads; generations reject
 late responses. Refocus coalesces events. Agent detail rechecks access in place,
-preserving controls and saves on success; failures clear the view. Other pages
-revalidate retained views before reuse. Drafts keep save baselines and Namespace
+preserving controls, input, and saves; failures clear the view. Other pages
+revalidate before reuse; forms defer refocus. Drafts keep save baselines and Namespace
 scopes separate.
 
 Authorization and dependency failures clear affected content and expose recovery;
