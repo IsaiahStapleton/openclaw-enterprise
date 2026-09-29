@@ -43,7 +43,7 @@
     "agent": {
       "name": "{{ vars.name }}",
       "executionMode": "dedicated",
-      "providerId": null,
+      "backendId": null,
       "harnessAuth": {
         "method": "api_key",
         "source": {
