@@ -14672,37 +14672,37 @@
           },
           "400": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
             },
             "description": "Default Response"
           },
           "401": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
             },
             "description": "Default Response"
           },
           "403": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
             },
             "description": "Default Response"
           },
           "404": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
             },
             "description": "Default Response"
           },
           "500": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
             },
             "description": "Default Response"
           },
           "503": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-5" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
             },
             "description": "Default Response"
           }
