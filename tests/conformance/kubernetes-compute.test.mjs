@@ -622,7 +622,10 @@ test("preparation records a device redeemed on an expired setup before renewing 
     assert.deepEqual(writes, ["3"]);
     assert.equal(setups.length, 1);
     const data = Object.fromEntries(
-      Object.entries(secret.data).map(([key, value]) => [key, Buffer.from(value, "base64").toString()]),
+      Object.entries(secret.data).map(([key, value]) => [
+        key,
+        Buffer.from(value, "base64").toString(),
+      ]),
     );
     assert.equal(data.setupId, "setup-b");
     assert.equal(data.deviceId, redeemed ? deviceId : undefined);
