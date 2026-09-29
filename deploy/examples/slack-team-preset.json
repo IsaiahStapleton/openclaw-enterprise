@@ -111,8 +111,7 @@
           "ackReactionScope": "off",
           "statusReactions": {
             "enabled": false
-          },
-          "suppressToolErrors": true
+          }
         },
         "commands": {
           "ownerAllowFrom": ["slack:{{ vars.slackOwnerId }}"]
