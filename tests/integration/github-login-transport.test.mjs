@@ -43,12 +43,11 @@ function loginFixture(overrides = {}) {
     origin,
   );
   login.designateRecovery("Recovery@example.test");
+  const db = { user: [], session: [], account: [], verification: [] };
   const auth = betterAuth({
     baseURL: origin,
     secret: "test-only-authentication-secret-with-at-least-32-characters",
-    database: login.database(
-      memoryAdapter({ user: [], session: [], account: [], verification: [] }),
-    ),
+    database: login.database(memoryAdapter(db)),
     session: {
       expiresIn: 8 * 60 * 60,
       disableSessionRefresh: true,
@@ -70,6 +69,8 @@ function loginFixture(overrides = {}) {
     },
   });
   return {
+    auth,
+    db,
     subjects,
     denialReasons,
     errors,
@@ -711,3 +712,39 @@ test(
     );
   },
 );
+
+test("guarded adapter never lists, counts or mutates raw session rows", async () => {
+  const login = loginFixture({
+    // State owns session reads; this row would be rejected by it (for example, revoked).
+    currentSession: async () => undefined,
+  });
+  const now = new Date();
+  login.db.user.push({
+    id: "stale-user",
+    email: "stale@example.test",
+    name: "Stale",
+    emailVerified: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  login.db.session.push({
+    id: "stale-session",
+    userId: "stale-user",
+    token: "stale-session-token",
+    expiresAt: new Date(now.getTime() + 3_600_000),
+    createdAt: now,
+    updatedAt: now,
+  });
+  const context = await login.auth.$context;
+  assert.deepEqual(await context.internalAdapter.listSessions("stale-user"), []);
+  assert.deepEqual(await context.adapter.findMany({ model: "session" }), []);
+  assert.equal(await context.adapter.count({ model: "session" }), 0);
+  const where = [{ field: "id", value: "stale-session" }];
+  await assert.rejects(context.adapter.consumeOne({ model: "session", where }));
+  await assert.rejects(
+    context.adapter.incrementOne({ model: "session", where, increment: { version: 1 } }),
+  );
+  assert.equal(login.db.session.length, 1, "the raw row is untouched");
+  // Other models still pass through to the underlying adapter.
+  assert.equal(await context.adapter.count({ model: "user" }), 1);
+});

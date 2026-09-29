@@ -398,6 +398,32 @@ export function createHumanLogin(
           }
           return ((await state.currentSession(token)) ?? null) as T | null;
         },
+        // Sessions are read only through State.currentSession, one token at a time. Listing or
+        // counting raw rows would surface sessions that State rejects (revoked, disabled, stale).
+        async findMany<T>(input: Parameters<DBAdapter["findMany"]>[0]): Promise<T[]> {
+          if (input.model === "session") {
+            return [];
+          }
+          return adapter.findMany<T>(input);
+        },
+        async count(input) {
+          if (input.model === "session") {
+            return 0;
+          }
+          return adapter.count(input);
+        },
+        async consumeOne<T>(input: Parameters<DBAdapter["consumeOne"]>[0]): Promise<T | null> {
+          if (input.model === "session") {
+            throw rejected();
+          }
+          return adapter.consumeOne<T>(input);
+        },
+        async incrementOne<T>(input: Parameters<DBAdapter["incrementOne"]>[0]): Promise<T | null> {
+          if (input.model === "session") {
+            throw rejected();
+          }
+          return adapter.incrementOne<T>(input);
+        },
         async update(input) {
           if (input.model === "session") {
             throw rejected();
