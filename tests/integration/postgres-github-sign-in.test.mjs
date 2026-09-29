@@ -692,6 +692,7 @@ test(
     providerAvailable = true;
 
     browser = await chromium.launch({
+      chromiumSandbox: true,
       headless: true,
       ...(process.env.OCC_TEST_BROWSER_EXECUTABLE
         ? { executablePath: process.env.OCC_TEST_BROWSER_EXECUTABLE }

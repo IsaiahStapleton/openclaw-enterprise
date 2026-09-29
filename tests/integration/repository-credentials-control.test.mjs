@@ -1,3 +1,4 @@
+import { startReceiptState } from "../fixtures/repository-credentials/receipt-state.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
@@ -344,6 +345,11 @@ test(
       upstreamOrigins: [github.origin],
     });
     assert.equal((await lstat(config.gateway.controlSocket)).mode & 0o777, 0o600);
+    // Standalone services do not implement registry-backed durable admission.
+    assert.equal(
+      (await control(config.gateway.controlSocket, "GET", "/v1/capabilities")).status,
+      404,
+    );
     const opened = await control(config.gateway.controlSocket, "POST", "/v1/sessions", {
       durationSeconds: 86400,
     });
@@ -765,6 +771,7 @@ async function boundControlFixture(t, limits = {}) {
   const port = reservation.address().port;
   await new Promise((resolve) => reservation.close(resolve));
   const fixture = await startRegistryCredentialServiceFixture(t, {
+    namespaceId: `ns_${randomUUID()}`,
     autoOpen: false,
     maximumDurationSeconds: 1200,
     durationSeconds: 600,
@@ -785,10 +792,17 @@ async function boundControlFixture(t, limits = {}) {
     durationSeconds: 600,
     deadlineWallMs: fixture.clock.wallNow() + 90_000,
   };
+  const receipts = await startReceiptState(t, fixture, [binding], input.deadlineWallMs);
   const freshId = () => `${fixture.clock.wallNow()}-${randomUUID()}`;
   const send = (value, id = freshId(), socketPath = fixture.config.gateway.controlSocket) =>
-    control(socketPath, "POST", "/v1/sessions", value, { "x-admission-id": id });
-  return { ...fixture, input, freshId, send };
+    control(
+      socketPath,
+      "POST",
+      "/v1/sessions",
+      { ...value, durableAdmission: true },
+      { "x-admission-id": id },
+    );
+  return { ...fixture, input, freshId, send, receipts };
 }
 
 test(
@@ -801,6 +815,13 @@ test(
       status: 200,
       body: { ready: true, protocolVersion: 1 },
     });
+    assert.deepEqual(
+      await control(fixture.config.gateway.controlSocket, "GET", "/v1/capabilities"),
+      {
+        status: 200,
+        body: { durableAdmissionVersion: 1 },
+      },
+    );
     assert.equal((await send({ durationSeconds: 600, profile: "git-full" })).status, 400);
     for (const field of [
       "namespaceId",
@@ -814,6 +835,7 @@ test(
       assert.equal((await send(incomplete)).status, 400, field);
     }
     const id = freshId();
+    await fixture.receipts.prepare(id, input.repositoryRef, input.durationSeconds);
     const created = await send(input, id);
     assert.equal(created.status, 201);
     assert.equal(created.body.session.deadlineWallMs, input.deadlineWallMs);
@@ -842,9 +864,9 @@ test(
     assert.equal(
       (await send({ ...input, expectedBinding: { ...input.expectedBinding, grantId: "obsolete" } }))
         .status,
-      400,
+      503,
     );
-    assert.equal((await send({ ...input, deadlineWallMs: clock.wallNow() })).status, 400);
+    assert.equal((await send({ ...input, deadlineWallMs: clock.wallNow() })).status, 503);
 
     // Recovery after freshness expires still returns the existing session, never a
     // fresh duration or another bearer. The original 90-second deadline then closes it.
@@ -855,7 +877,9 @@ test(
     assert.equal(lateRecovery.body.deadlineWallMs, input.deadlineWallMs);
     await clock.advance(30_000);
     assert.notEqual(fixture.service.status(created.body.session.sessionId).state, "OPEN");
-    assert.deepEqual(await send(input, id), { status: 404, body: { error: "admission-missing" } });
+    const terminal = await send(input, id);
+    assert.equal(terminal.status, 200);
+    assert.equal(terminal.body.state, "DISPOSED");
     assert.deepEqual(
       await control(fixture.config.gateway.controlSocket, "GET", "/v1/sessions/unknown"),
       {
@@ -863,17 +887,6 @@ test(
         body: { error: "not-found" },
       },
     );
-
-    // A shorter replacement request cannot use the persisted later deadline to extend itself.
-    const shorter = await send({
-      ...input,
-      durationSeconds: 1,
-      deadlineWallMs: clock.wallNow() + 60_000,
-    });
-    assert.equal(shorter.status, 201);
-    assert.equal(shorter.body.session.deadlineWallMs, clock.wallNow() + 1000);
-    await clock.advance(0, 1001);
-    assert.notEqual(fixture.service.status(shorter.body.session.sessionId).state, "OPEN");
   },
 );
 
@@ -930,13 +943,14 @@ async function holdControlRequest(t, target) {
 }
 
 test(
-  "lookup-only missing fences a delayed first admission and refuses missing when fence capacity is exhausted",
+  "lookup-only missing durably fences a delayed first admission across restart",
   { timeout: 15000 },
   async (t) => {
     const fixture = await boundControlFixture(t, { sessions: 1 });
     const { input, send, freshId, clock } = fixture;
     const held = await holdControlRequest(t, fixture.config.gateway.controlSocket);
     const id = freshId();
+    await fixture.receipts.prepare(id, input.repositoryRef, input.durationSeconds);
     const delayed = send(input, id, held.socketPath);
     await held.received;
     // Cleanup observes absence while the first create request is still in transport.
@@ -947,28 +961,14 @@ test(
     });
     held.release();
     assert.deepEqual(await delayed, { status: 404, body: { error: "admission-missing" } });
-    assert.equal((await send({ ...input, durationSeconds: 601 }, id)).status, 400);
-    // Recovery also works after startup policy changes; obsolete authority is
-    // never revalidated or minted while proving a process-local admission absent.
-    assert.equal(
-      (
-        await send(
-          { ...input, durationSeconds: 1201, profile: "retired-profile", recoverOnly: true },
-          freshId(),
-        )
-      ).status,
-      404,
-    );
-    assert.deepEqual(await send({ ...input, recoverOnly: true }, freshId()), {
-      status: 503,
-      body: { error: "overloaded" },
-    });
+    assert.equal((await send({ ...input, durationSeconds: 601 }, id)).status, 503);
     for (const entry of fixture.repositories) {
       assert.equal(entry.github.trace.length, 0);
     }
+    // The durable fence survives service replacement and later clock advances.
+    await fixture.restart();
     await clock.advance(60_001);
     assert.deepEqual(await send(input, id), { status: 404, body: { error: "admission-missing" } });
-    assert.equal((await send({ ...input, deadlineWallMs: clock.wallNow() + 60_000 })).status, 201);
   },
 );
 

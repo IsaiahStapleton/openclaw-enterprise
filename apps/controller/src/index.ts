@@ -902,6 +902,7 @@ function clientDeploymentStatus(status: Readonly<DeploymentStatusResult>): Recor
     status: status.status,
     error: status.error,
     warnings: status.warnings,
+    progress: status.progress,
   };
 }
 
@@ -2242,8 +2243,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           "Workspace defaults changed. Reload the create form before submitting.",
         );
       }
-      const result = await controller.transact(async (unit) => {
-        const provisioned = await controller!.provisionAgent(context.actorId, {
+      const provisioned = await controller.provisionAgent(
+        context.actorId,
+        {
           requestId: provisionBody.requestId,
           namespaceId,
           name: provisionBody.name,
@@ -2279,8 +2281,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 repositoryBindings:
                   provisionBody.repositoryBindings as readonly RepositoryBindingRequest[],
               }),
-        });
-        await unit.audit.append(
+        },
+        (provisioned) =>
           event(
             operation,
             request,
@@ -2292,11 +2294,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             "mutation",
             context,
           ),
-        );
-        return {
-          provisioning: clientAgentProvisioning(provisioned.provisioning, namespaceId),
-        };
-      });
+      );
+      const result = {
+        provisioning: clientAgentProvisioning(provisioned.provisioning, namespaceId),
+      };
       reply.status(202).send({ data: result, meta: { requestId: request.id } });
       return;
     }
@@ -2558,13 +2559,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     if (operation.operationId === "deployAgent") {
       try {
-        const revision = await controller.transact(async (unit) => {
-          const admitted = await controller!.deployAgentWithAuthorization(
-            context.actorId,
-            { namespaceId, agentId },
-            options.resolveHarness,
-          );
-          await unit.audit.append(
+        const admitted = await controller.deployAgentWithAuthorization(
+          context.actorId,
+          { namespaceId, agentId },
+          options.resolveHarness,
+          (admitted) =>
             event(
               operation,
               request,
@@ -2576,9 +2575,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               undefined,
               admitted.authorization,
             ),
-          );
-          return clientRevision(admitted.revision);
-        });
+        );
+        const revision = clientRevision(admitted.revision);
         reply.status(202).send({ data: revision, meta: { requestId: request.id } });
         return;
       } catch (error) {

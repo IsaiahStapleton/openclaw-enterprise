@@ -67,9 +67,9 @@ through `0029_agent_provisioning_work`. `backendCompleted` is the exact
 migration. `providerCompleted` is the exact 31-receipt Provider terminology
 history published before the rename. `backendTerminology` has the 32 receipts
 through `0031_backend_terminology_compatibility`; `prePluginApprovers` adds
-`0032_credential_sources` for 33 receipts. `preHumanAuthentication` adds
-`0033_agent_plugin_approvers` for 34 receipts. `completed` is the current
-canonical history with all receipts, including `0034_human_authentication`.
+`0032_credential_sources` for 33 receipts. `preHumanAuthentication` has the
+37 receipts through `0036_deployment_progress`. `completed` is the current
+canonical history with all receipts, including `0037_human_authentication`.
 The source manifest is
 [`migrations/meta/canonical-history.json`](../../../migrations/meta/canonical-history.json).
 Empty schemas may be absent or have only their owner's ordinary `CREATE` and
