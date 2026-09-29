@@ -173,10 +173,23 @@ Retains repository-session identity and cleanup context after AgentRevision dele
 - `admission_id`
 - `duration_seconds`
 - `deadline_wall_ms`
+- `broker_protocol`
 - `phase`
 - `session_id`
 - `created_at`
 - `updated_at`
+
+### `repository_broker_receipts`
+
+Retains nonsecret admission fences and broker-confirmed terminal evidence for an exact attempt.
+
+- `admission_id`
+- `state`
+- `generation`
+- `session_id`
+- `deadline_wall_ms`
+- `revoked`
+- `expired`
 
 ## Identity and access
 

@@ -3,6 +3,7 @@ import { bindPlatformUnitOfWork } from "../ports/platform-unit-of-work.ts";
 import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import type {
   RepositorySessionAttempt,
+  RepositoryBrokerReceipt,
   RepositorySessionReadRepository,
   RepositorySessionRepository,
 } from "../ports/repository-sessions.ts";
@@ -55,7 +56,7 @@ import {
   ResourceConflictError,
   ScopeViolationError,
 } from "../errors.ts";
-import type { ControllerWork } from "./controller-work.ts";
+import type { ControllerWork, ControllerWorkAttempt } from "./controller-work.ts";
 import type {
   AgentProvisioningReadRepository,
   AgentProvisioningRepository,
@@ -589,6 +590,7 @@ export type PlatformOperation =
 export interface PlatformOperationReadRepository {
   list(): Promise<readonly Readonly<PlatformOperation>[]>;
   findWork(idempotencyKey: string): Promise<Readonly<ControllerWork> | undefined>;
+  findWorkAttempt(idempotencyKey: string): Promise<Readonly<ControllerWorkAttempt> | undefined>;
 }
 
 export interface PlatformOperationRepository extends PlatformOperationReadRepository {
@@ -671,6 +673,7 @@ interface PlatformSnapshot {
   readonly roles: Map<string, Readonly<Role>>;
   readonly bindings: Map<string, Readonly<AccessBinding>>;
   readonly repositorySessions: Map<string, Readonly<RepositorySessionAttempt>>;
+  readonly repositoryBrokerReceipts: Map<string, Readonly<RepositoryBrokerReceipt>>;
   readonly audit: Readonly<AuditEvent>[];
   readonly operations: Readonly<PlatformOperation>[];
 }
@@ -722,6 +725,12 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
     ),
     repositorySessions: new Map(
       Array.from(snapshot.repositorySessions, ([key, attempt]) => [key, immutableCopy(attempt)]),
+    ),
+    repositoryBrokerReceipts: new Map(
+      Array.from(snapshot.repositoryBrokerReceipts, ([key, receipt]) => [
+        key,
+        immutableCopy(receipt),
+      ]),
     ),
     audit: snapshot.audit.map((event) => immutableCopy(event)),
     operations: snapshot.operations.map((operation) => immutableCopy(operation)),
@@ -1953,7 +1962,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
     resourceId: string,
   ): Promise<boolean> => {
     if (resourceKind === "agent") {
-      return (await agents.findAgent(namespaceId, resourceId)) !== undefined;
+      return (await agents.findAgent(namespaceId, resourceId))?.status === "active";
     }
     if (resourceKind === "agent_revision") {
       return agentRevisionExists(namespaceId, resourceId);
@@ -2093,6 +2102,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
 
   const repositorySessions = memoryRepositorySessions(
     snapshot.repositorySessions,
+    snapshot.repositoryBrokerReceipts,
     (owner) =>
       snapshot.revisions
         .get(agentKey(owner.namespaceId, owner.agentId))
@@ -2224,6 +2234,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         Object.freeze(snapshot.operations.map((operation) => immutableCopy(operation))),
       // The in-memory operation log has no executing or terminal work records.
       retryFailedAgentDeletion: async () => false,
+      findWorkAttempt: async () => undefined,
       findWork: async (idempotencyKey) => {
         const operation = snapshot.operations.find(
           (candidate) => operationIdempotencyKey(candidate) === idempotencyKey,
@@ -2283,6 +2294,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
     roles: new Map(),
     bindings: new Map(),
     repositorySessions: new Map(),
+    repositoryBrokerReceipts: new Map(),
     audit: [],
     operations: [],
   };
