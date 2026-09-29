@@ -11,13 +11,13 @@ Keep the actual references in an operator-local input record outside the
 repository and evidence directory. Record only purpose, selected account, and
 completion status in shared reports.
 
-| Purpose           | Required input                                                                                                  | Destination                                                                |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Agent model       | Existing Codex-scoped service-account token and selected model                                                  | Namespace Secret selected under Console **Service Accounts**               |
-| Slack Socket Mode | App-level token (`xapp-` prefix)                                                                                | Namespace Secret selected as **Slack app token**                           |
-| Slack bot         | Bot token (`xoxb-` prefix) from the same Slack app/workspace                                                    | Namespace Secret selected as **Slack bot token**                           |
-| GitHub broker     | App ID, installation ID, both numeric repository IDs, and RSA private-key reference/file                        | Operator-owned broker registry and Kubernetes input Secrets                |
-| Linear            | Authorized account/workspace, known readable issue, and any provider connection required by the selected plugin | Supported account connection; never raw credentials in Agent Configuration |
+| Purpose           | Required input                                                                                            | Destination                                                                  |
+| ----------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Agent model       | Existing Codex-scoped service-account token and selected model                                            | Namespace Secret selected under Console **Service Accounts**                 |
+| Slack Socket Mode | App-level token (`xapp-` prefix)                                                                          | Namespace Secret selected as **Slack app token**                             |
+| Slack bot         | Bot token (`xoxb-` prefix) from the same Slack app/workspace                                              | Namespace Secret selected as **Slack bot token**                             |
+| GitHub broker     | App ID, installation ID, both numeric repository IDs, and RSA private-key reference/file                  | Operator-owned broker registry and Kubernetes input Secrets                  |
+| Linear            | Selected Agent/Codex account with Linear already connected for the workspace, plus a known readable issue | Preexisting account connection; never raw credentials in Agent Configuration |
 
 An item name alone does not identify which field to use. A Slack item may contain
 both tokens; do not use its app-level token for the bot field. Do not confuse an
@@ -104,8 +104,8 @@ This operator installation step is separate from Console-only Agent provisioning
 
 Bootstrap OCC first to obtain its server-assigned Namespace IDs. Build the
 registry with the supplied App/installation/repository IDs and the scenario's
-approved profiles. Prepare the service configuration and certificate/key/CA
-files using the rendered broker hostname.
+approved `git-read` profile for every repository. Prepare the service
+configuration and certificate/key/CA files using the rendered broker hostname.
 
 Create the operator-owned registry ConfigMap and service/App/TLS/public-CA
 Secrets through the guide's file-based commands. Use `--from-file` for protected
@@ -115,24 +115,27 @@ key contents. Keep the TLS private key separate from the public CA input. Verify
 broker startup and trust before choosing the Agent's repository bindings in
 Console. Never mount the App key into the Agent.
 
-## Authenticate Linear and handle failures
+## Confirm Linear account connection
 
-In **Configure plugins**, select Linear from the curated catalog. Curated
-discovery needs no discovery token, but it does not grant Linear account access.
-Save the selection and deploy through Console.
+Before provisioning, confirm the selected Agent/Codex account already has the
+intended Linear workspace connected for the selected plugin. Curated discovery
+needs no discovery token, but it does not grant Linear account access. After
+deployment, verify the connection with a real lookup of the chosen issue. The
+Community role's read-only instruction is not a provider-enforced permission;
+record any independently verified Linear account restrictions separately.
 
-Use an already authorized account connection or the selected version's supported
-user-visible provider login/consent flow. Verify the intended Linear workspace
-and read-only access with a real lookup of the chosen issue. Do not invent a
-Linear-token field or inject a PAT into native Configuration: plugin-specific
-credential APIs are outside the current
+After that confirmation, select Linear from the curated catalog in
+**Configure plugins**, save the selection, and deploy through Console. Do not
+invent a Linear-token field, inject a PAT into native Configuration, or rely on
+a nonexistent Console/plugin authentication flow: plugin-specific credential APIs
+are outside the current
 [plugin configuration contract](../../../../docs/reference/agent-plugins.md).
 
 If startup reports `PLUGIN_AUTH_REQUIRED`, record the required account action.
-If that action has no supported user-visible path, mark Linear acceptance blocked
-rather than patching runtime credential files. Similarly, model quota/authentication
-or Slack membership failures block their checks; do not silently substitute
-another account.
+For this scenario, an unconnected account blocks Linear acceptance rather than
+prompting a provisioning-time login repair. Do not patch runtime credential
+files. Similarly, model quota/authentication or Slack membership failures block
+their checks; do not silently substitute another account.
 
 During cleanup, remove only temporary exports and run-created Secrets whose
 ownership and lack of remaining consumers are verified. Preserve preexisting

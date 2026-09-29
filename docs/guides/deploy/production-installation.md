@@ -7,8 +7,8 @@ Keep private routing enabled. Start with the password profile and
 [native Agent administration](native-admin.md#requirements); optional
 [GitHub sign-in](#enable-github-browser-sign-in) requires disabling native administration.
 
-Use [profiles](#recommended-generate-profile-configuration) for configuration, or
-[manual YAML](#advanced-copy-manual-yaml-examples) for advanced customization.
+Configure with an [installation profile](#recommended-generate-profile-configuration)
+or, for advanced customization, [manual YAML](#advanced-copy-manual-yaml-examples).
 
 Use a clean checkout matching the image revision. Follow
 [private-registry delivery](private-registry-images.md) for provenance, ECR copies,
@@ -108,11 +108,11 @@ YAML and configure pull credentials for control-plane and tenant Pods.
 ## Configure the Installation
 
 Set the production shell before Kubernetes commands. This runbook uses Helm
-release `oce` in Namespace `openclaw-system`. Keep one protected handoff directory
-for generated configuration and the bootstrap PVC YAML; Secret inputs stay under
-`/secure/occ`.
+release `oce` in Namespace `openclaw-system`. Keep configuration and
+bootstrap PVC YAML in the protected `OCC_INPUT_DIRECTORY`; Secret inputs stay
+under `/secure/occ`.
 
-For existing profile output or verified YAML from
+To reuse profile output or verified YAML from
 [local operations](local-operations.md#build-images-for-local-kubernetes), set
 `OCC_INPUT_DIRECTORY` to it, skip both generation branches, and continue with the
 [shared checks](#shared-bootstrap-pvc-and-configuration-checks).
@@ -127,7 +127,7 @@ chmod 600 "$KUBECONFIG_FILE"
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" version
 ```
 
-Kubernetes older than 1.35 remains unsupported; API and worker emit
+Kubernetes older than 1.35 is unsupported; the API and worker emit
 `compute.preflight-warning`.
 
 ### Recommended: generate profile configuration
@@ -136,12 +136,12 @@ Choose `openclaw` or `codex` from the [profile options](installation-profiles.md
 Generation requires Node.js 24+ on the operator host; manual YAML does not.
 
 Create `$OCC_INPUT_DIRECTORY/profile-input.json` from the schema in
-[Render installation profiles](installation-profiles.md#prepare-inputs). Keep the
-input JSON separate from renderer-owned `values.yaml`, `installation.yaml`, and
-`preflight.json`; reruns clear those three output files. For this runbook, set
+[Render installation profiles](installation-profiles.md#prepare-inputs). Set
 `controlPlane.releaseName` to `oce`, `controlPlane.namespace` to
 `openclaw-system`, `controlPlane.controllerImage` to `$CONTROLLER_IMAGE`, and
-`runtime.image` to `$RUNTIME_IMAGE`. Keep credentials out of the input JSON.
+`runtime.image` to `$RUNTIME_IMAGE`. Keep credentials and tokens out of the
+input JSON. Keep it separate from `values.yaml`, `installation.yaml`, and
+`preflight.json`, which each render clears.
 
 ```bash
 export OCC_PROFILE="${OCC_PROFILE:-codex}"
@@ -169,7 +169,7 @@ or manual YAML. This keeps `values.yaml`, `installation.yaml`, and
 ### Advanced: copy manual YAML examples
 
 Use this branch only when deliberately skipping profiles; it refuses to overwrite
-profile output. The manual example selects the curated Codex PluginDriver catalog,
+existing configuration YAML. The manual example selects the curated Codex PluginDriver catalog,
 unlike the `codex` profile's default hosted PAT-backed discovery.
 
 ```bash
@@ -205,9 +205,9 @@ chmod 600 "$OCC_INPUT_DIRECTORY/values.yaml" \
   "$OCC_INPUT_DIRECTORY/bootstrap-pvc.yaml"
 ```
 
-For profile installs, change `$OCC_PROFILE_INPUT` and rerender; do not hand-edit
+For profile installs, change `$OCC_PROFILE_INPUT` and rerender instead of editing
 `values.yaml` or `installation.yaml`. For manual installs, edit the copied YAML
-before validation:
+before running the checks:
 
 - `values.yaml`: set auth URL, admin email, database and cluster CIDRs,
   control-plane node selector, database CA, DNS, API clients, and bootstrap
@@ -215,18 +215,22 @@ before validation:
   routing enabled with the reviewed GatewayClass and Secret names.
 - `installation.yaml`: set cluster name, log level, DNS selectors,
   service-principal token settings, Secret prefixes, runtime storage class,
-  immutable runtime image digests, and PluginDriver catalog.
+  immutable runtime image digests, and PluginDriver catalog. Set
+  `runtime.gatewayNodeSelector` and `runtime.nodeSelector` to
+  [disjoint Ready pools](../../reference/drivers/kubernetes-compute.md#images-and-resources);
+  Helm does not place runtimes. Omit `network.gatewayClients` with
+  [routing](../../reference/gateway-routing.md#routing-configuration) enabled.
+  `presets.includeDefaults: false` disables the
+  [bundled Presets](../../reference/presets.md#installation-defaults).
 
-For both branches, set `bootstrap-pvc.yaml` name, namespace, size, and protected
-`storageClassName`.
+For every install, set `bootstrap-pvc.yaml` name, namespace, size, and
+protected `storageClassName`.
 
 For `logging.level`, see [Choose the log level](../observability.md#1-choose-the-log-level).
 Configure native admin domains through [native admin setup](native-admin.md#steps).
 For Slack Agents, configure both proxy paths in the
 [Slack guide](../integrations/slack.md#configure-both-slack-proxies). For Codex
-sandboxing, follow [Codex sandbox setup](codex-sandbox.md): install a reviewed
-profile on every eligible node, set `runtime.codexSeccompProfile`, and verify
-enforcement.
+sandboxing, follow [Codex sandbox setup](codex-sandbox.md).
 
 Run every check below before provisioning the password profile:
 
@@ -262,20 +266,20 @@ test "$BOOTSTRAP_CLAIM" = "$(yq e -r '.metadata.name' "$OCC_INPUT_DIRECTORY/boot
 Prepare these Secret inputs under `/secure/occ`, each containing one raw value
 without quotes or a variable assignment.
 
-| File                  | Contents and source                                                                                                                                                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Obtain it from your database administrator or provider. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`. |
-| `occ-migration-url`   | URL for a separate schema-migration role on the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker.                     |
-| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set; the example mount path is `/etc/openclaw/database-ca/ca.pem`.                                              |
-| `occ-auth-secret`     | Random session-signing secret. Generate it once with the command below and retain it across redeployments; it is separate from other credentials.                                                                                                             |
+| File                  | Contents and source                                                                                                                                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `occ-application-url` | PostgreSQL connection URL for the limited application role, used by bootstrap, the API, and the worker. Example shape: `postgresql://occ_app:<url-encoded-password>@<postgres-host>:5432/<database>`.                                     |
+| `occ-migration-url`   | URL for a separate schema-migration role on the same database. Example shape: `postgresql://occ_migrator:<url-encoded-password>@<postgres-host>:5432/<database>`. Obtain this credential separately; do not give it to the API or worker. |
+| `occ-database-ca.pem` | Optional PostgreSQL root CA bundle when the database root is not in the base image trust store. Required only when `database.caSecretName` is set.                                                                                        |
+| `occ-auth-secret`     | Random session-signing secret. Generate it once with the command below and retain it across redeployments; it is separate from other credentials.                                                                                         |
 
 Save both database URLs in protected files, replacing placeholders and preserving
 required TLS options. For managed PostgreSQL roots supplied through
 `database.caSecretName`, set `sslmode=verify-full` and `sslrootcert` to the
 mounted CA file in both URLs. With the example mount settings, the path is
 `/etc/openclaw/database-ca/ca.pem`; if you change them, use
-`<database.caMountPath>/<database.caKey>`. Introduce URL query parameters with
-`?`, or join them to existing parameters with `&`. Generate the auth secret for a
+`<database.caMountPath>/<database.caKey>`. Start query parameters with `?` and
+join further ones with `&`. Generate the auth secret for a
 new Installation; this command refuses to overwrite an existing file:
 
 ```bash
@@ -342,18 +346,23 @@ Secret mounts read-only in migration, bootstrap, API, and worker containers at
 
 Enable repository credentials only after preparing the
 [repository service inputs](../repository-credentials/installation.md) and
-[GitHub Backend selection](../../reference/backends.md#github-repository-credentials).
-Keep the feature disabled until you have the immutable service image, registry
-ConfigMap, private service configuration, App key, internal-Service TLS Secret,
-public CA Secret, worker peer on port `8443`, and Service HTTPS on port `443`.
-Mount one registry version into API, worker, and service.
+[GitHub Backend selection](../../reference/backends.md#github-repository-credentials):
+the immutable service image, registry ConfigMap, private service configuration,
+App key, internal-Service TLS Secret, and public CA Secret. Mount one registry
+version into the API, worker, and
+service. The Compute network peer must select the worker Pod on port `8443`; the
+Service serves HTTPS on `443`.
 
-The chart runs one `Recreate` worker Pod with a sidecar for private inputs. The
-sidecar has no Kubernetes API token; the worker token owns tenant Secret verbs.
-NetworkPolicies admit managed gateways and approved provider CIDRs, while
-registry and session checks enforce exact scope. Keep `limits.shutdownGraceMs` at
-or below `60000`. Restart API and worker together after registry or service input
-changes; readiness does not prove token minting or Agent Git workflows.
+The chart runs one `Recreate` worker Pod with a credential sidecar. Only the
+sidecar mounts the App and TLS private inputs, and it has no Kubernetes API token;
+only the worker container's token has tenant Secret access, and the worker stays
+[trusted per tenant namespace](../../reference/security/runtime-isolation.md#temporary-runtime-credential-exceptions).
+NetworkPolicies let managed gateways reach the service and the worker reach
+approved provider CIDRs; registry and session checks enforce exact scope. Startup
+rejects `limits.shutdownGraceMs` above `60000` to finish cleanup within the
+Pod's 75-second grace. Restart the API and worker together after registry
+or service input changes; readiness does not prove token minting or Agent Git
+workflows.
 
 ### Azure PostgreSQL workload identity
 
@@ -365,11 +374,10 @@ Provision federation and database grants for separate application and migrator
 identities; keep the migrator privileges confined to migration. Use
 `node scripts/migrate-production.mjs` for this authentication mode.
 
-These are deployment-owned inputs. The supplied chart does not configure Azure
-identities, federation, grants, identity environment variables, or token
-projection for OCC. Its migration and bootstrap containers share an
-initialization Pod and service account; changing database URL Secrets alone
-does not configure their distinct identity inputs or enable Azure mode.
+The chart configures none of these deployment-owned inputs. Its migration and
+bootstrap containers share an initialization Pod and service account, so
+changing database URL Secrets alone neither configures their distinct identity
+inputs nor enables Azure mode.
 
 ### Optional operational log export
 
@@ -378,8 +386,7 @@ Prepare optional Collector Secrets, values, and verification through
 
 ### Prepare the fresh bootstrap output PVC
 
-Create the fresh claim from the native example, then prepare the mounted root
-with the same immutable Node-capable image selected for the controller:
+Create the fresh claim, then prepare its mounted root with the controller image:
 
 ```bash
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
@@ -390,9 +397,9 @@ scripts/prepare-bootstrap-volume --kubeconfig "$KUBECONFIG_FILE" --context "$CON
   --node-selector oce-role=control
 ```
 
-Replace `--node-selector oce-role=control` with the same labels selected by
-`controlPlane.nodeSelector`; repeat the option for multiple labels so preparation
-and initialization can use the same volume topology.
+Replace `--node-selector oce-role=control` with the `controlPlane.nodeSelector`
+labels, one option per label, so preparation and initialization share volume
+topology.
 
 The helper refuses any nonfresh mounted root except `lost+found`, schedules with
 the supplied node selector before storage binds, reports `Prepared bootstrap
@@ -409,15 +416,19 @@ helm upgrade --install oce deploy/helm/openclaw-enterprise \
   --wait --timeout 5m
 ```
 
+For the [published chart](../../../.github/chart-publication.md#pull-and-install),
+authenticate Helm, verify its receipt, then use
+`oci://ghcr.io/openclaw/charts/openclaw-enterprise` with `--version "$OCE_VERSION"`.
+
 Helm owns migration and bootstrap ordering through its initialization hook.
-Readiness covers the API and worker probes. It does not prove authenticated API
-access, Agent deployment, or a model turn.
+Readiness covers the API and worker probes, not authenticated API access, Agent
+deployment, or a model turn.
 
 ## Authenticate to the production API
 
 Retrieve `initial-admin-service-key.json` from the protected bootstrap PVC
-through approved storage access and retain it privately. This example preserves
-existing shell values and creates a separate session copy:
+through approved storage access and retain it privately. This example keeps
+existing shell values and works on a session copy:
 
 ```bash
 export OCC_URL="${OCC_URL:-https://<internal-occ-host>}"
@@ -462,9 +473,6 @@ session copy.
 
 After authentication, follow [Namespace and Agent deployment](production-agents.md),
 including its [model-response check](production-agents.md#verify-production-workloads).
-
-For later releases, follow the
-[production image upgrade](production-upgrade.md).
 
 ## Enable GitHub browser sign-in
 
