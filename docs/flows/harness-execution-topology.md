@@ -32,8 +32,8 @@ graph TD
   C --> D["Claim and reauthorize revision work"]
   D --> E{"Approved topology"}
   E -->|embedded OpenClaw| F["Create gateway or stage replacement"]
-  E -->|dedicated Codex| G["Start control-plane Gateway and data-plane Codex in separate namespaces"]
-  E -->|dedicated OpenClaw| Q{"Provisioning Sandbox with all containment facets?"}
+  E -->|dedicated Codex| G["Start Gateway and Codex in separate namespaces"]
+  E -->|dedicated OpenClaw| Q{"Full-containment provisioning Sandbox?"}
   Q -->|no| H
   Q -->|yes| R["Start Gateway; SandboxDriver provisions native Harness"]
   E -->|unsupported or mismatched| H["Reject before workload creation"]
@@ -67,9 +67,9 @@ primary provider and Harness. It preserves their order in the native configurati
 The admitted revision immutably
 captures its native configuration, approved harness identity/version, explicit mode, Compute
 selection, and Agent ServicePrincipal. Production admits approved
-`openclaw`/`embedded` and `codex`/`dedicated` combinations. It admits
-`openclaw`/`dedicated` only when the selected SandboxDriver implements Harness
-provisioning and declares networking, filesystem, and process containment. An associated
+`openclaw`/`embedded` and `codex`/`dedicated`, and `openclaw`/`dedicated` only when
+the selected SandboxDriver provisions Harnesses with networking, filesystem, and
+process containment. An associated
 `access_token` additionally requires dedicated Codex; the frozen account
 contains only its OCC identity, credential kind, and opaque Secret reference.
 
@@ -82,9 +82,8 @@ approved harness, and calls `ComputeDriver.prepareRevision`.
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.prepareRevision`
 
-Docker's existing topology implementation starts an embedded gateway or dedicated
-Codex container, but it does not support the new harness-auth binding contract;
-unsupported bindings fail before deployment. In the underlying container path,
+Docker starts an embedded gateway or dedicated Codex container but does not
+support the harness-auth binding contract; unsupported bindings fail before deployment. In the underlying container path,
 `dockerGatewayConfigurationDocument` admits only supported authentication
 fields and modes. Omitted
 mode renders password mode. An omitted password or explicit managed reference
@@ -103,8 +102,8 @@ validation. See the [SSH flow](pr-24-ssh-compute.md).
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareRevision`
 
 Kubernetes workload rendering calls `prepareHarnessAuth` once for the resolved
-source. It projects the OCC Secret key into embedded OpenClaw, the dedicated
-OpenClaw Harness, or dedicated Codex. Canonical sources live in CP; Compute delivers selected fields into an
+source. It projects the OCC Secret key only into embedded OpenClaw or a dedicated
+Harness. Canonical sources live in CP; Compute delivers selected fields into an
 exact revision-owned DP Secret, including the account token/workspace for ChatGPT.
 Dedicated gateways receive neither model source. This namespace-local delivery
 also applies to fixture images without native runtime configuration; only the
@@ -136,15 +135,14 @@ not ready until the workspace node is enrolled and observed.
 
 Dedicated Codex and dedicated OpenClaw keep separate Agent-owned Gateway and
 Harness ServiceAccounts. Compute owns the Gateway Pod; the selected SandboxDriver
-owns the dedicated native Harness Pod. The OpenClaw Harness enrolls as a paired node,
-owns its persistent identity and workspace, and is the only workload that
-receives the model key. Its ephemeral provider process reads the one-use
-enrollment target from a private file; later starts reuse the persisted device
-token. Compute writes the enrolled device into a mandatory generated `dedicated-native`
-profile with `inference: "worker"`, so every session uses the Harness. A missing or disconnected Harness
-fails the turn instead of falling back to Gateway inference. Their exact callback
-route and session-bound worker admission keep the transport scoped to the owning
-Agent. Embedded OpenClaw uses one combined workload with its exact Agent identity
+owns the native Harness Pod. The OpenClaw Harness enrolls as a paired node, owns
+its identity and workspace, and alone receives the model key. It reads the
+one-use enrollment target from a private file; later starts reuse the persisted
+device token. Compute pins the enrolled device in a generated `dedicated-native`
+profile with `inference: "worker"`, so a missing or disconnected Harness fails
+the turn rather than using Gateway inference. An exact callback route and
+session-bound worker admission scope the transport to the owning Agent.
+Embedded OpenClaw uses one combined workload with its exact Agent identity
 and model key. The worker
 has scoped Secret permissions for admitted delivery and node enrollment. Its
 trusted workload-writing authority also projects tenant Secrets. Gateway Pods
@@ -180,14 +178,12 @@ preparation pass, or preparing or activating that predecessor, drops the record.
 Old reconciliation and maintenance cannot restart a predecessor after a newer
 exclusive revision is admitted. Both PVCs survive this downtime window; a failed
 candidate is recovered by retry or a new revision, not automatic rollback.
-Dedicated Codex must complete its bounded native authentication/model probe
-before its app-server becomes ready. If the predecessor Gateway cannot serve node enrollment,
+Dedicated Codex and dedicated OpenClaw must complete a bounded native
+authentication/model probe before their Harness becomes ready. If the predecessor Gateway cannot serve node enrollment,
 Kubernetes Compute starts the candidate Gateway during preparation after the candidate Harness is
 otherwise ready, then keeps the revision incomplete until the node setup is redeemed and connected.
 This repair path does not change unrelated Gateways or activate a revision without its exact
 workspace node.
-Dedicated OpenClaw must also complete its bounded native authentication/model probe before its
-Harness becomes ready.
 Embedded preparation does not validate the replacement's credentials. See the
 [authentication flow](native-service-account-credential-delivery.md#5-authenticate-during-runtime-startup).
 
@@ -215,27 +211,24 @@ Forced termination can delay the successor until the persistent owner lease expi
 Kubernetes gateways in both modes mount their own persistent SQLite and media
 directories. Embedded gateways also retain their attested default workspace on
 the same private claim so continued turns survive Pod replacement. Dedicated
-Codex and dedicated OpenClaw receive the Harness-only workspace claim. The
-OpenClaw node identity uses an Agent-scoped subdirectory on that claim, so
-Pod and revision replacement reuse its paired device. The gateway's nested Codex home remains
-ephemeral. The driver creates separate Harness and gateway claims before
+Harnesses receive only the Harness workspace claim, where an Agent-scoped
+subdirectory keeps the node identity across Pod and revision replacement. The
+gateway's nested Codex home remains ephemeral. The driver creates separate Harness and gateway claims before
 their consuming Pods and relies on workload readiness instead of waiting for
 `Bound`, which would deadlock `WaitForFirstConsumer` storage classes. A nonroot
 gateway-image init container prepares private SQLite and media directories
-without credentials or elevated privileges. It also creates a node-owned,
-mode-`0700` subdirectory mounted at `/tmp`, so the fsGroup-writable `emptyDir`
-root never becomes the worker's temp-workspace ancestry.
+without credentials or elevated privileges, plus a node-owned mode-`0700` `/tmp`
+so the fsGroup-writable `emptyDir` root never becomes a worker workspace ancestor.
 
 Each image initializes its own bundled and plugin assets. Workspace-file access
 uses the enrolled Harness node; generated-image bytes return through the remote
-media reader. There are no shared workspace, session, skill, or image mounts
-between gateway and Harness. See the [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage).
-The dedicated OpenClaw node host installs Gateway-issued worker bundles into its
-own state and creates workspaces below `/home/node/workspace`; gateway state,
-`CODEX_HOME`, and gateway credentials stay outside it. A restart republishes
-image-owned runtime assets, then reconnects with the paired identity. Readiness
-waits for the bounded identity check. The compile cache and model-probe state
-stay under bounded writable paths (node state and `TMPDIR`) that a Sandbox Driver can grant.
+media reader. Gateway and Harness share no workspace, session, skill, or image mounts. See the [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage).
+The OpenClaw node host keeps Gateway-issued worker bundles in its own state and
+workspaces below `/home/node/workspace`, away from gateway state, `CODEX_HOME`,
+and credentials. A restart republishes image-owned
+runtime assets and reconnects with the paired identity; readiness waits for the
+bounded identity check. The compile cache and model-probe state stay in node
+state and `TMPDIR`, which a Sandbox Driver can grant.
 
 For a selected Sandbox Driver, stopping or retiring a revision always runs its
 required cleanup after stopping a Compute-owned ordinary Harness, or delegates
@@ -275,8 +268,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
   `OCC_TEST_CHATGPT_ADMIN_KEY_PATH`; this scenario does not use `OPENAI_API_KEY`.
 - Treat unavailable credentials, runtime images, provider access, or either real model response as
   a verification failure. Never substitute a readiness probe, handshake, fixture, or skipped test.
-- An HTTP 401 before worker admission indicates that the callback fell through
-  to the administrative route instead of matching the node-only worker ingress.
+- An HTTP 401 before worker admission means the callback missed the node-only
+  worker ingress and fell through to the administrative route.
 
 ## Related docs
 
