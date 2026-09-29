@@ -299,8 +299,8 @@ invalidation does not prove provider settlement. Retained attempts support
 cleanup after revision deletion.
 
 `ControllerWorker.processAgentDeletion` queues cleanup and retires Compute without
-waiting for sessions. Cleanup Work keeps its revision identity in the idempotency
-key after live owners detach. Under the current claim,
+waiting for sessions. After owner detachment, cleanup Work uses its revision key
+for dispatch and audits. Under the current claim,
 `PostgresWorkQueue.completeAgentDeletion` calls `occ.finalize_agent_deletion` to
 detach attempts, delete live rows and audit deletion atomically. Attempts and cleanup Work survive without fabricated disposal. Sessions block
 neither admission nor completion. Unresolved provisioning effects

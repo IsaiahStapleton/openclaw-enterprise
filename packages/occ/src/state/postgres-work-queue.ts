@@ -378,7 +378,16 @@ const FAIL_EXHAUSTED_NAMESPACES_SQL = `
   )`;
 
 const INSERT_EVIDENCE_CTE_SQL = `
-  evidence AS (
+  evidence_targets AS (
+    SELECT transitioned.*,
+      CASE WHEN ${repositoryCleanupSql("transitioned")} THEN
+        substring(
+          transitioned.idempotency_key
+          from '^agent_revision:(${REVISION_ID_PATTERN}):repository_cleanup:(retire:)?[0-9a-f]{64}$'
+        )
+      END AS repository_cleanup_revision_id
+    FROM transitioned
+  ), evidence AS (
     INSERT INTO occ.audit_events (
       id, occurred_at, kind, actor_id, action, namespace_id,
       resource_kind, resource_id, outcome, details
@@ -391,14 +400,20 @@ const INSERT_EVIDENCE_CTE_SQL = `
       'reconcile',
       transitioned.namespace_id,
       CASE
-        WHEN transitioned.revision_id IS NOT NULL THEN 'agent_revision'
+        WHEN transitioned.revision_id IS NOT NULL
+          OR transitioned.repository_cleanup_revision_id IS NOT NULL THEN 'agent_revision'
         WHEN transitioned.agent_id IS NOT NULL THEN 'agent'
         ELSE 'namespace'
       END,
-      COALESCE(transitioned.revision_id, transitioned.agent_id, transitioned.namespace_id),
+      COALESCE(
+        transitioned.revision_id,
+        transitioned.repository_cleanup_revision_id,
+        transitioned.agent_id,
+        transitioned.namespace_id
+      ),
       $3::text,
       jsonb_build_object('reasonCode', $4::text, 'attemptCount', transitioned.attempt_count)
-    FROM transitioned
+    FROM evidence_targets AS transitioned
     RETURNING id
   )`;
 const INSERT_EVIDENCE_SQL = `${INSERT_EVIDENCE_CTE_SQL}
