@@ -94,6 +94,9 @@
       "path": "tests/integration/presets-controller.test.mjs"
     },
     {
+      "path": "tests/integration/profile-renderer.test.mjs"
+    },
+    {
       "path": "tests/integration/bootstrap-output.test.mjs"
     },
     {

@@ -417,6 +417,10 @@
                     "label": "Private Images"
                   },
                   {
+                    "page": "guides/deploy/installation-profiles",
+                    "label": "Profiles"
+                  },
+                  {
                     "page": "guides/deploy/upgrade-checklist",
                     "label": "Upgrade Checklist"
                   },
@@ -528,7 +532,11 @@
                 ]
               }
             ],
-            "hidden": ["guides/deploy/service-keys", "guides/deploy/local-operations"]
+            "hidden": [
+              "guides/deploy/service-keys",
+              "guides/deploy/local-operations",
+              "flows/installation-profile-rendering"
+            ]
           },
           {
             "tab": "Reference",
