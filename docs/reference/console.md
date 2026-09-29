@@ -47,7 +47,7 @@ The console uses a light appearance and OCC-served fonts.
 
 Returning pages retain content during access checks; controls await authorization.
 Unchanged pages and Agent tabs keep their loaded controls and expanded panels.
-Agent detail keeps its mounted editor and open Slack search during refocus access checks.
+Agent detail refocus checks keep mounted editors, form input, and open Slack search.
 Changed data rebuilds the view. Refresh explicitly reloads; first visits still load.
 Document-local views
 are scoped to account, session, route, and Namespace; sign-out, session changes,

@@ -7,6 +7,7 @@ import {
   PostgresCommitOutcomeUnknownError,
 } from "../../packages/occ/src/state/postgres-state.ts";
 import { DependencyUnavailableError, ScopeViolationError } from "../../packages/occ/src/errors.ts";
+import { requestFailure } from "../../apps/controller/src/http/errors.ts";
 
 // A transport protocol fixture for the actual outer owner, not a SQL database
 // emulator. No repository reads/writes, authentication, custody or PG evidence.
@@ -102,11 +103,33 @@ test("serialization failure at COMMIT rolls back as a definite failure", async (
   });
   await assert.rejects(
     p.state.transact(async () => 1),
-    (error) => error === failure,
+    (error) => error instanceof DependencyUnavailableError && /conflict/.test(error.message),
   );
   assert.deepEqual(p.calls, ["BEGIN", "COMMIT", "ROLLBACK"]);
   assert.equal(discarded, false);
 });
+
+for (const code of ["40P01", "40001"]) {
+  test(`transaction conflict ${code} in a statement is retryable unavailability`, async () => {
+    const p = protocol({
+      query: () => {
+        throw serverError(code);
+      },
+    });
+    const rejection = await p.state
+      .transact(async (unit) => unit.audit.list())
+      .then(
+        () => assert.fail("expected the statement rejection"),
+        (error) => error,
+      );
+    assert.ok(rejection instanceof DependencyUnavailableError);
+    assert.match(rejection.message, /conflict/);
+    assert.deepEqual(p.calls.at(-1), "ROLLBACK");
+    const response = requestFailure(rejection);
+    assert.equal(response.status, 503);
+    assert.equal(response.code, "DEPENDENCY_UNAVAILABLE");
+  });
+}
 
 test("a client error with a server-looking code leaves COMMIT unknown", async () => {
   let discarded;

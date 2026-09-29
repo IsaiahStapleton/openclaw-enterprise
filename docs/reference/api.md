@@ -819,7 +819,7 @@ Issue a service API key
 
 **Operation ID:** `createServiceKey`
 
-**Permissions:** Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope; creates no identity or IAM grant. The plaintext key is returned only here.
+**Permissions:** Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope when the caller already holds every IAM grant of that ServicePrincipal at the same or a broader scope; creates no identity or IAM grant. The plaintext key is returned only here.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -1269,7 +1269,7 @@ Get the configured external observability destination
 | --- | --- |
 | [`GET /namespaces`](#get-namespaces) | List authorized Namespaces |
 | [`POST /namespaces`](#post-namespaces) | Create an Installation-owned Namespace |
-| [`DELETE /namespaces/{namespaceId}`](#delete-namespacesnamespaceid) | Begin deletion of an empty Installation-owned Namespace |
+| [`DELETE /namespaces/{namespaceId}`](#delete-namespacesnamespaceid) | Begin or retry deletion of an empty Installation-owned Namespace |
 | [`GET /namespaces/{namespaceId}`](#get-namespacesnamespaceid) | Get an exact Installation-owned Namespace |
 
 #### `GET /namespaces`
@@ -1369,7 +1369,7 @@ Create an Installation-owned Namespace
 
 <span id="delete-namespacesnamespaceid"></span>
 
-Begin deletion of an empty Installation-owned Namespace
+Begin or retry deletion of an empty Installation-owned Namespace
 
 **Operation ID:** `deleteNamespace`
 

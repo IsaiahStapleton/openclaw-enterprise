@@ -8809,10 +8809,11 @@ test("retirement preserves active storage and node routing and deletes exact own
 
 // These fixtures substitute Kubernetes transport only. Preparation, ownership, private delivery,
 // redaction, readiness, and completed-payload retention run through the production driver.
-function workspaceSetupFixture(embedded, runtime = true) {
+function workspaceSetupFixture(embedded, runtime = true, network = undefined) {
   const state = { ready: false, secretFailure: false, failedInitializer: false };
   const driver = new KubernetesComputeDriver(
     routedOptions({
+      ...(network === undefined ? {} : { network }),
       resources: {
         gateway: {
           requests: { cpu: "200m", memory: "256Mi" },
@@ -9565,6 +9566,63 @@ test("dedicated Harness Service selector satisfies the gateway policy during cut
   await driver.deactivateRevision(successor);
   assert.deepEqual(serviceSelector(), { "app.kubernetes.io/name": `${serviceName}-inactive` });
 });
+
+// Agent-scoped policies have one name per Agent. Preparing a successor must not
+// point them only at its own revision while the predecessor still serves. The
+// worker keeps an embedded predecessor serving; it stops a dedicated one first,
+// but the driver must not depend on that ordering.
+for (const embedded of [true, false]) {
+  test(`${embedded ? "embedded" : "dedicated"} successor preparation keeps the serving predecessor's grants`, async () => {
+    const { driver, revision, namespace, objects, state, context } = workspaceSetupFixture(
+      embedded,
+      true,
+      { pluginStatusProxySourceCidrs: ["192.0.2.20/32"] },
+    );
+    const suffix = digest(revision.agentId);
+    const gatewayNamespace = embedded ? namespace : kubernetesGatewayNamespaceName(tenant.id);
+    const policy = (target, name) => objects.get(`NetworkPolicy:${target}:${name}-${suffix}`);
+    const harnessLabels = (selected) =>
+      objects.get(
+        embedded
+          ? `Deployment:${namespace}:gateway-${suffix}`
+          : `Deployment:${namespace}:agent-${suffix}-rev-${digest(selected.id)}`,
+      ).spec.template.metadata.labels;
+    const grants = () =>
+      embedded
+        ? [policy(namespace, "allow-plugin-status-proxy").spec.podSelector]
+        : [
+            policy(gatewayNamespace, "allow-gateway-agent").spec.egress[0].to[0].podSelector,
+            policy(namespace, "allow-agent-runtime").spec.podSelector,
+            policy(namespace, "allow-plugin-status-proxy").spec.podSelector,
+          ];
+    state.ready = true;
+    assert.equal(await prepareUntilReady(driver, revision, context), 1);
+    await driver.activateRevision(revision, context);
+    const predecessor = structuredClone(harnessLabels(revision));
+    assert.equal(predecessor["openclaw.dev/revision"], revision.id);
+
+    const successor = { ...revision, id: "grant-successor", revision: revision.revision + 1 };
+    const successorContext = { ...context, ...authContext(successor) };
+    assert.equal(await prepareUntilReady(driver, successor, successorContext), 1);
+    for (const selector of grants()) {
+      assert.equal(selectorMatches(selector, predecessor), true, JSON.stringify(selector));
+      assert.equal(
+        selectorMatches(selector, { ...predecessor, "openclaw.dev/agent": "another" }),
+        false,
+      );
+      if (!embedded) {
+        assert.equal(selectorMatches(selector, harnessLabels(successor)), true);
+      }
+    }
+
+    // Activation pins the grants to the revision that now serves.
+    await driver.activateRevision(successor, successorContext);
+    for (const selector of grants()) {
+      assert.equal(selectorMatches(selector, predecessor), false, JSON.stringify(selector));
+      assert.equal(selectorMatches(selector, harnessLabels(successor)), true);
+    }
+  });
+}
 
 test("dedicated Harness deactivation still closes pre-upgrade Service selectors", async () => {
   const fixture = workspaceSetupFixture(false);

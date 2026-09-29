@@ -106,8 +106,9 @@ work unchanged. The initiating actor can retry terminal failure after correcting
 its cause. OCC checks current delete permission, then calls
 `operations.retryFailedAgentDeletion` and appends the retry audit atomically.
 Only the exact stopped, deleting Agent's terminal work is reset; identity and
-prior audits remain. The worker reauthorizes normally. Namespace deletion is
-outside this recovery path.
+prior audits remain. The worker reauthorizes normally.
+`deleteNamespace` recovers Namespace teardown via
+`retryFailedNamespaceDeletion`.
 
 ### 3. Recover expired claims and claim one eligible operation
 

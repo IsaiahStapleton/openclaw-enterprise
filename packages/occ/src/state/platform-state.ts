@@ -619,6 +619,7 @@ export interface PlatformOperationReadRepository {
 export interface PlatformOperationRepository extends PlatformOperationReadRepository {
   append(operation: PlatformOperation): Promise<void>;
   retryFailedAgentDeletion(namespaceId: string, agentId: string, actorId: string): Promise<boolean>;
+  retryFailedNamespaceDeletion(namespaceId: string, actorId: string): Promise<boolean>;
 }
 
 export type { AgentProvisioningRecord } from "./agent-provisioning.ts";
@@ -2324,6 +2325,7 @@ function repositories(
         Object.freeze(snapshot.operations.map((operation) => immutableCopy(operation))),
       // The in-memory operation log has no executing or terminal work records.
       retryFailedAgentDeletion: async () => false,
+      retryFailedNamespaceDeletion: async () => false,
       findWorkAttempt: async () => undefined,
       findWork: async (idempotencyKey) => {
         const operation = snapshot.operations.find(
