@@ -117,6 +117,7 @@ test(
     const paths = [
       "tests/conformance/workspace-node-supervisor.test.mjs",
       "apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts",
+      "apps/controller/src/drivers/compute/node-program.ts",
       "apps/controller/src/drivers/plugin/runtime-translator.ts",
     ];
     const files = await Promise.all(
