@@ -1016,13 +1016,14 @@ function portableRuntimeCommand(command) {
   const programIndex = inlineNodeProgramIndex(command);
   const runtimeArguments = command.slice(programIndex);
   const nodeProgramLoader = nodeProgramArguments("")[0];
-  if (runtimeArguments[0] === nodeProgramLoader) {
+  if (runtimeArguments[0].endsWith(nodeProgramLoader)) {
     // Compute already compressed the program behind this fixed loader. Preserve that contract
-    // while splitting its concatenated payload below OpenShell's smaller argument limit.
+    // and the bridge's credential bootstrap while splitting the concatenated payload below
+    // OpenShell's smaller argument limit.
     const payload = runtimeArguments.slice(1).join("");
     return [
       ...command.slice(0, programIndex),
-      nodeProgramLoader,
+      runtimeArguments[0],
       ...portableProgramPieces(payload),
     ];
   }
