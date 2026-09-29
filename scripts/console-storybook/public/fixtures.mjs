@@ -12,6 +12,13 @@ const candidateRevisionId = "rev_00000000-0000-4000-8000-000000000007";
 const secretRef = (id) => ({ kind: "secret", namespaceId, id });
 const auth = { method: "api_key", source: secretRef("sec_demo_model") };
 
+function initialDeploymentProgress(status) {
+  if (status !== "queued" && status !== "running") {
+    return null;
+  }
+  return { lastAttempt: null, nextAttemptAt: status === "queued" ? createdAt : null };
+}
+
 function slackChannels(scenario) {
   if (scenario.slackChannels !== undefined) {
     return structuredClone(scenario.slackChannels);
@@ -30,6 +37,11 @@ function configurationValues(scenario) {
     agents: { defaults: { model: "codex/gpt-4.1" } },
     channels: {},
   };
+  if (scenario.gatewayPassword) {
+    values.gateway.auth = {
+      password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+    };
+  }
   if (scenario.slack) {
     values.channels.slack = {
       enabled: true,
@@ -245,6 +257,7 @@ export function installFixture(scenario, evidence) {
       namespaceId,
       agentId: agent.id,
       status: "succeeded",
+      progress: null,
       error: null,
       warnings: [],
     });
@@ -257,6 +270,13 @@ export function installFixture(scenario, evidence) {
         namespaceId,
         agentId: agent.id,
         status: scenario.candidateDeploymentStatus,
+        progress: ["queued", "running"].includes(scenario.candidateDeploymentStatus)
+          ? {
+              lastAttempt: scenario.deploymentLastAttempt ?? null,
+              nextAttemptAt:
+                scenario.candidateDeploymentStatus === "queued" ? "2026-09-26T22:53:01.000Z" : null,
+            }
+          : null,
         error:
           scenario.candidateDeploymentStatus === "failed"
             ? scenario.candidateSelected
@@ -290,6 +310,30 @@ export function installFixture(scenario, evidence) {
       id: "agt_00000000-0000-4000-8000-000000000002",
       name: "Documentation assistant",
       activeRevisionId: null,
+    });
+  }
+  if (scenario.unreadableAgentConfiguration) {
+    for (const field of ["harnessAuth", "plugins", "pluginApprovers", "repositoryBindings"]) {
+      delete agent[field];
+    }
+    agent.configurationReadError = {
+      code: "SAVED_CONFIGURATION_UNREADABLE",
+      field: scenario.unreadableAgentConfiguration,
+    };
+  }
+  if (scenario.unreadableRevisionConfiguration) {
+    const saved = revisions.get(selectedRevisionId);
+    revisions.set(saved.id, {
+      id: saved.id,
+      namespaceId: saved.namespaceId,
+      agentId: saved.agentId,
+      revision: saved.revision,
+      backendId: saved.backendId,
+      createdAt: saved.createdAt,
+      configurationReadError: {
+        code: "SAVED_CONFIGURATION_UNREADABLE",
+        field: scenario.unreadableRevisionConfiguration,
+      },
     });
   }
   const preset = {
@@ -645,9 +689,13 @@ export function installFixture(scenario, evidence) {
           deploymentId: revision.id,
           namespaceId,
           agentId: saved.id,
-          status: "queued",
-          reads: 0,
-          error: null,
+          status: scenario.provisionedDeploymentStatus ?? "queued",
+          progress: initialDeploymentProgress(scenario.provisionedDeploymentStatus ?? "queued"),
+          reads: scenario.provisionedDeploymentStatus === undefined ? 0 : undefined,
+          error:
+            scenario.provisionedDeploymentStatus === "failed"
+              ? { code: "DEPENDENCY_UNAVAILABLE", message: "Deployment reconciliation failed." }
+              : null,
           warnings: [],
         });
         provisioning.set(saved.id, {
@@ -814,6 +862,7 @@ export function installFixture(scenario, evidence) {
             namespaceId,
             agentId: id,
             status: "queued",
+            progress: initialDeploymentProgress("queued"),
             reads: 0,
             error: null,
             warnings: [],
@@ -893,10 +942,12 @@ export function installFixture(scenario, evidence) {
           }
           if (deployment.reads !== undefined && ++deployment.reads > 1) {
             deployment.status = "succeeded";
+            deployment.progress = null;
             saved.desiredRuntimeState = "running";
             saved.activeRevisionId = deployment.deploymentId;
           }
-          return response(deployment);
+          const { reads: _reads, ...status } = deployment;
+          return response(status);
         }
         if (suffix.startsWith("/workspace/files/")) {
           const filename = decodeURIComponent(suffix.split("/").at(-1));

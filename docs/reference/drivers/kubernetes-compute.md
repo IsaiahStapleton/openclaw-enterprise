@@ -163,7 +163,7 @@ drivers:
         gatewayNodeSelector: { oce-role: control-plane }
         transportSecretPrefix: openclaw-agent-transport
         # Optional; first install this reviewed profile on every eligible node.
-        codexSeccompProfile: profiles/codex-0.156.0.json
+        codexSeccompProfile: profiles/codex-0.158.0.json
 ```
 
 This example shows only the Compute Driver portion of the Installation
@@ -323,8 +323,11 @@ for additional execution details.
   readiness marker at process start so a marker left in the Pod's temporary
   volume by a previous container attempt cannot make a restarted runtime ready.
   Access-token login retries only native process timeouts, up to three 30-second
-  attempts. Credential refusals and model probes are not retried; exhausted
-  startup remains unready until an explicit restart.
+  attempts. The dedicated Codex model probe separately retries a confirmed timeout
+  once within a 61-second budget; refusals are not retried. Exhausted startup
+  remains unready until an explicit restart. See the
+  [authentication probe contract](../harness-execution.md#harness-authentication)
+  for retry limits and sanitized attempt logs.
   Native plugin startup, authentication, transport, and installation failures
   remain generic workload startup failures unless the Compute-owned runtime
   reports a verified current-startup warning for an admitted selected plugin.

@@ -36,6 +36,8 @@ import {
   CredentialSourceResponse,
   occApiRoutes,
   type Agent,
+  type AgentRead,
+  type AgentRevisionRead,
   type ProvisionAgentBody,
   type AgentRevision,
   type AgentRuntimeCredentialsBody,
@@ -803,7 +805,10 @@ function clientInstallation(
   };
 }
 
-function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
+function clientAgent(agent: Readonly<AgentRead>): Record<string, unknown> {
+  if ("configurationReadError" in agent) {
+    return { ...agent };
+  }
   return {
     id: agent.id,
     namespaceId: agent.namespaceId,
@@ -849,7 +854,10 @@ function clientAgentProvisioning(
   };
 }
 
-function clientRevision(revision: Readonly<AgentRevision>): Record<string, unknown> {
+function clientRevision(revision: Readonly<AgentRevisionRead>): Record<string, unknown> {
+  if ("configurationReadError" in revision) {
+    return { ...revision };
+  }
   return {
     id: revision.id,
     namespaceId: revision.namespaceId,
@@ -893,6 +901,7 @@ function clientDeploymentStatus(status: Readonly<DeploymentStatusResult>): Recor
     status: status.status,
     error: status.error,
     warnings: status.warnings,
+    progress: status.progress,
   };
 }
 
@@ -2220,8 +2229,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           "Workspace defaults changed. Reload the create form before submitting.",
         );
       }
-      const result = await controller.transact(async (unit) => {
-        const provisioned = await controller!.provisionAgent(context.actorId, {
+      const provisioned = await controller.provisionAgent(
+        context.actorId,
+        {
           requestId: provisionBody.requestId,
           namespaceId,
           name: provisionBody.name,
@@ -2257,8 +2267,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 repositoryBindings:
                   provisionBody.repositoryBindings as readonly RepositoryBindingRequest[],
               }),
-        });
-        await unit.audit.append(
+        },
+        (provisioned) =>
           event(
             operation,
             request,
@@ -2270,11 +2280,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             "mutation",
             context,
           ),
-        );
-        return {
-          provisioning: clientAgentProvisioning(provisioned.provisioning, namespaceId),
-        };
-      });
+      );
+      const result = {
+        provisioning: clientAgentProvisioning(provisioned.provisioning, namespaceId),
+      };
       reply.status(202).send({ data: result, meta: { requestId: request.id } });
       return;
     }
@@ -2428,7 +2437,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
     if (operation.operationId === "getAgent") {
       reply.send({
-        data: clientAgent(await controller.getAgent(context.actorId, namespaceId, agentId)),
+        data: clientAgent(
+          await controller.getAgentForBrowsing(context.actorId, namespaceId, agentId),
+        ),
         meta: { requestId: request.id },
       });
       return;
@@ -2536,13 +2547,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     if (operation.operationId === "deployAgent") {
       try {
-        const revision = await controller.transact(async (unit) => {
-          const admitted = await controller!.deployAgentWithAuthorization(
-            context.actorId,
-            { namespaceId, agentId },
-            options.resolveHarness,
-          );
-          await unit.audit.append(
+        const admitted = await controller.deployAgentWithAuthorization(
+          context.actorId,
+          { namespaceId, agentId },
+          options.resolveHarness,
+          (admitted) =>
             event(
               operation,
               request,
@@ -2554,9 +2563,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               undefined,
               admitted.authorization,
             ),
-          );
-          return clientRevision(admitted.revision);
-        });
+        );
+        const revision = clientRevision(admitted.revision);
         reply.status(202).send({ data: revision, meta: { requestId: request.id } });
         return;
       } catch (error) {
@@ -2794,7 +2802,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
 
     if (operation.operationId === "getAgentRevision") {
-      const revision = await controller.getRevision(
+      const revision = await controller.getRevisionForBrowsing(
         context.actorId,
         namespaceId,
         agentId,

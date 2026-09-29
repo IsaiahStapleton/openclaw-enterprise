@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
-updated: 2026-09-27
-last_updated_session: 01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-09-28
+last_updated_session: authoring-run/1b67a5da-eea7-4eb4-a91f-38abd1fb5792
 ---
 
 # Agent Workspace Files Flow
@@ -178,21 +178,20 @@ prove readiness.
 
 `kubernetes/index.ts:reconcileGatewayRoute` provisions operator routing and a
 separate exact `/node` HTTPRoute and SecurityPolicy for dedicated runtimes.
-Only operator routing allows native admin UI subpaths. Both strip authorization
-and cookies; node routing also strips administrative identity headers, relying
-on native device authentication instead of OCC's key.
-Preparation creates or repairs the node route under the serving revision;
-activation transfers ownership after replacing Gateway. This allows enrollment
-before candidate activation. Stop and retirement remove the exact revision's
-endpoint before its policy, checking ownership and UID. See the
+Only operator routes allow native admin UI subpaths. Both strip authorization
+and cookies; node routes also strip administrative identity headers and use
+native device authentication.
+Preparation repairs the serving revision's node route before candidate activation.
+Activation transfers ownership after replacing Gateway. Stop and retirement check
+ownership and UID, then remove that revision's endpoint before its policy. See the
 [node endpoint contract](../reference/gateway-routing.md#native-node-endpoint).
 
-Dedicated runtimes require routing and enrollment wiring before Kubernetes access.
-`prepareWorkspaceNode` uses
+`prepareWorkspaceNode` calls
 `gateway/node-enrollment-client.ts:createGatewayNodeEnrollment` after Gateway
-readiness. A revision-owned Secret holds the setup code, then the device ID.
-The next reconciliation attaches the node to the Harness; its Deployment uses
-`Recreate` throughout enrollment.
+readiness. A revision-owned Secret retains the setup code and device ID.
+Reconciliation attaches the node through a `Recreate` Harness deployment.
+Replacing the Harness restarts its Gateway; `prepareRevision` keeps deployment
+pending until that Gateway is ready, then queries enrollment.
 
 - Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
   `dir.list`, `workspace.memory`, and `workspace.skills`. Gateway admits these
@@ -318,6 +317,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 21:47: Defer enrollment checks until Gateway readiness. (authoring-run/1b67a5da-eea7-4eb4-a91f-38abd1fb5792 - 1365d9b33eec2de2452bd3142f57a1729cccd559)
 
 - 2026-09-27 05:17: Give native workspace initialization the Gateway resource budget. (01a0cf72-6985-7712-ba92-d8cc32470f24 - c0f792d5b92e2dee596711654784759d327e0817)
 

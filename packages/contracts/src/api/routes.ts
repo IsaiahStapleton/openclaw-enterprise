@@ -57,8 +57,10 @@ import {
   AgentRuntimeCredentialResponse,
   AgentRuntimeImagesResponse,
   AgentResponse,
+  AgentReadResponse,
   AgentRevisionListResponse,
   AgentRevisionResponse,
+  AgentRevisionReadResponse,
   ConfigurationResponse,
   IAMAccessBindingListResponse,
   IAMAccessBindingResponse,
@@ -1022,7 +1024,7 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       params: AgentParams,
-      response: { 200: AgentResponse, ...readErrors },
+      response: { 200: AgentReadResponse, ...readErrors },
     },
   },
   {
@@ -1065,7 +1067,7 @@ export const occApiRoutes = [
     iamAction: "delete",
     resourceKind: "agent",
     authorizationTarget: "agent",
-    summary: "Begin deletion of an exact Namespace-owned Agent and its AgentRevisions",
+    summary: "Begin or retry deletion of an exact Namespace-owned Agent and its AgentRevisions",
     tags: ["Agents"],
     schema: {
       querystring: EmptyQuery,
@@ -1223,7 +1225,7 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       params: RevisionParams,
-      response: { 200: AgentRevisionResponse, ...readErrors },
+      response: { 200: AgentRevisionReadResponse, ...readErrors },
     },
   },
   {

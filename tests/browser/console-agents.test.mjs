@@ -1574,7 +1574,7 @@ test("Agent repository recovery with empty current policy requires an explicit n
   );
 });
 
-test("Dedicated Agent creation provisions inline Configuration and masked new Secrets", async (t) => {
+test("Dedicated Agent creation opens deployment details after provisioning with masked new Secrets", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Provisioned create", { ready: true });
@@ -1585,7 +1585,7 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   const revisionId = "rev_00000000-0000-4000-8000-00000000feed";
   let allowProvisioningSuccess = false;
   let provisioningReads = 0;
-  let deploymentReads = 0;
+  let deploymentStatus = "queued";
   let provisionBody;
   const savedSecrets = new Map();
   await routeInstallationProvisioning(page, fixture);
@@ -1620,7 +1620,7 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
     },
     servicePrincipalId: "identity_provisioned_agent",
     createdAt: new Date().toISOString(),
-    activeRevisionId: revisionId,
+    activeRevisionId: null,
   };
   const revision = {
     id: revisionId,
@@ -1725,13 +1725,15 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   await page.route(
     `**/namespaces/${namespace.id}/agents/${agentId}/deployments/${revisionId}`,
     async (route) => {
-      deploymentReads += 1;
       await route.fulfill(
         json({
           deploymentId: `dep_${revisionId}`,
           revisionId,
-          status: deploymentReads > 1 ? "succeeded" : "queued",
-          error: null,
+          status: deploymentStatus,
+          error:
+            deploymentStatus === "failed"
+              ? { code: "DEPENDENCY_UNAVAILABLE", message: "Deployment reconciliation failed." }
+              : null,
         }),
       );
     },
@@ -1828,9 +1830,19 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
       url.pathname === `/console/agents/${agentId}` &&
       url.searchParams.get("namespace") === namespace.id &&
       url.searchParams.get("revision") === revisionId &&
-      url.searchParams.get("tab") === "workspace"
+      url.searchParams.get("tab") === "configuration"
     );
   });
+  // Creation must hand off to the detail page while deployment is still queued.
+  const deploymentPanel = page.locator(".deployment-status");
+  await deploymentPanel.getByText("Recorded status: queued", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Create Agent", exact: true }).count(), 0);
+  deploymentStatus = "failed";
+  await deploymentPanel.getByRole("button", { name: "Refresh deployment", exact: true }).click();
+  await deploymentPanel.getByText("Recorded status: failed", { exact: true }).waitFor();
+  await deploymentPanel
+    .getByText("DEPENDENCY_UNAVAILABLE: Deployment reconciliation failed.", { exact: true })
+    .waitFor();
 
   assert.match(provisionBody.requestId, /^req_[0-9a-f-]{36}$/);
   assert.equal(provisionBody.name, agent.name);
@@ -1882,7 +1894,6 @@ test("Dedicated Agent creation provisions inline Configuration and masked new Se
   assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
   assert.equal(agentPostRequests(requests, namespace.id).length, 0);
   assert.ok(provisioningReads >= 1);
-  assert.ok(deploymentReads >= 2);
 });
 
 test("Dedicated Agent creation keeps provisioning when optional repository discovery is unavailable", async (t) => {
@@ -2315,7 +2326,7 @@ test("Dedicated Agent creation reuses separately saved Secret references after p
       url.pathname === `/console/agents/${agentId}` &&
       url.searchParams.get("namespace") === namespace.id &&
       url.searchParams.get("revision") === revisionId &&
-      url.searchParams.get("tab") === "workspace"
+      url.searchParams.get("tab") === "configuration"
     );
   });
   assert.equal(bodies.length, 2);
@@ -3305,6 +3316,7 @@ test("Agent detail separates the current version, viewed version, and latest dep
   const requests = apiRequests(page, fixture.origin);
   // The in-memory API fixture has no worker records. Supply contract-shaped status
   // reads to prove the UI keeps each version's outcome tied to its exact ID.
+  let pendingProgress = { lastAttempt: null, nextAttemptAt: "2026-09-27T12:00:00.000Z" };
   for (const [revisionId, status] of [
     [current.revision.id, "succeeded"],
     [pending.id, "queued"],
@@ -3323,6 +3335,7 @@ test("Agent detail separates the current version, viewed version, and latest dep
               status,
               error: null,
               warnings: [],
+              progress: status === "queued" ? pendingProgress : null,
             },
             meta: { requestId: "req_test_deployment_activity" },
           }),
@@ -3368,6 +3381,22 @@ test("Agent detail separates the current version, viewed version, and latest dep
   await activity.getByText("Most recent visible deployment · v2").waitFor();
   await activity.getByText("Recorded status: queued").waitFor();
   await activity.getByText("Waiting for a worker claim.").waitFor();
+  await activity.getByText("No reconciliation result is available yet.").waitFor();
+  // Simulate a subsequent status read. Persistence and attribution are proved
+  // separately by the PostgreSQL queue/worker test, not by this browser fixture.
+  pendingProgress = {
+    lastAttempt: {
+      at: "2026-09-27T12:01:00.000Z",
+      code: "REVISION_INCOMPLETE",
+      message: "Waiting for the runtime to become ready.",
+    },
+    nextAttemptAt: "2026-09-27T12:01:01.000Z",
+  };
+  await activity.getByRole("button", { name: "Refresh deployment" }).click();
+  await activity.getByText("Waiting to continue deployment.").waitFor();
+  await activity.getByText("Waiting for the runtime to become ready.").waitFor();
+  await activity.getByText("Last checked", { exact: true }).waitFor();
+  assert.equal(await activity.getByText("Waiting for a worker claim.").count(), 0);
   await activity.getByText("Successful completion is not recorded yet.").waitFor();
   const versionRecord = page.locator(".version-deployment-record");
   await versionRecord.getByRole("heading", { name: "This version’s deployment record" }).waitFor();
@@ -3447,6 +3476,246 @@ test("Agent detail separates the current version, viewed version, and latest dep
     .getByText("Deployment work failed; check the recorded error and current version.")
     .waitFor();
   await activity.getByText("Successful completion was not recorded for this deployment.").waitFor();
+});
+
+for (const unreadable of ["draft", "revision"]) {
+  test(`Agent browsing isolates an unreadable ${unreadable} from other saved settings`, async (t) => {
+    const fixture = await createConsoleAppFixture(t);
+    await fixture.bootstrap();
+    const namespace = await fixture.createNamespace("Unreadable saved settings", { ready: true });
+    const agent = await fixture.createAgent(namespace.id, "Affected Agent", nativeValues("saved"));
+    await fixture.createAgent(namespace.id, "Healthy Agent", nativeValues("healthy"));
+    const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+    const { page } = await newPage(t, fixture);
+    const requests = apiRequests(page, fixture.origin);
+    const agentsPath = `/namespaces/${namespace.id}/agents`;
+    const agentPath = `${agentsPath}/${agent.id}`;
+    const revisionsPath = `${agentPath}/revisions`;
+    const revisionPath = `${revisionsPath}/${revision.id}`;
+    const degradedId = unreadable === "draft" ? agent.id : revision.id;
+    const metadataFields =
+      unreadable === "draft"
+        ? [
+            "id",
+            "namespaceId",
+            "name",
+            "configurationId",
+            "backendId",
+            "executionMode",
+            "servicePrincipalId",
+            "activeRevisionId",
+            "desiredRuntimeState",
+            "status",
+            "createdAt",
+          ]
+        : ["id", "namespaceId", "agentId", "revision", "backendId", "createdAt"];
+    function unreadableProjection(value) {
+      return value.id === degradedId
+        ? {
+            ...Object.fromEntries(
+              metadataFields
+                .filter((field) => Object.hasOwn(value, field))
+                .map((field) => [field, value[field]]),
+            ),
+            configurationReadError: { code: "SAVED_CONFIGURATION_UNREADABLE", field: "plugins" },
+          }
+        : value;
+    }
+    // The real authorized response supplies the metadata. This simulates only the
+    // supported degraded wire shape; PostgreSQL tests own the decode-failure proof.
+    for (const path of unreadable === "draft"
+      ? [agentsPath, agentPath]
+      : [revisionsPath, revisionPath]) {
+      await page.route(`${fixture.origin}${path}`, async (route) => {
+        const response = await route.fetch();
+        const payload = await response.json();
+        payload.data = Array.isArray(payload.data)
+          ? payload.data.map(unreadableProjection)
+          : unreadableProjection(payload.data);
+        await route.fulfill({ response, json: payload });
+      });
+    }
+
+    await login(page, fixture, `/console/agents?namespace=${namespace.id}`);
+    await page.getByRole("link", { name: "Healthy Agent", exact: true }).waitFor();
+    const row = page
+      .getByRole("row")
+      .filter({ has: page.getByRole("link", { name: "Affected Agent", exact: true }) });
+    assert.equal(
+      await row.getByText("Saved configuration unreadable", { exact: true }).count(),
+      unreadable === "draft" ? 1 : 0,
+    );
+    await row.getByRole("link", { name: "Affected Agent", exact: true }).click();
+    await page.getByRole("heading", { name: "Affected Agent", exact: true }).waitFor();
+    await page
+      .getByRole("button", { name: "View version v1, current version", exact: true })
+      .waitFor();
+    if (unreadable === "draft") {
+      await page.getByRole("heading", { name: "Configuration snapshot", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Edit current Configuration", exact: true }).click();
+    }
+    await page
+      .getByRole("heading", { name: "Saved configuration unreadable", exact: true })
+      .waitFor();
+    const tabs = [
+      "Configuration",
+      "Plugins",
+      "Channels",
+      ...(unreadable === "draft" ? ["Credentials"] : []),
+    ];
+    for (const tab of tabs) {
+      await page.getByRole("button", { name: tab, exact: true }).click();
+      await page
+        .getByRole("heading", { name: "Saved configuration unreadable", exact: true })
+        .waitFor();
+      await page.getByText(/Saved plugin selections could not be read/).waitFor();
+      for (const name of [
+        "Deploy new version",
+        "Edit Configuration",
+        "Save plugin selections",
+        "Save authentication source",
+      ]) {
+        assert.equal(await page.getByRole("button", { name, exact: true }).count(), 0);
+      }
+    }
+    if (unreadable === "draft") {
+      assert.equal(
+        pathRequests(
+          requests,
+          "GET",
+          `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+        ).length,
+        0,
+      );
+      await page
+        .getByRole("button", { name: "View version v1, current version", exact: true })
+        .click();
+      await page.getByRole("heading", { name: "Configuration snapshot", exact: true }).waitFor();
+    } else {
+      await page.getByRole("button", { name: "Create new version", exact: true }).first().click();
+      await page.getByRole("button", { name: "Edit Configuration", exact: true }).waitFor();
+    }
+    assert.equal(
+      await page
+        .getByRole("heading", { name: "Saved configuration unreadable", exact: true })
+        .count(),
+      0,
+    );
+    assert.deepEqual(nonAuthWriteRequests(requests), []);
+  });
+}
+
+test("Configuration save stops when fresh Agent settings become unreadable", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Unreadable during edit", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Editing Agent", nativeValues("saved"));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("button", { name: "Edit Configuration", exact: true }).click();
+  await page
+    .getByLabel("Configuration JSON", { exact: true })
+    .fill(JSON.stringify(nativeValues("changed")));
+
+  // A saved Agent can become unreadable after the editor opens. The independent
+  // Configuration PATCH must not proceed using the stale Agent draft.
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}`,
+    async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      for (const field of ["harnessAuth", "plugins", "pluginApprovers", "repositoryBindings"]) {
+        delete payload.data[field];
+      }
+      payload.data.configurationReadError = {
+        code: "SAVED_CONFIGURATION_UNREADABLE",
+        field: "plugins",
+      };
+      await route.fulfill({ response, json: payload });
+    },
+  );
+  await page.getByRole("button", { name: "Save Configuration", exact: true }).click();
+  await page.getByText(/Saved plugin selections could not be read/).waitFor();
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  const saved = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.deepEqual(saved.data.values, nativeValues("saved"));
+});
+
+test("Gateway password access saves the generated reference without changing admitted versions or Secret bindings", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "occ-gateway-password-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = await createConsoleAppFixture(t, {
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Gateway password", { ready: true });
+  const values = nativeAdminValues("gateway-password", "http://127.0.0.1:18789");
+  values.gateway.auth.rateLimit = { maxAttempts: 5 };
+  const agent = await fixture.createAgent(namespace.id, "Gateway password Agent", values);
+  const first = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const secret = await fixture.createSecret(namespace.id, "External API token", "fixture-token");
+  const secretBindings = {
+    EXTERNAL_API_TOKEN: { source: secret.ref, delivery: { type: "env" } },
+  };
+  await fixture.updateConfiguration(namespace.id, agent.configurationId, values, {
+    secretBindings,
+  });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  requests.length = 0;
+  const enable = page.getByRole("button", { name: "Enable Gateway password access", exact: true });
+  await enable.click();
+  const expected = structuredClone(values);
+  expected.gateway.auth.password = {
+    source: "env",
+    provider: "default",
+    id: "OPENCLAW_GATEWAY_PASSWORD",
+  };
+  assert.deepEqual(JSON.parse(await page.getByLabel("Configuration JSON").inputValue()), expected);
+  assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), true);
+  assert.deepEqual(configurationPatchRequests(requests, namespace.id, agent.configurationId), []);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await enable.click();
+  const saved = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      response.url().endsWith(`/configurations/${agent.configurationId}`),
+  );
+  await page.getByRole("button", { name: "Save Configuration", exact: true }).click();
+  assert.equal((await saved).status(), 200);
+  await page
+    .getByText(
+      "Gateway password access is enabled in the saved Configuration. Deploy a new version to apply it.",
+    )
+    .waitFor();
+  assert.equal(await enable.count(), 0);
+  const current = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.deepEqual(current.data.values, expected);
+  assert.deepEqual(current.data.secretBindings, secretBindings);
+  const unchanged = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/revisions/${first.revision.id}`,
+  );
+  assert.deepEqual(unchanged.data.configuration, first.revision.configuration);
+  assert.equal(
+    (await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`)).data
+      .activeRevisionId,
+    first.revision.id,
+  );
+  assert.equal(nonAuthWriteRequests(requests).length, 1);
+  await page.getByLabel("Available versions").selectOption(first.revision.id);
+  await page.getByRole("button", { name: "Edit current Configuration", exact: true }).waitFor();
+  assert.equal(await enable.count(), 0);
 });
 
 test("Agent detail preserves admitted revision history while draft edits change current configuration", async (t) => {
@@ -7863,10 +8132,16 @@ test("unsaved Preset drafts retain unfinished edits across navigation until expl
     unfinished,
   );
   assert.equal(await page.getByLabel("USER.md", { exact: true }).inputValue(), "");
-  // Navigation clears the transient password and returns to explicit Secret selection.
-  await page.getByLabel("API key Secret", { exact: true }).waitFor();
-  assert.equal(await page.getByLabel("API key Secret", { exact: true }).inputValue(), "");
+  // Navigation clears the transient password and requires a fresh Secret selection.
   assert.equal(await page.locator("#provider-api-key").inputValue(), "");
+  const credentialSecret = page.getByLabel("API key Secret", { exact: true });
+  await credentialSecret.waitFor();
+  await page.waitForFunction(() => {
+    const select = globalThis.document.querySelector("#provider-credential-secret");
+    return select && !select.disabled && select.required;
+  });
+  assert.equal(await credentialSecret.inputValue(), "");
+  assert.equal(await credentialSecret.evaluate((select) => select.validity.valueMissing), true);
   assert.deepEqual(
     await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } })),
     { local: {}, session: {} },

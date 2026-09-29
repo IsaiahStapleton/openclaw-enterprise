@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
 updated: 2026-09-28
-last_updated_session: authoring-run/c43b309b-ac83-4ece-ba43-85dc673d5342
+last_updated_session: 01a0eb85-73a8-7572-92a9-a6a06fbdf0a5
 ---
 
 # Controller Worker Flow
@@ -49,6 +49,7 @@ graph TD
         I -->|invalid or exhausted| H
         K --> D
         L --> D
+        H -->|"Initiating caller repeats Agent DELETE"| A
     end
 ```
 
@@ -59,25 +60,21 @@ graph TD
 `apps/controller/src/worker.mjs:configuration`,
 `apps/controller/src/worker.ts:ControllerWorker.start`
 
-The [entrypoint](../../apps/controller/src/worker.mjs) validates mode, PostgreSQL
-URL, and positive timings; removes old readiness; loads trusted configuration;
-and constructs `ControllerWorker` with its application-role pool.
-Development without `OCC_CONFIG_PATH` selects and preflights the Docker Compute
-Driver. Production requires explicit startup configuration.
+The [entrypoint](../../apps/controller/src/worker.mjs) validates configuration,
+removes stale readiness, and constructs `ControllerWorker` with an
+application-role pool. Development without `OCC_CONFIG_PATH` preflights Docker;
+production requires explicit configuration.
 
-`start()` loads the bootstrapped Installation, validates persisted native IAM
-state, and attaches selected Configuration, Sandbox, and IAM lifecycle hooks to
-Compute. Shared composition supplies the optional Sandbox Driver to the bundled
-Kubernetes Compute Driver. Selected hooks require `setLifecycleDrivers`; an
-invalid or unavailable capability stops startup. Production runs Compute
-preflight before emitting `worker.started` and starting `run()`.
+`start()` loads the bootstrapped Installation, validates native IAM, and attaches
+selected Configuration, Sandbox, and IAM hooks to Compute. Shared composition
+supplies Kubernetes Compute's optional Sandbox Driver. Selected hooks require
+`setLifecycleDrivers`; unsupported capabilities stop startup. Production runs
+Compute preflight before emitting `worker.started` and entering `run()`.
 
-The worker has no resource API. Its private metrics listener uses one read-only
-connection. Concurrent scrapes share
+Metrics scrapes share one read-only connection and
 `packages/occ/src/state/postgres-metrics.ts:PostgresMetricsSnapshot.collect`
-for persisted lifecycle, backlog depth, and oldest age. It distinguishes stopped
-from draft Agents without runtime probes. Metrics follow finalization
-independently of logging; see the [metrics contract](../reference/metrics.md).
+for lifecycle and backlog observations without runtime probes. Metrics follow
+finalization independently of logging; see the [metrics contract](../reference/metrics.md).
 
 ### 2. Commit API admission and the durable work record
 
@@ -103,6 +100,14 @@ immutable AgentRevision for revision work. Agent lifecycle work identifies its
 Agent and `stopped` or `deleted` target without a revision. Reusing an idempotency
 key with a different actor, owner, or target is rejected. The API returns accepted
 state before Compute; the worker takes over.
+
+For an already-deleting Agent, `OpenClawController.deleteAgent` leaves active
+work unchanged. The initiating actor can retry terminal failure after correcting
+its cause. OCC checks current delete permission, then calls
+`operations.retryFailedAgentDeletion` and appends the retry audit atomically.
+Only the exact stopped, deleting Agent's terminal work is reset; identity and
+prior audits remain. The worker reauthorizes normally. Namespace deletion is
+outside this recovery path.
 
 ### 3. Recover expired claims and claim one eligible operation
 
@@ -267,21 +272,21 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.defer`,
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
-Pending convergence requeues work with backoff and restores the consumed attempt.
-Dependency failures consume attempts within the retry budget. Permanent failures,
-exhausted attempts, and the convergence deadline terminate work. See the
-[controller reference](../reference/controller.md) for the supported outcomes
-and the [settings reference](../reference/settings/operations.md#controller-worker-environment)
-for their timing controls.
+Pending convergence requeues with backoff and refunds the attempt. Dependency
+failures consume attempts; permanent failure, exhaustion or deadline terminates
+work. See [outcomes](../reference/controller.md) and
+[timing controls](../reference/settings/operations.md#controller-worker-environment).
 
-Terminal rows store the overall `reason_code` and optional `result_data` for
-success or failure details. Successful revision work stores
-`{ warnings: [...] }`; a convergence deadline failure stores required
-`timeoutMs` and optional `runtimeFailure` from the exact candidate runtime.
-Compute observes cached startup results through its private status path,
-including unready Harnesses without plugins, and verifies the Pod or container
-incarnation. It does not repeat the model probe. Missing or invalidated evidence
-leaves the cause unspecified.
+`ControllerWorker.processRepositoryCleanup` defers every incomplete pass at the
+Driver interval, including closing sessions and failed runtime retirement.
+It releases the claim without consuming retries, freeing the worker between
+attempts. Obligations survive; lease loss aborts the pass.
+
+Terminal rows store `reason_code` and optional `result_data`: `{ warnings: [...] }`
+for success; required `timeoutMs` and optional `runtimeFailure` for convergence
+deadline failure. Compute reads cached startup results from its private status
+path, including unready Harnesses without plugins, and verifies runtime incarnation
+without repeating the model probe. Missing or invalid evidence leaves cause unspecified.
 
 `packages/occ/src/state/controller-work.ts:validateFailureData` validates reads
 and writes; the PostgreSQL constraint enforces the matching persisted shape.
@@ -289,26 +294,25 @@ Other failure reasons still reject data.
 `PostgresWorkQueue.complete` and `PostgresWorkQueue.fail` publish only under the
 live claim; deployment status derives `error` and `warnings` from that result.
 Completion needs no runtime receipt acknowledgment or post-commit cleanup.
-Maintenance cannot rewrite the completed deployment's historical startup warnings.
+Maintenance cannot rewrite deployment warnings.
 
-Deployment GET requires exact revision `read` and uses durable state that survives
-Pod deletion and controller restart. Queued, running, and successful deployments
-have no failure error. See [deployment status](../reference/agents.md#deployment-status).
+See [deployment status](../reference/agents.md#deployment-status) for authorization
+and persisted result semantics.
 
-Legacy terminal rows derive `reason_code` from audit evidence: `REVISION_ACTIVATED`
-requires matching activation evidence between creation and completion. Otherwise,
-backfill uses the terminal `reconcile` reason matching resource, actor, attempt,
-outcome and completion window, or `LEGACY_OUTCOME_UNKNOWN` without evidence.
-Historical `result_data` stays `NULL` because structured timeout/warning data was
-not stored; pending rows retain no terminal outcome.
+Indexed `workId` scopes progress to work; maintenance and unbound history cannot
+supply it. `getDeploymentStatus` reads
+`findWorkAttempt` with the work row in one State snapshot and projects fixed
+public explanations. Memory State has no attempt.
 
-If Compute declares a maintenance interval, activation schedules another
-exact-revision observation. An incomplete observation or Compute binding closes
-the bounded item and schedules another, so a provider outage does not abandon
-reconciliation of an authorized active runtime.
-Each new claim reauthorizes its original actor. The next maintenance key uses a
-strictly later time bucket than the current claim, preventing clock skew from
-colliding with completed work and silently dropping its successor.
+Legacy terminal rows derive `reason_code` from matching activation or terminal
+reconcile audit evidence, otherwise `LEGACY_OUTCOME_UNKNOWN`. Their
+`result_data` remains `NULL`; pending rows have no terminal outcome.
+
+If Compute declares maintenance, activation schedules exact-revision observations.
+Incomplete observations or Compute bindings close the bounded item and schedule
+another, preserving authorized-runtime reconciliation through outages. Each claim
+reauthorizes its original actor. Successor keys use strictly later time buckets
+to prevent clock-skew collisions with completed work.
 
 `worker.completed` reports the target, outcome, and code; polling then continues.
 Lease loss is reported as `worker.error` with `CLAIM_LOST` rather than publishing
@@ -361,7 +365,13 @@ final-attempt crashes from stranding provisioning.
 
 ## Changelog
 
+- 2026-09-28 22:10: Expose exact-work pending reconciliation results through deployment status and the Console. (01a0eb85-73a8-7572-92a9-a6a06fbdf0a5 - 0aedecfd)
+
+- 2026-09-28 21:25: Apply the Driver interval to every incomplete repository cleanup pass. (authoring-run/b7089bf7-3566-4ce4-a761-d0e9fc197f6f - 8352c093)
+
 - 2026-09-28 12:53: Document deployment audit attribution and its transaction boundary. (authoring-run/c43b309b-ac83-4ece-ba43-85dc673d5342 - da62a0368fa4f3ab0a2fa6cca40d9952bf93cdb2)
+
+- 2026-09-27 22:05: Allow the initiating caller to requeue failed Agent teardown through repeated DELETE, retaining active claims and prior audit. (01a0cf72-6985-7712-ba92-d8cc32470f24 - ae31581574744bea2745066f189eea6e826fe823)
 
 - 2026-09-24 11:28: Document exclusive dedicated preparation and durable RWO workspaces in the accompanying change. (01a0cf72-6985-7712-ba92-d8cc32470f24 - 14a4508baad876d3eea4e6fe6388f8d8a91559b7)
 

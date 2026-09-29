@@ -8,7 +8,11 @@ export function createPlatformReadView(
   lifetime: RepositoryTransactionLifetime,
 ): PlatformReadView {
   return Object.freeze({
-    operations: bindRepository(repositories.operations, lifetime, ["list", "findWork"]),
+    operations: bindRepository(repositories.operations, lifetime, [
+      "list",
+      "findWork",
+      "findWorkAttempt",
+    ]),
     installations: bindRepository(repositories.installations, lifetime, [
       "findInstallation",
       "getInstallation",
@@ -30,8 +34,18 @@ export function createPlatformReadView(
       "findServiceAccountBackendBinding",
     ]),
     workspaceSetups: bindRepository(repositories.workspaceSetups, lifetime, ["find"]),
-    agents: bindRepository(repositories.agents, lifetime, ["findAgent", "listAgents"]),
-    revisions: bindRepository(repositories.revisions, lifetime, ["findRevision", "listRevisions"]),
+    agents: bindRepository(repositories.agents, lifetime, [
+      "findAgent",
+      "listAgents",
+      "findAgentForBrowsing",
+      "listAgentsForBrowsing",
+    ]),
+    revisions: bindRepository(repositories.revisions, lifetime, [
+      "findRevision",
+      "listRevisions",
+      "findRevisionForBrowsing",
+      "listRevisionsForBrowsing",
+    ]),
     iamPolicy: bindRepository(repositories.iamPolicy, lifetime, [
       "listRoles",
       "getRole",
@@ -40,6 +54,8 @@ export function createPlatformReadView(
     ]),
     repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
       "findAttempt",
+      "findBrokerReceipt",
+      "findBrokerReceiptBySession",
       "listRevisionAttempts",
       "listNamespaceAttempts",
     ]),
