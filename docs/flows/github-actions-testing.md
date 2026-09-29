@@ -87,6 +87,17 @@ capture; local callers still invoke cleanup with their failed run's state file.
 Collection preserves the original error, including when an observation fails or
 times out. The [CI guide](../testing/ci.md) describes the retained evidence.
 
+Tests delete their Agent namespaces, and those namespaces' events, before a
+file exits. `scripts/ci/run-tests.mjs:runFile` therefore watches Compute-managed
+Pods and Kubernetes events in each ready k3d cluster while the file runs, then
+`scripts/ci/k3d-diagnostics.mjs:projectAgentNamespaceActivity` appends the Pod
+status transitions and those namespaces' events to the same report under
+`agentNamespaces`, passing or failing. Each file keeps at most 200 Pod and 200
+event records and the report keeps 40 files; messages are redacted and
+truncated, Pod specs are dropped, and raw watch streams stay in the cluster
+directory that cleanup removes. The artifact is uploaded for every lane that
+writes it.
+
 Dedicated Codex preparation and the operator's offline profile generator share
 `scripts/lib/codex-seccomp-profile.mjs:deriveCodexBwrapProfile`. Preparation
 requires an actual workspace write and denied write to a container-writable

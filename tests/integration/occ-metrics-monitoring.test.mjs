@@ -5,10 +5,14 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import test from "node:test";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
+import {
+  checkGrafanaDatasource,
+  queryPrometheus,
+  waitForMonitoring,
+} from "../helpers/metrics-monitoring-readiness.mjs";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
 import { startMetricsListener } from "../../apps/controller/src/metrics/listener.ts";
 
@@ -30,19 +34,9 @@ async function port() {
   return value;
 }
 
-async function waitFor(read) {
-  const end = Date.now() + 60_000;
-  while (Date.now() < end) {
-    try {
-      if (await read()) {
-        return;
-      }
-    } catch {
-      // Monitoring services can reject requests while their listeners start.
-    }
-    await delay(500);
-  }
-  assert.fail("Monitoring did not become ready within 60 seconds.");
+async function containerState(name) {
+  const { stdout } = await run(engine, ["inspect", "--format", "{{json .State}}", name]);
+  return JSON.parse(stdout);
 }
 
 test(
@@ -58,13 +52,13 @@ test(
     const directory = await mkdtemp(join(tmpdir(), "occ-metrics-monitoring-"));
     const names = [];
     t.after(async () => {
-      for (const name of names.reverse()) {
+      for (const [role, name] of names.reverse()) {
         if (!t.passed) {
           const logs = await run(engine, ["logs", "--tail=20", name]).catch(() => ({
             stdout: "",
             stderr: "",
           }));
-          t.diagnostic(`${name}: ${logs.stdout}${logs.stderr}`);
+          t.diagnostic(`${role}: ${logs.stdout}${logs.stderr}`);
         }
         await run(engine, ["rm", "-f", "-v", name]);
       }
@@ -75,9 +69,9 @@ test(
     const listener = await startMetricsListener(metrics, { host: "127.0.0.1", port: 0 });
     t.after(() => listener.close());
     await fixture.bootstrap();
+    // Select each candidate port as late as possible; Docker still owns the
+    // final bind, so an exited container is reported by the readiness wait.
     const promPort = await port();
-    const grafanaPort = await port();
-    const agentPort = await port();
     const promURL = `http://127.0.0.1:${promPort}`;
     await writeFile(
       join(directory, "prometheus.yaml"),
@@ -111,7 +105,7 @@ test(
 
     async function container(role, image, args, extra = []) {
       const name = `occ-metrics-${role}-${randomUUID().slice(0, 8)}`;
-      names.push(name);
+      names.push([role, name]);
       await run(
         engine,
         [
@@ -134,10 +128,11 @@ test(
         ],
         { timeout: 60_000 },
       );
+      return name;
     }
     // Containers use host networking solely to reach this test's real loopback
     // listener. The checked-in Compose overlay instead shares OCC namespaces.
-    await container(
+    const server = await container(
       "server",
       prometheusImage,
       [
@@ -148,7 +143,8 @@ test(
       ],
       ["--tmpfs", "/tmp:rw,mode=1777"],
     );
-    await container(
+    const agentPort = await port();
+    const agent = await container(
       "agent",
       prometheusImage,
       [
@@ -159,22 +155,34 @@ test(
       ],
       ["--tmpfs", "/tmp:rw,mode=1777"],
     );
-    const query = async (expression) => {
-      const response = await fetch(
-        `${promURL}/api/v1/query?query=${encodeURIComponent(expression)}`,
-      );
-      const body = await response.json();
-      assert.equal(body.status, "success");
-      return body.data.result;
-    };
-    await waitFor(async () =>
-      (await query('up{job="occ-api"}')).some((series) => series.value[1] === "1"),
+    const query = (stage, expression) => queryPrometheus(promURL, stage, expression);
+    await waitForMonitoring(
+      "prometheus-up",
+      async () =>
+        (await query("prometheus-up", 'up{job="occ-api"}')).some(
+          (series) => series.value[1] === "1",
+        ),
+      [
+        ["server", server],
+        ["agent", agent],
+      ],
+      containerState,
     );
     await fixture.request("GET", "/installation");
-    await waitFor(async () =>
-      (await query('sum(occ_http_requests_total{route="/installation",method="GET"})')).some(
-        (series) => Number(series.value[1]) >= 1,
-      ),
+    await waitForMonitoring(
+      "occ-request",
+      async () =>
+        (
+          await query(
+            "occ-request",
+            'sum(occ_http_requests_total{route="/installation",method="GET"})',
+          )
+        ).some((series) => Number(series.value[1]) >= 1),
+      [
+        ["server", server],
+        ["agent", agent],
+      ],
+      containerState,
     );
     const dashboard = JSON.parse(
       await readFile("deploy/helm/openclaw-observability-demo/files/dashboard.json", "utf8"),
@@ -182,10 +190,11 @@ test(
     // Every shipped panel must be valid PromQL, even when a quiet/absent worker
     // has no samples. A real server, not a string matcher, checks the queries.
     for (const panel of dashboard.panels) {
-      await query(panel.targets[0].expr);
+      await query("occ-request", panel.targets[0].expr);
     }
 
-    await container(
+    const grafanaPort = await port();
+    const grafana = await container(
       "grafana",
       grafanaImage,
       [],
@@ -214,7 +223,22 @@ test(
         "GF_PLUGINS_PREINSTALL_DISABLED=true",
       ],
     );
-    await waitFor(async () => (await fetch(`http://127.0.0.1:${grafanaPort}/api/health`)).ok);
+    await waitForMonitoring(
+      "grafana-health",
+      async () => {
+        const response = await fetch(`http://127.0.0.1:${grafanaPort}/api/health`, {
+          signal: AbortSignal.timeout(3_000),
+        });
+        if (!response.ok) {
+          const error = new Error(`Grafana health returned HTTP ${response.status}`);
+          error.httpStatus = response.status;
+          throw error;
+        }
+        return true;
+      },
+      [["grafana", grafana]],
+      containerState,
+    );
     const provisioned = await fetch(
       `http://127.0.0.1:${grafanaPort}/api/dashboards/uid/occ-development`,
     ).then((response) => response.json());
@@ -222,12 +246,14 @@ test(
     assert.deepEqual(provisioned.dashboard.panels, dashboard.panels);
     // Grafana's HTTP listener can be ready before its datasource backend. Wait
     // for the actual Grafana-to-Prometheus query to succeed within the same bound.
-    await waitFor(async () => {
-      const response = await fetch(
-        `http://127.0.0.1:${grafanaPort}/api/datasources/uid/occ-prometheus/health`,
-      );
-      const datasource = await response.json();
-      return response.ok && datasource.status === "OK";
-    });
+    await waitForMonitoring(
+      "grafana-datasource",
+      () => checkGrafanaDatasource(`http://127.0.0.1:${grafanaPort}`),
+      [
+        ["grafana", grafana],
+        ["server", server],
+      ],
+      containerState,
+    );
   },
 );
