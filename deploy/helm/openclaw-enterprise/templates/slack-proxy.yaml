@@ -93,7 +93,7 @@ spec:
               app.kubernetes.io/component: api
         - namespaceSelector:
             matchExpressions:
-              - key: openclaw.dev/namespace
+              - key: openclaw.dev/gateway-namespace
                 operator: Exists
           podSelector:
             matchLabels:

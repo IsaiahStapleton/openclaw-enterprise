@@ -1720,7 +1720,7 @@ test(
           },
           {
             namespaceSelector: {
-              matchExpressions: [{ key: "openclaw.dev/namespace", operator: "Exists" }],
+              matchExpressions: [{ key: "openclaw.dev/gateway-namespace", operator: "Exists" }],
             },
             podSelector: {
               matchLabels: {
