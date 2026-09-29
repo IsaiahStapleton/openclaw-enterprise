@@ -497,7 +497,7 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     ];
   }
 
-  if (operation.operationId === "createSecret" || operation.operationId === "listSecrets") {
+  if (operation.operationId === "createSecret") {
     return [{ ...permission, scope: "namespace" }];
   }
 
@@ -710,6 +710,8 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
         { ...permission, scope: "each_returned" },
       ];
     case "namespace_and_service_account_candidates":
+    case "namespace_and_secret_candidates":
+    case "namespace_and_credential_source_candidates":
       return [
         { action: "read", resourceKind: "namespace", scope: "requested" },
         { ...permission, scope: "each_returned" },
@@ -1205,13 +1207,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             authorization: validatedAuthorization?.request ?? {
               principalId: context.actorId,
               action: authorization?.action ?? operation.iamAction,
+              // Namespace IAM policy routes are admitted by administer on the
+              // Installation (plus reads), never by a Namespace administer check.
               resource:
                 authorization?.resource ??
-                operationTarget(
-                  operation,
-                  installationId,
-                  request.params as Record<string, unknown>,
-                ),
+                (operation.authorizationTarget === "namespace_iam"
+                  ? { kind: "installation", id: installationId }
+                  : operationTarget(
+                      operation,
+                      installationId,
+                      request.params as Record<string, unknown>,
+                    )),
             },
             ...(authorizationEvidence === undefined
               ? {}
@@ -2245,7 +2251,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         params,
         body,
         namespaceId,
-        mutationEvent: (resource) => event(operation, request, resource, "mutation", context),
+        mutationEvent: (resource, details) => {
+          const recorded = event(operation, request, resource, "mutation", context);
+          return details === undefined
+            ? recorded
+            : { ...recorded, details: { ...recorded.details, ...details } };
+        },
       });
       return;
     }
@@ -3103,7 +3114,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: operation.operationId,
           summary: operation.summary,
           description: creating
-            ? "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope; creates no identity or IAM grant. The plaintext key is returned only here."
+            ? "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope when the caller already holds every IAM grant of that ServicePrincipal at the same or a broader scope; creates no identity or IAM grant. The plaintext key is returned only here."
             : "Requires a session or Installation-scoped service key with administer on the Installation. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.",
           tags: [...operation.tags],
           security: [{ sessionCookie: [] }, { serviceApiKey: [] }],
@@ -3218,6 +3229,26 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 400,
                 "INVALID_REQUEST",
                 "An existing non-Agent ServicePrincipal in the exact scope is required.",
+              );
+            }
+            // A key carries all of its principal's grants; never issue beyond the caller's own.
+            let covered;
+            try {
+              covered =
+                typeof selected.coversIdentityAccess === "function" &&
+                (await selected.coversIdentityAccess({
+                  principalId: context.actorId,
+                  targetIdentityId: principal.id,
+                })) === true;
+            } catch {
+              throw dependencyUnavailable();
+            }
+            if (!covered) {
+              await denial(operation, request, "authorization_denial", context, decision.evidence);
+              throw failure(
+                403,
+                "FORBIDDEN",
+                "The caller does not hold every grant of the target ServicePrincipal.",
               );
             }
             let key;

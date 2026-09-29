@@ -100,15 +100,19 @@ The Helm values select the control-plane image, Better Auth base URL,
 bootstrap administrator, database and cluster egress CIDRs, API client
 selectors, DNS peer, metrics, native admin, private gateway routing, optional
 ChatGPT Backend mounting, optional logging collector, and optional repository
-credential sidecar. Both profiles always enable native admin, so gateway routing
-is always enabled too.
+credential sidecar. Gateway routing is always enabled. Native admin is enabled
+unless `controlPlane.github` or `controlPlane.google` renders external sign-in
+with `auth.recoveryUserId`, which Helm requires with native admin off. An
+optional `controlPlane.trustedProxy` renders `api.trustedProxy`.
 
 When `channels.managedSlackProxy` is true, the values also enable the
 chart-managed Slack proxy Service. The chart allows that proxy public IPv4 HTTPS
 egress, excluding private and reserved ranges, and the proxy authorizes Slack
 hostnames. Repository values render only when the input explicitly sets
 `repository.enabled: true`. Repository provider CIDRs pass through unchanged,
-so operators can keep their existing GitHub ranges without DNS snapshots.
+so operators can keep their existing GitHub ranges without DNS snapshots. The
+renderer copies `repository.serviceName` only when the input sets it, so the
+chart's upgrade guard still requires an explicit current broker Service name.
 
 ### 5. Build Installation startup YAML
 
@@ -186,6 +190,10 @@ activation, and repository registry creation need separate evidence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 20:30: Stop defaulting the repository broker Service name so the chart upgrade guard applies.
+
+- 2026-09-29 18:00: Carry external sign-in, the recovery user ID, and trusted proxies through profile rerenders.
 
 - 2026-09-28 22:45: Preserve original Slack public HTTPS egress and repository provider ranges in both profiles. (authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a - 1365d9b33eec2de2452bd3142f57a1729cccd559)
 

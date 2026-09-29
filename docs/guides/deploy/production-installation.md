@@ -17,33 +17,16 @@ and chart selection. Retain this shell and protected files for
 
 ## Use published images
 
-Select a verified release or custom controller image matching this chart and the
-generated configuration: native admin, private routing, the selected PluginDriver
-catalog or hosted discovery, and any managed proxy or repository wiring, plus a
-compatible runtime. Export immutable digests as `CONTROLLER_IMAGE` and
-`RUNTIME_IMAGE`, or [build and publish images](#build-and-publish-production-images).
+Use `ghcr.io/openclaw/openclaw-enterprise-controller:latest` and
+`ghcr.io/openclaw/openclaw-enterprise-runtime:latest` through the
+[published-image procedure](published-images.md). It pulls the pair, checks
+their source revisions, and sets `CONTROLLER_IMAGE` and `RUNTIME_IMAGE` for this
+runbook. It also explains how to select the matching source checkout and chart.
+Complete it before generating configuration; then skip the build section below.
 
-The historical controller below predates the origin check and profile-generated
-configuration. Use it only for tests or workflows targeting its source.
-
-Images from `97b1d7421931c9e1c6b14b869f6bb2eb0ddb6ecc` passed startup and digest checks in
-[publication run 36366875910](https://github.com/openclaw/openclaw-enterprise/actions/runs/36366875910).
-Multi-platform indexes select the host or node variant.
-
-Both GHCR packages require repository-inherited read access. Use a GitHub personal
-access token **(classic)** with `read:packages` and required organization SSO.
-Replace the username; enter the token only at Docker's password prompt. See
-[GitHub's registry authentication instructions](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry).
-
-```bash
-docker login ghcr.io --username '<your-github-username>'
-export HISTORICAL_CONTROLLER_IMAGE='ghcr.io/openclaw/openclaw-enterprise-controller@sha256:37a76b3c5bb54a81b106b948af4678bf4b6af9a7aad5f6b9e56385236444424c'
-export HISTORICAL_RUNTIME_IMAGE='ghcr.io/openclaw/openclaw-enterprise-runtime@sha256:f17a66a18de9d4231c9579faf90573d80bef1278aaaf63135b6c6ce0b71a23b3'
-```
-
-Configure approved pull credentials for **control-plane and tenant Pods**;
-`docker login` does not authenticate nodes. Install with the verified current
-pair at [Configure the Installation](#configure-the-installation).
+Configure pull credentials for control-plane and tenant Pods. Workstation
+`docker login` does not authenticate cluster nodes. For registry copies and
+published charts, follow [private-registry delivery](private-registry-images.md).
 
 ## Build and publish production images
 
@@ -133,7 +116,9 @@ Kubernetes older than 1.35 is unsupported; the API and worker emit
 ### Recommended: generate profile configuration
 
 Choose `openclaw` or `codex` from the [profile options](installation-profiles.md#choose-a-profile).
-Generation requires Node.js 24+ on the operator host; manual YAML does not.
+Generation requires Node.js 24+ on the operator host. Manual YAML skips that
+requirement for installation, but the later Agent transport-provisioning example
+also uses Node. Use console transport provisioning if Node is unavailable.
 
 Create `$OCC_INPUT_DIRECTORY/profile-input.json` from the schema in
 [Render installation profiles](installation-profiles.md#prepare-inputs). Set
@@ -242,7 +227,8 @@ yq e -e '.auth.baseUrl != "" and .bootstrap.adminEmail != "" and
   (.controlPlane.nodeSelector | length > 0) and
   (.api.clients | length > 0) and .gatewayRouting.enabled == true and
   .gatewayRouting.gatewayClassName != "" and
-  .gatewayRouting.apiKeySecretName != "" and .agentNativeAdmin.enabled == true' \
+  .gatewayRouting.apiKeySecretName != "" and (.agentNativeAdmin.enabled == true or
+  .auth.github.enabled == true or .auth.google.enabled == true)' \
   "$OCC_INPUT_DIRECTORY/values.yaml" >/dev/null
 yq e -e '.drivers.compute.configuration.images.requireImmutableDigest == true and
   (.drivers.compute.configuration.images.gateway | test("@sha256:[a-f0-9]{64}$")) and
@@ -416,7 +402,8 @@ helm upgrade --install oce deploy/helm/openclaw-enterprise \
   --wait --timeout 5m
 ```
 
-For the [published chart](../../../.github/chart-publication.md#pull-and-install),
+For an explicitly [published chart release](../../../.github/chart-publication.md#pull-and-install)
+(created with `publish_chart: true`),
 authenticate Helm, verify its receipt, then use
 `oci://ghcr.io/openclaw/charts/openclaw-enterprise` with `--version "$OCE_VERSION"`.
 
@@ -495,7 +482,9 @@ Activation is one-way: the database refuses older images' sessions and
 2. Create the Secret, then set `auth.github.enabled: true`, that ID as
    `auth.recoveryUserId`, and `agentNativeAdmin.enabled: false` in protected
    values, keeping workspace routing. Optionally narrow `auth.github.egressCidrs` or set `api.trustedProxy`
-   ([settings](../../reference/settings/production.md#github-sign-in-and-trusted-proxies)). Rerender.
+   ([settings](../../reference/settings/production.md#github-sign-in-and-trusted-proxies)).
+   Profile installs set [these inputs](installation-profiles.md#external-sign-in-and-trusted-proxies)
+   and keep them in every rerender. Rerender.
 
    ```bash
    kubectl -n openclaw-system create secret generic occ-github-login \

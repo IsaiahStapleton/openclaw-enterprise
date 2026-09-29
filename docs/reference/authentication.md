@@ -248,13 +248,14 @@ still be running. Resolve uncertainty before choosing a new action and version.
 Password reset and deletion remain deferred.
 
 Password sign-in allows 10 requests/minute, two active, per client address and
-per email; GitHub start/callback, including invalid callbacks, allows 30 and four
-per address. Global caps: four and eight active. The recovery email has a
+per email; GitHub start/callback (even invalid) allows 30 and four per
+address. Global caps: four and eight active. The recovery email has a
 reserved lane (20, two active). A 4,096-key table bounds memory. Clients behind
 an ingress share its address unless
 [trusted proxies](cheatsheets/environment-variables.md#controller-and-authentication)
-are set. Pending attempts cap at 1,000. Provider calls share a ten-second
-deadline, refuse redirects, and read at most 64 KiB. Limits are per controller.
+are set. Pending attempts cap at 1,000, oldest evicted. Provider
+calls share a ten-second deadline, refuse redirects, read at most 64 KiB. Limits
+are per controller.
 
 ## Native admin shared sessions
 

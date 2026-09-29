@@ -300,8 +300,8 @@ Select the `postgres-azure-workload-identity` lane to run
 [postgres-azure-workload-identity.test.mjs](../../tests/integration/postgres-azure-workload-identity.test.mjs)
 against an existing authorized Azure PostgreSQL database. This lane has no
 GitHub workflow entrypoint and provisions no database or identity resources.
-The ordinary constructor, security-rejection, and real password-authentication
-cases remain in
+The ordinary constructor, security-rejection, real password-authentication,
+and terminated-idle-connection cases remain in
 [postgres-connection-auth.test.mjs](../../tests/integration/postgres-connection-auth.test.mjs),
 owned by the mandatory `postgres` lane.
 
@@ -364,7 +364,9 @@ retrying an effect. A socket failure does not prove rollback.
 `tests/conformance/postgres-transaction-commit.test.mjs` exercises the actual outer
 transaction owner with a transport protocol fixture. It covers definite server
 rejection, ambiguous SQLSTATEs, exact COMMIT/ROLLBACK command acknowledgment,
-and cleanup errors. The fixture supplies no database or persistence proof.
+and cleanup errors. A deadlock (`40P01`) or serialization failure (`40001`) is a
+definite rollback and maps to retryable `DependencyUnavailableError` (`503`).
+The fixture supplies no database or persistence proof.
 Unknown acknowledgment always remains possibly committed, even when a later
 ROLLBACK responds. An independent exact readback is required before reconciliation.
 

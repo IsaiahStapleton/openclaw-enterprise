@@ -51,7 +51,7 @@
 - [`listNamespaces`](../api.md#get-namespaces): List authorized Namespaces.
 - [`getNamespace`](../api.md#get-namespacesnamespaceid): Get an exact Installation-owned Namespace.
 - [`createNamespace`](../api.md#post-namespaces): Create an Installation-owned Namespace.
-- [`deleteNamespace`](../api.md#delete-namespacesnamespaceid): Begin deletion of an empty Installation-owned Namespace.
+- [`deleteNamespace`](../api.md#delete-namespacesnamespaceid): Begin or retry deletion of an empty Installation-owned Namespace.
 
 ### Agents
 

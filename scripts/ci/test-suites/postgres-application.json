@@ -10,7 +10,9 @@
         "password authentication preserves the existing pg connection configuration",
         "the password pool authenticates to the selected real PostgreSQL database",
         "the real pg client retains the Azure token callback and verified TLS after URL parsing",
-        "workload authentication rejects password fallback and unverified TLS"
+        "workload authentication rejects password fallback and unverified TLS",
+        "an idle pooled client error is logged instead of crashing the process",
+        "the pool survives PostgreSQL terminating an idle backend"
       ]
     },
     {

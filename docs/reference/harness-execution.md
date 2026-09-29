@@ -1,9 +1,10 @@
 # Harness execution
 
-A Harness calls the model and runs tools for an Agent. OpenClaw Enterprise supports
-OpenClaw either inside the Agent's gateway or as a dedicated native worker,
-and Codex as a dedicated runtime. You choose an execution mode on the Agent and
-a compatible model and Harness in its Configuration.
+A Harness calls the model and runs tools for an Agent. The bundled deployment
+paths run OpenClaw inside the Agent's gateway or Codex as a dedicated runtime.
+Dedicated native OpenClaw requires the experimental Sandbox integration below.
+Choose an execution mode on the Agent and a compatible model and Harness in its
+Configuration.
 
 This page explains supported combinations, model authentication, and what a
 replacement can interrupt. For the infrastructure choices, see
@@ -12,11 +13,11 @@ response, follow [Deploy your first Agent](../guides/first-agent.md).
 
 ## Supported topology
 
-| Harness  | Agent execution mode | Workloads                                                        |
-| -------- | -------------------- | ---------------------------------------------------------------- |
-| OpenClaw | `embedded`           | One Agent-owned gateway executes the built-in Harness.           |
-| OpenClaw | `dedicated`          | An Agent-owned gateway connects to a paired dedicated Harness.   |
-| Codex    | `dedicated`          | An Agent-owned gateway connects to a separate dedicated Harness. |
+| Harness  | Agent execution mode | Workloads and support                                                                                                                                                                      |
+| -------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| OpenClaw | `embedded`           | One gateway executes the built-in Harness; available on Kubernetes and SSH.                                                                                                                |
+| Codex    | `dedicated`          | A gateway connects to a separate Codex Harness; available on Kubernetes.                                                                                                                   |
+| OpenClaw | `dedicated`          | Experimental native worker; requires full-facet Sandbox provisioning. Stock OpenShell has [upstream blockers](#optional-sandbox-provisioning), so this is not a supported production path. |
 
 Agent creation defaults to `embedded`; an update preserves the existing mode
 when omitted. Unsupported Harness/mode pairs are rejected before work is admitted.

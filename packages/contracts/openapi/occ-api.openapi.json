@@ -3459,7 +3459,7 @@
     },
     "/api/auth/service-keys": {
       "post": {
-        "description": "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope; creates no identity or IAM grant. The plaintext key is returned only here.",
+        "description": "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope when the caller already holds every IAM grant of that ServicePrincipal at the same or a broader scope; creates no identity or IAM grant. The plaintext key is returned only here.",
         "operationId": "createServiceKey",
         "requestBody": {
           "content": {
@@ -5362,7 +5362,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Begin deletion of an empty Installation-owned Namespace",
+        "summary": "Begin or retry deletion of an empty Installation-owned Namespace",
         "tags": ["Namespaces"],
         "x-openclaw-permissions": [
           { "action": "delete", "resourceKind": "namespace", "scope": "requested" }
@@ -13518,7 +13518,7 @@
     },
     "/namespaces/{namespaceId}/credential-sources": {
       "get": {
-        "description": "Requires read permission for CredentialSource resources in the requested Namespace.",
+        "description": "Requires read permission on the requested Namespace. Only CredentialSource resources with individual read permission are returned.",
         "operationId": "listCredentialSources",
         "parameters": [
           {
@@ -13710,7 +13710,8 @@
         "summary": "List readable credential sources without revealing credential values",
         "tags": ["Credential sources"],
         "x-openclaw-permissions": [
-          { "action": "read", "resourceKind": "credential_source", "scope": "namespace" }
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          { "action": "read", "resourceKind": "credential_source", "scope": "each_returned" }
         ]
       },
       "post": {
@@ -16462,7 +16463,7 @@
     },
     "/namespaces/{namespaceId}/secrets": {
       "get": {
-        "description": "Requires read permission for Secret resources in the requested Namespace.",
+        "description": "Requires read permission on the requested Namespace. Only Secret resources with individual read permission are returned.",
         "operationId": "listSecrets",
         "parameters": [
           {
@@ -16582,7 +16583,8 @@
         "summary": "List readable Namespace-owned Secret metadata without revealing material",
         "tags": ["Secrets"],
         "x-openclaw-permissions": [
-          { "action": "read", "resourceKind": "secret", "scope": "namespace" }
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          { "action": "read", "resourceKind": "secret", "scope": "each_returned" }
         ]
       },
       "post": {

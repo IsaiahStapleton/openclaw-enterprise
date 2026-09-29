@@ -182,9 +182,10 @@ reaches `oceGithubResult`, which checks the receipt signature and expiry, the
 posted `attemptId`, and that the session cookie still resolves to the named
 session. It then records the receipt in a process-local ledger until expiry,
 clears the cookie, and returns the session key, without issuing or extending a
-session. Password sign-in in this profile returns the same key. Expected protocol or identity rejection is
-audited separately from State dependency failure or uncertain session completion.
-Neither path automatically retries.
+session. Password sign-in in this profile returns the same key. Callback denials are audited as
+`INVALID_ATTEMPT` (malformed, unbound, replayed, or expired), `PROVIDER_UNAVAILABLE`
+(transport failure, deadline, 429/5xx, malformed body), or `EXTERNAL_IDENTITY_REJECTED`;
+State dependency failure or uncertain session completion is not a denial. Neither path retries.
 
 Google uses the same start, callback, and result code through
 `apps/controller/src/auth/github.ts:externalProviderEndpoints`, with provider instance

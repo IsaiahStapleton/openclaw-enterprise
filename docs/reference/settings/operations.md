@@ -56,6 +56,7 @@ An exit-0 `migration.checked` record reports one reviewed history shape:
 `empty`, `prePresetsMain`, `main`, `repositoryCredentials`,
 `repositoryRetention`, `workspaceSetup`, `agentProvisioning`,
 `backendCompleted`, `providerCompleted`, `backendTerminology`, `prePluginApprovers`,
+`preBrokerReceipts`, `preAgentDeletion`, `preDeploymentProgress`,
 `preHumanAuthentication`, or `completed`.
 `prePresetsMain` means
 the exact canonical history through `0023_runtime_failure_timestamp_validation`;
@@ -67,8 +68,11 @@ through `0029_agent_provisioning_work`. `backendCompleted` is the exact
 migration. `providerCompleted` is the exact 31-receipt Provider terminology
 history published before the rename. `backendTerminology` has the 32 receipts
 through `0031_backend_terminology_compatibility`; `prePluginApprovers` adds
-`0032_credential_sources` for 33 receipts. `preHumanAuthentication` has the
-37 receipts through `0036_deployment_progress`. `completed` is the current
+`0032_credential_sources` for 33 receipts. `preBrokerReceipts` has 34 receipts
+through `0033_agent_plugin_approvers`; `preAgentDeletion` has 35 through
+`0034_repository_broker_receipts`; `preDeploymentProgress` has 36 through
+`0035_agent_deletion_repository_session_evidence`. `preHumanAuthentication` has
+the 37 receipts through `0036_deployment_progress`. `completed` is the current
 canonical history with all receipts, including `0037_human_authentication`.
 The source manifest is
 [`migrations/meta/canonical-history.json`](../../../migrations/meta/canonical-history.json).

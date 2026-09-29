@@ -253,9 +253,9 @@ test("code exchange posts to the fixed token endpoint and verifies against fixed
     url === "https://oauth2.googleapis.com/token"
       ? json({ access_token: "ya29.fixture", id_token: token(live), token_type: "Bearer" })
       : json(jwks);
-  assert.equal(
+  assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    live.sub,
+    { subject: live.sub },
   );
   assert.deepEqual(
     requests.map(({ url, method, redirect }) => [url, method, redirect]),
@@ -270,29 +270,41 @@ test("code exchange posts to the fixed token endpoint and verifies against fixed
   assert.equal(exchange.get("redirect_uri"), redirectURI);
   assert.equal(exchange.get("grant_type"), "authorization_code");
 
-  assert.equal(
+  const rejectedIdentity = { denial: "EXTERNAL_IDENTITY_REJECTED" };
+  const unavailable = { denial: "PROVIDER_UNAVAILABLE" };
+  assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, "other"),
-    undefined,
+    rejectedIdentity,
   );
   respond = (url) =>
     url === "https://oauth2.googleapis.com/token"
       ? json({ access_token: "ya29.fixture" })
       : json(jwks);
-  assert.equal(
+  assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    undefined,
+    rejectedIdentity,
   );
   respond = () => json({ error: "invalid_grant" }, 400);
-  assert.equal(
+  assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    undefined,
+    rejectedIdentity,
   );
   respond = (url) =>
     url === "https://oauth2.googleapis.com/token"
       ? json({ id_token: token(live) })
       : new Response("x".repeat(64 * 1024 + 1));
-  assert.equal(
+  assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    undefined,
+    unavailable,
+  );
+  respond = () => json({}, 503);
+  assert.deepEqual(
+    await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
+    unavailable,
+  );
+  respond = () => Promise.reject(new TypeError("fetch failed"));
+  assert.deepEqual(
+    await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
+    unavailable,
   );
 });
