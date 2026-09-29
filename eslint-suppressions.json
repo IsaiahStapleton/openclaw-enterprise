@@ -160,11 +160,6 @@
       "count": 1
     }
   },
-  "tests/integration/ci-cleanup.test.mjs": {
-    "no-useless-escape": {
-      "count": 8
-    }
-  },
   "tests/integration/controller-lifecycle.test.mjs": {
     "no-unused-vars": {
       "count": 1
