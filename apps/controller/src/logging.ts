@@ -59,6 +59,9 @@ const ALLOWED_FIELDS = new Set([
   "revisionId",
   "route",
   "sandboxDriverId",
+  "skippedUserCount",
+  "skippedUserIds",
+  "skippedUserIdsTruncated",
   "status",
   "workId",
 ]);
@@ -148,6 +151,35 @@ function safeScalar(key: string, value: unknown): string | number | boolean | un
   return undefined;
 }
 
+// One log record carries at most this many account identifiers.
+export const MAX_LOGGED_IDENTIFIERS = 100;
+
+// Fields for a warning about accounts an operator must repair, such as users
+// skipped at GitHub activation. The identifier list is capped; the total count
+// and the truncation flag say when the record does not name every account.
+export function skippedUserLogFields(userIds: readonly string[]): {
+  readonly skippedUserIds: readonly string[];
+  readonly skippedUserCount: number;
+  readonly skippedUserIdsTruncated: boolean;
+} {
+  return {
+    skippedUserIds: userIds.slice(0, MAX_LOGGED_IDENTIFIERS),
+    skippedUserCount: userIds.length,
+    skippedUserIdsTruncated: userIds.length > MAX_LOGGED_IDENTIFIERS,
+  };
+}
+
+// Account identifiers an operator must repair, such as users skipped at GitHub activation.
+function safeIdentifiers(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const identifiers = value
+    .slice(0, MAX_LOGGED_IDENTIFIERS)
+    .filter((entry): entry is string => typeof entry === "string" && safeString(entry) === entry);
+  return identifiers.length === 0 ? undefined : Object.freeze(identifiers);
+}
+
 function safeAttempt(
   value: unknown,
 ): number | Readonly<Record<string, string | number | boolean>> | undefined {
@@ -190,7 +222,12 @@ function sanitizedEvent(
     if (key === "message" && eventName !== "compute.preflight-warning") {
       continue;
     }
-    const safe = key === "attempt" ? safeAttempt(value) : safeScalar(key, value);
+    const safe =
+      key === "attempt"
+        ? safeAttempt(value)
+        : key === "skippedUserIds"
+          ? safeIdentifiers(value)
+          : safeScalar(key, value);
     if (safe !== undefined) {
       result[key] = safe;
     }
