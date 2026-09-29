@@ -181,8 +181,8 @@ user ID (1–20 digits, no leading zero) through
 `POST /api/auth/accounts/:userId/providers/github` with
 `{"subject":"12345678","expectedVersion":1}`, using the version just read.
 
-Attachment preserves the user, Principal, and grants, advances the account version,
-and invalidates existing sessions and pending proofs. Subjects owned by another
+Attachment keeps the user, Principal, and grants, advances the version,
+and invalidates sessions and pending proofs. Subjects owned by another
 user, email association, signup, identity transfer, and self-service linking are
 rejected. For unknown identities, follow the
 [enrollment procedure](../guides/deploy/production-installation.md#enable-github-browser-sign-in).
@@ -204,18 +204,16 @@ cookie is current. It never issues or extends a session.
 
 ### Session and recovery controls
 
-Enabling this profile applies the same admission rules to password and GitHub
-sessions: an eight-hour absolute lifetime without refresh, current account and
+Password and GitHub sessions share admission rules: an eight-hour lifetime without refresh, current account and
 method checks, and required audit before a cookie is released or, on logout,
-cleared. Older sessions without account/method binding are
-rejected; users sign in again. Activation is one-way: removing every provider
+cleared. Older sessions without account/method binding are rejected; users sign in again. Activation is one-way: removing every provider
 fails startup, and the database refuses sessions from older
 binaries. Returning to password-only sign-in needs [stopped maintenance](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in).
 
 The recovery user needs one local password, its Installation Principal, and
 native IAM Installation `administer`; disabling it returns `409`. Keep its password
-in protected custody; out-of-band database or policy changes can still remove
-recovery. Password login never depends on GitHub.
+in protected custody; out-of-band database or policy changes can remove
+it. Password login never depends on GitHub.
 
 `POST /api/auth/recovery` (`userId`, `expectedCurrentUserId`, target
 `expectedVersion`) moves the designation (`GET` reads it) to another qualifying
@@ -223,9 +221,10 @@ user. The variable, like `auth:maintain activate --recovery-user`, then only
 seeds first activation; a differing value warns, and each start re-checks the holder.
 
 Account reads and mutations require a human session, exact `Origin`, and
-Installation `administer`; service keys are refused. State locks actor and target
+Installation `administer`; service keys are refused. Account mutations also
+require every IAM grant of the target account's Principal (else `403`). State locks actor and target
 accounts (retryable `503` after five-second lock waits) and rechecks the actor
-session, which logout or revocation can invalidate. A stale
+session. A stale
 `expectedVersion` or disabled target returns `409 RESOURCE_CONFLICT`.
 
 Send the version just read, such as `{"expectedVersion":1}`:

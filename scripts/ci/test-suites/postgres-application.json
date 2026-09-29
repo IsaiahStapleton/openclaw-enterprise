@@ -290,6 +290,12 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-github-admin-scope.test.mjs",
+      "expectedTests": [
+        "an exact-scope Installation administrator cannot manage an account with broader grants"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-github-tab-binding.test.mjs",
       "expectedTests": [
         "a GitHub tab keeps its own session: another tab's password sign-in signs it out"

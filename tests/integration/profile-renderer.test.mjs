@@ -347,8 +347,8 @@ test(
       }),
     );
 
-    assert.match(original.values, /installationChecksum: [a-f0-9]{64}/);
-    assert.match(changed.values, /installationChecksum: [a-f0-9]{64}/);
+    assert.match(original.values, /installationChecksum: "?[a-f0-9]{64}"?$/m);
+    assert.match(changed.values, /installationChecksum: "?[a-f0-9]{64}"?$/m);
     assert.notEqual(original.installation, changed.installation);
 
     const originalManifests = helmTemplate(original);
@@ -422,6 +422,44 @@ test("Helm catches generated profile Secret collisions", { skip: helmSkip }, () 
     `${error.stdout ?? ""}${error.stderr ?? ""}`,
     /repositoryCredentials\.serviceConfigSecretName must use a dedicated Secret distinct from chatgpt/,
   );
+});
+
+test("label values that YAML 1.1 would retype stay strings", () => {
+  const labels = {
+    spot: "no",
+    enabled: "on",
+    legacy: "Off",
+    short: "y",
+    scale: "1e3",
+    hex: "0x1f",
+    octal: "0o17",
+    sexagesimal: "1:20",
+    infinity: ".inf",
+    team: "@platform",
+    trailing: "zone:",
+    yes: "keep",
+  };
+  const input = baseInput();
+  input.controlPlane.nodeSelector = labels;
+  const output = render("openclaw", input);
+  for (const [key, value] of Object.entries(labels)) {
+    const quotedValue = JSON.stringify(value);
+    const expected = key === "yes" ? '"yes": keep' : `${key}: ${quotedValue}`;
+    assert.ok(
+      output.values.includes(expected),
+      `expected ${key} to render as a quoted string in values.yaml`,
+    );
+  }
+});
+
+test("Helm renders YAML 1.1 lookalike label values as strings", { skip: helmSkip }, () => {
+  const input = baseInput();
+  input.controlPlane.nodeSelector = { spot: "no", scale: "1e3", team: "@platform" };
+  const manifests = helmTemplate(render("openclaw", input));
+  assert.match(manifests, /spot: ["']no["']/);
+  assert.match(manifests, /scale: ["']1e3["']/);
+  assert.match(manifests, /team: ["']@platform["']/);
+  assert.doesNotMatch(manifests, /spot: false/);
 });
 
 test("renderer rejects the removed default profile", () => {

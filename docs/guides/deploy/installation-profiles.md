@@ -94,7 +94,7 @@ discovery egress into the base input:
 ```json
 {
   "runtime": {
-    "codexSeccompProfile": "openclaw/codex-0.156.0-<profile-sha256>.json"
+    "codexSeccompProfile": "openclaw/codex-0.158.0-<profile-sha256>.json"
   },
   "codex": {
     "modelDiscoveryCidrs": ["198.51.100.20/32"]
