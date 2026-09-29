@@ -1,6 +1,6 @@
 ---
 created: 2026-09-28
-updated: 2026-09-28
+updated: 2026-09-29
 last_updated_session: authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a
 ---
 
@@ -8,15 +8,14 @@ last_updated_session: authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a
 
 ## Overview
 
-Installation profile rendering starts when an operator runs
-`scripts/render-installation-profile.mjs` with a selected profile, a JSON input
-file, and an output directory. The renderer validates that each supplied input
-belongs to the profile contract, then writes the Helm values overlay,
-Installation startup YAML, and preflight report. This flow stops at rendered
-files; Kubernetes Secret creation, Helm apply, cluster provisioning, hosted
-plugin and `codex_pat` token setup, optional ChatGPT service-account setup,
-repository registry creation, and Slack consumer configuration remain
-operator-owned steps.
+An operator runs `scripts/render-installation-profile.mjs` with a profile, a
+JSON input file, and an output directory. The renderer checks that every
+supplied input belongs to the profile contract, then writes the Helm values
+overlay, Installation startup YAML, and a preflight report. This flow stops at
+the rendered files. The operator still creates Kubernetes Secrets, applies Helm,
+provisions the cluster, sets up hosted plugin and `codex_pat` tokens and the
+optional ChatGPT service account, creates the repository registry, and
+configures Slack consumers.
 
 ## Entry Points
 
@@ -54,59 +53,66 @@ graph TD
 `scripts/render-installation-profile.mjs:parseArgs`
 
 The command accepts exactly three operator inputs: `--profile`, `--input`, and
-`--out-dir`. The profile flag selects either `openclaw` or `codex`; there is no
-`default` profile. Release name and namespace live in the JSON input so they
-have one owner and can feed both Helm instructions and Installation settings.
-Unsupported flags fail before any file is rendered.
-After valid arguments identify the output directory, the renderer removes only
-its prior `values.yaml`, `installation.yaml`, and `preflight.json`. Unrelated
-files remain. Clearing these before input loading prevents an unreadable or
-malformed JSON input from leaving deployable files or an old success report.
+`--out-dir`. Any other flag fails before a file is rendered. `--profile` must be
+`openclaw` or `codex`; there is no `default` profile. The release name and
+namespace come only from the JSON input, which feeds both the Helm instructions
+and the Installation settings.
+
+Once the arguments are valid, the renderer deletes any prior `values.yaml`,
+`installation.yaml`, and `preflight.json` from the output directory and leaves
+other files in place. It does this before loading input, so an unreadable or
+malformed input cannot leave deployable files or an old success report behind.
 
 ### 2. Load profile and site input
 
 `scripts/render-installation-profile.mjs:readProfile`
 
-The renderer reads the small profile definition from `deploy/profiles/`. The
-profile owns only profile identity and PluginDriver selection. It does not
-carry environment-specific image names, domains, CIDRs, Secrets, or repository
-registry names. The input JSON supplies those values so repeated runs with the
-same profile and input render the same output.
+The renderer reads the profile definition from `deploy/profiles/`. The profile
+owns only its identity and PluginDriver selection. The input JSON supplies
+environment-specific image names, domains, CIDRs, Secrets, and repository
+registry names, so the same profile and input always render the same output.
 
 ### 3. Validate every supplied input
 
 `scripts/render-installation-profile.mjs:buildInput`
 
-Input validation is closed at each section. Unknown fields produce preflight
-errors instead of being ignored, which keeps the contract deterministic and
-prevents unused readiness flags. Profile-specific checks reject Codex-only
-inputs under the OpenClaw profile. The hosted discovery and `codex_pat` runtime
-token value is intentionally absent from the input schema because current
-Installation startup configuration does not consume it; `preflight.json` tells
-the operator to add that credential later as a same-Namespace Secret or through
-the Console. Managed `chatgpt_service_account` provisioning is optional and
-renders only when `codex.managedServiceAccounts` is supplied. Preflight
-validation mirrors the downstream contracts for IPv4 CIDRs, native-admin DNS
-hostnames and shared cookie parent domains, and paired metrics scraper
-selectors so invalid inputs fail before `values.yaml` or `installation.yaml`
-are written.
+Every input section is closed: an unknown field is a preflight error, not
+ignored, so the renderer never accepts an unused readiness flag. The OpenClaw
+profile rejects Codex-only inputs.
+
+The input schema has no field for the hosted discovery and `codex_pat` runtime
+token because Installation startup configuration does not consume it.
+`preflight.json` tells the operator to add that credential later as a
+same-Namespace Secret or through the Console. Managed `chatgpt_service_account`
+provisioning is optional and renders only when `codex.managedServiceAccounts` is
+supplied.
+
+Preflight applies the downstream contracts for IPv4 CIDRs, native-admin DNS
+hostnames and their shared cookie parent domain, and paired metrics scraper
+selectors. Invalid values therefore fail before `values.yaml` or
+`installation.yaml` is written.
 
 ### 4. Build Helm values
 
 `scripts/render-installation-profile.mjs:buildRendered`
 
-The Helm values output selects the control-plane image, Better Auth base URL,
+The Helm values select the control-plane image, Better Auth base URL,
 bootstrap administrator, database and cluster egress CIDRs, API client
 selectors, DNS peer, metrics, native admin, private gateway routing, optional
 ChatGPT Backend mounting, optional logging collector, and optional repository
-credential sidecar values. When `channels.managedSlackProxy` is true,
-it also enables the chart-managed Slack proxy Service. The chart preserves public
-IPv4 HTTPS egress with private and reserved ranges excluded; the proxy enforces
-Slack hostname authorization. Repository provider CIDRs pass through unchanged,
-so operators can preserve the existing GitHub ranges without DNS snapshots. Native admin
-is always enabled by both profiles, so gateway routing is also always enabled.
-Repository values render only when the input explicitly sets
-`repository.enabled: true`.
+credential sidecar. Gateway routing is always enabled. Native admin is enabled
+unless `controlPlane.github` or `controlPlane.google` renders external sign-in
+with `auth.recoveryUserId`, which Helm requires with native admin off. An
+optional `controlPlane.trustedProxy` renders `api.trustedProxy`.
+
+When `channels.managedSlackProxy` is true, the values also enable the
+chart-managed Slack proxy Service. The chart allows that proxy public IPv4 HTTPS
+egress, excluding private and reserved ranges, and the proxy authorizes Slack
+hostnames. Repository values render only when the input explicitly sets
+`repository.enabled: true`. Repository provider CIDRs pass through unchanged,
+so operators can keep their existing GitHub ranges without DNS snapshots. The
+renderer copies `repository.serviceName` only when the input sets it, so the
+chart's upgrade guard still requires an explicit current broker Service name.
 
 ### 5. Build Installation startup YAML
 
@@ -118,38 +124,42 @@ PluginDriver. Compute settings consume the runtime image, DNS peer, trusted
 proxy CIDRs, plugin-status proxy CIDRs, gateway routing identity, runtime
 storage class, node selectors, and transport Secret prefix. The Codex profile
 also consumes the reviewed `runtime.codexSeccompProfile` path. When optional
-managed ServiceAccount inputs are supplied, it emits the ChatGPT Backend plus
+managed ServiceAccount inputs are supplied, it emits the ChatGPT Backend and a
 matching ServiceAccount Driver; otherwise Codex Agents use the existing
 `codex_pat` token path configured at Agent creation. If the chart-managed Slack
 proxy is enabled, Compute receives the generated Service DNS URL and selector
-for API-to-proxy egress. Repository opt-in adds the GitHub Backend, Repo Driver,
+for gateway-to-proxy egress; the chart grants API-to-proxy egress. Repository
+opt-in adds the GitHub Backend, Repo Driver,
 and worker peer expected by the broker sidecar.
-The Compute Gateway name follows Helm's release-name derivation, including its
-63-character truncation and trailing-hyphen removal, so HTTPRoute parent
-references identify the Gateway actually rendered by the chart.
 
-Optional `presets.files` adds operator-selected Preset JSON paths while retaining
-both standard Presets. The renderer rejects non-list input and empty or non-string
-entries. It does not access these files locally: controller startup resolves the
-paths and validates their contents. Preset input changes participate in the same
-Installation checksum as other startup configuration.
+The renderer derives the Compute Gateway name the same way Helm does: it
+truncates `<releaseName>-agent-gateways` to 63 characters and removes a trailing
+hyphen. HTTPRoute parent references therefore match the Gateway the chart
+renders.
+
+Optional `presets.files` adds operator-selected Preset JSON paths and keeps both
+standard Presets. The renderer rejects a non-list value and empty or non-string
+entries, but it does not read the files; controller startup resolves the paths
+and validates their contents. Preset input changes alter the Installation
+checksum like any other startup configuration.
 
 ### 6. Write outputs and preflight
 
 `scripts/render-installation-profile.mjs:writeYaml`
 
-Successful runs render deterministic `installation.yaml`, compute a SHA-256
-checksum from those exact bytes, inject that digest into
-`values.yaml` as `controlPlane.installationChecksum`, then write
-`values.yaml`, `installation.yaml`, and `preflight.json`. Failed validation
-writes only `preflight.json` with `ok:false`, lists only that report in `outputs`,
-and exits nonzero. Input-loading failures exit without a preflight report. The preflight
-report includes warnings, external prerequisites, and the next operator steps.
-It tells the operator to update the Installation startup Secret before the Helm
-upgrade so API and worker pod-template annotations roll when startup-only
-configuration changes. It does not claim live readiness; Helm rendering, Secret
-creation, runtime proof, hosted discovery, Slack consumer activation, and
-repository registry creation are separate evidence.
+On success, the renderer serializes a deterministic `installation.yaml`, hashes
+those exact bytes with SHA-256, and sets `controlPlane.installationChecksum` in
+`values.yaml` to that digest. It then writes `values.yaml`, `installation.yaml`,
+and `preflight.json`. On validation failure, it writes only `preflight.json`
+with `ok:false`, lists only that report in `outputs`, and exits nonzero.
+Input-loading failures exit without a preflight report.
+
+The preflight report lists warnings, external prerequisites, and the next
+operator steps. It tells the operator to update the Installation startup Secret
+before the Helm upgrade, so API and worker pod-template annotations roll when
+startup-only configuration changes. The report does not claim live readiness:
+Helm rendering, Secret creation, runtime proof, hosted discovery, Slack consumer
+activation, and repository registry creation need separate evidence.
 
 ## Debugging and Verification
 
@@ -180,6 +190,10 @@ repository registry creation are separate evidence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 20:30: Stop defaulting the repository broker Service name so the chart upgrade guard applies.
+
+- 2026-09-29 18:00: Carry external sign-in, the recovery user ID, and trusted proxies through profile rerenders.
 
 - 2026-09-28 22:45: Preserve original Slack public HTTPS egress and repository provider ranges in both profiles. (authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a - 1365d9b33eec2de2452bd3142f57a1729cccd559)
 

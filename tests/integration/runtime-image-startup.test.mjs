@@ -117,6 +117,7 @@ test(
     const paths = [
       "tests/conformance/workspace-node-supervisor.test.mjs",
       "apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts",
+      "apps/controller/src/drivers/compute/node-program.ts",
       "apps/controller/src/drivers/plugin/runtime-translator.ts",
     ];
     const files = await Promise.all(
@@ -168,7 +169,10 @@ process.exit(child.status ?? 1);
       {},
       JSON.stringify(files),
     );
-    assert.match(stdout, /pass 1/);
+    // All supervisor proofs: environment and file-delivered node setup, and a
+    // failed saved-identity probe that is retried.
+    assert.match(stdout, /\bpass 3\b/);
+    assert.match(stdout, /\bfail 0\b/);
     assert.match(stdout, /skipped 0/);
   },
 );
@@ -289,6 +293,117 @@ async function runDocker(args, options = {}, input) {
   const [result] = await Promise.all([command, inputComplete]);
   return result;
 }
+
+test(
+  "runtime image omits inactive Slack approvers and checks native compatibility before gateway launch",
+  imageTestOptions,
+  async (t) => {
+    const containerName = `oce-runtime-image-approvers-${randomBytes(6).toString("hex")}`;
+    t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
+    // Exercise both production launchers against the selected native image. No
+    // model or Slack credentials are provided, and the container has no network.
+    const launch = String.raw`
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const cp = require("node:child_process");
+const entrypoints = JSON.parse(fs.readFileSync(0, "utf8"));
+const manifest = { kind: "openclaw", selections: {}, pluginApprovers: [] };
+const base = {
+  gateway: { mode: "local", bind: "loopback", controlUi: { enabled: false },
+    auth: { mode: "token", token: "synthetic-approver-startup-token" } },
+  logging: { consoleLevel: "error" },
+};
+const schemaResult = cp.spawnSync("node", ["/app/openclaw.mjs", "config", "schema", "--json"], { encoding: "utf8", timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
+assert.equal(schemaResult.status, 0, schemaResult.stderr);
+const supportsSlackApprovers = JSON.parse(schemaResult.stdout).properties?.approvals?.properties?.plugin?.properties?.slack !== undefined;
+async function scenario(entrypoint, channel, label) {
+  const directory = fs.mkdtempSync("/tmp/oce-approver-startup-");
+  const config = { ...base, ...(channel === undefined ? {} : { channels: { slack: channel } }) };
+  const configPath = directory + "/base.json";
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  const environment = { ...process.env, HOME: "/home/node", OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: directory, OPENCLAW_CONFIG_JSON: JSON.stringify(config),
+    OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest }), OPENCLAW_GATEWAY_PORT: "18789",
+    OPENCLAW_RUNTIME_STATUS_PORT: "18888", OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
+    OPENCLAW_AGENT_REVISION_ID: "rev_approver-startup", OPENCLAW_POD_UID: "pod_approver-startup" };
+  const child = cp.spawn("node", ["-e", entrypoint], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", value => { output += value; });
+  child.stderr.on("data", value => { output += value; });
+  const exited = new Promise(resolve => child.once("exit", resolve));
+  const deadline = Date.now() + 45000;
+  const incompatible = channel?.enabled !== false && channel !== undefined && !supportsSlackApprovers;
+  try {
+    let observed = false;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) throw new Error(label + " exited before readiness: " + output);
+      if (incompatible) {
+        observed = output.includes("cannot validate approvals.plugin.slack");
+      } else {
+        try { observed = (await fetch("http://127.0.0.1:18789/healthz", { signal: AbortSignal.timeout(1000) })).ok; } catch {}
+      }
+      if (observed) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.ok(observed, label + " did not report its expected startup outcome: " + output);
+    if (incompatible) {
+      assert.equal(fs.existsSync(directory + "/openclaw.json"), false, "Rejected policy must not replace the native config");
+      assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), config);
+      await assert.rejects(fetch("http://127.0.0.1:18789/healthz", { signal: AbortSignal.timeout(1000) }));
+      if (label.startsWith("kubernetes")) {
+        const status = await (await fetch("http://127.0.0.1:18888/openclaw/runtime/status")).json();
+        assert.equal(status.runtimeFailure.check, "plugin-approvers");
+        assert.equal(status.runtimeFailure.code, "INCOMPATIBLE_RESPONSE");
+      }
+    } else {
+      const effective = JSON.parse(fs.readFileSync(directory + "/openclaw.json", "utf8"));
+      assert.deepEqual(effective.approvals?.plugin?.slack, channel === undefined || channel.enabled === false ? undefined : { approvers: [] });
+    }
+    assert.deepEqual(manifest.pluginApprovers, []);
+    assert.equal(fs.readdirSync("/tmp").some(name => name.startsWith("oce-plugin-approvers-")), false, "Capability probe must clean up its private config");
+  } finally {
+    child.kill("SIGTERM");
+    await exited;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+(async () => {
+  for (const [label, entrypoint] of Object.entries(entrypoints)) {
+    await scenario(entrypoint, undefined, label + " absent");
+    await scenario(entrypoint, { enabled: false }, label + " disabled");
+    await scenario(entrypoint, { enabled: true }, label + " configured");
+  }
+  console.log("PLUGIN_APPROVER_STARTUP_PASSED");
+})().catch(error => { console.error(error); process.exitCode = 1; });
+`;
+    const { stdout } = await runDocker(
+      [
+        "run",
+        "-i",
+        "--rm",
+        "--name",
+        containerName,
+        "--network",
+        "none",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--entrypoint",
+        "node",
+        image,
+        "-e",
+        launch,
+      ],
+      { timeout: 180_000 * imageSmokeTimeoutMultiplier },
+      JSON.stringify({
+        docker: DOCKER_GATEWAY_RUNTIME_ENTRYPOINT,
+        kubernetes: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+      }),
+    );
+    assert.match(stdout, /PLUGIN_APPROVER_STARTUP_PASSED/);
+  },
+);
 
 const runtimeImageStockBrokerDiagnosticStages = new Set([
   "material-init",
@@ -1326,6 +1441,32 @@ test(
 );
 
 test(
+  "runtime image reconnects an ephemeral native worker from an expired replayed setup code",
+  imageTestOptions,
+  async (t) => {
+    // Pod restarts replay the enrollment Secret's setup code after its expiry.
+    const configurationPath = await temporaryGatewayConfiguration(t, "codex");
+    const { containerName } = await runGatewaySmoke(t, "codex", {
+      configurationPath: "/etc/openclaw/openclaw.json",
+      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+      volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
+    });
+    const source = await readFile(
+      new URL("../fixtures/runtime-native-worker-restart.mjs", import.meta.url),
+      "utf8",
+    );
+    const { stdout } = await runDocker(
+      ["exec", containerName, "node", "--input-type=module", "-e", source],
+      { timeout: 300_000 * imageSmokeTimeoutMultiplier },
+    );
+    const result = JSON.parse(stdout);
+    assert.equal(result.sameIdentityAfterExpiredReplay, true);
+    assert.equal(result.singleBootstrapCompletion, true);
+    assert.equal(result.unpairedExpiredRejected, true);
+  },
+);
+
+test(
   "runtime image routes sandboxed Git through stock Codex and the repository broker",
   imageTestOptions,
   async (t) => {
@@ -1905,9 +2046,10 @@ assert.equal(execFileSync("codex", ["--version"], {encoding: "utf8"}).trim(), "c
 assert.equal(execFileSync(process.execPath, [bundledCommand, "--version"], {encoding: "utf8"}).trim(), "codex-cli 0.158.0");
 const provenance = JSON.parse(readFileSync("/opt/oce/runtime/provenance.json", "utf8"));
 assert.equal(provenance.source, "https://github.com/openclaw/openclaw");
-assert.equal(provenance.commit, "9190ad7c12667af435734d4944060effd6ad0a71");
-assert.equal(provenance.sourceArchiveSha256, "5393d25ac73b98030609fa40b2c2bc3f44c62a455660b7cc3f28371fc92dc851");
-assert.equal(provenance.openclawBridgePatchSha256, "62328f7cc72ada024a97a5a7bf89e988db3f91b64b4c6d7fa6809c218fc8b72e");
+assert.equal(provenance.commit, "9d9c8568c51e340540f634f71bd7c7582a70debc");
+assert.equal(provenance.sourceArchiveSha256, "175260a3e26e6de4c1225ff27d8c2b17b01b700640db915a8bac9ee3d4cf903f");
+assert.equal(provenance.openclawBridgePatchSha256, "705b21a67f344de66a5468a07b35f6fec01635331d99cb85d9254c56bccc0c7d");
+assert.equal(provenance.openclawConnectPatchSha256, "c57722da9a88ec4295577ab9a9ba6e2ca37fceda11ce8b51b08ee1425e00851f");
 assert.equal(provenance.codex.version, "0.158.0");
 assert.equal(Object.hasOwn(provenance, "codexPatchSha256"), false);
 assert.equal(Object.hasOwn(provenance, "codexVersion"), false);

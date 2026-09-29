@@ -1,3 +1,43 @@
+// A trace may record an interim tool error before that same call completes.
+// Only its latest result, or an exact process-session poll, can prove success.
+export function completedToolResult(trace, call) {
+  const succeeded = (result) =>
+    !result.isError && result.status === "completed" && result.exitCode === 0;
+  const result = trace.results.findLast(
+    (result) => result.toolCallId === call.id && result.seq > call.seq,
+  );
+  if (!result || result.isError) {
+    return undefined;
+  }
+  if (succeeded(result)) {
+    return result;
+  }
+  if (result.status !== "running" || typeof result.processSessionId !== "string") {
+    return undefined;
+  }
+  for (const poll of trace.calls) {
+    if (
+      poll.name !== "process" ||
+      poll.processAction !== "poll" ||
+      poll.processSessionId !== result.processSessionId ||
+      poll.seq <= result.seq
+    ) {
+      continue;
+    }
+    const completed = trace.results.findLast(
+      (done) => done.toolCallId === poll.id && done.seq > poll.seq,
+    );
+    if (
+      completed &&
+      completed.processSessionId === result.processSessionId &&
+      succeeded(completed)
+    ) {
+      return completed;
+    }
+  }
+  return undefined;
+}
+
 const repositoryCommandEvidence = String.raw`
   // This is the deliberately small grammar requested by this installed task,
   // not a general shell parser: one command, literal arguments and explicit cwd.
@@ -287,6 +327,8 @@ export const codexRepositoryEvidenceScript = String.raw`
               operations: expected.filter(command => item.cwd === command.workdir && args?.length === command.argv.length && args.every((arg, index) => arg === command.argv[index])).map(command => command.operation),
               status: item.status,
               exitCode: item.exitCode,
+              http400: /returned error: 400\b/i.test(item.aggregatedOutput ?? ""),
+              sandboxDenied: /SANDBOX_DENIED:(?:EACCES|EPERM|EROFS)\b/.test(item.aggregatedOutput ?? ""),
               commitShas: lines.filter(line => /^[a-f0-9]{40}$/.test(line)),
               pullUrls: lines.filter(line => /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/.test(line)),
             };

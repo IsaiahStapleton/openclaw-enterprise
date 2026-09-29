@@ -358,6 +358,22 @@ Before selecting an older controller or runtime image, verify it can read all
 state written by the candidate and restore compatible data if required. Never
 delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
 
+### Roll back across human sign-in
+
+Migration `0037` adds the human sign-in state. `helm rollback` skips the
+pre-upgrade migration Job, so it never reverses that migration.
+
+Before GitHub sign-in is activated, scale `deployment/openclaw-enterprise-api` to
+zero and wait for its Pods to disappear, run `helm rollback`, then verify password
+sign-in before reopening ingress.
+
+After activation, do not roll back; fix forward. The database refuses sessions
+that the previous controller issues without a human sign-in binding, so it
+cannot sign anyone in, and existing sessions expire within 8 hours. Never run
+the previous and current controllers together.
+To roll back anyway, first return to password-only sign-in with
+[stopped maintenance](auth-maintenance.md#deactivate-github-sign-in).
+
 ## Current limits
 
 - No canary, batching, general runtime compatibility check, automatic rollback,

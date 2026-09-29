@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,7 +62,7 @@ async function writePrepare(root) {
       "export async function prepareFile({ file, statePath }) {",
       "  if (file.path.endsWith('first.test.mjs')) {",
       "    return {",
-      "      env: { CI_RUNNER_SCOPED_VALUE: 'one', OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: 'private.example/controller@sha256:' + 'a'.repeat(64), OCC_TEST_PRODUCTION_NODE_IMAGE: 'untrusted-image-value' },",
+      "      env: { CI_RUNNER_SCOPED_VALUE: 'one', OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: 'private.example/controller@sha256:' + 'a'.repeat(64), OCC_TEST_KUBERNETES_RUNTIME_IMAGE: 'private.example/runtime@sha256:' + 'b'.repeat(64), OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: 'private.example/controller@sha256:' + 'd'.repeat(64), OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE: 'private.example/runtime@sha256:' + 'e'.repeat(64), OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE: 'private.example/broker@sha256:' + 'c'.repeat(64), OCC_TEST_PRODUCTION_NODE_IMAGE: 'untrusted-image-value' },",
       "      cleanup: async () => appendFile(statePath, `${file.path}\\n`),",
       "    };",
       "  }",
@@ -77,6 +86,8 @@ test("run resolves lane documents relative to the manifest and preserves ordered
       'import test from "node:test";',
       'test("first file sees scoped env", () => {',
       '  assert.equal(process.env.CI_RUNNER_SCOPED_VALUE, "one");',
+      "  assert.match(process.env.OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE, /@sha256:d{64}$/);",
+      "  assert.match(process.env.OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE, /@sha256:e{64}$/);",
       "});",
       "",
     ].join("\n"),
@@ -166,6 +177,10 @@ test("run resolves lane documents relative to the manifest and preserves ordered
   };
   assert.deepEqual(summary.files[0].imageDigests, {
     controller: `sha256:${"a".repeat(64)}`,
+    runtime: `sha256:${"b".repeat(64)}`,
+    controllerUpgrade: `sha256:${"d".repeat(64)}`,
+    runtimeUpgrade: `sha256:${"e".repeat(64)}`,
+    repositoryCredentials: `sha256:${"c".repeat(64)}`,
     ...pairDigests,
   });
   assert.deepEqual(summary.files[1].imageDigests, pairDigests);
@@ -874,6 +889,16 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
       "    throw error;",
       "  }",
       "});",
+      'test("allowlisted observability log export diagnostic", () => {',
+      `  const error = new Error("${secret}-message");`,
+      `  error.openclawCiDiagnostic = { kind: "observability-log-export", api: true, worker: false, records: ["${secret}-record"] };`,
+      "  throw error;",
+      "});",
+      'test("rejects unsafe observability log export diagnostic", () => {',
+      `  const error = new Error("${secret}-message");`,
+      `  error.openclawCiDiagnostic = { kind: "observability-log-export", api: "${secret}", worker: false };`,
+      "  throw error;",
+      "});",
       'test("rejects unsafe controller HTTP diagnostic", () => {',
       "  try {",
       "    assert.equal(500, 201);",
@@ -936,6 +961,26 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
         {
           name: "rejects unsafe runtime stock broker stage",
           diagnostic: { kind: "runtime-image-stock-broker", stage: `${secret}-stage` },
+        },
+        {
+          name: "retains safe monitoring readiness evidence",
+          diagnostic: {
+            kind: "metrics-monitoring",
+            stage: "prometheus-up",
+            reason: "container-exited",
+            container: "agent",
+            exitCode: 2,
+            lastHttpStatus: 503,
+            logs: secret,
+          },
+        },
+        {
+          name: "rejects unsafe monitoring stage",
+          diagnostic: {
+            kind: "metrics-monitoring",
+            stage: secret,
+            reason: "timeout",
+          },
         },
         {
           name: "allowlisted repository platform setup diagnostic",
@@ -1041,6 +1086,18 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     (entry) => entry.name === "rejects unsafe controller HTTP diagnostic",
   );
   assert.equal(unsafeFailure.error.diagnostic, undefined);
+  const logExportFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "allowlisted observability log export diagnostic",
+  );
+  assert.deepEqual(logExportFailure.error.diagnostic, {
+    kind: "observability-log-export",
+    api: true,
+    worker: false,
+  });
+  const unsafeLogExportFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "rejects unsafe observability log export diagnostic",
+  );
+  assert.equal(unsafeLogExportFailure.error.diagnostic, undefined);
   // Keep the failed wait identifiable without exposing arbitrary runtime output.
   for (const stage of ["ready-status", "warning-status", "initial-rollout"]) {
     const failure = summary.files[0].tests.find((entry) => entry.name === stage);
@@ -1092,6 +1149,21 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     (entry) => entry.name === "rejects unsafe runtime stock broker stage",
   );
   assert.equal(unsafeStockBroker.error.diagnostic, undefined);
+  const monitoringFailure = summary.files[0].tests.find(
+    (entry) => entry.name === "retains safe monitoring readiness evidence",
+  );
+  assert.deepEqual(monitoringFailure.error.diagnostic, {
+    kind: "metrics-monitoring",
+    stage: "prometheus-up",
+    reason: "container-exited",
+    container: "agent",
+    exitCode: 2,
+    lastHttpStatus: 503,
+  });
+  const unsafeMonitoring = summary.files[0].tests.find(
+    (entry) => entry.name === "rejects unsafe monitoring stage",
+  );
+  assert.equal(unsafeMonitoring.error.diagnostic, undefined);
   const setupFailure = summary.files[0].tests.find(
     (entry) => entry.name === "allowlisted repository platform setup diagnostic",
   );
@@ -1120,6 +1192,154 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     assert.equal(rejected.status, "failed");
     assert.equal(rejected.error.diagnostic, undefined);
   }
+});
+
+test("run keeps bounded Agent namespace activity from a passing k3d file", async (t) => {
+  const root = await fixture(t);
+  const clusterDirectory = join(root, "cluster");
+  await mkdir(clusterDirectory);
+  const statePath = join(root, "state/k3d.json");
+  const resultsPath = join(root, "results/k3d.json");
+  await writeJson(statePath, {
+    lane: "k3d-lane",
+    resources: [
+      {
+        kind: "k3d-cluster",
+        status: "ready",
+        name: "owned-cluster",
+        directory: clusterDirectory,
+        kubeconfig: join(clusterDirectory, "kubeconfig"),
+        context: "k3d-owned-cluster",
+      },
+    ],
+  });
+  // This kubectl stand-in serves the raw watch streams a live API server would
+  // send while the test file creates and deletes its Agent namespace.
+  const kubectl = join(root, "kubectl");
+  const pod = (ready, type) => ({
+    type,
+    object: {
+      kind: "Pod",
+      metadata: {
+        namespace: "occ-agent-a",
+        name: "harness-0",
+        creationTimestamp: "2026-09-29T00:00:00Z",
+      },
+      spec: {
+        nodeName: "server-0",
+        containers: [{ name: "harness", env: [{ name: "TOKEN", value: "do-not-publish-env" }] }],
+      },
+      status: {
+        phase: "Running",
+        conditions: [{ type: "Ready", status: ready ? "True" : "False", lastTransitionTime: "t" }],
+        containerStatuses: [{ name: "harness", ready, restartCount: 0 }],
+      },
+    },
+  });
+  const event = (namespace, uid, reason, message, count = 1) => ({
+    type: "ADDED",
+    object: {
+      metadata: { namespace, name: `${uid}.event`, uid },
+      involvedObject: { kind: "Pod", name: "harness-0", namespace },
+      type: "Normal",
+      reason,
+      message,
+      count,
+      firstTimestamp: "2026-09-29T00:00:01Z",
+      lastTimestamp: `2026-09-29T00:00:0${count}Z`,
+    },
+  });
+  const pods = [
+    pod(false, "ADDED"),
+    pod(false, "MODIFIED"),
+    pod(true, "MODIFIED"),
+    pod(true, "DELETED"),
+  ];
+  const events = [
+    event("occ-agent-a", "e1", "Pulled", "Successfully pulled image"),
+    event("occ-agent-a", "e2", "Unhealthy", "Readiness probe failed"),
+    event("occ-agent-a", "e2", "Unhealthy", "Readiness probe failed", 3),
+    event("occ-agent-a", "e3", "Failed", "bearer do-not-publish-event"),
+    event("kube-system", "e4", "Started", "unrelated system event"),
+  ];
+  await writeFile(
+    kubectl,
+    [
+      `#!${process.execPath}`,
+      "const query = process.argv.at(-1);",
+      `const lines = query.startsWith("/api/v1/pods?") ? ${JSON.stringify(pods)} : ${JSON.stringify(events)};`,
+      "for (const line of lines) process.stdout.write(JSON.stringify(line) + '\\n');",
+      'process.stdout.write(\'{"type":"MODIFIED","object":\');',
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+  );
+  await chmod(kubectl, 0o755);
+  await writeFile(
+    join(root, "tests/integration/agent.test.mjs"),
+    [
+      'import test from "node:test";',
+      'import { setTimeout as delay } from "node:timers/promises";',
+      'test("agent file passes", () => delay(300));',
+      "",
+    ].join("\n"),
+  );
+  await writeJson(join(root, "scripts/ci/k3d-lane.json"), {
+    files: [{ path: "tests/integration/agent.test.mjs", expectedTests: ["agent file passes"] }],
+  });
+  await writeJson(join(root, "scripts/ci/suites.json"), {
+    version: 1,
+    lanes: { "k3d-lane": "./k3d-lane.json" },
+    groups: {},
+  });
+
+  const result = run(
+    root,
+    [
+      "run",
+      "k3d-lane",
+      "--manifest",
+      join(root, "scripts/ci/suites.json"),
+      "--root",
+      root,
+      "--state",
+      statePath,
+      "--results",
+      resultsPath,
+    ],
+    { OCC_KUBECTL_BIN: kubectl },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(await readFile(resultsPath, "utf8")).status, "passed");
+  const text = await readFile(`${statePath}.diagnostics.json`, "utf8");
+  const report = JSON.parse(text);
+  assert.equal(report.lane, "k3d-lane");
+  assert.equal(report.agentNamespaces.length, 1);
+  const [activity] = report.agentNamespaces;
+  assert.equal(activity.file, "tests/integration/agent.test.mjs");
+  assert.equal(activity.cluster, "owned-cluster");
+  assert.deepEqual(activity.namespaces, ["occ-agent-a"]);
+  // Unchanged watch records collapse; readiness and deletion transitions remain.
+  assert.deepEqual(
+    activity.pods.map(({ watch, containers }) => [watch, containers[0].ready]),
+    [
+      ["ADDED", false],
+      ["MODIFIED", true],
+      ["DELETED", true],
+    ],
+  );
+  assert.deepEqual(
+    activity.events.map(({ reason, count }) => [reason, count]),
+    [
+      ["Pulled", 1],
+      ["Failed", 1],
+      ["Unhealthy", 3],
+    ],
+  );
+  assert.doesNotMatch(text, /do-not-publish|unrelated system event/);
+  // Raw watch streams hold full Pod specs; only the projection survives.
+  assert.deepEqual(await readdir(clusterDirectory), []);
 });
 
 test("audit fails when a referenced lane cannot be loaded", async (t) => {
@@ -1412,4 +1632,76 @@ test("aggregate fails when a supplied non-lane need failed even if lane artifact
     ["need-not-success"],
   );
   assert.equal(summary.issues[0].need, "audit");
+});
+
+test("run records only allowlisted measurements from test diagnostics", async (t) => {
+  const root = await fixture(t);
+  const resultsPath = join(root, "results/measurements.json");
+  const measurement = (value) => `openclaw-ci-measurement ${JSON.stringify(value)}`;
+  await writeFile(
+    join(root, "tests/integration/measurements.test.mjs"),
+    [
+      'import test from "node:test";',
+      'test("measures", (t) => {',
+      ...[
+        measurement({
+          kind: "kubelet-volume-refresh",
+          volume: "secret",
+          nudge: "pod-annotation",
+          sample: 1,
+          seconds: 1.234,
+          extra: "secretauthvalue-extra",
+        }),
+        measurement({
+          kind: "kubelet-volume-refresh",
+          volume: "secretauthvalue-volume",
+          nudge: "none",
+          sample: 0,
+          seconds: 1,
+        }),
+        measurement({
+          kind: "kubelet-volume-refresh",
+          volume: "configmap",
+          nudge: "none",
+          sample: 0,
+          seconds: "secretauthvalue-seconds",
+        }),
+        "openclaw-ci-measurement secretauthvalue-not-json",
+        "secretauthvalue-plain-diagnostic",
+      ].map((message) => `  t.diagnostic(${JSON.stringify(message)});`),
+      "});",
+      "",
+    ].join("\n"),
+  );
+  await writeJson(join(root, "manifest.json"), {
+    version: 1,
+    lanes: { measure: { files: [{ path: "tests/integration/measurements.test.mjs" }] } },
+    groups: { ci: ["measure"] },
+  });
+
+  const result = run(root, [
+    "run",
+    "measure",
+    "--manifest",
+    "manifest.json",
+    "--root",
+    root,
+    "--state",
+    "state/measurements.jsonl",
+    "--results",
+    resultsPath,
+  ]);
+  const artifact = await readFile(resultsPath, "utf8");
+  const summary = JSON.parse(artifact);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(summary.files[0].measurements, [
+    {
+      kind: "kubelet-volume-refresh",
+      volume: "secret",
+      nudge: "pod-annotation",
+      sample: 1,
+      seconds: 1.2,
+    },
+  ]);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}\n${artifact}`, /secretauthvalue/);
 });

@@ -36,6 +36,43 @@ test("console Backend API returns only safe Installation-admin summaries", async
   assert.equal(unavailable.body.error.code, "DEPENDENCY_UNAVAILABLE");
 });
 
+test("observability destination requires Installation administration", async (t) => {
+  const url = "https://metrics.example.test/d/operations";
+  const fixture = await createConsoleAppFixture(t, { observabilityUrl: url });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Observability readers");
+
+  const administrator = await fixture.request("GET", "/observability");
+  assert.equal(administrator.status, 200);
+  assert.deepEqual(administrator.data, { url });
+
+  // A Namespace reader must not discover the Installation-wide external destination.
+  const limited = await fixture.createAccountWithPolicy("namespace-observer", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-console-observability-reader",
+      namespaceId: namespace.id,
+      permissions: [{ action: "read", resourceKind: "namespace" }],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-console-observability-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-console-observability-reader",
+    });
+  });
+  const session = await fixture.signIn(limited.credentials);
+  const denied = await fixture.request("GET", "/observability", { session });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.error.code, "FORBIDDEN");
+
+  const absent = await createConsoleAppFixture(t);
+  await absent.bootstrap("No observability destination");
+  const response = await absent.request("GET", "/observability");
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.data, { url: null });
+});
+
 test("console collection APIs keep exact Namespace and Agent IAM boundaries", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -238,13 +275,38 @@ test("console auth routes reject untrusted browser origins and issue production 
   });
   assert.equal(crossSiteNoOrigin.response.status, 403);
 
+  // Without the GitHub profile the session key still only narrows the cookie session.
+  const providers = await fixture.rawRequest("GET", "/api/auth/providers");
+  assert.deepEqual(JSON.parse(providers.text).data, {
+    github: false,
+    google: false,
+    sessionBinding: false,
+  });
+  const sessionKey = JSON.parse(retainedSession.text).data.sessionKey;
+  assert.match(sessionKey, /^[A-Za-z0-9_-]{43}$/);
+  const foreignKey = "A".repeat(43);
+  const foreignSession = await fixture.rawRequest("GET", "/api/auth/session", {
+    headers: { cookie: requestCookie, "x-occ-session-key": foreignKey },
+  });
+  assert.equal(foreignSession.response.status, 401, foreignSession.text);
+  const foreignSignOut = await fixture.rawRequest("POST", "/api/auth/sign-out", {
+    headers: { cookie: requestCookie, origin: fixture.origin, "x-occ-session-key": foreignKey },
+  });
+  assert.equal(foreignSignOut.response.status, 401, foreignSignOut.text);
+  assert.equal(foreignSignOut.response.headers.get("set-cookie"), null);
+  const keptSession = await fixture.rawRequest("GET", "/api/auth/session", {
+    headers: { cookie: requestCookie, "x-occ-session-key": sessionKey },
+  });
+  assert.equal(JSON.parse(keptSession.text).data.sessionKey, sessionKey);
+
+  // The exact Origin check runs before the session key is considered.
   const originlessSignOut = await fixture.rawRequest("POST", "/api/auth/sign-out", {
-    headers: { cookie: requestCookie },
+    headers: { cookie: requestCookie, "x-occ-session-key": foreignKey },
   });
   assert.equal(originlessSignOut.response.status, 403);
 
   const cliSignOut = await fixture.rawRequest("POST", "/api/auth/sign-out", {
-    headers: { cookie: requestCookie, origin: fixture.origin },
+    headers: { cookie: requestCookie, origin: fixture.origin, "x-occ-session-key": sessionKey },
   });
   assert.equal(cliSignOut.response.status, 200, cliSignOut.text);
 });

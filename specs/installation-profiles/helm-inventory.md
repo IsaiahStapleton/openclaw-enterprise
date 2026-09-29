@@ -124,20 +124,21 @@ Envoy and correct post-NAT sources are required. Policies allow Agent ports
 See [routing](../../deploy/helm/openclaw-execution/templates/routing.yaml).
 
 [Observability demo values](../../deploy/helm/openclaw-observability-demo/values.yaml)
-select pinned Prometheus/Loki/Grafana images; require `occ.namespace`,
-`occ.release`, `cluster.cidrs` and `grafana.adminSecretName`.
-`occ.metricsPort: 9464` and `grafana.adminSecretKey: password`.
-`cluster.port: 443`; normal DNS selectors; `grafana.clients: []` means
-port-forward-only access. Each workload has one replica, `storage.sizeLimit: 1Gi`
-emptyDir, requests 100m/128Mi and limits 1 CPU/512Mi. Prometheus retains 24h/256MB.
+select pinned Prometheus/Loki/Grafana images and require `occ.namespace`,
+`occ.release`, `cluster.cidrs` and `grafana.adminSecretName`. Defaults:
+`occ.metricsPort: 9464`, `grafana.adminSecretKey: password`, `cluster.port: 443`,
+and normal DNS selectors. `grafana.clients: []` means port-forward-only access.
+Each workload has one replica, `storage.sizeLimit: 1Gi` emptyDir, requests
+100m/128Mi and limits 1 CPU/512Mi. Prometheus retains 24h/256MB.
 The demo provides neither durable storage nor HA.
 
 ## Environment requirements and absent knobs
 
 Local Kubernetes and EKS/general Kubernetes use the same value contracts.
-Compute requires Kubernetes 1.35.0 or newer in production for each cluster. Both
-need enforcing CNI, actual Pod-observed endpoint addresses, protected bootstrap
-storage, namespace-scoped bindings, compatible runtime storage and image access.
+Compute requires Kubernetes 1.35.0 or newer in production for each cluster.
+Both environments need enforcing CNI, actual Pod-observed endpoint addresses,
+protected bootstrap storage, namespace-scoped bindings, compatible runtime
+storage and image access.
 EKS-specific node/CSI/IAM/API reachability work remains operator-owned; no EKS
 switch exists. Local cluster provisioning is likewise outside these charts.
 

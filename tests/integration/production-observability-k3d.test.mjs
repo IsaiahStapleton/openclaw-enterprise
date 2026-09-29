@@ -77,7 +77,8 @@ test(
     assert.ok(fresh.requestId);
     // Inspect actual OTLP exports from the shipped chart Collector. Neither a
     // query backend nor a synthetic log emission stands in for OCC here.
-    const exported = await f.waitFor("attributed API and worker OTLP records", async () => {
+    let found = { api: false, worker: false };
+    const exporting = f.waitFor("attributed API and worker OTLP records", async () => {
       const payloads = await readLogs();
       const records = payloads.flatMap(({ resourceLogs = [] }) =>
         resourceLogs.flatMap((resource) =>
@@ -104,7 +105,13 @@ test(
           record.body?.startsWith("worker.") &&
           record.body === record.attributes["event.name"],
       );
+      found = { api: Boolean(api), worker: Boolean(worker) };
       return api && worker ? { payloads, api, worker } : false;
+    });
+    const exported = await exporting.catch((error) => {
+      // CI results keep only allowlisted fields; name the source that never arrived.
+      error.openclawCiDiagnostic = { kind: "observability-log-export", ...found };
+      throw error;
     });
     for (const value of f.secrets) {
       assert.ok(

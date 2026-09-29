@@ -234,7 +234,8 @@ test(
             .errors()
             .split("\n")
             .filter((line) => line.startsWith("{"))
-            .map(JSON.parse);
+            .map(JSON.parse)
+            .filter(({ event }) => event === "codex.model_probe");
           assert.equal(diagnostics.length, scenario.attempts);
           assert.equal(diagnostics.at(-1).code, scenario.code ?? "READY");
           assert.deepEqual(
@@ -266,7 +267,9 @@ test(
         launcher
           .errors()
           .split("\n")
-          .filter((line) => line.startsWith("{")).length,
+          .filter((line) => line.startsWith("{"))
+          .map(JSON.parse)
+          .filter(({ event }) => event === "codex.model_probe").length,
         1,
       );
       assert.doesNotMatch(launcher.errors(), /Harness model authentication probe failed/);

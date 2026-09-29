@@ -61,13 +61,11 @@ Verify the runtime and a real response with
 An **AgentRevision** is an immutable version created by deployment. A
 **Configuration** is the reusable, mutable input for the next version.
 
-The **Versions** list marks the current version. **View version vN** opens
-read-only details: creation time, source Configuration generation, recorded
-deployment status, and captured settings. The activity panel still follows the
-latest visible deployment. **Available versions** jumps to readable versions;
-Configuration and Channels show further details, including admitted native JSON.
-The `rev_…` ID identifies an exact version for API calls and support. Viewing
-does not deploy or activate it.
+**Versions** marks the current version. **View version vN** shows creation time,
+Configuration generation, deployment status, and read-only settings, including
+native JSON. Activity follows the latest visible deployment. **Available versions**
+jumps to readable versions; `rev_…` identifies the version for API calls and
+support. Viewing neither deploys nor activates it.
 
 **Run diagnostics for this version** requests fresh, on-demand observations of
 the viewed version. Checks include a time and `succeeded`, `failed`, or
@@ -80,7 +78,7 @@ There is no rollback or redeploy-old-revision button. See
 [Agent Revisions](../topics/agent-revisions.md) for the lifecycle.
 
 Select **Create new version** to open the current saved settings. Edit and save
-Configuration, plugin selections, channel settings, or credentials as needed.
+Configuration, plugin selections, channel settings, or credentials.
 **Deploy new version** submits those saved settings for a new revision; it does
 not redeploy a version you were viewing. It
 checks freshness and required model and channel credentials; missing prerequisites
@@ -97,6 +95,12 @@ The **Configuration**, **Plugins**, **Channels**, **Credentials**, and **Workspa
 change the panel below. Credentials is available only on the new version draft.
 Browser Back and Forward restore the selected tab. Leaving a tab clears entered
 token values. The workspace remains live regardless of the viewed version.
+
+### Unreadable saved settings
+
+Unreadable settings show a warning; identity, navigation, and readable versions
+remain available. Omissions are not defaults. Unreadable drafts block editing and
+deployment; nothing repairs them.
 
 ## Configuration tab
 
@@ -291,16 +295,17 @@ the active gateway in a new tab, even while you view a draft or older revision.
 
 The native UI can change the gateway outside OCE's revision tracking. Use OCE for
 durable configuration. See [native admin access](../../reference/agent-native-admin.md)
-for permissions and stopped, unavailable, or unsupported states.
+for permissions and stopped, unavailable, or unsupported states. Installation
+administrators can [share an Agent](agent-sharing.md) with existing people.
 
 ## Stop and resume
 
 **Stop Agent** opens a confirmation explaining that shutdown interrupts running
 work but preserves revision history, credentials, gateway state, and workspace
 files. **Cancel** closes it without a write. Confirming requires `operate`
-permission on this Agent, regardless of the revision or tab you are viewing.
+permission on this Agent, regardless of the viewed revision or tab.
 
-An accepted stop requests shutdown; it does not prove that the runtime has
+An accepted stop requests shutdown; it does not prove the runtime
 finished. **Refresh stop status** reads the desired state and selected revision.
 An uncertain result blocks another stop until a successful refresh. To resume,
 open **Create new version** and select **Deploy new version**, which creates a new

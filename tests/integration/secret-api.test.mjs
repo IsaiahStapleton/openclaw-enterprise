@@ -130,7 +130,7 @@ async function createFixture(options = {}) {
     const email = `${name}-${randomUUID()}@example.com`;
     const password = `generated-password-${randomUUID()}`;
     const account = await authFixture.auth.createAccount({ email, password, name });
-    const seed = authFixture.auth.principalSeed(account);
+    const seed = authFixture.auth.principalSeed(account, { grant: "none" });
     state.identities.push(seed.principal);
     sessionsByPrincipalId.set(
       seed.principal.id,

@@ -264,6 +264,46 @@ export const AgentSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ConfigurationReadErrorSchema = Type.Object(
+  {
+    code: Type.Literal("SAVED_CONFIGURATION_UNREADABLE"),
+    field: Type.Union([
+      Type.Literal("plugins"),
+      Type.Literal("pluginApprovers"),
+      Type.Literal("repositoryBindings"),
+      Type.Literal("harnessAuth"),
+      Type.Literal("secretBindings"),
+      Type.Literal("repositoryCredentials"),
+      Type.Literal("configuration"),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+const agentReadDescription =
+  "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth.";
+
+export const AgentReadSchema = Type.Union(
+  [
+    AgentSchema,
+    Type.Object(
+      {
+        ...Type.Omit(AgentSchema, [
+          "plugins",
+          "pluginApprovers",
+          "repositoryBindings",
+          "harnessAuth",
+        ]).properties,
+        configurationReadError: ConfigurationReadErrorSchema,
+      },
+      { additionalProperties: false },
+    ),
+  ],
+  {
+    description: agentReadDescription,
+  },
+);
+
 export const PluginDriverIdentitySchema = Type.Object(
   { id: Type.String({ minLength: 1 }), implementation: Type.String({ minLength: 1 }) },
   { additionalProperties: false, $id: "PluginDriverIdentity" },
@@ -620,6 +660,11 @@ export const AgentResponse = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentReadResponse = Type.Object(
+  { data: AgentReadSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 export const AgentProvisioningResponse = Type.Object(
   {
     data: Type.Object(
@@ -664,7 +709,7 @@ export const IAMAccessBindingListResponse = Type.Object(
 );
 
 export const AgentListResponse = Type.Object(
-  { data: Type.Array(AgentSchema), meta: Meta },
+  { data: Type.Array(AgentReadSchema, { description: agentReadDescription }), meta: Meta },
   { additionalProperties: false },
 );
 
@@ -675,6 +720,17 @@ export const BackendListResponse = Type.Object(
 
 export const RepositoryOptionListResponse = Type.Object(
   { data: Type.Array(RepositoryOptionSchema, { maxItems: 128 }), meta: Meta },
+  { additionalProperties: false },
+);
+
+export const ObservabilityResponse = Type.Object(
+  {
+    data: Type.Object(
+      { url: Type.Union([Type.String({ format: "uri" }), Type.Null()]) },
+      { additionalProperties: false },
+    ),
+    meta: Meta,
+  },
   { additionalProperties: false },
 );
 
@@ -741,8 +797,42 @@ export const AgentRevisionResponse = Type.Object(
   { additionalProperties: false },
 );
 
+const agentRevisionReadDescription =
+  "An immutable revision with readable saved settings, or revision metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits saved configuration fields.";
+
+export const AgentRevisionReadSchema = Type.Union(
+  [
+    AgentRevisionSchema,
+    Type.Object(
+      {
+        ...Type.Pick(AgentRevisionSchema, [
+          "id",
+          "namespaceId",
+          "agentId",
+          "revision",
+          "backendId",
+          "createdAt",
+        ]).properties,
+        configurationReadError: ConfigurationReadErrorSchema,
+      },
+      { additionalProperties: false },
+    ),
+  ],
+  {
+    description: agentRevisionReadDescription,
+  },
+);
+
+export const AgentRevisionReadResponse = Type.Object(
+  { data: AgentRevisionReadSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 export const AgentRevisionListResponse = Type.Object(
-  { data: Type.Array(AgentRevisionSchema), meta: Meta },
+  {
+    data: Type.Array(AgentRevisionReadSchema, { description: agentRevisionReadDescription }),
+    meta: Meta,
+  },
   { additionalProperties: false },
 );
 
@@ -924,6 +1014,10 @@ export type ConfigurationWire = Type.Static<typeof ConfigurationSchema>;
 export type SecretWire = Type.Static<typeof SecretSchema>;
 export type ServiceAccountWire = Type.Static<typeof ServiceAccountSchema>;
 export type BackendSummaryWire = Type.Static<typeof BackendSummarySchema>;
+export type AgentReadWire = Type.Static<typeof AgentReadSchema>;
+export type AgentRevisionReadWire = Type.Static<typeof AgentRevisionReadSchema>;
+export type AgentReadResponse = Type.Static<typeof AgentReadResponse>;
+export type AgentRevisionReadResponse = Type.Static<typeof AgentRevisionReadResponse>;
 export type AgentWire = Type.Static<typeof AgentSchema>;
 export type AgentRuntimeCredentialStatusWire = Type.Static<
   typeof AgentRuntimeCredentialStatusSchema

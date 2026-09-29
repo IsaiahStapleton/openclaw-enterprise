@@ -106,8 +106,11 @@ Agent identity, gateway, and routing; a selected provider may own the dedicated
 Harness workload. The Compute-owned Pod templates above do not independently
 prove the containment of a provider-owned workload.
 
-The bundled OpenShell provider supports dedicated Codex and delegates containment
-outside the inner Codex sandbox. Its paired Credential Gateway keeps the model
+Dedicated native OpenClaw is admitted only when the selected SandboxDriver
+provisions the Harness and declares networking, filesystem, and process
+containment. The bundled OpenShell provider supports dedicated Codex and native
+OpenClaw, and delegates containment outside the inner Harness sandbox. Its paired
+Credential Gateway keeps the model
 API key outside the Harness. It still requires upstream support for the
 app-server token Secret reference and projected identity. Stock gateway incompatibilities fail
 explicitly, and test-only bridges are not production support. Do not infer a
@@ -118,7 +121,8 @@ Driver selection alone. See the [Sandbox overview](../../guides/topics/sandbox.m
 
 ## Agent runtime isolation
 
-Production Agent dispatch supports embedded OpenClaw and dedicated Codex. Each
+Production Agent dispatch supports embedded OpenClaw, dedicated Codex, and
+sandbox-provisioned dedicated native OpenClaw. Each
 Agent has its own gateway, one selected active revision, and an exact-owner
 Service. Guarded routing does not guarantee a physical process singleton during
 Kubernetes node partitions or manual replacement; the
@@ -133,6 +137,16 @@ Existing claim-fenced worker reconciliation allows temporary unavailability but
 fails closed across Agent and Namespace boundaries. Brokered credentials,
 workload-bound transport authentication, and restricted model egress remain
 future work.
+
+OpenShell treats the AgentRevision as its containment boundary. It provisions
+one Sandbox for the dedicated Harness, disables nested Codex containment, and
+runs native OpenClaw session workers without an additional inner process
+sandbox. Dedicated Codex sessions share one app server; native OpenClaw admits
+a bounded, configurable set of session-owned workers with separate managed
+workspaces in one node host. Those sessions share the Sandbox's user,
+filesystem, process, and network boundary and therefore must belong to the same
+Agent trust domain. This model does not provide mutual operating-system
+isolation between sessions of one Agent.
 
 ## Related
 

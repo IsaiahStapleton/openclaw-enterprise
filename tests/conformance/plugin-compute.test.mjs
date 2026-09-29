@@ -492,7 +492,7 @@ test("compute renders plugin-free Codex revisions with native default-deny plugi
   assert.match(data[PLUGIN_RUNTIME_CODEX_CONFIG], /^\[apps\._default\]\nenabled = false/m);
 });
 
-test("plugin-free revisions apply explicit Slack approvers and keep unrelated approvals", () => {
+test("plugin-free revisions apply explicit Slack approvers for configured Slack and keep unrelated approvals", () => {
   const rawSlackApprovers = [
     { channel: "slack", id: "U456" },
     { channel: "slack", id: "W789" },
@@ -517,14 +517,15 @@ test("plugin-free revisions apply explicit Slack approvers and keep unrelated ap
     });
     const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, [], {
       baseConfig: {
+        channels: { slack: { enabled: true } },
         approvals: {
-          exec: { security: "full" },
+          exec: { enabled: true, mode: "session" },
         },
       },
     });
     const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
     assert.deepEqual(config.approvals, {
-      exec: { security: "full" },
+      exec: { enabled: true, mode: "session" },
       plugin: { slack: { approvers: expectedApprovers } },
     });
   }
@@ -537,11 +538,14 @@ test("plugin-free Codex Gateway applies explicit Agent approvers at launch", asy
       APP_SERVER_URL: "ws://harness.example.test:18790",
       OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
     },
-    baseConfig: { approvals: { exec: { security: "full" } } },
+    baseConfig: {
+      channels: { slack: { enabled: true } },
+      approvals: { exec: { enabled: true, mode: "session" } },
+    },
   });
   const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.deepEqual(config.approvals, {
-    exec: { security: "full" },
+    exec: { enabled: true, mode: "session" },
     plugin: { slack: { approvers: [] } },
   });
 });
@@ -561,7 +565,9 @@ test("plugin-free Codex runtime carries broker policy and Slack approvers togeth
     pluginApprovers: [],
     repositoryBrokerNetworkPolicy,
   });
-  const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, []);
+  const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, [], {
+    baseConfig: { channels: { slack: { enabled: true } } },
+  });
   const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.deepEqual(config.approvals.plugin.slack.approvers, []);
   assert.equal(
@@ -586,6 +592,20 @@ test("compute consumes Codex no-plugin selections from the revision", () => {
   const docker = JSON.parse(pluginRuntimeEnvironment(runtime)[PLUGIN_RUNTIME_ENVIRONMENT]);
   assert.deepEqual(docker.manifest, JSON.parse(data[PLUGIN_RUNTIME_MANIFEST]));
   assert.equal(docker.codexConfigurationToml, data[PLUGIN_RUNTIME_CODEX_CONFIG]);
+});
+
+test("Codex runtime skips the plugin API when no plugins are selected", async () => {
+  // A no-plugin Agent must reach readiness without the Codex plugin API, which a Sandbox
+  // workload may not be able to reach. Salvaged from #146 by @sallyom.
+  const runtime = {
+    manifest: pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() })),
+  };
+  const { requests, sockets } = await runCodexRuntimeHelper(runtime, (method) => {
+    throw new Error(`unexpected request ${method}`);
+  });
+
+  assert.deepEqual(requests, []);
+  assert.deepEqual(sockets, []);
 });
 
 test("compute serializes selected Codex plugins for startup-time resolution", () => {
@@ -1936,7 +1956,7 @@ test("compute rejects plugin selections that target the wrong native runtime", a
   await assert.rejects(async () => {
     const state = openClawPluginState();
     pluginRuntimeSpecForRevision(revision({ plugins: state }));
-  }, /embedded OpenClaw Harness/);
+  }, /require an OpenClaw Harness/);
 });
 
 test("compute fails closed when Codex plugin selections are malformed", () => {
@@ -2001,7 +2021,11 @@ function enrolledNodeSecret(driver, candidate, namespace) {
       driver.pluginRuntimeOwnership(candidate),
       { name: namespace, plane: "execution" },
     ),
-    data: { deviceId: Buffer.from("fixture-node").toString("base64") },
+    data: {
+      deviceId: Buffer.from("fixture-node").toString("base64"),
+      // A current setup code, as preparation keeps renewing it.
+      expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
+    },
   };
 }
 
@@ -2126,6 +2150,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/namespace": embedded.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": embedded.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(reconciled[runtimePolicyIndex].spec.egress[0].ports, [
     { protocol: "TCP", port: 443 },
@@ -2282,6 +2307,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/namespace": dedicated.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": dedicated.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].spec.egress[0].ports, [
     { protocol: "TCP", port: 18790 },
@@ -2296,6 +2322,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/workload-role": "agent",
     "openclaw.dev/agent": dedicated.agentId,
     "openclaw.dev/revision": dedicated.id,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(dedicatedReconciled[runtimeAgentPolicyIndex].spec.ingress[0].ports, [
     { protocol: "TCP", port: 18790 },
@@ -2740,6 +2767,14 @@ test("Codex runtime gates startup and readiness on a successful native authentic
     type: "item.completed",
     item: { type: "error", message: "Model catalog metadata unavailable" },
   };
+  const recoveredStreamError = {
+    type: "error",
+    message: "Reconnecting... 1/3 stream disconnected before completion",
+  };
+  const recoveredRetryingSamplingError = {
+    type: "error",
+    message: "Reconnecting... 2/3 stream disconnected - retrying sampling request",
+  };
   const scenarios = [
     {
       name: "delayed retry uses only the remaining budget",
@@ -2798,6 +2833,22 @@ test("Codex runtime gates startup and readiness on a successful native authentic
     },
     { name: "access-token login refusal is not retried", pat: true, loginStatus: 1 },
     {
+      // Native text observed from codex-cli 0.154 with a revoked access token.
+      name: "access-token login credential rejection is a deterministic authentication failure",
+      pat: true,
+      loginStatus: 1,
+      loginStderr:
+        "Error logging in with access token: personal access token metadata request failed with status 403 Forbidden\n",
+      failureCode: "AUTHENTICATION_FAILED",
+    },
+    {
+      name: "access-token login transport error remains a login failure",
+      pat: true,
+      loginStatus: 1,
+      loginStderr:
+        "Error logging in with access token: failed to request personal access token metadata: error sending request for url (https://auth.openai.com/)\n",
+    },
+    {
       name: "access-token login recovers one timeout before probing",
       pat: true,
       loginTimeouts: 1,
@@ -2817,8 +2868,80 @@ test("Codex runtime gates startup and readiness on a successful native authentic
       ready: true,
     },
     {
+      name: "recovered native stream error during active turn",
+      events: [started, recoveredStreamError, assistant, completed],
+      ready: true,
+    },
+    {
+      name: "recovered native sampling retry error during active turn",
+      events: [started, recoveredRetryingSamplingError, assistant, completed],
+      ready: true,
+    },
+    {
       name: "fatal top-level error despite assistant output",
       events: [started, assistant, { type: "error", message: "authentication failed" }, completed],
+    },
+    {
+      name: "reconnecting error with auth marker remains fatal",
+      events: [
+        started,
+        {
+          type: "error",
+          message: "Reconnecting... 1/3 stream disconnected before completion after 401 auth",
+        },
+        assistant,
+        completed,
+      ],
+    },
+    {
+      name: "recovered native stream error with provider detail during active turn",
+      events: [
+        started,
+        {
+          type: "error",
+          message:
+            "Reconnecting... 1/5 (stream disconnected before completion: connection reset by peer)",
+        },
+        assistant,
+        completed,
+      ],
+      ready: true,
+    },
+    {
+      name: "reconnecting error after completed turn remains fatal",
+      events: [started, assistant, completed, recoveredStreamError],
+    },
+    {
+      name: "reconnecting error before the turn starts remains fatal",
+      events: [recoveredStreamError, started, assistant, completed],
+    },
+    ...[
+      [
+        "with auth detail",
+        "Reconnecting... 1/3 stream disconnected before completion: 401 Unauthorized",
+      ],
+      [
+        "with credential detail",
+        "Reconnecting... 1/3 stream disconnected before completion: invalid credential",
+      ],
+      ["with an unknown reason", "Reconnecting... 1/3 request failed with status 500"],
+      ["with trailing reason text", "Reconnecting... 1/3 stream disconnected before completionist"],
+      ["not at the start", "Error: Reconnecting... 1/3 stream disconnected before completion"],
+      ["past its retry limit", "Reconnecting... 4/3 stream disconnected before completion"],
+      ["above the retry budget", "Reconnecting... 1/50 stream disconnected before completion"],
+      ["with a zero attempt", "Reconnecting... 0/3 stream disconnected before completion"],
+    ].map(([description, message]) => ({
+      name: `reconnecting error ${description} remains fatal`,
+      events: [started, { type: "error", message }, assistant, completed],
+    })),
+    {
+      name: "unbounded reconnecting errors remain fatal",
+      events: [
+        started,
+        ...Array.from({ length: 11 }, () => recoveredStreamError),
+        assistant,
+        completed,
+      ],
     },
     {
       name: "failed turn",
@@ -2827,6 +2950,31 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         assistant,
         { type: "turn.failed", error: { message: "authentication failed" } },
       ],
+    },
+    {
+      // Native terminal event observed from codex-cli 0.154 with an invalid API key.
+      name: "provider credential rejection is a deterministic authentication failure",
+      events: [
+        started,
+        {
+          type: "error",
+          message: "unexpected status 401 Unauthorized: Incorrect API key provided",
+        },
+        {
+          type: "turn.failed",
+          error: { message: "unexpected status 401 Unauthorized: Incorrect API key provided" },
+        },
+      ],
+      probeStatus: 1,
+      failureCode: "AUTHENTICATION_FAILED",
+    },
+    {
+      name: "provider server error is not an authentication failure",
+      events: [
+        started,
+        { type: "turn.failed", error: { message: "unexpected status 503 Service Unavailable" } },
+      ],
+      probeStatus: 1,
     },
     { name: "completed turn without visible assistant", events: [started, advisory, completed] },
     {
@@ -2952,7 +3100,10 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                     if (loginCalls <= (scenario.loginTimeouts ?? 0)) {
                       return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" } };
                     }
-                    return { status: scenario.loginStatus ?? 0 };
+                    return {
+                      status: scenario.loginStatus ?? 0,
+                      ...(scenario.loginStderr ? { stderr: scenario.loginStderr } : {}),
+                    };
                   }
                   probeCalls++;
                   assert.ok(options.timeout > 0 && options.timeout <= 30000);
@@ -3008,9 +3159,15 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           loginCalls +
             (loginFailed ? 0 : scenario.probeTimeouts && !scenario.expiredBudget ? 2 : 1),
         );
-        const probeDiagnostics = diagnostics
+        const jsonDiagnostics = diagnostics
           .filter((message) => message.startsWith("{"))
           .map(JSON.parse);
+        const probeDiagnostics = jsonDiagnostics.filter(
+          ({ event }) => event !== "runtime.startup_phase",
+        );
+        const startupPhases = jsonDiagnostics.filter(
+          ({ event }) => event === "runtime.startup_phase",
+        );
         assert.equal(probeDiagnostics.length, probeCalls);
         for (const [index, diagnostic] of probeDiagnostics.entries()) {
           assert.equal(diagnostic.event, "codex.model_probe");
@@ -3019,6 +3176,29 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         }
         if (scenario.probeTimeouts) {
           assert.equal(probeDiagnostics[0].code, "MODEL_PROBE_TIMEOUT");
+        }
+        // Startup timing reports fixed phase names and outcomes only: no model,
+        // provider, credential or path value can appear in these lines.
+        assert.deepEqual(
+          startupPhases.map(({ phase, outcome }) => [phase, outcome]),
+          [
+            ["codex-login", loginFailed ? "failed" : "ok"],
+            ...(loginFailed ? [] : [["model-probe", scenario.ready ? "ok" : "failed"]]),
+            ...(scenario.ready ? [["native-spawn", "ok"]] : []),
+          ],
+        );
+        for (const phase of startupPhases) {
+          assert.deepEqual(Object.keys(phase), [
+            "event",
+            "container",
+            "phase",
+            "outcome",
+            "ms",
+            "sinceStartMs",
+          ]);
+          assert.equal(phase.container, "agent");
+          assert.ok(Number.isInteger(phase.ms) && phase.ms >= 0);
+          assert.ok(phase.sinceStartMs >= phase.ms);
         }
         const failureMessages = diagnostics.filter((message) => !message.startsWith("{"));
         assert.ok(statusHandler);
@@ -3044,7 +3224,7 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           assert.equal(runtimeStatus.runtimeFailure.check, loginFailed ? "login" : "model-probe");
           assert.equal(
             runtimeStatus.runtimeFailure.code,
-            loginFailed ? "LOGIN_FAILED" : (scenario.failureCode ?? "MODEL_PROBE_FAILED"),
+            scenario.failureCode ?? (loginFailed ? "LOGIN_FAILED" : "MODEL_PROBE_FAILED"),
           );
           assert.match(runtimeStatus.runtimeFailure.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
         }

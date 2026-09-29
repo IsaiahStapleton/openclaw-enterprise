@@ -38,7 +38,7 @@ test(
       );
       return rows.some(({ values }) => values.some(([, line]) => line === marker));
     });
-    for (const uid of ["occ-development", "occ-logs"]) {
+    for (const uid of ["occ-observability", "occ-development", "occ-logs"]) {
       const response = await demo.grafana(`/api/dashboards/uid/${uid}`);
       assert.equal(response.status, 200);
       assert.ok(JSON.parse(response.text).dashboard.panels.length > 0);
@@ -155,6 +155,16 @@ test(
     const allPanel = page.getByRole("region", { name: "All events", exact: true });
     const attentionPanel = page.getByRole("region", { name: "Needs attention", exact: true });
     try {
+      // The overview lists only provisioned views, and both links must resolve
+      // inside the real Grafana demo before following its log dashboard.
+      await page.goto(`${url}/d/occ-observability`, { waitUntil: "domcontentloaded" });
+      const views = page.getByRole("region", { name: "Available views", exact: true });
+      const metricsLink = views.getByRole("link", { name: "Metrics" });
+      const logsLink = views.getByRole("link", { name: "Operational logs" });
+      await metricsLink.waitFor();
+      await logsLink.waitFor();
+      assert.match(await metricsLink.getAttribute("href"), /\/d\/occ-development/);
+      assert.match(await logsLink.getAttribute("href"), /\/d\/occ-logs/);
       await page.goto(`${url}/d/occ-logs?from=now-5m&to=now&refresh=1h`, {
         waitUntil: "domcontentloaded",
       });

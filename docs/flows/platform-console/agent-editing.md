@@ -24,7 +24,9 @@ from exact Agent selection through API response or confirmed deletion. See the
 ```mermaid
 graph TD
   subgraph Browser["Browser"]
-    A["Read exact Agent"] --> B["Open detail action"]
+    A["Read Agent or revision"] -->|readable settings| B["Open detail action"]
+    A -->|unreadable settings| AE["Show metadata and warning"]
+    AE -->|refresh or browse versions| A
     B --> C["Edit draft or save credential bindings"]
     B --> P["Edit Agent plugin selections"]
     B --> Q["Deploy saved draft"]
@@ -66,6 +68,13 @@ graph TD
 
 The page reads Agent, readable revisions, and current Configuration
 (`revision=draft`) or immutable AgentRevision (`revision=<id>`).
+`packages/occ/src/index.ts` uses `listAgents`, `listRevisions`,
+`getAgentForBrowsing`, and `getRevisionForBrowsing` for browsing.
+`packages/occ/src/state/postgres-state.ts:browseSavedConfiguration` turns
+payload-decode failures into metadata plus `configurationReadError`; queries
+and operational reads remain strict. Drafts and revisions decode independently.
+The UI retains navigation, blocks editing/deployment of unreadable drafts, and
+never substitutes defaults. Exact-resource permissions still apply.
 **Current version** uses `activeRevisionId`; **View version vN** opens read-only
 details without activating it. **Deployment activity** shows the newest readable
 version's persisted `queued`, `running`, `succeeded`, or `failed` status, not live
@@ -83,9 +92,8 @@ It rereads Agent and Configuration, rejecting changed ID or generation.
 Writes can race after these reads; the API owns authorization and generation.
 
 **Enable Gateway password access** stages `gateway.auth.password` referencing
-`OPENCLAW_GATEWAY_PASSWORD` through this editor. Other settings and Secret bindings
-remain unchanged; Cancel discards the edit. Saving leaves admitted versions
-unchanged. On deployment, Kubernetes `gatewayConfiguration` detects the reference;
+`OPENCLAW_GATEWAY_PASSWORD` through this editor. Other settings, Secret bindings, and
+admitted versions remain unchanged; Cancel discards the edit. On deployment, Kubernetes `gatewayConfiguration` detects the reference;
 `deployment` delivers the generated password environment variable.
 
 Saving reloads the draft without changing admitted snapshots. Invalid input,
@@ -117,10 +125,9 @@ Like Escape, cancellation discards channel drafts, clears Secret inputs, and
 retains plugin selections. Pending channel saves and Secret creation prevent dismissal.
 
 `apps/controller/src/console/channels.mjs:renderChannels` renders Slack settings;
-only **Create new version** permits editing. Slack uses unresolved
-`SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` references and requires dedicated
-execution. The editor rejects [unsupported native shapes](../../reference/console.md#inspect-detail-revisions-and-channel-drafts).
-Teams remains in native JSON and blocks Console deployment.
+only **Create new version** permits editing. The
+[console reference](../../reference/console.md#inspect-detail-revisions-and-channel-drafts)
+owns Slack requirements and rejected native shapes; Teams remains native JSON.
 
 `agents/detail.mjs:renderConfigurationTab` reads draft Harness authentication
 from the Agent, or admitted authentication and channel `secretBindings` from the
@@ -134,7 +141,7 @@ neither collection permission nor Secret values.
 senders from DMs. Wildcard, empty, or omitted channel `users` selects **Allow
 everyone**; explicit IDs fill the mutually exclusive input. Mention
 requirements remain independent. `updatedSlack` replaces selected channels'
-`users`, preserving unrelated settings and bindings.
+`users`, preserving DM and group policies, unrelated settings, and bindings.
 
 The DM selector preserves omitted policies on existing configurations; new setup
 starts with Allowlist. `validate` rejects empty/wildcard DM allowlists and
@@ -146,7 +153,7 @@ selection; redeployment applies it. See
 
 `apps/controller/src/console/agents/detail.mjs:renderAgentDetail` supplies Namespace,
 bindings, and Credentials URL to `channels/slack.mjs:credentialReferenceField`.
-It loads `GET /namespaces/:namespaceId/secrets`; collection read is required.
+It loads `GET /namespaces/:namespaceId/secrets`; Namespace read is required.
 `packages/occ/src/index.ts:listSecrets` filters records by exact Secret read
 without calling the Secret Driver. Shared `agents/secret-picker.mjs:createSecretReferenceField`
 filters names/IDs in a combobox. Arrows navigate, Enter selects, and Escape
@@ -171,11 +178,11 @@ new Secret grant.
 After PATCH, `apps/controller/src/console/agents/secret-access.mjs:ensureSecretOperateBinding`
 grants the Agent service principal access to selected Secrets through Namespace
 IAM. A failed grant leaves Configuration saved. The detail view rereads bindings
-and asks a Namespace administrator to grant access; it does not repeat the
+and asks a Namespace administrator to grant access without repeating the
 channel save. New Secrets remain Namespace-owned after cancellation or failure.
 Preflight reads cannot prevent a later race. An uncertain PATCH blocks another
-channel write until Refresh. Disabling a draft channel changes Configuration;
-it does not stop a running Agent. The
+channel write until Refresh. Disabling a draft channel changes Configuration
+but does not stop a running Agent. The
 [console reference](../../reference/console.md#inspect-detail-revisions-and-channel-drafts)
 describes the supported edits and their deployment boundaries.
 
@@ -221,11 +228,6 @@ status again. Lost deployment replies require revision-history readback. Missing
 credentials after a historical revision require operator investigation. Model
 and channel Secrets remain separate.
 
-Slack fields separately derive bound state from Configuration `secretBindings`.
-The shared Secret picker lists readable Namespace Secrets, shows the current
-reference by name when metadata is readable or by ID when unavailable, and can
-create a Namespace Secret without reading existing values.
-
 On explicit submission, the browser PATCHes selected Secret references while
 preserving other bindings, then calls `ensureSecretOperateBinding` for changed
 and pending Secrets. A post-PATCH grant failure leaves bindings saved and blocks
@@ -233,7 +235,7 @@ deployment in the current view. Subsequent saves retry still-referenced pending
 grants. Picker edits and rejected PATCHes preserve that warning; only a confirmed
 grant or confirmed removal of its reference clears the pending Secret. Explicit
 refresh resets local outcome tracking; the API always enforces Secret access.
-Pickers switch references; shared Secret value rotation remains a separate operation.
+Pickers switch references; rotating shared Secret values is separate.
 
 ### 6. Read and replace live workspace files
 
@@ -252,15 +254,12 @@ route. It neither patches Configuration nor admits a revision. The existing
 Results are per file. Unknown write outcomes require a successful reload before
 another save; the editor never retries a write automatically.
 
-Creation uses the same channel editor to stage initial Configuration values and
-Secret bindings before its POST; see the [creation trace](../platform-console.md#3-authorize-the-selected-page-resource).
-Separately, `apps/controller/src/console/agents/create.mjs` submits the
-four workspace textarea values as `initialWorkspaceFiles` plus
-`workspaceDefaultsId` in the Agent POST. OCC stages these exact-Agent inputs
-privately until Compute initializes the workspace before execution. No deployed
-gateway is required. The [workspace setup flow](../workspace-files.md)
-owns initialization, retry, and completion cleanup; the live editor above
-becomes available after deployment.
+The [creation trace](../platform-console.md#3-authorize-the-selected-page-resource)
+covers initial channel settings and Secret bindings.
+`apps/controller/src/console/agents/create.mjs` submits `initialWorkspaceFiles`
+and `workspaceDefaultsId`. OCC stages these privately for Compute's initialization
+before execution; no gateway is needed. The [workspace setup flow](../workspace-files.md)
+owns initialization, retries, and cleanup. Live editing requires deployment.
 
 <span id="stop-agent"></span>
 
@@ -300,8 +299,8 @@ returns to the Agents list in the selected Namespace. An uncertain deletion
 blocks another write until a successful read establishes the current state; the browser never automatically retries it.
 
 `packages/occ/src/index.ts:deleteAgent` owns deletion admission. The
-[Agent deletion reference](../../reference/agents.md#deletion) covers the
-subsequent worker cleanup and the Namespace-owned resources it preserves.
+[Agent deletion reference](../../reference/agents.md#deletion) covers
+worker cleanup and the Namespace-owned resources it preserves.
 
 ## Debugging and Verification
 
@@ -310,12 +309,12 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
   Secrets, Configuration update, and Namespace IAM authority to grant Agent use.
 - After a partial save, inspect Configuration, Secret metadata, and Agent IAM
   bindings before retrying. Storage and binding do not prove runtime delivery;
-  explicitly deploy and verify the consuming Agent.
+  deploy and verify the consuming Agent.
 - Compare saved `Agent.plugins` with the viewed revision's plugin snapshot after
   a plugin edit. A successful Agent update does not install or activate plugins;
   deploy and inspect startup status separately.
 - Stop requires exact-Agent `operate`. An accepted stop or an empty selected
-  revision does not independently prove that Compute shutdown has finished.
+  revision does not prove Compute shutdown finished.
 - On `403`, check `delete` permission on the exact Agent; Agent `read` and
   `operate` do not authorize deletion. Use the displayed request ID when present.
 - An accepted deletion remains in progress until the exact Agent read reports
@@ -329,6 +328,7 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 - [Console reference](../../reference/console.md)
 - [Agent lifecycle reference](../../reference/agents.md#deletion)
 - [Agent plugin flow](../agent-plugins.md)
+- [Agent sharing flow](agent-sharing.md)
 
 ## Manual Notes
 
@@ -337,6 +337,9 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 ## Changelog
 
 - 2026-09-29 02:55: Trace Gateway password access staging through the existing Configuration editor and save path. (01a0eb0e-dbc1-78d1-91b0-ea91ee87c00f - fdccee5cab532bc7ef2085c5ec6f8f922663f5ce)
+- 2026-09-28 21:31: Trace metadata-preserving browsing and unreadable saved settings in the accompanying change. (01a0e9c2-e0cd-7ed2-a1b9-a70247c43db2 - 176a52892f72aefc45505f89ae6d33e7526fe4da)
+
+- 2026-09-28 01:39: Move the sharing trace to its own flow. (authoring-run/462d5207-c3a1-4203-af4a-8db2551ccb9a - 4f32ebbca5d699296a142dfbd34c8ec46844fce7)
 
 - 2026-09-27 21:44: Trace backdrop dismissal through existing cancellation handlers. (01a0e4d1-c52a-7231-9d1f-d2ceadb556d1 - ab9527bb2615168649438f7f591bd098083b62cb)
 
@@ -352,6 +355,8 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 
 - 2026-09-25 00:24: Trace authentication Secret grants, partial-save recovery, and persistent deployment errors in the accompanying change. (01a0d5ee-ab06-7571-8d4a-9ae0f33d5737 - 5f2f3a7448c7f5f0f4a5ed08be2395f2c5623ed7)
 - 2026-09-24 22:03: Trace shared document-local drafts, navigation capture, explicit discard, and retained save baselines. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)
+
+- 2026-09-24 06:09: Preserve current Slack editing behavior alongside existing-person sharing. (01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - c3a3913f0aded736b17140d6caa7c5c857641a9d)
 
 - 2026-09-23 19:52: Record unsupported mixed Slack sender lists, unrepresentable sender IDs, and channel wildcard maps in the simple drawer. (01a0d150-104a-71a3-9e56-6c5e3ee510ea - 77aedc620f443056f9ee859050b8dc657a9c3133)
 

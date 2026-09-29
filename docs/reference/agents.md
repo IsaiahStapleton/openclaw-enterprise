@@ -19,18 +19,15 @@ for revision, execution, and stop behavior.
 
 ## Supported operations
 
-Agent operations are scoped beneath `/namespaces/:namespaceId/agents`. Creation
-returns `201`, reads and updates return `200`, and deployment returns `202`
-with the newly admitted AgentRevision. Stop and deletion also return `202`;
-their Compute effects remain asynchronous. Stop sets the Agent's
-`desiredRuntimeState` to `stopped`. Collection reads include only Agents the
-caller has an exact `read` grant for. The [API reference](api.md) documents route
-schemas, response envelopes, and permissions.
+Operations beneath `/namespaces/:namespaceId/agents` return `201` for creation,
+`200` for reads/updates, and `202` for deployment, stop, or deletion. Deployment
+returns the admitted AgentRevision; Compute work remains asynchronous. Stop sets
+`desiredRuntimeState` to `stopped`. Lists require each Agent's exact `read`.
+See [API schemas, envelopes, and permissions](api.md).
 
-Authorized Agent responses include immutable, read-only `servicePrincipalId`.
-Use this value for [Namespace IAM bindings](authorization.md#manage-namespace-policy);
-clients must not derive the identity from the Agent ID. Create and update
-requests reject a supplied `servicePrincipalId`.
+Responses include immutable `servicePrincipalId` for
+[Namespace IAM bindings](authorization.md#manage-namespace-policy). Do not derive
+it from the Agent ID; create/update reject caller-supplied values.
 
 Creation body:
 
@@ -43,12 +40,20 @@ Creation body:
 }
 ```
 
-Creation requires an existing Namespace in `provisioning` or `ready` status
-and a same-Namespace Configuration with `kind: "agent"`. The caller needs
-Agent `create` permission in that Namespace and `read` permission on the
-exact Configuration. A selected model credential requires separate permissions;
-see [Harness authentication](#harness-authentication). [Authentication](authentication.md)
-establishes the caller; [authorization](authorization.md) defines its grants.
+Creation requires a `provisioning` or `ready` Namespace, a same-Namespace
+Configuration with `kind: "agent"`, Namespace Agent `create`, and exact
+Configuration `read`. See [Harness authentication](#harness-authentication)
+for model credential permissions, [authentication](authentication.md) for caller
+identity, and [authorization](authorization.md) for grants.
+
+### Unreadable saved settings
+
+Agent and revision list/detail GETs preserve readable metadata with unreadable settings,
+adding `configurationReadError` with `code: "SAVED_CONFIGURATION_UNREADABLE"`
+and the affected `field`. Settings are omitted without defaults; readable
+siblings remain available. Authorization and strict mutation/runtime validation
+are unchanged. Query failures still fail requests. See the
+[Console warning](../guides/console/agent-details.md#unreadable-saved-settings).
 
 ## Deployment status
 
@@ -83,7 +88,8 @@ Errors have fixed codes, messages, and allowlisted `error.data`.
 `CONVERGENCE_DEADLINE_EXCEEDED` data includes positive `timeoutMs` and optional
 `runtimeFailure` (`component`, `check`, `checkedAt`, `code`) captured by Compute
 from that revision. The primary error remains unchanged; missing evidence
-leaves the cause unspecified. Success can include [plugin warnings](agent-plugins.md#lifecycle)
+leaves the cause unspecified. `RUNTIME_AUTHENTICATION_FAILED` ends deployment
+early when the runtime reports a rejected credential (HTTP 401/403); fix it and redeploy. Success can include [plugin warnings](agent-plugins.md#lifecycle)
 with a closed code and admitted `pluginId`.
 
 Polling reads persisted state without runtime, provider, or model probes.
@@ -329,7 +335,8 @@ Teardown retries are bounded. After permanent failure or exhaustion, the Agent
 stays `deleting`. Once the cause is corrected, the initiating caller can repeat
 DELETE to replenish the attempt budget. OCC and the worker recheck permission;
 another actor cannot take over. Work identity and prior failure audits remain,
-and the retry adds an audit event. This recovery covers Agent deletion only.
+and the retry adds an audit event. Namespace deletion has the same
+[recovery](namespaces.md#failure-semantics-and-limitations).
 
 ## Editable configuration
 

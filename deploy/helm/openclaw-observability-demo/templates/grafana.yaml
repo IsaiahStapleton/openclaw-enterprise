@@ -33,6 +33,8 @@ kind: ConfigMap
 metadata:
   name: {{ .Release.Name }}-dashboards
 data:
+  overview.json: |
+    {{- .Files.Get "files/overview-dashboard.json" | nindent 4 }}
   metrics.json: |
     {{- .Files.Get "files/dashboard.json" | nindent 4 }}
   logs.json: |

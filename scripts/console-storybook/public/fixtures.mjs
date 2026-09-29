@@ -67,6 +67,14 @@ function configurationValues(scenario) {
 export function installFixture(scenario, evidence) {
   const rules = structuredClone(scenario.rules ?? []);
   let signedIn = !scenario.signedOut;
+  if (scenario.pendingGithubAttempt) {
+    // Simulates returning from a GitHub callback started in this tab.
+    sessionStorage.setItem("occ.console.githubAttempt", "a".repeat(43));
+  }
+  if (scenario.pendingGoogleAttempt) {
+    // Simulates returning from a Google callback started in this tab.
+    sessionStorage.setItem("occ.console.googleAttempt", "a".repeat(43));
+  }
   let serial = 100;
   const nextId = (prefix) =>
     `${prefix}_00000000-0000-4000-8000-${String(serial++).padStart(12, "0")}`;
@@ -312,6 +320,30 @@ export function installFixture(scenario, evidence) {
       activeRevisionId: null,
     });
   }
+  if (scenario.unreadableAgentConfiguration) {
+    for (const field of ["harnessAuth", "plugins", "pluginApprovers", "repositoryBindings"]) {
+      delete agent[field];
+    }
+    agent.configurationReadError = {
+      code: "SAVED_CONFIGURATION_UNREADABLE",
+      field: scenario.unreadableAgentConfiguration,
+    };
+  }
+  if (scenario.unreadableRevisionConfiguration) {
+    const saved = revisions.get(selectedRevisionId);
+    revisions.set(saved.id, {
+      id: saved.id,
+      namespaceId: saved.namespaceId,
+      agentId: saved.agentId,
+      revision: saved.revision,
+      backendId: saved.backendId,
+      createdAt: saved.createdAt,
+      configurationReadError: {
+        code: "SAVED_CONFIGURATION_UNREADABLE",
+        field: scenario.unreadableRevisionConfiguration,
+      },
+    });
+  }
   const preset = {
     id: scenario.devdayPreset ? "pre_devday_codex" : "pre_00000000-0000-4000-8000-000000000001",
     namespaceId,
@@ -432,12 +464,34 @@ export function installFixture(scenario, evidence) {
         return error(rule.status, rule.code);
       }
     }
+    if (path === "/api/auth/providers" && method === "GET") {
+      return response({
+        github: scenario.githubEnabled === true,
+        google: scenario.googleEnabled === true,
+        sessionBinding: scenario.githubEnabled === true || scenario.googleEnabled === true,
+      });
+    }
+    if (
+      (path === "/api/auth/providers/github/start" ||
+        path === "/api/auth/providers/google/start") &&
+      method === "POST"
+    ) {
+      // Keep the preview local; provider navigation needs real backend verification.
+      return error(503);
+    }
+    if (
+      (path === "/api/auth/providers/github/result" ||
+        path === "/api/auth/providers/google/result") &&
+      method === "POST"
+    ) {
+      return response({ sessionKey: session.sessionKey });
+    }
     if (path === "/api/auth/session") {
       return response(signedIn ? session : null);
     }
     if (path === "/api/auth/sign-in/email" && method === "POST") {
       signedIn = true;
-      return response(session);
+      return response({ authenticated: true, sessionKey: session.sessionKey });
     }
     if (path === "/api/auth/sign-out" && method === "POST") {
       signedIn = false;
@@ -464,6 +518,11 @@ export function installFixture(scenario, evidence) {
     }
     if (path === "/backends" && method === "GET") {
       return response(backends);
+    }
+    if (path === "/observability" && method === "GET") {
+      return scenario.observabilityDenied
+        ? error(403)
+        : response({ url: scenario.observabilityUrl ?? null });
     }
     const match = path.match(/^\/namespaces\/([^/]+)\/(.*)$/);
     if (match) {
@@ -946,7 +1005,7 @@ export function installFixture(scenario, evidence) {
           return response(roles);
         }
         if (method === "POST") {
-          const role = { ...body, id: `role_${serial++}` };
+          const role = { ...body, id: `role_${serial++}`, namespaceId };
           roles.push(role);
           return response(role, 201);
         }
@@ -956,10 +1015,19 @@ export function installFixture(scenario, evidence) {
           return response(bindings);
         }
         if (method === "POST") {
-          const binding = { ...body, id: `binding_${serial++}` };
+          const binding = { ...body, id: `binding_${serial++}`, namespaceId };
           bindings.push(binding);
           return response(binding, 201);
         }
+      }
+      const bindingMatch = resource.match(/^iam\/access-bindings\/([^/]+)$/);
+      if (bindingMatch && method === "DELETE") {
+        const index = bindings.findIndex((binding) => binding.id === bindingMatch[1]);
+        if (index < 0) {
+          return error(404);
+        }
+        bindings.splice(index, 1);
+        return new Response(null, { status: 204 });
       }
       if (resource === "secrets") {
         if (method === "POST" && scenario.denySecretCreate) {

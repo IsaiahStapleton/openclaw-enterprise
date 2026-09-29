@@ -203,17 +203,28 @@ Bind it to the immutable `servicePrincipalId` returned in the Agent response:
 }
 ```
 
-The identity, Role, and target must exist in the path Namespace. Exact targets
-and Role permission kinds are `agent`, `agent_revision`, `configuration`,
-`credential_source`, `preset`, `secret`, or `service_account`. A ServiceAccount resource is not an IAM
-identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
+The subject must be an existing human Principal or a ServicePrincipal in the
+path Namespace. A human does not need a separate Namespace ServicePrincipal.
+The Role and target must exist in the path Namespace. Exact targets and Role
+permission kinds are `namespace`, `agent`, `agent_revision`, `configuration`,
+`credential_source`, `preset`, `secret`, or `service_account`. `namespace`
+permissions support only `read`, and for a `namespace` target, `resourceId` must
+equal the Namespace ID in the path. A ServiceAccount
+resource is not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
 and extra fields are rejected. Native IAM commits validated policy and its
 attributable audit event together; later requests on other replicas see it
 without a restart.
 
+For human discovery, grant `read` on that exact Namespace and separately grant
+the required actions on each exact Agent. A Namespace target grants only
+Namespace actions; it does not grant access to its Agents or permission to
+create child resources. Human enrollment and grant creation are separate steps.
+
 Roles and bindings cannot be updated. Create replacements and explicitly
 remove old bindings. A referenced Role cannot be deleted (`409`), and deleting
-one binding preserves equivalent and unrelated bindings. After an unknown
+one binding preserves equivalent and unrelated bindings. Deleting an Agent,
+Configuration, Preset, Secret, credential source, or ServiceAccount removes the
+bindings that target it in the same transaction. After an unknown
 creation outcome, list and inspect policy before retrying; equivalent bindings
 may coexist. Names are labels: inspect permissions before reusing a Role.
 

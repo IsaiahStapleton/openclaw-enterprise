@@ -131,7 +131,9 @@ database rejects deleting a source an Agent draft still uses.
 declare `harnessAuth`. The frozen snapshot is `{ method, sourceId,
 credentialGatewayId, sourceType, loginMode }`. `admittedCredentialSourceType`
 requires a selected Sandbox, and Compute `validateHarnessAuth` requires
-dedicated Codex, the paired Sandbox and gateway, and an `openai`/`api_key` type.
+a dedicated Codex or native OpenClaw Harness, the paired Sandbox and gateway,
+and an `openai`/`api_key` type. Compute renders no model Secret for either
+Harness and passes the resolved source to Sandbox provisioning.
 
 ### 6. Resolve the source at dispatch
 
@@ -201,4 +203,5 @@ audited; if the append fails, the record stays `deleting` for a retry. Namespace
 ## Changelog
 
 - 2026-09-28 05:13: Documented the controller transaction boundary for credential source writes. (authoring-run/5da74b2e-b249-44da-87e4-ca85f018c832 - 646b067220f6b7f8f3059eaa0710db2654b61499)
+- 2026-09-27 22:51: Extended credential-source Harness delivery to dedicated native OpenClaw without projecting the model Secret. (authoring-run/88764ea7-c6bb-4ac8-919f-c21071946c37 - 859c0b11e5f1c350acda231c89ad3573504324eb)
 - 2026-09-26 14:29: Documented credential source registration, Agent binding, admission, dispatch resolution, and retried deletion for the uncommitted Credential Gateway change. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 849b2b24111fe237b12da5be1d4b411d3146cefb)
