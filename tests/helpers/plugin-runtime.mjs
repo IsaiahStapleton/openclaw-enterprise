@@ -7,10 +7,30 @@ import {
 
 const nodeRequire = createRequire(import.meta.url);
 
+export const WORKSPACE_NODE_BINDING_PATH = "/run/openclaw-workspace-node/workspace-node.json";
+export const WORKSPACE_NODE_REVISION_ID = "revision-1";
+
+// A Codex Gateway receives its node through the controller's binding file;
+// options.workspaceNodeId writes that file before launch.
+export function workspaceNodeBinding(deviceId, revisionId = WORKSPACE_NODE_REVISION_ID) {
+  return JSON.stringify({ revisionId, deviceId });
+}
+
 export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
   const gatewayRuntime =
-    options.workspaceNodeId !== undefined || options.env?.APP_SERVER_URL !== undefined;
+    options.workspaceNodeId !== undefined ||
+    options.workspaceNodeBindingPath === true ||
+    options.env?.APP_SERVER_URL !== undefined;
   const calls = options.calls ?? [];
+  const intervals = options.intervals ?? [];
+  const kills = options.kills ?? [];
+  const bindingEnvironment =
+    options.workspaceNodeId !== undefined || options.workspaceNodeBindingPath === true
+      ? {
+          OPENCLAW_WORKSPACE_NODE_PATH: WORKSPACE_NODE_BINDING_PATH,
+          OPENCLAW_AGENT_REVISION_ID: WORKSPACE_NODE_REVISION_ID,
+        }
+      : {};
   const files = new Map([
     [
       "/etc/openclaw/openclaw.json",
@@ -23,6 +43,9 @@ export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
       ),
     ],
     ...(options.files ?? []),
+    ...(options.workspaceNodeId === undefined
+      ? []
+      : [[WORKSPACE_NODE_BINDING_PATH, workspaceNodeBinding(options.workspaceNodeId)]]),
   ]);
   let temporaryDirectory = 0;
   const sandbox = {
@@ -32,19 +55,32 @@ export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
       env: {
         OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
         HOME: "/home/node",
+        ...bindingEnvironment,
         ...(options.env ?? {}),
-        ...(options.workspaceNodeId === undefined
-          ? {}
-          : { OPENCLAW_WORKSPACE_NODE_ID: options.workspaceNodeId }),
       },
       on() {},
+      exit(code) {
+        kills.push({ exit: code });
+      },
     },
+    setInterval(callback, ms) {
+      intervals.push({ callback, ms });
+      return { unref() {} };
+    },
+    ...(options.setTimeout === undefined ? {} : { setTimeout: options.setTimeout }),
+    ...(options.console === undefined ? {} : { console: options.console }),
+    clearInterval() {},
     require(specifier) {
       if (specifier === "node:child_process") {
         return {
           spawn(command, args) {
             calls.push({ command, args });
-            return { on() {} };
+            return {
+              on() {},
+              kill(signal) {
+                kills.push({ signal });
+              },
+            };
           },
           spawnSync(command, args, spawnOptions) {
             options.beforeSpawn?.(command, args, sandbox, spawnOptions);

@@ -203,10 +203,13 @@ Other Harnesses are replaced, restarting their Gateway.
   Codex and the node under `tini`. It passes admitted bootstrap options, preserves
   existing edits, and stops on setup failure. Codex starts at once with the
   managed PATH; the node waits for a complete code. Neither gets OCC's key.
-- Activation reads the exact revision's device ID and sets
-  `file-transfer.config.workspaces.main` in runtime configuration before Gateway
-  starts. Candidate preparation preserves the serving binding; losing it fails
-  rather than restoring local reads. The revision ConfigMap remains immutable.
+- A Codex Gateway gets the device ID from an optional Agent-owned ConfigMap
+  (`{revisionId, deviceId}`), not its pod spec. The controller writes it and
+  annotates the running Gateway Pod; the wrapper polls the file and hot-applies
+  `file-transfer.config.workspaces.main` under `plugins.*` only, without a
+  restart. Activation waits for the Gateway to report it. Native workers keep it
+  in their environment. Losing the serving binding fails rather than restoring
+  local reads. The revision ConfigMap remains immutable.
 - Default reads cover the enrolled Agent's Harness workspace and managed skill
   roots. Symlinks are not followed; explicit policies remain authoritative. This
   enables native previews, browsing, bootstrap, and generated outputs.

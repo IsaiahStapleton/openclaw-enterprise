@@ -217,6 +217,8 @@ let pluginStatusReport = {
 };
 
 let runtimeStartupFailure;
+// The workspace node this Gateway's OpenClaw config was written with.
+let runtimeWorkspaceNodeId;
 
 function publishPluginRuntimeStatus(report) {
   if (pluginRuntimeStatusPort() === undefined) return;
@@ -277,6 +279,7 @@ function runtimeStatusReport() {
     container: runtimeStatusContainer(),
     podUid: requireNonEmptyString(process.env.OPENCLAW_POD_UID, "Runtime status Pod UID"),
     ...(runtimeStartupFailure === undefined ? {} : { runtimeFailure: runtimeStartupFailure }),
+    ...(runtimeWorkspaceNodeId === undefined ? {} : { workspaceNodeId: runtimeWorkspaceNodeId }),
   };
 }
 
@@ -1859,6 +1862,106 @@ function configureNativeWorkerProfile() {
   });
 }
 
+function requireWorkspaceNodePlugins(config) {
+  const plugins = isPlainObject(config.plugins) ? config.plugins : {};
+  if (
+    plugins.deny?.includes("file-transfer") ||
+    plugins.entries?.["file-transfer"]?.enabled === false
+  ) {
+    throw new Error("The workspace node requires the file-transfer plugin.");
+  }
+}
+
+// Every change this makes is under plugins.*, which OpenClaw hot-applies.
+function configureWorkspaceNodePlugins(config, workspaceNodeId) {
+  requireWorkspaceNodePlugins(config);
+  const plugins = config.plugins ??= {};
+  if (Array.isArray(plugins.allow)) {
+    plugins.allow = [...new Set([...plugins.allow, "file-transfer"])];
+  }
+  const entries = plugins.entries ??= {};
+  const transfer = entries["file-transfer"] ??= {};
+  transfer.enabled = true;
+  const fileConfig = transfer.config ??= {};
+  // Current Kubernetes Codex layout; this is not a cross-Harness workspace root.
+  const remoteRoot = "/home/node/workspace";
+  // Codex stages reply artifacts while its client is live, even when both
+  // hosts use the same workspace path. A shared path no longer means shared files.
+  if (entries.codex) {
+    const appServer = (entries.codex.config ??= {}).appServer ??= {};
+    appServer.remoteWorkspaceRoot ??= remoteRoot;
+  }
+  // OCC edits four owner documents; native previews read the Agent workspace.
+  const editable = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
+  const memoryPaths = ["MEMORY.md", "memory.md", "DREAMS.md", "dreams.md", "memory", "memory/**"]
+    .map((name) => remoteRoot + "/" + name);
+  const skillRoots = [
+    "/home/node/.openclaw/skills", "/home/node/.openclaw/plugin-skills",
+    "/home/node/.openclaw/agents/*/agent/workshop-skills",
+    "/home/node/.openclaw/worktree-sources/empty/*/workspace",
+    "/home/node/.agents/skills", "/home/node/openclaw-runtime-assets/bundled-skills",
+    "/home/node/openclaw-runtime-assets/custodian-skills",
+    "/home/node/openclaw-runtime-assets/plugin-skills", "/app/extensions/*/skills",
+  ];
+  const nodes = fileConfig.nodes ??= {};
+  if (nodes[workspaceNodeId] === undefined && nodes["*"] === undefined) {
+    nodes[workspaceNodeId] = {
+      ask: "off",
+      allowReadPaths: [
+        remoteRoot,
+        remoteRoot + "/**",
+        "/home/node/.openclaw",
+        ...skillRoots.flatMap((root) => [root, root + "/**"]),
+      ],
+      allowWritePaths: [
+        ...editable.map((name) => remoteRoot + "/" + name),
+        ...memoryPaths,
+        remoteRoot + "/skills",
+        remoteRoot + "/media/inbound/openclaw-staged-*/**",
+      ],
+      followSymlinks: false,
+    };
+  }
+  fileConfig.policyVersion ??= 2;
+  (fileConfig.workspaces ??= {}).main = { nodeId: workspaceNodeId, remoteRoot };
+}
+
+const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const workspaceNodeBindingPath = process.env.OPENCLAW_WORKSPACE_NODE_PATH;
+
+// The controller writes {revisionId, deviceId} to an optional ConfigMap volume.
+// A missing, partial or foreign file (another revision of this Agent) is absent.
+function readWorkspaceNodeBinding() {
+  if (workspaceNodeBindingPath === undefined) return undefined;
+  let binding;
+  try {
+    binding = JSON.parse(pluginReadFileSync(workspaceNodeBindingPath, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (
+    !isPlainObject(binding) ||
+    binding.revisionId !== process.env.OPENCLAW_AGENT_REVISION_ID ||
+    typeof binding.deviceId !== "string" ||
+    !WORKSPACE_NODE_ID_PATTERN.test(binding.deviceId)
+  ) {
+    return undefined;
+  }
+  return binding.deviceId;
+}
+
+// OpenClaw hot-applies plugins.* and cloudWorkers.* (gateway/config-reload-plan.ts);
+// any other change, gateway.* in particular, would restart the Gateway.
+const HOT_APPLIED_CONFIG_KEYS = new Set(["plugins", "cloudWorkers"]);
+
+function assertHotApplicableChange(previous, next) {
+  for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    if (!HOT_APPLIED_CONFIG_KEYS.has(key) && !pluginDeepEqual(previous[key], next[key])) {
+      throw new Error("A workspace node update would change configuration OpenClaw cannot hot-apply.");
+    }
+  }
+}
+
 const openClawAuthenticationFailureCode =
   process.env.OPENCLAW_HARNESS_PROBE_CONFIG === undefined
     ? undefined
@@ -1902,74 +2005,29 @@ if (peerStatus !== undefined) {
   pluginResult.successfulPluginIds = peerStatus.successfulPluginIds;
 }
 publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
-const workspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
+// Only a native worker profile receives its node in the environment.
+const environmentWorkspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
 if (
-  workspaceNodeId !== undefined ||
+  environmentWorkspaceNodeId !== undefined ||
+  workspaceNodeBindingPath !== undefined ||
   process.env.APP_SERVER_URL !== undefined ||
   process.env.OPENCLAW_NATIVE_WORKER_PROFILE !== undefined
 ) {
   const config = readOpenClawConfig();
   // The first pairing records its command grant before a node ID is available.
+  // gateway.* changes restart OpenClaw, so this is written only here, at start.
   const commands = ((config.gateway ??= {}).nodes ??= {}).commands ??= {};
   commands.allow = [...new Set([...(commands.allow ?? []), "file.fetch", "file.stat", "file.write", "file.create", "dir.list", "workspace.memory", "workspace.skills"])];
-  if (workspaceNodeId !== undefined) {
-    const plugins = config.plugins ??= {};
-    if (plugins.deny?.includes("file-transfer")) {
-      throw new Error("The workspace node requires the file-transfer plugin.");
-    }
-    if (Array.isArray(plugins.allow)) {
-      plugins.allow = [...new Set([...plugins.allow, "file-transfer"])];
-    }
-    const entries = plugins.entries ??= {};
-    const transfer = entries["file-transfer"] ??= {};
-    if (transfer.enabled === false) {
-      throw new Error("The workspace node requires the file-transfer plugin.");
-    }
-    transfer.enabled = true;
-    const fileConfig = transfer.config ??= {};
-    // Current Kubernetes Codex layout; this is not a cross-Harness workspace root.
-    const remoteRoot = "/home/node/workspace";
-    // Codex stages reply artifacts while its client is live, even when both
-    // hosts use the same workspace path. A shared path no longer means shared files.
-    if (entries.codex) {
-      const appServer = (entries.codex.config ??= {}).appServer ??= {};
-      appServer.remoteWorkspaceRoot ??= remoteRoot;
-    }
-    // OCC edits four owner documents; native previews read the Agent workspace.
-    const editable = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
-    const memoryPaths = ["MEMORY.md", "memory.md", "DREAMS.md", "dreams.md", "memory", "memory/**"]
-      .map((name) => remoteRoot + "/" + name);
-    const skillRoots = [
-      "/home/node/.openclaw/skills", "/home/node/.openclaw/plugin-skills",
-      "/home/node/.openclaw/agents/*/agent/workshop-skills",
-      "/home/node/.openclaw/worktree-sources/empty/*/workspace",
-      "/home/node/.agents/skills", "/home/node/openclaw-runtime-assets/bundled-skills",
-      "/home/node/openclaw-runtime-assets/custodian-skills",
-      "/home/node/openclaw-runtime-assets/plugin-skills", "/app/extensions/*/skills",
-    ];
-    const nodes = fileConfig.nodes ??= {};
-    if (nodes[workspaceNodeId] === undefined && nodes["*"] === undefined) {
-      nodes[workspaceNodeId] = {
-        ask: "off",
-        allowReadPaths: [
-          remoteRoot,
-          remoteRoot + "/**",
-          "/home/node/.openclaw",
-          ...skillRoots.flatMap((root) => [root, root + "/**"]),
-        ],
-        allowWritePaths: [
-          ...editable.map((name) => remoteRoot + "/" + name),
-          ...memoryPaths,
-          remoteRoot + "/skills",
-          remoteRoot + "/media/inbound/openclaw-staged-*/**",
-        ],
-        followSymlinks: false,
-      };
-    }
-    fileConfig.policyVersion ??= 2;
-    (fileConfig.workspaces ??= {}).main = { nodeId: workspaceNodeId, remoteRoot };
+  if (environmentWorkspaceNodeId !== undefined || workspaceNodeBindingPath !== undefined) {
+    // Refuse a revision that cannot host its node now, not when the node arrives.
+    requireWorkspaceNodePlugins(config);
+  }
+  const startWorkspaceNodeId = environmentWorkspaceNodeId ?? readWorkspaceNodeBinding();
+  if (startWorkspaceNodeId !== undefined) {
+    configureWorkspaceNodePlugins(config, startWorkspaceNodeId);
   }
   writeOpenClawConfig(config);
+  runtimeWorkspaceNodeId = startWorkspaceNodeId;
 }
 publishRuntimeReady();
 // Everything before this line delays the native Gateway process.
@@ -1980,6 +2038,41 @@ const child = spawn(
   { stdio: "inherit" },
 );
 forwardTermination(child);
+if (workspaceNodeBindingPath !== undefined) {
+  let stoppingForChangedWorkspaceNode = false;
+  let reportedFailure = false;
+  const workspaceNodePoll = setInterval(() => {
+    try {
+      const deviceId = readWorkspaceNodeBinding();
+      if (deviceId === undefined || deviceId === runtimeWorkspaceNodeId) return;
+      if (runtimeWorkspaceNodeId !== undefined) {
+        // Another node for this revision: replace the config from a clean start.
+        if (stoppingForChangedWorkspaceNode) return;
+        stoppingForChangedWorkspaceNode = true;
+        clearInterval(workspaceNodePoll);
+        logStartupPhase("workspace-node-changed", startupPhaseOrigin);
+        child.kill("SIGTERM");
+        setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+        return;
+      }
+      const startedAt = Date.now();
+      const previous = readOpenClawConfig();
+      const next = JSON.parse(JSON.stringify(previous));
+      configureWorkspaceNodePlugins(next, deviceId);
+      assertHotApplicableChange(previous, next);
+      writeOpenClawConfig(next);
+      runtimeWorkspaceNodeId = deviceId;
+      logStartupPhase("workspace-node", startedAt);
+    } catch {
+      // The next poll retries; report once so a stuck binding is visible.
+      if (!reportedFailure) {
+        reportedFailure = true;
+        logStartupPhase("workspace-node", startupPhaseOrigin, "failed");
+      }
+    }
+  }, 1_000);
+  workspaceNodePoll.unref?.();
+}
 if (pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)) {
   let pollInFlight = false;
   let stoppingForChangedPeerStatus = false;
