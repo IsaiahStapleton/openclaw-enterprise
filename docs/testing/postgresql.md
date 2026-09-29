@@ -59,6 +59,46 @@ already has an Installation. See [PostgreSQL settings](#postgresql-test-environm
 For a repeat of production bootstrap, prepare a fresh migrated database and
 change its URL. Keep the general and bootstrap databases separate.
 
+## GitHub human sign-in
+
+`tests/integration/postgres-github-sign-in.test.mjs` exercises ordinary PostgreSQL
+development composition, real controller routes across a stopped maintenance restart,
+and a Playwright browser using the Console. It selects the application-role
+`OCC_TEST_DATABASE_URL`; use a fresh disposable database prepared by the migrator.
+The test provisions its own Installation and local recovery administrator.
+Select an already prepared browser with `OCC_TEST_BROWSER_EXECUTABLE` when needed:
+
+```sh
+node --test tests/integration/postgres-github-sign-in.test.mjs
+```
+
+The suite checks existing-account enrollment, unchanged Principals and grants,
+password parity, rejection of older unbound sessions, one-use callback handling,
+account-wide revocation, protected recovery, and browser access to an already
+permitted Namespace and existing Agent detail. It checks actual listener stop, admitted-request drain, activation and restart in the loopback composition; installed ingress and deployment controls remain a separate qualification. Provider exchange/profile HTTP responses are controlled
+fixtures. They allow deterministic optional-email and rejected-identity cases;
+they do not establish live GitHub registration, provider availability, or deployed
+HTTPS cookie behavior. Missing database configuration skips the case; a missing
+browser fails it. A command invocation or green memory-backed suite does not
+establish that this PostgreSQL/browser proof ran successfully.
+
+The same PostgreSQL lane also runs
+`tests/integration/postgres-human-authentication.test.mjs` for the original State
+transaction, account/method currentness, recovery protections, and concurrent
+issuance/revocation, actor-session revocation races, account-version conflicts,
+attachment invalidation, State deadlines and persisted attempt bounds.
+`tests/integration/postgres-github-cookie-commit.test.mjs` checks audit rollback
+and lost COMMIT acknowledgements through the controller. It drops a real
+PostgreSQL COMMIT response through the loopback protocol proxy and verifies
+persisted state, withheld cookies, and no replay. It also checks the ordinary
+HTTP cookie boundary for login and logout, unknown administrative completion,
+and a guarded present-state read. Password sign-in runs without a browser
+Origin header; a headerless sign-out is rejected with `403` and leaves the
+session current, and the other sign-outs send the configured Origin. No live
+provider credential
+is needed for these cases. Hosted PostgreSQL CI prepares Chromium after the
+frozen workspace dependencies; local runs use the prepared browser above.
+
 ## Canonical migration compatibility
 
 The mandatory native `postgres` lane runs

@@ -3459,6 +3459,174 @@ test("Agent detail separates the current version, viewed version, and latest dep
   await activity.getByText("Successful completion was not recorded for this deployment.").waitFor();
 });
 
+for (const unreadable of ["draft", "revision"]) {
+  test(`Agent browsing isolates an unreadable ${unreadable} from other saved settings`, async (t) => {
+    const fixture = await createConsoleAppFixture(t);
+    await fixture.bootstrap();
+    const namespace = await fixture.createNamespace("Unreadable saved settings", { ready: true });
+    const agent = await fixture.createAgent(namespace.id, "Affected Agent", nativeValues("saved"));
+    await fixture.createAgent(namespace.id, "Healthy Agent", nativeValues("healthy"));
+    const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+    const { page } = await newPage(t, fixture);
+    const requests = apiRequests(page, fixture.origin);
+    const agentsPath = `/namespaces/${namespace.id}/agents`;
+    const agentPath = `${agentsPath}/${agent.id}`;
+    const revisionsPath = `${agentPath}/revisions`;
+    const revisionPath = `${revisionsPath}/${revision.id}`;
+    const degradedId = unreadable === "draft" ? agent.id : revision.id;
+    const metadataFields =
+      unreadable === "draft"
+        ? [
+            "id",
+            "namespaceId",
+            "name",
+            "configurationId",
+            "backendId",
+            "executionMode",
+            "servicePrincipalId",
+            "activeRevisionId",
+            "desiredRuntimeState",
+            "status",
+            "createdAt",
+          ]
+        : ["id", "namespaceId", "agentId", "revision", "backendId", "createdAt"];
+    function unreadableProjection(value) {
+      return value.id === degradedId
+        ? {
+            ...Object.fromEntries(
+              metadataFields
+                .filter((field) => Object.hasOwn(value, field))
+                .map((field) => [field, value[field]]),
+            ),
+            configurationReadError: { code: "SAVED_CONFIGURATION_UNREADABLE", field: "plugins" },
+          }
+        : value;
+    }
+    // The real authorized response supplies the metadata. This simulates only the
+    // supported degraded wire shape; PostgreSQL tests own the decode-failure proof.
+    for (const path of unreadable === "draft"
+      ? [agentsPath, agentPath]
+      : [revisionsPath, revisionPath]) {
+      await page.route(`${fixture.origin}${path}`, async (route) => {
+        const response = await route.fetch();
+        const payload = await response.json();
+        payload.data = Array.isArray(payload.data)
+          ? payload.data.map(unreadableProjection)
+          : unreadableProjection(payload.data);
+        await route.fulfill({ response, json: payload });
+      });
+    }
+
+    await login(page, fixture, `/console/agents?namespace=${namespace.id}`);
+    await page.getByRole("link", { name: "Healthy Agent", exact: true }).waitFor();
+    const row = page
+      .getByRole("row")
+      .filter({ has: page.getByRole("link", { name: "Affected Agent", exact: true }) });
+    assert.equal(
+      await row.getByText("Saved configuration unreadable", { exact: true }).count(),
+      unreadable === "draft" ? 1 : 0,
+    );
+    await row.getByRole("link", { name: "Affected Agent", exact: true }).click();
+    await page.getByRole("heading", { name: "Affected Agent", exact: true }).waitFor();
+    await page
+      .getByRole("button", { name: "View version v1, current version", exact: true })
+      .waitFor();
+    if (unreadable === "draft") {
+      await page.getByRole("heading", { name: "Configuration snapshot", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Edit current Configuration", exact: true }).click();
+    }
+    await page
+      .getByRole("heading", { name: "Saved configuration unreadable", exact: true })
+      .waitFor();
+    const tabs = [
+      "Configuration",
+      "Plugins",
+      "Channels",
+      ...(unreadable === "draft" ? ["Credentials"] : []),
+    ];
+    for (const tab of tabs) {
+      await page.getByRole("button", { name: tab, exact: true }).click();
+      await page
+        .getByRole("heading", { name: "Saved configuration unreadable", exact: true })
+        .waitFor();
+      await page.getByText(/Saved plugin selections could not be read/).waitFor();
+      for (const name of [
+        "Deploy new version",
+        "Edit Configuration",
+        "Save plugin selections",
+        "Save authentication source",
+      ]) {
+        assert.equal(await page.getByRole("button", { name, exact: true }).count(), 0);
+      }
+    }
+    if (unreadable === "draft") {
+      assert.equal(
+        pathRequests(
+          requests,
+          "GET",
+          `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+        ).length,
+        0,
+      );
+      await page
+        .getByRole("button", { name: "View version v1, current version", exact: true })
+        .click();
+      await page.getByRole("heading", { name: "Configuration snapshot", exact: true }).waitFor();
+    } else {
+      await page.getByRole("button", { name: "Create new version", exact: true }).first().click();
+      await page.getByRole("button", { name: "Edit Configuration", exact: true }).waitFor();
+    }
+    assert.equal(
+      await page
+        .getByRole("heading", { name: "Saved configuration unreadable", exact: true })
+        .count(),
+      0,
+    );
+    assert.deepEqual(nonAuthWriteRequests(requests), []);
+  });
+}
+
+test("Configuration save stops when fresh Agent settings become unreadable", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Unreadable during edit", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Editing Agent", nativeValues("saved"));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("button", { name: "Edit Configuration", exact: true }).click();
+  await page
+    .getByLabel("Configuration JSON", { exact: true })
+    .fill(JSON.stringify(nativeValues("changed")));
+
+  // A saved Agent can become unreadable after the editor opens. The independent
+  // Configuration PATCH must not proceed using the stale Agent draft.
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}`,
+    async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      for (const field of ["harnessAuth", "plugins", "pluginApprovers", "repositoryBindings"]) {
+        delete payload.data[field];
+      }
+      payload.data.configurationReadError = {
+        code: "SAVED_CONFIGURATION_UNREADABLE",
+        field: "plugins",
+      };
+      await route.fulfill({ response, json: payload });
+    },
+  );
+  await page.getByRole("button", { name: "Save Configuration", exact: true }).click();
+  await page.getByText(/Saved plugin selections could not be read/).waitFor();
+  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  const saved = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.deepEqual(saved.data.values, nativeValues("saved"));
+});
+
 test("Gateway password access saves the generated reference without changing admitted versions or Secret bindings", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "occ-gateway-password-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -7945,10 +8113,16 @@ test("unsaved Preset drafts retain unfinished edits across navigation until expl
     unfinished,
   );
   assert.equal(await page.getByLabel("USER.md", { exact: true }).inputValue(), "");
-  // Navigation clears the transient password and returns to explicit Secret selection.
-  await page.getByLabel("API key Secret", { exact: true }).waitFor();
-  assert.equal(await page.getByLabel("API key Secret", { exact: true }).inputValue(), "");
+  // Navigation clears the transient password and requires a fresh Secret selection.
   assert.equal(await page.locator("#provider-api-key").inputValue(), "");
+  const credentialSecret = page.getByLabel("API key Secret", { exact: true });
+  await credentialSecret.waitFor();
+  await page.waitForFunction(() => {
+    const select = globalThis.document.querySelector("#provider-credential-secret");
+    return select && !select.disabled && select.required;
+  });
+  assert.equal(await credentialSecret.inputValue(), "");
+  assert.equal(await credentialSecret.evaluate((select) => select.validity.valueMissing), true);
   assert.deepEqual(
     await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } })),
     { local: {}, session: {} },

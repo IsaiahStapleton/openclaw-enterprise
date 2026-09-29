@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type {
   Agent,
+  AgentRead,
+  AgentRevisionRead,
   InitialWorkspaceFiles,
   AgentDeploymentDiagnostics,
   AgentRevision,
@@ -212,6 +214,25 @@ export {
   type ServiceAccountRepository,
   type TransactionalAuditWriter,
 } from "./state/platform-state.ts";
+export { PostgresCommitOutcomeUnknownError };
+export {
+  PostgresHumanAuthentication,
+  UserAlreadyExistsError,
+} from "./state/human-authentication.ts";
+export type {
+  HumanAuthenticationActivation,
+  HumanAuthenticationEnrolment,
+  PreparedPasswordAccount,
+  HumanAuthenticationActor,
+  HumanAuthenticationAccount,
+  HumanAuthenticationUser,
+  HumanAuthenticationProof,
+  HumanAuthenticationSnapshot,
+  HumanAuthenticationSession,
+  HumanAuthenticationAttemptKey,
+  HumanAuthenticationAttempt,
+  HumanAuthenticationDenial,
+} from "./state/human-authentication.ts";
 export { createPostgresPool } from "./state/postgres-pool.ts";
 export type {
   RepositoryRevisionOwner,
@@ -1413,11 +1434,14 @@ export class OpenClawController {
     }
   }
 
-  async listAgents(principalId: string, namespaceId: string): Promise<readonly Readonly<Agent>[]> {
+  async listAgents(
+    principalId: string,
+    namespaceId: string,
+  ): Promise<readonly Readonly<AgentRead>[]> {
     const namespace = await this.getNamespace(principalId, namespaceId);
     return this.read(async (state) => {
-      const readable: Readonly<Agent>[] = [];
-      for (const agent of await state.agents.listAgents(namespace.id)) {
+      const readable: Readonly<AgentRead>[] = [];
+      for (const agent of await state.agents.listAgentsForBrowsing(namespace.id)) {
         if (
           await this.canRead(principalId, {
             kind: "agent",
@@ -1555,6 +1579,34 @@ export class OpenClawController {
     return this.read(async (state) => {
       const namespace = await this.exactNamespace(state, namespaceId);
       const agent = await state.agents.findAgent(namespace.id, agentId);
+      if (!agent) {
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      }
+      return agent;
+    });
+  }
+
+  async getAgentForBrowsing(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+  ): Promise<Readonly<AgentRead>> {
+    if (!isNonEmptyString(namespaceId)) {
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    }
+    if (!isNonEmptyString(agentId)) {
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    }
+    await this.authorize(principalId, "read", {
+      kind: "agent",
+      id: agentId,
+      namespaceId,
+    });
+    return this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      const agent = await state.agents.findAgentForBrowsing(namespace.id, agentId);
       if (!agent) {
         throw new ScopeViolationError(
           "The Agent does not belong to the exact Installation and Namespace.",
@@ -2185,11 +2237,14 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     agentId: string,
-  ): Promise<readonly Readonly<AgentRevision>[]> {
-    const agent = await this.getAgent(principalId, namespaceId, agentId);
+  ): Promise<readonly Readonly<AgentRevisionRead>[]> {
+    const agent = await this.getAgentForBrowsing(principalId, namespaceId, agentId);
     return this.read(async (state) => {
-      const readable: Readonly<AgentRevision>[] = [];
-      for (const revision of await state.revisions.listRevisions(agent.namespaceId, agent.id)) {
+      const readable: Readonly<AgentRevisionRead>[] = [];
+      for (const revision of await state.revisions.listRevisionsForBrowsing(
+        agent.namespaceId,
+        agent.id,
+      )) {
         if (
           await this.canRead(principalId, {
             kind: "agent_revision",
@@ -2233,6 +2288,48 @@ export class OpenClawController {
         namespaceId: namespace.id,
       });
       const revision = await state.revisions.findRevision(namespace.id, agent.id, revisionId);
+      if (!revision) {
+        throw new ScopeViolationError(
+          "The AgentRevision does not belong to the exact Agent and Namespace.",
+        );
+      }
+      return revision;
+    });
+  }
+
+  async getRevisionForBrowsing(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    revisionId: string,
+  ): Promise<Readonly<AgentRevisionRead>> {
+    if (!isNonEmptyString(namespaceId)) {
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    }
+    if (!isNonEmptyString(agentId)) {
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    }
+    if (!isNonEmptyString(revisionId)) {
+      throw new ScopeViolationError("The exact AgentRevision identity is missing.");
+    }
+    return this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      const agent = await state.agents.findAgentForBrowsing(namespace.id, agentId);
+      if (!agent) {
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      }
+      await this.authorize(principalId, "read", {
+        kind: "agent_revision",
+        id: revisionId,
+        namespaceId: namespace.id,
+      });
+      const revision = await state.revisions.findRevisionForBrowsing(
+        namespace.id,
+        agent.id,
+        revisionId,
+      );
       if (!revision) {
         throw new ScopeViolationError(
           "The AgentRevision does not belong to the exact Agent and Namespace.",

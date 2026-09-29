@@ -8,11 +8,12 @@ last_updated_session: codex/01a0cf72-6985-7712-ba92-d8cc32470f24
 
 ## Overview
 
-Manual Enterprise container publication builds controller and runtime OCI archives
-for Linux amd64 and arm64, checks both variants, and transfers the tested bytes
-to private GHCR packages. Each package receives one multi-platform index digest.
-This flow ends with verified remote digests and a publication receipt; it does
-not deploy workloads or change package visibility.
+Manual Enterprise publication builds controller and runtime OCI archives for
+Linux amd64 and arm64, checks both variants, and transfers the tested bytes to
+private GHCR packages. Each package receives one multi-platform index digest.
+The protected job then tags those digests with the OCE version and publishes a
+Helm chart that records both image digests. It does not deploy workloads or
+change package visibility.
 
 ## Entry Points
 
@@ -21,6 +22,8 @@ not deploy workloads or change package visibility.
   and optional mutable image tag.
 - `scripts/ci/container-release.mjs:main`: validation, smoke, seal, and publication
   commands called by the workflow.
+- `scripts/ci/chart-release.mjs:publish`: version-tag and chart publication after
+  the image receipt exists.
 - Publication requires pre-existing private packages. The manual dispatch
   authorizes publication without a separate environment approval. GitHub grants
   manual dispatch to repository writers, including maintainers.
@@ -40,7 +43,9 @@ graph TD
   F -->|publish true| I["Recheck source, CI, seals and private packages"]
   I --> J["Copy and verify both immutable source tags"]
   J --> K["Copy and verify selected mutable aliases"]
-  K --> L["Recheck digests and write receipt"]
+  K --> L["Recheck digests and write image receipt"]
+  L --> M["Tag image digests and push chart"]
+  M --> N["Pull chart, verify bytes and write release receipt"]
 ```
 
 The workflow implements these gates; source review alone does not prove that a
@@ -175,6 +180,29 @@ A partial failure leaves existing published bytes intact. Recovery consumes the
 same retained multi-platform archives and original producer identity; it does
 not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 
+`scripts/ci/chart-release.mjs` reads the original image receipt. It requires
+both entries to match the current source, producer run, CI run, package names,
+and immutable digests. Root `package.json`, the chart version, and appVersion
+must agree before a version tag is written. The staged chart carries the source
+SHA and both digest references in annotations; its default controller image is
+the verified controller digest. Operator values can override that default.
+
+The chart publisher checks both image version tags and any existing chart
+version before writing. Existing tags must resolve to the receipt's digests;
+an existing chart version must have identical packaged files. It rechecks the trusted
+source, CI, environment, and private chart package before each write. After
+`helm push`, it pulls the chart, compares its packaged files and new-push archive bytes, inspects the remote
+manifest digest, and writes a separate `chart-publication.json`. A partial
+failure can be retried against identical packaged files. Registry conflict, ambiguous
+lookup, or permission failure stops publication without a success receipt.
+The receipt binds the chart manifest digest observed after the pull. This
+assumes the protected publication workflows and trusted package administrators
+are the only package writers; their workflow concurrency group does not exclude
+independent GHCR writers. A tag change between the pull and digest lookup could
+make the receipt refer to a different manifest. The operator's
+[single-writer requirement](../../.github/chart-publication.md#choose-one-release-version)
+owns package-write access and coordination.
+
 ## Debugging and Verification
 
 - Run `node --test tests/integration/container-{release,resume,promote}.test.mjs`
@@ -197,6 +225,7 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Related docs
 
 - [Publication and recovery instructions](../../.github/containers.md)
+- [Chart publication and pull](../../.github/chart-publication.md)
 - [Package bootstrap flow](container-package-bootstrap.md)
 - [Image startup checks](../testing/images.md)
 

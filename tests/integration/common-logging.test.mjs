@@ -334,12 +334,25 @@ test("worker emitter reports health at debug and failures at error", () => {
     namespaceId: "ns_test",
     outcome: "success",
   });
+  emit({
+    event: "worker.completed",
+    workId: "agent_revision:rev_test:reconcile",
+    attempt: 1,
+    outcome: "success",
+    durationMs: 120,
+    deployPasses: 3,
+    prepareMs: 450,
+    readinessWaitMs: 2100,
+    activationMs: 80,
+    elapsedMs: 2900,
+  });
   emit({ event: "worker.error", code: "CLAIM_LOST" });
 
   assert.deepEqual(
     output.lines.map(({ event, severity }) => ({ event, severity })),
     [
       { event: "worker.health", severity: "DEBUG" },
+      { event: "worker.completed", severity: "INFO" },
       { event: "worker.completed", severity: "INFO" },
       { event: "worker.error", severity: "ERROR" },
     ],
@@ -348,6 +361,26 @@ test("worker emitter reports health at debug and failures at error", () => {
   assert.equal(completed.workId, "namespace:ns_test:reconcile:ready");
   assert.equal(completed.attempt, 1);
   assert.equal(completed.operation, "namespace.ensure");
+  // Deployment phase timing survives sanitization for operators and log queries.
+  const deployed = output.lines.find((line) => line.workId === "agent_revision:rev_test:reconcile");
+  assert.deepEqual(
+    {
+      durationMs: deployed.durationMs,
+      deployPasses: deployed.deployPasses,
+      prepareMs: deployed.prepareMs,
+      readinessWaitMs: deployed.readinessWaitMs,
+      activationMs: deployed.activationMs,
+      elapsedMs: deployed.elapsedMs,
+    },
+    {
+      durationMs: 120,
+      deployPasses: 3,
+      prepareMs: 450,
+      readinessWaitMs: 2100,
+      activationMs: 80,
+      elapsedMs: 2900,
+    },
+  );
 });
 
 test("worker startup diagnostics honor logging YAML and stay on stderr", async (t) => {

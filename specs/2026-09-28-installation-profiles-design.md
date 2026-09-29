@@ -28,8 +28,8 @@ An **installation profile** selects platform defaults and prerequisites. An
 **Agent preset** is a saved template used when creating an Agent; it neither
 installs a plugin driver nor supplies credentials. `presets.includeDefaults: true`
 currently seeds both Standard OpenClaw and Standard Codex, preserving existing
-presets with matching names. The optimized profiles must not imply that seeding
-those presets makes both plugin stacks compatible.
+presets with matching names. The profiles must not imply that seeding those
+presets makes both plugin stacks compatible.
 
 ## Proposed configuration matrix
 
@@ -57,11 +57,10 @@ All entries below are proposed final configuration, not existing named profiles.
 
 Both profiles include the shared installation capabilities and select one plugin
 driver globally. Selecting another Agent preset does not switch that driver.
-Installing the shared proxy infrastructure is not Agent channel capability:
+Installing the shared proxy infrastructure does not give Agents a channel.
 Kubernetes Compute rejects enabled external channels for embedded OpenClaw, so
 only dedicated Codex Agents can use the Slack consumer path in the initial
-profiles.
-Profile names must not become a new persisted platform resource.
+profiles. Profile names must not become a new persisted platform resource.
 
 ## Shared defaults and optional integrations
 
@@ -74,13 +73,14 @@ unrelated deployment state.
 Console access is authenticated. Both profiles enable native OpenClaw
 administration by default, as selected by Kevin. This retains the full-admin
 pilot contract: wildcard DNS/TLS, shared-cookie boundaries and exact-Agent OCC
-admission. Those inputs and private gateway routing are mandatory for both
-profiles; native edits can diverge from managed configuration.
+admission. Both profiles require those inputs and private gateway routing.
+Native edits can diverge from managed configuration.
 
 Codex uses hosted discovery with an operator-supplied PAT by default. Supply the
 PAT directly through the supported discovery flow or an authorized same-Namespace
-Secret, plus current API egress addresses for the auth/catalog hosts. Runtime can use an existing account access token through `codex_pat`, or
-optional OCE-managed ServiceAccount provisioning. Verify discovery and runtime
+Secret, plus current API egress addresses for the auth/catalog hosts. Runtime can
+use an existing account access token through `codex_pat`, or optional
+OCE-managed ServiceAccount provisioning. Verify discovery and runtime
 independently; catalog visibility does not establish app connection or model access.
 
 | Optional integration         | Required inputs and consequence                                                                                                                                                                              |
@@ -124,8 +124,8 @@ and file format remain implementation choices after this proposal is accepted.
 ### Repository bootstrap and recovery
 
 Repository support is optional and disabled by default in both profiles.
-When enabled, registry policy is keyed by server-assigned OCC Namespace IDs.
-The selected repository integration therefore requires two stages:
+Registry policy is keyed by server-assigned OCC Namespace IDs, so enabling
+repositories requires two stages:
 
 1. Bootstrap the core with repository credentials disabled and obtain the
    Namespace IDs. Report the opted-in repository integration as incomplete.
@@ -142,18 +142,18 @@ automating it is outside the initial scope.
 The current broker is colocated with the worker and retains sessions in memory.
 Worker Pod replacement can invalidate them; a stable DNS name or persisted OCC
 ledger does not restore them. Keep explicit maintenance/recovery instructions
-and prove new revisions receive fresh sessions. Do not label the optional repository integration
-restart-safe before qualification. Moving the broker into its own Deployment
-reduces coupling but does not solve broker restart recovery; it is a separate
-scope decision, not a hidden prerequisite of a YAML profile.
+and prove new revisions receive fresh sessions. Do not label the optional
+repository integration restart-safe before qualification. Moving the broker into
+its own Deployment reduces coupling but does not solve broker restart recovery;
+it is a separate scope decision, not a hidden prerequisite of a YAML profile.
 
 ### Channel proxy completion
 
 The chart currently consumes proxy endpoints but does not install a Slack proxy.
 Propose one optional chart-managed restricted forward proxy, enabled by both
 profiles, with separately wired `runtime.channels.proxyUrl` and
-`api.channelDirectoryProxyUrl`. The present API value requires a literal IPv4
-address and port. A reusable Service DNS value is therefore **not yet supported**.
+`api.channelDirectoryProxyUrl`. The API value currently requires a literal IPv4
+address and port, so a reusable Service DNS value is **not yet supported**.
 Choose either a bounded post-Service endpoint-resolution step using current
 contracts or a reviewed DNS-plus-selector extension. Prefer endpoint resolution
 first; do not hard-code an allocated Service IP. Provisioning the proxy never
@@ -233,7 +233,7 @@ The PAT choice applies to discovery. The supplied existing account access token
 also selects the supported `codex_pat` runtime path for qualification; managed
 account provisioning remains optional with separate administrator prerequisites.
 
-The remaining scope decisions are also settled:
+The two remaining scope decisions are settled:
 
 1. OpenClaw ships initially with manual/API plugin selection. The profile records
    the missing Console picker as a limitation instead of blocking setup.

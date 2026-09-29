@@ -198,6 +198,10 @@ p {
   width: 100%;
   margin-top: 28px;
 }
+.auth-providers button {
+  width: 100%;
+  margin-top: 16px;
+}
 .error {
   color: var(--danger);
   margin-top: 18px;
@@ -431,6 +435,9 @@ p {
 .state-panel p {
   color: var(--muted);
   max-width: 560px;
+}
+.namespace-recovery {
+  margin-bottom: 20px;
 }
 .state-panel .request-id {
   font-family: ui-monospace, monospace;

@@ -17,7 +17,7 @@ Command-line flags override the corresponding environment variables.
 | `--timeout-seconds`  | `OCC_TIMEOUT_SECONDS`  | Positive whole seconds for an HTTP request. Default: `30`.                                                                       |
 | `--output`, `-o`     | —                      | Output format: `table` (default), `json`, or `yaml`.                                                                             |
 | `--help`, `-h`       | —                      | Prints help for the command.                                                                                                     |
-| `--version`, `-v`    | —                      | Prints the CLI version. Source builds report `dev` unless release packaging sets a version.                                      |
+| `--version`, `-v`    | —                      | Prints the CLI version. Source builds report `dev`; published binaries report their OCE release version.                         |
 
 The service-key JSON must contain a nonempty `data.key` with no line breaks.
 The client sends it as `x-api-key` and does not follow redirects. Use a trusted

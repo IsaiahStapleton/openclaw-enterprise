@@ -1,3 +1,4 @@
+import { NativeIAMDriver } from "@openclaw-enterprise/iam";
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
@@ -36,6 +37,8 @@ import {
   CredentialSourceResponse,
   occApiRoutes,
   type Agent,
+  type AgentRead,
+  type AgentRevisionRead,
   type ProvisionAgentBody,
   type AgentRevision,
   type AgentRuntimeCredentialsBody,
@@ -67,6 +70,7 @@ import {
   NamespaceNotReadyError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  UserAlreadyExistsError,
   type DeploymentStatusResult,
   type AgentProvisioningProgress,
   type DeployAgentAuthorization,
@@ -79,7 +83,9 @@ import {
   hostnameMatchesSharedCookieDomain,
   normalizeSharedCookieDomain,
   OCC_SERVICE_KEY_HEADER,
+  type ClientAddressConfiguration,
   type ControllerAuth,
+  type PreparedAuthAccount,
 } from "./auth/index.ts";
 import { CONSOLE_CONTENT_SECURITY_POLICY, readConsoleAsset } from "./console-assets.ts";
 import {
@@ -151,12 +157,16 @@ export interface ControllerAppOptions {
   readonly nativeAdmin?: NativeAdminAccessConfig;
   readonly nativeAdminGatewayApiKey?: () => Promise<string>;
   readonly publicOrigin?: string;
+  /** Writes the prepared account with its Principal, bindings and enrolment atomically. */
   readonly provisionAuthAccount?: (
     seed: AuthPrincipalSeed,
     auditEvent: AuditEvent,
+    prepared: PreparedAuthAccount,
   ) => Promise<void>;
   readonly auditEventFactory?: AuditEventFactory;
   readonly logger?: FastifyBaseLogger;
+  /** Production proxies allowed to send forwarded headers; admission ignores those headers. */
+  readonly trustedProxies?: Pick<ClientAddressConfiguration, "trusts">;
 }
 
 export interface ControllerApp {
@@ -803,7 +813,10 @@ function clientInstallation(
   };
 }
 
-function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
+function clientAgent(agent: Readonly<AgentRead>): Record<string, unknown> {
+  if ("configurationReadError" in agent) {
+    return { ...agent };
+  }
   return {
     id: agent.id,
     namespaceId: agent.namespaceId,
@@ -849,7 +862,10 @@ function clientAgentProvisioning(
   };
 }
 
-function clientRevision(revision: Readonly<AgentRevision>): Record<string, unknown> {
+function clientRevision(revision: Readonly<AgentRevisionRead>): Record<string, unknown> {
+  if ("configurationReadError" in revision) {
+    return { ...revision };
+  }
   return {
     id: revision.id,
     namespaceId: revision.namespaceId,
@@ -963,6 +979,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
   }
   validateTrustedDevelopmentCidrs(development);
+  if (development.enabled && options.trustedProxies !== undefined) {
+    throw new Error("Trusted proxies are a production setting.");
+  }
 
   const app = Fastify({
     bodyLimit,
@@ -1778,9 +1797,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     } else if (Array.isArray(origin)) {
       originAllowed = false;
     }
-    const forwarded = Object.keys(request.headers).some(
-      (name) => name === "forwarded" || name === "x-real-ip" || name.startsWith("x-forwarded-"),
-    );
+    // Forwarded headers are never used for admission. They are tolerated only from a
+    // configured trusted proxy, which adds them to every request it relays.
+    const forwarded =
+      options.trustedProxies?.trusts(remoteAddress) !== true &&
+      Object.keys(request.headers).some(
+        (name) => name === "forwarded" || name === "x-real-ip" || name.startsWith("x-forwarded-"),
+      );
     if (
       forwarded ||
       (development.enabled &&
@@ -2429,7 +2452,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
     if (operation.operationId === "getAgent") {
       reply.send({
-        data: clientAgent(await controller.getAgent(context.actorId, namespaceId, agentId)),
+        data: clientAgent(
+          await controller.getAgentForBrowsing(context.actorId, namespaceId, agentId),
+        ),
         meta: { requestId: request.id },
       });
       return;
@@ -2792,7 +2817,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
 
     if (operation.operationId === "getAgentRevision") {
-      const revision = await controller.getRevision(
+      const revision = await controller.getRevisionForBrowsing(
         context.actorId,
         namespaceId,
         agentId,
@@ -3207,6 +3232,293 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       });
     }
 
+    routes.get(
+      "/api/auth/providers",
+      {
+        schema: {
+          operationId: "getAuthProviders",
+          summary: "List configured browser sign-in methods",
+          tags: ["Authentication"],
+          security: [],
+          response: responses({
+            type: "object",
+            additionalProperties: false,
+            required: ["github"],
+            properties: { github: { type: "boolean" } },
+          }),
+        },
+      },
+      async (request, reply) => {
+        reply.header("cache-control", "no-store");
+        return {
+          data: { github: options.auth.githubEnabled === true },
+          meta: { requestId: request.id },
+        };
+      },
+    );
+    routes.post(
+      "/api/auth/providers/github/start",
+      {
+        schema: {
+          operationId: "startGitHubSignIn",
+          summary: "Start GitHub sign-in for an enrolled account",
+          description:
+            "Requires the configured browser Origin. Creates a one-use browser-bound login attempt; does not create an account or grant access.",
+          tags: ["Authentication"],
+          security: [],
+          response: responses({
+            type: "object",
+            additionalProperties: false,
+            required: ["url"],
+            properties: { url: { type: "string", format: "uri" } },
+          }),
+        },
+      },
+      async (request, reply) => options.auth.githubStart(request, reply),
+    );
+    routes.get(
+      "/api/auth/providers/github/callback",
+      {
+        schema: {
+          operationId: "completeGitHubSignIn",
+          summary: "Complete an enrolled GitHub sign-in",
+          description:
+            "Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.",
+          tags: ["Authentication"],
+          security: [],
+          response: { 302: { description: "Redirect to Console", type: "null" } },
+        },
+      },
+      async (request, reply) => options.auth.githubCallback(request, reply),
+    );
+
+    const accountParams = {
+      type: "object",
+      additionalProperties: false,
+      required: ["userId"],
+      properties: { userId: { type: "string", minLength: 1, maxLength: 200 } },
+    };
+    const accountReadOperation = {
+      operationId: "getAuthAccount",
+      method: "GET",
+      path: "/api/auth/accounts/:userId",
+      action: "openclaw.auth.accounts.read",
+      iamAction: "administer",
+      resourceKind: "installation",
+      authorizationTarget: "installation",
+      tags: ["Authentication"],
+      summary: "Inspect current human account state",
+      schema: {},
+    } as unknown as OccApiRoute;
+    async function humanAccountActor(
+      request: FastifyRequest,
+      operation: OccApiRoute,
+      context: RequestContext,
+    ) {
+      const admitted = admissions.get(request);
+      if (
+        admitted?.method !== "session" ||
+        admitted.session.userId !== context.subject ||
+        publicOrigin === undefined ||
+        request.headers.origin !== publicOrigin
+      ) {
+        throw failure(
+          403,
+          "FORBIDDEN",
+          "A current human session and trusted browser origin are required.",
+        );
+      }
+      const { selected } = await requireInstallationAdmin(request, operation, context);
+      if (!(selected instanceof NativeIAMDriver)) {
+        throw dependencyUnavailable();
+      }
+      return {
+        userId: admitted.session.userId,
+        sessionId: admitted.session.id,
+        principalId: context.actorId,
+      };
+    }
+    routes.get(
+      accountReadOperation.path,
+      {
+        schema: {
+          operationId: accountReadOperation.operationId,
+          summary: accountReadOperation.summary,
+          description:
+            "Requires a current human Native IAM Installation administrator and trusted Origin. Returns guarded present state, not a receipt for any prior operation.",
+          tags: ["Authentication"],
+          security: [{ sessionCookie: [] }],
+          "x-openclaw-permissions": [
+            { action: "administer", resourceKind: "installation", scope: "requested" },
+          ],
+          params: accountParams,
+          response: {
+            ...responses({
+              type: "object",
+              additionalProperties: false,
+              required: ["userId", "principalId", "version", "disabled", "methods"],
+              properties: {
+                userId: { type: "string" },
+                principalId: { type: "string" },
+                version: { type: "integer", minimum: 1 },
+                disabled: { type: "boolean" },
+                methods: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["methodId", "providerId", "subject"],
+                    properties: {
+                      methodId: { type: "string" },
+                      providerId: { type: "string" },
+                      subject: { type: "string" },
+                    },
+                  },
+                },
+              },
+            }),
+            403: { description: "Forbidden", ...error },
+          },
+        },
+        onRequest: async (request) => admit(request, accountReadOperation),
+        preValidation: async (request) => resolveIdentity(request, accountReadOperation),
+      },
+      async (request, reply) => {
+        const context = contexts.get(request);
+        if (!context || !options.auth.readAccount) {
+          throw dependencyUnavailable();
+        }
+        const actor = await humanAccountActor(request, accountReadOperation, context);
+        const { userId } = request.params as { userId: string };
+        const account = await options.auth.readAccount(userId, actor);
+        reply
+          .header("cache-control", "no-store")
+          .send({ data: account, meta: { requestId: request.id } });
+      },
+    );
+
+    const accountOperations = [
+      {
+        operationName: "github",
+        path: "/api/auth/accounts/:userId/providers/github",
+        operationId: "attachGitHubIdentity",
+        summary: "Attach an exact GitHub identity to an existing account",
+      },
+      {
+        operationName: "disable",
+        path: "/api/auth/accounts/:userId/disable",
+        operationId: "disableAuthAccount",
+        summary: "Disable a human account",
+      },
+      {
+        operationName: "enable",
+        path: "/api/auth/accounts/:userId/enable",
+        operationId: "enableAuthAccount",
+        summary: "Re-enable a disabled human account",
+      },
+      {
+        operationName: "revoke",
+        path: "/api/auth/accounts/:userId/revoke",
+        operationId: "revokeAuthAccountSessions",
+        summary: "Revoke all sessions for a human account",
+      },
+      {
+        operationName: "detach",
+        path: "/api/auth/accounts/:userId/methods/:methodId/detach",
+        operationId: "detachAuthMethod",
+        summary: "Detach an external sign-in identity from an account",
+      },
+    ] as const;
+    const methodParams = {
+      type: "object",
+      additionalProperties: false,
+      required: ["userId", "methodId"],
+      properties: {
+        userId: { type: "string", minLength: 1, maxLength: 200 },
+        methodId: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    };
+    for (const { operationName, path, operationId, summary } of accountOperations) {
+      const operation = {
+        operationId,
+        method: "POST",
+        path,
+        action: `openclaw.auth.accounts.${operationName}`,
+        iamAction: "administer",
+        resourceKind: "installation",
+        authorizationTarget: "installation",
+        tags: ["Authentication"],
+        summary,
+        schema: {},
+      } as unknown as OccApiRoute;
+      routes.post(
+        operation.path,
+        {
+          schema: {
+            operationId: operation.operationId,
+            summary: operation.summary,
+            description:
+              "Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
+            tags: [...operation.tags],
+            security: [{ sessionCookie: [] }],
+            "x-openclaw-permissions": [
+              { action: "administer", resourceKind: "installation", scope: "requested" },
+            ],
+            params: operationName === "detach" ? methodParams : accountParams,
+            body: {
+              type: "object",
+              additionalProperties: false,
+              required:
+                operationName === "github" ? ["subject", "expectedVersion"] : ["expectedVersion"],
+              properties: {
+                expectedVersion: { type: "integer", minimum: 1, maximum: 2147483647 },
+                ...(operationName === "github"
+                  ? { subject: { type: "string", pattern: "^[1-9][0-9]{0,19}$" } }
+                  : {}),
+              },
+            },
+            response: {
+              ...responses({
+                type: "object",
+                additionalProperties: false,
+                required: ["userId"],
+                properties: { userId: { type: "string" } },
+              }),
+              403: { description: "Forbidden", ...error },
+              409: { description: "Conflict", ...error },
+            },
+          },
+          onRequest: async (request) => admit(request, operation),
+          preValidation: async (request) => resolveIdentity(request, operation),
+        },
+        async (request, reply) => {
+          const context = contexts.get(request);
+          if (!context || !options.auth.readAccount || !options.auth.changeAccount) {
+            throw dependencyUnavailable();
+          }
+          const actor = await humanAccountActor(request, operation, context);
+          const { expectedVersion } = request.body as { expectedVersion: number };
+          const { userId } = request.params as { userId: string };
+          if (operationName === "github") {
+            if (!options.auth.attachGitHub || !options.auth.githubEnabled) {
+              throw failure(409, "RESOURCE_CONFLICT", "GitHub sign-in is not configured.");
+            }
+            const { subject } = request.body as { subject: string };
+            await options.auth.attachGitHub(userId, subject, actor, expectedVersion);
+          } else if (operationName === "detach") {
+            if (!options.auth.detachMethod) {
+              throw dependencyUnavailable();
+            }
+            const { methodId } = request.params as { methodId: string };
+            await options.auth.detachMethod(userId, methodId, actor, expectedVersion);
+          } else {
+            await options.auth.changeAccount(userId, operationName, actor, expectedVersion);
+          }
+          reply.send({ data: { userId }, meta: { requestId: request.id } });
+        },
+      );
+    }
+
     routes.post(
       "/api/auth/sign-in/email",
       {
@@ -3358,12 +3670,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           context,
         );
 
-        const account = await options.auth.createAccount({
+        const prepared = await options.auth.prepareAccount({
           email,
           password,
           ...(name === undefined ? {} : { name }),
         });
-        const seed = options.auth.principalSeed(account, { roleId });
+        const seed = options.auth.principalSeed(prepared, { roleId });
         const auditEvent = event(
           createAuthAccountOperation,
           request,
@@ -3373,25 +3685,23 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           decision.evidence,
         );
         try {
-          await options.provisionAuthAccount(seed, auditEvent);
+          await options.provisionAuthAccount(seed, auditEvent, prepared);
         } catch (error) {
-          try {
-            await options.auth.deleteAccount(account);
-          } catch {
-            // The failed provisioning path still returns the original dependency error.
-          }
           throw error instanceof RequestFailure
             ? error
-            : error instanceof AuthAccountRoleNotFoundError
-              ? failure(
-                  400,
-                  "INVALID_REQUEST",
-                  "The request does not match the operation contract.",
-                )
-              : new DependencyUnavailableError(
-                  error instanceof Error ? error.message : "Auth account provisioning failed.",
-                );
+            : error instanceof UserAlreadyExistsError
+              ? failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.")
+              : error instanceof AuthAccountRoleNotFoundError
+                ? failure(
+                    400,
+                    "INVALID_REQUEST",
+                    "The request does not match the operation contract.",
+                  )
+                : new DependencyUnavailableError(
+                    error instanceof Error ? error.message : "Auth account provisioning failed.",
+                  );
         }
+        const account = prepared;
         reply.status(201).send({
           data: {
             id: account.id,

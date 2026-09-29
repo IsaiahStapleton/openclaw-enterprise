@@ -143,9 +143,17 @@ never starts another model call. Embedded OpenClaw continues to probe once.
 
 Codex emits a structured `codex.model_probe` log for each attempt with its number,
 elapsed milliseconds, exit code, recognized termination signal, and final code
-(`READY`, `MODEL_PROBE_TIMEOUT`, `MODEL_PROBE_FAILED`, or `UNAVAILABLE`). Logs omit
-credentials and raw provider output. The existing runtime failure status is
-published only after retries end.
+(`READY`, `MODEL_PROBE_TIMEOUT`, `MODEL_PROBE_FAILED`, `AUTHENTICATION_FAILED`, or
+`UNAVAILABLE`). Logs omit credentials and raw provider output. The existing runtime
+failure status is published only after retries end.
+
+The runtime failure code is `AUTHENTICATION_FAILED` only when the provider
+rejected the credential: an OpenClaw probe result with status `auth` (provider
+401/403 or invalid key), or a Codex probe `turn.failed` event or access-token
+login error reporting HTTP 401 or 403. The worker then fails the deployment with
+`RUNTIME_AUTHENTICATION_FAILED` instead of waiting for the convergence deadline.
+Timeouts, provider server errors, and transport failures keep `MODEL_PROBE_TIMEOUT`,
+`MODEL_PROBE_FAILED`, or `LOGIN_FAILED` and remain pending.
 
 These startup checks make provider requests and may incur model usage charges.
 They do not verify access to every other configured model or guarantee continued validity
