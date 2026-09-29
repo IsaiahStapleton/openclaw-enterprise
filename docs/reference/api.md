@@ -623,7 +623,7 @@ Start GitHub sign-in for an enrolled account
 
 **Operation ID:** `startGitHubSignIn`
 
-**Permissions:** Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
+**Permissions:** Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
 
 ##### Responses
 
@@ -706,7 +706,7 @@ Start Google sign-in for an enrolled account
 
 **Operation ID:** `startGoogleSignIn`
 
-**Permissions:** Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
+**Permissions:** Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
 
 ##### Responses
 

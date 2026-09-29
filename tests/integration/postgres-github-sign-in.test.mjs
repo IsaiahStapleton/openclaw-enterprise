@@ -480,6 +480,8 @@ test(
       ["missing Origin", {}],
       ["foreign Origin", { origin: "https://github-sign-in.attacker.example" }],
       ["another host name for the same address", { origin: `http://localhost:${port}` }],
+      ["same-site fetch", { origin, "sec-fetch-site": "same-site" }],
+      ["cross-site fetch", { origin, "sec-fetch-site": "cross-site" }],
     ]) {
       const refused = await app.inject({
         method: "POST",

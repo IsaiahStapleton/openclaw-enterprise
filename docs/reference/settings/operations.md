@@ -57,7 +57,7 @@ An exit-0 `migration.checked` record reports one reviewed history shape:
 `repositoryRetention`, `workspaceSetup`, `agentProvisioning`,
 `backendCompleted`, `providerCompleted`, `backendTerminology`, `prePluginApprovers`,
 `preBrokerReceipts`, `preAgentDeletion`, `preDeploymentProgress`,
-`preHumanAuthentication`, or `completed`.
+`preHumanAuthentication`, `preAgentDeletionTakeover`, or `completed`.
 `prePresetsMain` means
 the exact canonical history through `0023_runtime_failure_timestamp_validation`;
 `main` also includes `0024_agent_presets`. `repositoryCredentials` adds
@@ -72,8 +72,9 @@ through `0031_backend_terminology_compatibility`; `prePluginApprovers` adds
 through `0033_agent_plugin_approvers`; `preAgentDeletion` has 35 through
 `0034_repository_broker_receipts`; `preDeploymentProgress` has 36 through
 `0035_agent_deletion_repository_session_evidence`. `preHumanAuthentication` has
-the 37 receipts through `0036_deployment_progress`. `completed` is the current
-canonical history with all receipts, including `0037_human_authentication`.
+the 37 receipts through `0036_deployment_progress`; `preAgentDeletionTakeover`
+has 38 through `0037_human_authentication`. `completed` is the current
+canonical history with all receipts, including `0038_agent_deletion_takeover`.
 The source manifest is
 [`migrations/meta/canonical-history.json`](../../../migrations/meta/canonical-history.json).
 Empty schemas may be absent or have only their owner's ordinary `CREATE` and

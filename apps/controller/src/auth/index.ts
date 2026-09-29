@@ -1102,9 +1102,9 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
             if (!configured) {
               throw new AdmissionFailure(403, "FORBIDDEN", `${label} sign-in is unavailable.`);
             }
-            if (request.headers.origin !== expectedBrowserOrigin) {
-              throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
-            }
+            // Sets the browser-binding cookie, so it takes the same exact-Origin and
+            // Sec-Fetch-Site guard as sign-out and the result exchange.
+            requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
             return runPrivateEndpoint(request, `/oce/providers/${name}/start`);
           },
           (value) => value,
