@@ -221,6 +221,7 @@ export {
 } from "./state/human-authentication.ts";
 export type {
   HumanAuthenticationActivation,
+  HumanAuthenticationActivationHooks,
   HumanAuthenticationEnrolment,
   PreparedPasswordAccount,
   HumanAuthenticationActor,
@@ -234,6 +235,17 @@ export type {
   HumanAuthenticationAttempt,
   HumanAuthenticationDenial,
 } from "./state/human-authentication.ts";
+export {
+  HumanAuthenticationMaintenanceRefusedError,
+  PostgresHumanAuthenticationMaintenance,
+  WritersNotStoppedError,
+} from "./state/human-authentication-maintenance.ts";
+export type {
+  HumanAuthenticationMaintenanceAccount,
+  HumanAuthenticationMaintenanceBackend,
+  HumanAuthenticationMaintenanceRefusal,
+  HumanAuthenticationMaintenanceStatus,
+} from "./state/human-authentication-maintenance.ts";
 export { createPostgresPool } from "./state/postgres-pool.ts";
 export type {
   RepositoryRevisionOwner,

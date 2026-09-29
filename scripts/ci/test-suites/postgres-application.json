@@ -244,6 +244,13 @@
       ]
     },
     {
+      "path": "tests/integration/auth-maintain.test.mjs",
+      "expectedTests": [
+        "auth:maintain requires an explicit writers-stopped claim for every change",
+        "stopped maintenance activates, repairs, resets, purges and returns to the legacy profile"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-github-cookie-commit.test.mjs",
       "expectedTests": [
         "opted-in HTTP login and logout preserve cookies until real State commit acknowledgement"

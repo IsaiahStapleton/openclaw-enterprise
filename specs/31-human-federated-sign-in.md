@@ -150,7 +150,7 @@ State commits local effects and audit together, not IAM reads, GitHub calls or b
 
 **M2, hybrid session binding.** Start returns `attemptId`; callback adds a signed two-minute receipt cookie; `POST /providers/github/result` exchanges receipt, attempt and session cookie for a session key; `x-occ-session-key` narrows, never widens, the cookie session; `sessionBinding` discovery.
 
-**M3, `auth:maintain`.** Break-glass CLI run as the migration role with writers-stopped proof: activate, repair enrollment, reset the recovery password, purge sessions, deactivate (refuses while disabled accounts exist).
+**M3, `auth:maintain`.** Break-glass CLI run as the migration role with writers-stopped proof: activate, repair enrollment, reset the recovery password, purge sessions, deactivate (refuses while disabled accounts exist). Its `activate` keeps an existing designation like startup, and `enrol` shares the enrollment rule with the M4 repair route. See the [operator procedure](../docs/guides/deploy/auth-maintenance.md).
 
 **M4, recovery replacement.** `/recovery` routes, optional GitHub subject at creation, an enrollment repair route, and the environment recovery ID as seed only.
 

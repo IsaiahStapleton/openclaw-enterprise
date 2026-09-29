@@ -99,12 +99,29 @@ export interface PreparedPasswordAccount {
 }
 
 export type HumanAuthenticationEnrolment =
-  | { readonly enrolled: true }
+  | {
+      readonly enrolled: true;
+      readonly principalId: string;
+      readonly version: number;
+      /** False when the account was already enrolled. */
+      readonly created: boolean;
+    }
   | { readonly enrolled: false; readonly reason: "PRINCIPAL_MISSING" | "PASSWORD_METHOD" };
 
 export interface HumanAuthenticationActivation {
   /** Users left unenrolled because they lack a Principal or exactly one password. */
   readonly skipped: readonly string[];
+}
+
+/** Lets stopped maintenance run activation inside its exclusivity proof. */
+export interface HumanAuthenticationActivationHooks {
+  /** Runs after the activation lock and again before commit; throwing rolls back. */
+  readonly exclusive?: (unit: PlatformUnitOfWork) => Promise<void>;
+  /** Runs before commit only when this call designated the recovery account. */
+  readonly activated?: (
+    unit: PlatformUnitOfWork,
+    activation: HumanAuthenticationActivation & { userId: string; principalId: string },
+  ) => Promise<void>;
 }
 
 type Row = Record<string, unknown>;
@@ -190,11 +207,12 @@ export class PostgresHumanAuthentication {
     return principal;
   }
 
-  /** Enrols one existing user that has a Principal and exactly one password method. */
-  private async enrolUser(
-    unit: PlatformUnitOfWork,
-    userId: string,
-  ): Promise<HumanAuthenticationEnrolment> {
+  /**
+   * Enrols one existing user that has a Principal and exactly one password method. The one
+   * enrolment rule for activation, online repair (enrolAccount) and stopped maintenance; it
+   * runs inside the caller's State transaction and is idempotent.
+   */
+  async enrolUser(unit: PlatformUnitOfWork, userId: string): Promise<HumanAuthenticationEnrolment> {
     await this.lockUser(unit, userId);
     const principal = await this.findPrincipal(unit, userId);
     if (principal === undefined) {
@@ -203,20 +221,25 @@ export class PostgresHumanAuthentication {
     const methods = await this.query(
       unit,
       `SELECT id FROM occ.account WHERE user_id = $1 AND provider_id = 'credential'
-       AND password IS NOT NULL AND password <> ''`,
+       AND password IS NOT NULL AND password <> '' FOR SHARE`,
       [userId],
     );
     if (methods.length !== 1) {
       return { enrolled: false, reason: "PASSWORD_METHOD" };
     }
-    await this.query(
+    const [inserted] = await this.query(
       unit,
       `INSERT INTO occ.human_authentication_accounts (user_id, installation_id, principal_id)
-       VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING`,
+       VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING RETURNING user_id`,
       [userId, this.installationId, principal],
     );
-    await this.enrolled(unit, userId);
-    return { enrolled: true };
+    const account = await this.enrolled(unit, userId);
+    return {
+      enrolled: true,
+      principalId: principal,
+      version: account.version as number,
+      created: inserted !== undefined,
+    };
   }
 
   private async enrolled(unit: PlatformUnitOfWork, userId: string): Promise<Row> {
@@ -279,12 +302,14 @@ export class PostgresHumanAuthentication {
   async activateRecovery(
     userId: string,
     principalId: string,
+    hooks: HumanAuthenticationActivationHooks = {},
   ): Promise<HumanAuthenticationActivation> {
     return this.state.transact(async (unit) => {
       // Serialize the one-time designation and legacy-session invalidation across controllers.
       await this.query(unit, `SELECT pg_advisory_xact_lock(1868785005, hashtext($1))`, [
         this.installationId,
       ]);
+      await hooks.exclusive?.(unit);
       const [designation] = await this.query(
         unit,
         `SELECT user_id, principal_id FROM occ.human_authentication_recovery WHERE installation_id = $1`,
@@ -324,6 +349,7 @@ export class PostgresHumanAuthentication {
         if (existing.user_id !== userId || existing.principal_id !== principalId) {
           throw new ScopeViolationError("The recovery designation cannot be changed.");
         }
+        await hooks.exclusive?.(unit);
         return { skipped: [] };
       }
       await this.query(
@@ -339,6 +365,8 @@ export class PostgresHumanAuthentication {
         userId,
         skipped,
       });
+      await hooks.activated?.(unit, { userId, principalId, skipped });
+      await hooks.exclusive?.(unit);
       return { skipped };
     });
   }
@@ -937,34 +965,20 @@ export class PostgresHumanAuthentication {
   ): Promise<{ principalId: string; version: number; created: boolean }> {
     return this.state.transact(async (unit) => {
       await this.guardActor(unit, actor, [userId]);
-      const principalId = await this.principal(unit, userId);
-      const methods = await this.query(
-        unit,
-        `SELECT id FROM occ.account WHERE user_id = $1 AND provider_id = 'credential'
-         AND password IS NOT NULL AND password <> '' FOR SHARE`,
-        [userId],
-      );
-      if (methods.length !== 1) {
-        throw new ResourceConflictError("The account requires exactly one password method.");
+      const enrolment = await this.enrolUser(unit, userId);
+      if (!enrolment.enrolled) {
+        throw enrolment.reason === "PRINCIPAL_MISSING"
+          ? new ScopeViolationError("The authentication Principal is unavailable.")
+          : new ResourceConflictError("The account requires exactly one password method.");
       }
-      const [inserted] = await this.query(
-        unit,
-        `INSERT INTO occ.human_authentication_accounts (user_id, installation_id, principal_id)
-         VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING RETURNING user_id`,
-        [userId, this.installationId, principalId],
-      );
-      const account = await this.enrolled(unit, userId);
-      if (inserted !== undefined) {
+      const { principalId, version, created } = enrolment;
+      if (created) {
         await this.audit(unit, "authentication.account.enrol", actor.principalId, {
           userId,
           principalId,
         });
       }
-      return {
-        principalId,
-        version: account.version as number,
-        created: inserted !== undefined,
-      };
+      return { principalId, version, created };
     });
   }
 

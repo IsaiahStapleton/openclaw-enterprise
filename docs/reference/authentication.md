@@ -208,7 +208,7 @@ method checks, and required audit before a cookie is released or, on logout,
 cleared. Older sessions without account/method binding are
 rejected; users sign in again. Activation is one-way: removing GitHub
 configuration fails startup, and the database refuses sessions from older
-binaries. There is no rollback; keep the `OCC_AUTH_GITHUB_*` environment set.
+binaries. Returning to password-only sign-in needs [stopped maintenance](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in).
 
 The recovery user needs one local password, its Installation Principal, and
 native IAM Installation `administer`; disablement refuses it. Keep its password
@@ -217,8 +217,8 @@ recovery. Password login never depends on GitHub.
 
 `POST /api/auth/recovery` (`userId`, `expectedCurrentUserId`, target
 `expectedVersion`) moves the designation (`GET` reads it) to another qualifying
-user. The variable then only seeds first activation; a differing value logs a
-warning, and each start re-checks the holder.
+user. The variable, like `auth:maintain activate --recovery-user`, then only
+seeds first activation; a differing value warns, and each start re-checks the holder.
 
 Account reads and mutations require a human session, exact `Origin`, and
 Installation `administer`; service keys are refused. State locks actor and target

@@ -481,9 +481,10 @@ Follow the [single-controller profile](../../reference/authentication.md#github-
 during stopped maintenance. Install without GitHub as above, then enable it with
 `helm upgrade`.
 
-Activation is one-way. The database refuses sessions from older images, the
-`auth.github` values must stay set, and `helm rollback` past activation is
-unsupported; see [rollback](production-upgrade.md#roll-back-across-human-sign-in).
+Activation is one-way: the database refuses older images' sessions and
+`auth.github` must stay set. Never `helm rollback` past activation
+([rollback](production-upgrade.md#roll-back-across-human-sign-in));
+[stopped maintenance](auth-maintenance.md) deactivates it.
 
 1. Verify password recovery ([replaceable](../../reference/authentication.md#session-and-recovery-controls)
    later). Register
