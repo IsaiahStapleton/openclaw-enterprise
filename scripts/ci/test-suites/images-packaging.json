@@ -56,6 +56,12 @@
       ]
     },
     {
+      "path": "tests/integration/production-image-upgrade-recovery.test.mjs"
+    },
+    {
+      "path": "tests/integration/production-image-qualification.test.mjs"
+    },
+    {
       "path": "tests/integration/production-kubernetes-packaging.test.mjs",
       "expectedTests": [
         "two-cluster packaging separates remote API identities without optional services",
