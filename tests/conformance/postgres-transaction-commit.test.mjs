@@ -131,6 +131,38 @@ for (const code of ["40P01", "40001"]) {
   });
 }
 
+for (const [name, failure] of [
+  ["DNS ENOTFOUND", Object.assign(new Error("getaddrinfo ENOTFOUND db"), { code: "ENOTFOUND" })],
+  ["DNS EAI_AGAIN", Object.assign(new Error("getaddrinfo EAI_AGAIN db"), { code: "EAI_AGAIN" })],
+  ["EHOSTUNREACH", Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" })],
+  ["a password callback failure", new Error("workload identity token request failed")],
+  ["a rejected credential", serverError("28P01")],
+]) {
+  test(`a connection checkout failure from ${name} is unavailable`, async () => {
+    const state = new PostgresPlatformState({
+      options: { connectionTimeoutMillis: 100 },
+      async connect() {
+        throw failure;
+      },
+      async end() {},
+    });
+    let ran = false;
+    const rejection = await state
+      .transact(async () => {
+        ran = true;
+      })
+      .then(
+        () => assert.fail("expected the checkout failure"),
+        (error) => error,
+      );
+    assert.equal(ran, false);
+    assert.ok(rejection instanceof DependencyUnavailableError);
+    const response = requestFailure(rejection);
+    assert.equal(response.status, 503);
+    assert.equal(response.code, "DEPENDENCY_UNAVAILABLE");
+  });
+}
+
 test("a client error with a server-looking code leaves COMMIT unknown", async () => {
   let discarded;
   const p = protocol({
