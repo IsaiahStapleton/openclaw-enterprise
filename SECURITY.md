@@ -6,7 +6,7 @@ Email [security@openclaw.ai](mailto:security@openclaw.ai) and identify the affec
 project as **OpenClaw Enterprise**. This is the existing
 [OpenClaw security contact](https://github.com/openclaw/openclaw/security/policy#report-a-security-issue)
 for routing reports. Do not open an ordinary issue or PR with an unpatched
-vulnerability, exploit, tenant data, or credential, even in this private repository.
+vulnerability, exploit, tenant data, or credential.
 Coordinate reproduction material and any patch through the security team.
 
 Include:
