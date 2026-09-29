@@ -175,7 +175,7 @@ workload is ready.
 - [Kubernetes Compute Driver](drivers/kubernetes-compute.md)
 - [IAM](authorization.md)
 - [Controller configuration](settings.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)
 - [Namespace lifecycle implementation](../../packages/occ/src/index.ts)
 - [Local testing](../testing/local.md)
 

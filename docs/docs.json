@@ -647,12 +647,8 @@
                     "label": "Readable Code"
                   },
                   {
-                    "page": "ARCHITECTURE",
-                    "label": "Current Architecture"
-                  },
-                  {
                     "page": "design",
-                    "label": "Target Architecture"
+                    "label": "Architecture"
                   },
                   {
                     "page": "reference/controller",
