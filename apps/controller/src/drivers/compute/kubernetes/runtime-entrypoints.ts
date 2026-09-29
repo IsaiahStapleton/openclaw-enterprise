@@ -1710,11 +1710,13 @@ function probeOpenClawAuthenticationFailureCode() {
     if (result.error?.code === "ETIMEDOUT") return "MODEL_PROBE_TIMEOUT";
     if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const results = JSON.parse(result.stdout).auth?.probes?.results;
-    return Array.isArray(results) && results.length === 1 &&
-      results[0].provider === provider && results[0].model === model &&
-      results[0].source === "env" && results[0].status === "ok"
-        ? undefined
-        : "MODEL_PROBE_FAILED";
+    if (!Array.isArray(results) || results.length !== 1 ||
+      results[0].provider !== provider || results[0].model !== model ||
+      results[0].source !== "env") return "MODEL_PROBE_FAILED";
+    if (results[0].status === "ok") return undefined;
+    // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
+    // Only that deterministic rejection fails the deployment before its deadline.
+    return results[0].status === "auth" ? "AUTHENTICATION_FAILED" : "MODEL_PROBE_FAILED";
   } catch {
     return "MODEL_PROBE_FAILED";
   } finally {
@@ -1983,6 +1985,11 @@ const loginArguments = loginMode === "api_key"
       "login",
       "--with-access-token",
     ];
+// Codex reports provider HTTP rejections as "status 401 Unauthorized" or
+// "unexpected status 403 Forbidden"; transport failures carry no status.
+function codexAuthenticationRejected(message) {
+  return typeof message === "string" && /\bstatus 40[13] (Unauthorized|Forbidden)\b/.test(message);
+}
 let login;
 for (let attempt = 0; attempt < 3; attempt++) {
   login = spawnSync("codex", loginArguments, {
@@ -1996,7 +2003,10 @@ for (let attempt = 0; attempt < 3; attempt++) {
   if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") break;
 }
 if (login.status !== 0 || login.error) {
-  holdFailedAuthentication("login", "LOGIN_FAILED");
+  holdFailedAuthentication(
+    "login",
+    login.error === undefined && codexAuthenticationRejected(login.stderr) ? "AUTHENTICATION_FAILED" : "LOGIN_FAILED",
+  );
 } else {
 delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
@@ -2070,6 +2080,11 @@ function probeCodexAuthentication(timeout) {
     });
     const output = result.stdout?.trim() ?? "";
     const events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
+    // A failed turn caused by provider 401/403 is a deterministic credential
+    // rejection; timeouts, 5xx, and transport errors keep their existing codes.
+    if (events.some((event) => event.type === "turn.failed" && codexAuthenticationRejected(event.error?.message))) {
+      return finish("AUTHENTICATION_FAILED");
+    }
     const allowed = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "item.updated", "item.completed"]);
     // Native item.error is advisory (for example missing catalog metadata),
     // distinct from fatal top-level error/turn.failed. Only a bounded, known
