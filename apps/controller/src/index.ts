@@ -4000,7 +4000,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         try {
           await options.provisionAuthAccount(seed, auditEvent, prepared, external);
         } catch (error) {
-          throw error instanceof RequestFailure
+          // The account, Principal and audit commit in one transaction, so nothing is
+          // compensated here. Dependency errors keep their class: an unknown COMMIT
+          // outcome must reach the caller as unknown, never as a plain outage.
+          throw error instanceof RequestFailure || error instanceof DependencyUnavailableError
             ? error
             : error instanceof UserAlreadyExistsError
               ? failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.")
