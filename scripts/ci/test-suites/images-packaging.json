@@ -59,8 +59,10 @@
       "path": "tests/integration/sign-in-chart-parity.test.mjs",
       "expectedTests": [
         "the API accepts exactly the sign-in settings the chart renders for every proxy preset, with and without GitHub",
+        "the API accepts exactly the Google sign-in settings the chart renders, alone and with GitHub",
         "values the chart refuses are settings the API also refuses",
-        "proxy CIDRs without a preset are refused by the chart and default to ingress-nginx in the API"
+        "proxy CIDRs without a preset are refused by the chart and default to ingress-nginx in the API",
+        "the chart refuses Google Secret and egress settings the API cannot observe"
       ]
     },
     {
