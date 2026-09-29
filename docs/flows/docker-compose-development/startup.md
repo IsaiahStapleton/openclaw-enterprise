@@ -308,10 +308,10 @@ current context unchanged.
 
 The host kubeconfig remains owner-readable. The container kubeconfig uses the
 cluster's internal load-balancer hostname with TLS verification. The lifecycle
-imports the runtime image by its engine-recorded name, `localhost/`-qualified
-on Podman, resolves the in-cluster digest, and writes Installation
-configuration selecting Kubernetes Compute, Configuration,
-and Secret Drivers with native IAM. Its runtime section configures the transport
+imports the runtime and OpenShell images under their engine-recorded names,
+`localhost/`-qualified on Podman, resolves each in-cluster digest, and writes
+Installation configuration selecting Kubernetes Compute, Configuration, and
+Secret Drivers with native IAM. Its runtime section configures the transport
 Secret prefix and gateway storage class accepted by the current Compute Driver
 schema. Generated Gateway and Harness resource limits allow 2 GiB of memory per
 workload; the runtime can exceed the former 1 GiB limit during startup.

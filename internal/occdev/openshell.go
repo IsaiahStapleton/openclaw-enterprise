@@ -215,6 +215,13 @@ func (r *runner) importOpenShellImage(ctx context.Context, state *developmentSta
 			resultErr = errors.Join(resultErr, fmt.Errorf("remove OpenShell %s staging image: %w", component, err))
 		}
 	}()
+	// Use the name the engine recorded for the staging tag. Podman qualifies it
+	// with the `localhost` registry, and containerd stores whatever reference
+	// was imported, so the verification below has to look for that name.
+	recorded, err := r.engineImageReference(ctx, stagingTag)
+	if err != nil {
+		return "", err
+	}
 	platformData, err := r.output(ctx, r.engine, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", source)
 	if err != nil {
 		return "", err
@@ -233,7 +240,7 @@ func (r *runner) importOpenShellImage(ctx context.Context, state *developmentSta
 	if r.engine == "docker" {
 		saveArgs = append(saveArgs, "--platform", platform)
 	}
-	saveArgs = append(saveArgs, "--output", archive, stagingTag)
+	saveArgs = append(saveArgs, "--output", archive, recorded)
 	if err := r.run(ctx, r.engine, saveArgs...); err != nil {
 		return "", err
 	}
@@ -242,6 +249,7 @@ func (r *runner) importOpenShellImage(ctx context.Context, state *developmentSta
 	}
 
 	candidates := map[string]struct{}{
+		recorded:                  {},
 		stagingTag:                {},
 		"docker.io/" + stagingTag: {},
 	}
