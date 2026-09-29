@@ -1205,13 +1205,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             authorization: validatedAuthorization?.request ?? {
               principalId: context.actorId,
               action: authorization?.action ?? operation.iamAction,
+              // Namespace IAM policy routes are admitted by administer on the
+              // Installation (plus reads), never by a Namespace administer check.
               resource:
                 authorization?.resource ??
-                operationTarget(
-                  operation,
-                  installationId,
-                  request.params as Record<string, unknown>,
-                ),
+                (operation.authorizationTarget === "namespace_iam"
+                  ? { kind: "installation", id: installationId }
+                  : operationTarget(
+                      operation,
+                      installationId,
+                      request.params as Record<string, unknown>,
+                    )),
             },
             ...(authorizationEvidence === undefined
               ? {}
@@ -2245,7 +2249,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         params,
         body,
         namespaceId,
-        mutationEvent: (resource) => event(operation, request, resource, "mutation", context),
+        mutationEvent: (resource, details) => {
+          const recorded = event(operation, request, resource, "mutation", context);
+          return details === undefined
+            ? recorded
+            : { ...recorded, details: { ...recorded.details, ...details } };
+        },
       });
       return;
     }
