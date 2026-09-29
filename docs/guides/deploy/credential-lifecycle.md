@@ -90,6 +90,12 @@ inactive history alone does not retain the source indefinitely.
 
 ## Use a personal Codex login
 
+The launch MVP covers the first deployment of a new Agent on Kubernetes with
+Compute-owned dedicated Codex, no selected Sandbox or Credential Gateway, and
+fresh private credential storage. The normal deployment prerequisites still
+apply: configured runtime images, provisionable storage, provider connectivity,
+and access to the selected model. Readiness requires a successful native model probe.
+
 Start `POST /namespaces/:namespaceId/agents/device-authorizations` with
 `{ "harnessId": "codex" }`. Open the returned verification link, enter the
 displayed code, and complete sign-in. Poll the returned Secret ID through
@@ -118,8 +124,10 @@ only discards OCE's local copy; OCE does not revoke the upstream session.
 A pending login expires after the provider's device deadline, at most 15 minutes.
 A completed login is available in OCE for 24 hours before handoff; OCE does not
 refresh it. If discovery rejects an expired access token, start a fresh login.
-Discard abandoned logins, then delete their unreferenced Secrets through the
-normal Secret API. An interrupted token exchange requires a fresh login.
+Expiry blocks use but does not erase stored credential bytes. Discard abandoned
+logins, then delete their unreferenced Secrets through the normal Secret API.
+An interrupted token exchange requires a fresh login; a controller crash during
+polling can leave the old login pending until expiry.
 
 If private storage or its credential file is lost, start a new Agent-scoped login,
 update its `harnessAuth` to the new source, and deploy. An explicit replacement
@@ -127,8 +135,11 @@ source installs a new bundle after the previous workload stops. An unchanged
 source can never reseed a missing bundle. Provider revocation also requires
 reconnecting. Ordinary revision changes do not need another runtime login.
 
-This is deliberate launch scope: durable token brokerage is separate work in
-progress. See [storage and limits](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage).
+Durable token brokerage is separate work in progress. Reconnect hardening,
+automatic cleanup, and replacement recovery are follow-up work; they are not
+first-deploy acceptance requirements. See the
+[known runtime limitations](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#oauth-launch-limits)
+and [verification gaps](../../testing/plugins.md#device-login-verification).
 
 ## Preserve administrator recovery
 
