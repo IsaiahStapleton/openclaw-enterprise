@@ -2689,6 +2689,13 @@ export class ControllerWorker {
             : { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
       }
     }
+    if (
+      resolved.outcome === "retry" &&
+      claim.attemptCount >= this.maxAttempts &&
+      (await this.continueExhaustedMaintenance(claim, resolved.code))
+    ) {
+      return;
+    }
     let activated: Readonly<AgentRevision> | undefined;
     let stoppedCandidate: Readonly<AgentRevision> | undefined;
     let committedOutcome: WorkOutcome =
@@ -3004,6 +3011,70 @@ export class ControllerWorker {
       outcome: "pending",
       code,
     });
+  }
+
+  // A dependency outage that outlasts one maintenance claim's retries must not
+  // retire the authorized active runtime. Fail only this bounded claim and keep
+  // the maintenance chain, as finalizeActiveRevision does for failed
+  // observations. The queue still refuses continuation past the credential
+  // deadline, and the next pass re-checks authority before any new material.
+  private async continueExhaustedMaintenance(claim: ClaimedWork, code: string): Promise<boolean> {
+    const revisionId = claim.revisionId;
+    if (
+      claim.agentId === undefined ||
+      revisionId === undefined ||
+      claim.namespaceTarget !== undefined ||
+      !new RegExp(`^agent_revision:${revisionId}:maintenance:(0|[1-9][0-9]*)$`).test(
+        claim.idempotencyKey,
+      )
+    ) {
+      return false;
+    }
+    let continued = false;
+    await this.state.transactWithQueue(async (unit, queue) => {
+      if ((await queue.heartbeat(claim)) === undefined) {
+        throw new WorkClaimLostError();
+      }
+      const agent = await unit.agents.lockAgent(claim.namespaceId, claim.agentId!);
+      if (agent?.activeRevisionId !== revisionId || agent.desiredRuntimeState !== "running") {
+        return;
+      }
+      const namespace = await unit.namespaces.findNamespace(claim.namespaceId);
+      const revision = await unit.revisions.findRevision(
+        claim.namespaceId,
+        claim.agentId!,
+        revisionId,
+      );
+      if (
+        namespace?.status !== "ready" ||
+        revision === undefined ||
+        revision.servicePrincipalId !== agent.servicePrincipalId ||
+        this.revisionMaintenanceInterval(revision) === undefined ||
+        (revision.repositoryCredentials !== undefined &&
+          Date.now() >= revision.repositoryCredentials.deadlineWallMs)
+      ) {
+        return;
+      }
+      await queue.fail(claim, { code }, { continuingRevision: true });
+      await this.enqueueMaintenance(queue, claim, revision);
+      continued = true;
+    }, this.queueOptions);
+    if (!continued) {
+      return false;
+    }
+    this.passOutcome = "permanent";
+    this.emit({
+      event: "worker.completed",
+      ...workLogFields(claim),
+      namespaceId: claim.namespaceId,
+      agentId: claim.agentId,
+      revisionId,
+      result: "retry",
+      outcome: "retry",
+      code,
+      ...this.deployTimingFields(claim),
+    });
+    return true;
   }
 
   private async enqueueMaintenance(
