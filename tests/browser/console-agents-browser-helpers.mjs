@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 
 import { watchBrowserContext } from "../helpers/browser-failure-diagnostics.mjs";
+import { keepRequestInterceptionEnabled } from "../helpers/browser-request-interception.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 export function apiRequests(page, origin) {
@@ -74,6 +75,7 @@ export async function newPage(t, fixture, options = {}) {
   });
   context = await browser.newContext();
   diagnostics = await watchBrowserContext(t, context);
+  await keepRequestInterceptionEnabled(context);
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
   return { page, artifacts };

@@ -11,6 +11,7 @@ import {
   noteBrowserEvent,
   watchBrowserContext,
 } from "../helpers/browser-failure-diagnostics.mjs";
+import { keepRequestInterceptionEnabled } from "../helpers/browser-request-interception.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 
 const routeHoldTimeoutMs = 30_000;
@@ -63,6 +64,7 @@ async function newPage(t, fixture) {
   });
   context = await browser.newContext();
   diagnostics = await watchBrowserContext(t, context);
+  await keepRequestInterceptionEnabled(context);
   return { page: await context.newPage(), artifacts };
 }
 
@@ -94,6 +96,7 @@ async function newMobilePage(t, fixture) {
     viewport: { width: 390, height: 844 },
   });
   diagnostics = await watchBrowserContext(t, context);
+  await keepRequestInterceptionEnabled(context);
   return { page: await context.newPage() };
 }
 
