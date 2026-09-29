@@ -320,6 +320,30 @@ export function installFixture(scenario, evidence) {
       activeRevisionId: null,
     });
   }
+  if (scenario.unreadableAgentConfiguration) {
+    for (const field of ["harnessAuth", "plugins", "pluginApprovers", "repositoryBindings"]) {
+      delete agent[field];
+    }
+    agent.configurationReadError = {
+      code: "SAVED_CONFIGURATION_UNREADABLE",
+      field: scenario.unreadableAgentConfiguration,
+    };
+  }
+  if (scenario.unreadableRevisionConfiguration) {
+    const saved = revisions.get(selectedRevisionId);
+    revisions.set(saved.id, {
+      id: saved.id,
+      namespaceId: saved.namespaceId,
+      agentId: saved.agentId,
+      revision: saved.revision,
+      backendId: saved.backendId,
+      createdAt: saved.createdAt,
+      configurationReadError: {
+        code: "SAVED_CONFIGURATION_UNREADABLE",
+        field: scenario.unreadableRevisionConfiguration,
+      },
+    });
+  }
   const preset = {
     id: scenario.devdayPreset ? "pre_devday_codex" : "pre_00000000-0000-4000-8000-000000000001",
     namespaceId,

@@ -136,6 +136,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y skopeo
           skopeo --version | grep -Fx 'skopeo version 1.13.3'
+      - name: Install pinned Helm
+        run: |
+          curl -fsSL https://get.helm.sh/helm-v3.19.2-linux-amd64.tar.gz -o "$RUNNER_TEMP/helm.tar.gz"
+          echo '2114c9dea2844dce6d0ee2d792a9aae846be8cf53d5b19dc2988b5a0e8fec26e  '"$RUNNER_TEMP/helm.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/helm.tar.gz" -C "$RUNNER_TEMP" linux-amd64/helm
+          echo "$RUNNER_TEMP/linux-amd64" >> "$GITHUB_PATH"
       - name: Revalidate private packages, CI and bytes before transfer
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,5 +154,19 @@ jobs:
         with:
           name: container-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/prepared/publication.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish coupled OCE chart and image version tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_ATTEMPT: ${{ needs.validate.outputs.ci_attempt }}
+          GHCR_CONTROLLER_IMAGE: ${{ vars.GHCR_CONTROLLER_IMAGE }}
+          GHCR_RUNTIME_IMAGE: ${{ vars.GHCR_RUNTIME_IMAGE }}
+          PUBLISH: "true"
+        run: node scripts/ci/chart-release.mjs publish "$RUNNER_TEMP/prepared"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chart-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/prepared/chart-publication.json
           if-no-files-found: error
           retention-days: 30

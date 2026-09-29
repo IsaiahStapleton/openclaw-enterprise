@@ -36,9 +36,12 @@ const {
 } = require("node:path");
 const {
   mkdirSync: pluginMkdirSync,
+  mkdtempSync: pluginMkdtempSync,
   readFileSync: pluginReadFileSync,
+  rmSync: pluginRmSync,
   writeFileSync: pluginWriteFileSync,
 } = require("node:fs");
+const { tmpdir: pluginTmpdir } = require("node:os");
 const {
   createHmac,
   timingSafeEqual: pluginTimingSafeEqual,
@@ -873,10 +876,71 @@ function openClawPluginConfiguration(runtime, failures = []) {
   return undefined;
 }
 
+class PluginApproverConfigurationError extends Error {
+  constructor() {
+    super("The selected OpenClaw gateway image cannot validate approvals.plugin.slack. Use a gateway image with Slack plugin approver support, or omit the Agent, plugin, and tool approver overrides.");
+  }
+}
+
+let validatedPluginApproverConfiguration;
+
+function validateOpenClawPluginApprovers(overlay) {
+  const candidate = JSON.stringify({ approvals: overlay.approvals });
+  if (candidate === validatedPluginApproverConfiguration) return;
+  let directory;
+  try {
+    directory = pluginMkdtempSync(pluginResolve(pluginTmpdir(), "oce-plugin-approvers-"));
+    const configPath = pluginResolve(directory, "openclaw.json");
+    pluginWriteFileSync(configPath, candidate, { mode: 0o600 });
+    // Probe only the exact generated approval policy: selected external plugins
+    // may not be installed yet, so a full-config check would reject them early.
+    const result = pluginSpawnSync("node", ["/app/openclaw.mjs", "config", "validate", "--json"], {
+      cwd: directory,
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+    });
+    if (result.error !== undefined || result.status !== 0 || JSON.parse(result.stdout)?.valid !== true) {
+      throw new PluginApproverConfigurationError();
+    }
+    validatedPluginApproverConfiguration = candidate;
+  } catch {
+    throw new PluginApproverConfigurationError();
+  } finally {
+    if (directory !== undefined) {
+      pluginRmSync(directory, { recursive: true, force: true });
+    }
+  }
+}
+
+function holdPluginApproverConfigurationFailure(error) {
+  if (!(error instanceof PluginApproverConfigurationError)) return false;
+  publishRuntimeFailure("plugin-approvers", "INCOMPATIBLE_RESPONSE");
+  console.error(error.message);
+  // Keep startup evidence available without launching an invalid gateway or
+  // discarding the admitted policy through a restart loop.
+  setInterval(() => {}, 3600000);
+  return true;
+}
+
 function applyOpenClawPluginConfiguration(runtime, failures = [], options = {}) {
   const overlay = openClawPluginConfiguration(runtime, failures);
   if (overlay === undefined) return;
   const base = readOpenClawConfig();
+  if (objectAtPath(overlay, ["approvals", "plugin", "slack"]) !== undefined) {
+    const slack = objectAtPath(base, ["channels", "slack"]);
+    if (slack === undefined || slack.enabled === false) {
+      // Stored approver policy applies when Slack is configured. Omitting this
+      // generated overlay preserves explicit deny lists in the admitted manifest.
+      delete overlay.approvals.plugin.slack;
+      if (Object.keys(overlay.approvals.plugin).length === 0) delete overlay.approvals.plugin;
+      if (Object.keys(overlay.approvals).length === 0) delete overlay.approvals;
+    } else {
+      validateOpenClawPluginApprovers(overlay);
+    }
+  }
   // Native allow and alsoAllow are mutually exclusive. Keep grants in the
   // configured policy form so both application and verification use that form.
   if (base?.tools?.allow?.length > 0 && Array.isArray(overlay?.tools?.alsoAllow)) {
@@ -1646,11 +1710,13 @@ function probeOpenClawAuthenticationFailureCode() {
     if (result.error?.code === "ETIMEDOUT") return "MODEL_PROBE_TIMEOUT";
     if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const results = JSON.parse(result.stdout).auth?.probes?.results;
-    return Array.isArray(results) && results.length === 1 &&
-      results[0].provider === provider && results[0].model === model &&
-      results[0].source === "env" && results[0].status === "ok"
-        ? undefined
-        : "MODEL_PROBE_FAILED";
+    if (!Array.isArray(results) || results.length !== 1 ||
+      results[0].provider !== provider || results[0].model !== model ||
+      results[0].source !== "env") return "MODEL_PROBE_FAILED";
+    if (results[0].status === "ok") return undefined;
+    // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
+    // Only that deterministic rejection fails the deployment before its deadline.
+    return results[0].status === "auth" ? "AUTHENTICATION_FAILED" : "MODEL_PROBE_FAILED";
   } catch {
     return "MODEL_PROBE_FAILED";
   } finally {
@@ -1861,7 +1927,9 @@ if (pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(plug
   }, 2_000).unref();
 }
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
-})();
+})().catch((error) => {
+  if (!holdPluginApproverConfigurationFailure(error)) throw error;
+});
 }
 `;
 
@@ -1917,6 +1985,11 @@ const loginArguments = loginMode === "api_key"
       "login",
       "--with-access-token",
     ];
+// Codex reports provider HTTP rejections as "status 401 Unauthorized" or
+// "unexpected status 403 Forbidden"; transport failures carry no status.
+function codexAuthenticationRejected(message) {
+  return typeof message === "string" && /\bstatus 40[13] (Unauthorized|Forbidden)\b/.test(message);
+}
 let login;
 for (let attempt = 0; attempt < 3; attempt++) {
   login = spawnSync("codex", loginArguments, {
@@ -1930,11 +2003,28 @@ for (let attempt = 0; attempt < 3; attempt++) {
   if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") break;
 }
 if (login.status !== 0 || login.error) {
-  holdFailedAuthentication("login", "LOGIN_FAILED");
+  holdFailedAuthentication(
+    "login",
+    login.error === undefined && codexAuthenticationRejected(login.stderr) ? "AUTHENTICATION_FAILED" : "LOGIN_FAILED",
+  );
 } else {
 delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
+
+// Codex reports an in-turn stream retry as a top-level error before retrying the
+// same sampling request. Only that exact transient shape, within Codex's small
+// retry budget, is recoverable; the turn must still complete successfully.
+const MAX_RECOVERED_STREAM_RETRIES = 10;
+function isRecoveredNativeStreamError(event) {
+  if (event.type !== "error" || typeof event.message !== "string" || event.message.length > 512) return false;
+  const match = /^Reconnecting\.\.\. ([1-9][0-9]?)\/([1-9][0-9]?)(?::| -)? (?:\()?stream disconnected (?:before completion|- retrying sampling request)(?:[:.)]|$)/.exec(event.message);
+  if (match === null) return false;
+  const attempt = Number(match[1]);
+  const limit = Number(match[2]);
+  if (attempt > limit || limit > MAX_RECOVERED_STREAM_RETRIES) return false;
+  return !/auth|unauthori[sz]ed|forbidden|credential|api.?key|\b40[13]\b/i.test(event.message);
+}
 
 function probeCodexAuthentication(timeout) {
   let result;
@@ -1990,12 +2080,30 @@ function probeCodexAuthentication(timeout) {
     });
     const output = result.stdout?.trim() ?? "";
     const events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
+    // A failed turn caused by provider 401/403 is a deterministic credential
+    // rejection; timeouts, 5xx, and transport errors keep their existing codes.
+    if (events.some((event) => event.type === "turn.failed" && codexAuthenticationRejected(event.error?.message))) {
+      return finish("AUTHENTICATION_FAILED");
+    }
     const allowed = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "item.updated", "item.completed"]);
-    // Native item.error is an advisory (for example missing catalog metadata),
-    // distinct from fatal top-level error/turn.failed. A completed model turn is
-    // still required; no tool item can satisfy this authentication check.
-    if (events.some((event) => !allowed.has(event.type) ||
-      (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type)))) return finish("MODEL_PROBE_FAILED");
+    // Native item.error is advisory (for example missing catalog metadata),
+    // distinct from fatal top-level error/turn.failed. Only a bounded, known
+    // stream reconnect inside the single model turn may precede its completion;
+    // fatal errors and tool items never satisfy this authentication check.
+    let turnStarted = false;
+    let turnCompleted = false;
+    let recoveredStreamErrors = 0;
+    for (const event of events) {
+      if (event.type === "turn.started") turnStarted = true;
+      if (event.type === "error") {
+        if (!turnStarted || turnCompleted || !isRecoveredNativeStreamError(event) ||
+          ++recoveredStreamErrors > MAX_RECOVERED_STREAM_RETRIES) return finish("MODEL_PROBE_FAILED");
+        continue;
+      }
+      if (!allowed.has(event.type) ||
+        (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type))) return finish("MODEL_PROBE_FAILED");
+      if (event.type === "turn.completed") turnCompleted = true;
+    }
     // A timeout cannot make an observed tool call or protocol failure retryable.
     if (result.error?.code === "ETIMEDOUT") return finish("MODEL_PROBE_TIMEOUT");
     if (result.status !== 0 || result.error) return finish("MODEL_PROBE_FAILED");

@@ -258,6 +258,8 @@ case "${profile}" in
     require_docker
     install_kubectl
     install_k3d
+    install_helm
+    install_yq
     ;;
   full)
     require_docker

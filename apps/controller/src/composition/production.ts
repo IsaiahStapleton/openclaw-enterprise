@@ -28,7 +28,7 @@ import {
   initializeInstallationPresets,
   backendSummariesFromDefinitions,
 } from "./installation-config.ts";
-import { emitOccLogEvent, type OccLogger } from "../logging.ts";
+import { emitOccLogEvent, skippedUserLogFields, type OccLogger } from "../logging.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import type { NativeAdminAccessConfig } from "../gateway/native-admin.ts";
@@ -127,7 +127,7 @@ export async function composeProduction(config: ProductionConfig) {
       emitOccLogEvent(config.logger, {
         event: "authentication.activation-warning",
         reason: "Accounts without a Principal or exactly one password were not enrolled.",
-        skippedUserIds: auth.activationSkipped,
+        ...skippedUserLogFields(auth.activationSkipped),
       });
     }
     const humanAuthentication = new PostgresHumanAuthentication(

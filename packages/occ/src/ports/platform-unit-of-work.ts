@@ -77,6 +77,8 @@ export function bindPlatformUnitOfWork(
       "delete",
     ]),
     agents: bindRepository(repositories.agents, lifetime, [
+      "findAgentForBrowsing",
+      "listAgentsForBrowsing",
       "findAgent",
       "listAgents",
       "createAgent",
@@ -88,6 +90,8 @@ export function bindPlatformUnitOfWork(
       "transitionAgentStatus",
     ]),
     revisions: bindRepository(repositories.revisions, lifetime, [
+      "findRevisionForBrowsing",
+      "listRevisionsForBrowsing",
       "findRevision",
       "listRevisions",
       "createRevision",

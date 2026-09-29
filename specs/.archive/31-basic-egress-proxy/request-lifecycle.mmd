@@ -1,0 +1,76 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontSize: 16px
+    actorBkg: "#EDF2F7"
+    actorBorder: "#879AB0"
+    actorTextColor: "#25364A"
+    signalColor: "#64748B"
+    signalTextColor: "#25364A"
+    noteBkgColor: "#F7F1E5"
+    noteBorderColor: "#B3A078"
+    noteTextColor: "#514532"
+  sequence:
+    mirrorActors: true
+    useMaxWidth: false
+    actorMargin: 24
+    messageMargin: 34
+    noteMargin: 14
+    boxMargin: 12
+    width: 130
+    wrap: true
+---
+sequenceDiagram
+  actor User as API user
+  participant Control as OCC / State
+  participant Compute as Compute owner
+  participant Workload as Workload Pod
+  participant Proxy as Go proxy Pod
+  participant DNS as Trusted resolver
+  participant Origin as Allowed origin
+
+  Note over User,Origin: Proposed C1 request lifecycle<br/>C3 separately adds protected identity and operation authority
+  Note over User,Compute: 1. Admit exact policy before resource effects
+  User->>Control: Deploy Agent with egress selection
+  Control->>Control: Authorize Agent and referenced resources
+  Control->>Compute: Resolve exact runtime/network support
+  Compute-->>Control: Admitted snapshot or denied/unsupported
+  alt Selection is denied or unsupported
+    Control-->>User: Refuse before resource construction
+  else Selection resolves
+    Control->>Control: Atomically freeze revision,<br/>admission fact and reconcile intent
+    Note over Control,Compute: Unknown acceptance recovers through its original owner
+    Note over Compute,Proxy: 2. Prepare separate proxy and confined workload
+    Control->>Compute: Reconcile frozen revision
+    Compute->>Compute: Validate snapshot and Driver<br/>Reauthorize before dispatch
+    Compute->>Proxy: Exact binding, config and prepared leaf material
+    Proxy->>Proxy: Strict decoding and complete trust validation<br/>before listeners
+    Compute->>Workload: Establish restrictions, resolver and public trust
+    Note over Compute,Workload: Readiness requires admitted generation and the real probe<br/>First-untrusted-instruction containment remains a proposal
+    Note over Workload,DNS: 3. Admit DNS before returning the proxy address
+    Workload->>Proxy: Original DNS question
+    Proxy->>Proxy: Authorize canonical original name
+    Proxy->>DNS: Bounded lookup at fixed endpoint
+    DNS-->>Proxy: Answer set
+    Proxy->>Proxy: Validate entire set and commit vetted numeric peers
+    Proxy-->>Workload: Proxy address after binding commit
+    Note over Workload,Origin: 4. Verify TLS and each HTTP request
+    Workload->>Proxy: TLS SNI and HTTP request
+    Proxy->>Proxy: Exact origin, method, path and query<br/>Reject ambiguous framing or tunnels
+    Proxy->>Origin: Numeric-peer TLS with original ServerName
+    Origin-->>Proxy: Upstream certificate chain
+    Proxy->>Proxy: Verify independent roots and exclude interception keys
+    Proxy->>Origin: Fresh admitted application request
+    Origin-->>Proxy: Bounded streamed response
+    Proxy-->>Workload: Stream permitted result
+    Note over Compute,Workload: Actual authentication probe must pass before Ready<br/>Model and approved tool requests use the same checks
+    Note over Compute,Origin: 5. Withdraw admission before awaited cleanup
+    Compute->>Proxy: Owned lifecycle shutdown or retirement
+    Proxy->>Proxy: Refuse new work, cancel requests and close sockets
+    Proxy-->>Workload: Closed stream or bounded refusal
+    Note over Proxy,Origin: Possibly dispatched effects remain uncertain<br/>Closed stream never permits mutation replay
+    Compute->>Compute: Observe exact proxy UID termination<br/>Pending or unknown is not completion
+    Compute-->>Control: Safe observed or pending outcome
+    Control-->>User: Attributable status without secret material
+  end

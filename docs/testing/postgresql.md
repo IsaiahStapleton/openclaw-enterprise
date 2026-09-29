@@ -129,9 +129,12 @@ The same composition covers the GitHub profile against the fixture provider:
 
 `tests/integration/password-default-chart.test.mjs` and
 `sign-in-chart-parity.test.mjs` (Images and Packaging lane, Helm and yq) check
-that the chart renders exactly those settings, and that the API starts with
-every trusted-proxy preset, with and without GitHub, and refuses what the chart
-refuses.
+that the chart renders exactly those settings, and that the API entrypoint
+accepts the rendered settings for every trusted-proxy preset, with and without
+GitHub, and refuses what the chart refuses. Accepted settings get as far as the
+PostgreSQL connection, which the suite points at an unreachable address, so it
+does not prove that the API starts with every preset. The PostgreSQL scenarios
+above start the API with their own settings.
 
 ## Authentication maintenance
 

@@ -9,7 +9,9 @@ import {
   createOccLogger,
   createWorkerLogEmitter,
   emitOccLogEvent,
+  MAX_LOGGED_IDENTIFIERS,
   operationalLoggingConfiguration,
+  skippedUserLogFields,
 } from "../../apps/controller/src/logging.ts";
 import {
   loadInstallationConfiguration,
@@ -270,6 +272,50 @@ test("OCC event sanitizer drops arbitrary fields and unsafe diagnostic text", ()
   assert.equal(JSON.stringify(output.lines).includes("arbitrary"), false);
 });
 
+test("activation warning caps skipped account IDs and reports the total and truncation", () => {
+  const output = memoryDestination();
+  const logger = createOccLogger({
+    component: "occ-api",
+    level: "info",
+    destination: output.destination,
+  });
+  const ids = (count) =>
+    Array.from({ length: count }, (_, index) => `user_${String(index).padStart(4, "0")}`);
+
+  for (const skipped of [ids(1), ids(MAX_LOGGED_IDENTIFIERS), ids(MAX_LOGGED_IDENTIFIERS + 1)]) {
+    emitOccLogEvent(logger, {
+      event: "authentication.activation-warning",
+      ...skippedUserLogFields(skipped),
+    });
+  }
+
+  assert.equal(output.lines.length, 3);
+  assert.deepEqual(
+    output.lines.map(({ severity, skippedUserIds, skippedUserCount, skippedUserIdsTruncated }) => ({
+      severity,
+      ids: skippedUserIds.length,
+      skippedUserCount,
+      skippedUserIdsTruncated,
+    })),
+    [
+      { severity: "WARN", ids: 1, skippedUserCount: 1, skippedUserIdsTruncated: false },
+      {
+        severity: "WARN",
+        ids: MAX_LOGGED_IDENTIFIERS,
+        skippedUserCount: MAX_LOGGED_IDENTIFIERS,
+        skippedUserIdsTruncated: false,
+      },
+      {
+        severity: "WARN",
+        ids: MAX_LOGGED_IDENTIFIERS,
+        skippedUserCount: MAX_LOGGED_IDENTIFIERS + 1,
+        skippedUserIdsTruncated: true,
+      },
+    ],
+  );
+  assert.deepEqual(output.lines[2].skippedUserIds, ids(MAX_LOGGED_IDENTIFIERS));
+});
+
 test("Fastify app writes one safe HTTP completion record and bounded unexpected-error diagnostics", async () => {
   const output = memoryDestination();
   const logger = createOccLogger({
@@ -334,12 +380,25 @@ test("worker emitter reports health at debug and failures at error", () => {
     namespaceId: "ns_test",
     outcome: "success",
   });
+  emit({
+    event: "worker.completed",
+    workId: "agent_revision:rev_test:reconcile",
+    attempt: 1,
+    outcome: "success",
+    durationMs: 120,
+    deployPasses: 3,
+    prepareMs: 450,
+    readinessWaitMs: 2100,
+    activationMs: 80,
+    elapsedMs: 2900,
+  });
   emit({ event: "worker.error", code: "CLAIM_LOST" });
 
   assert.deepEqual(
     output.lines.map(({ event, severity }) => ({ event, severity })),
     [
       { event: "worker.health", severity: "DEBUG" },
+      { event: "worker.completed", severity: "INFO" },
       { event: "worker.completed", severity: "INFO" },
       { event: "worker.error", severity: "ERROR" },
     ],
@@ -348,6 +407,26 @@ test("worker emitter reports health at debug and failures at error", () => {
   assert.equal(completed.workId, "namespace:ns_test:reconcile:ready");
   assert.equal(completed.attempt, 1);
   assert.equal(completed.operation, "namespace.ensure");
+  // Deployment phase timing survives sanitization for operators and log queries.
+  const deployed = output.lines.find((line) => line.workId === "agent_revision:rev_test:reconcile");
+  assert.deepEqual(
+    {
+      durationMs: deployed.durationMs,
+      deployPasses: deployed.deployPasses,
+      prepareMs: deployed.prepareMs,
+      readinessWaitMs: deployed.readinessWaitMs,
+      activationMs: deployed.activationMs,
+      elapsedMs: deployed.elapsedMs,
+    },
+    {
+      durationMs: 120,
+      deployPasses: 3,
+      prepareMs: 450,
+      readinessWaitMs: 2100,
+      activationMs: 80,
+      elapsedMs: 2900,
+    },
+  );
 });
 
 test("worker startup diagnostics honor logging YAML and stay on stderr", async (t) => {
