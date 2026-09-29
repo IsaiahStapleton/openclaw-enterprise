@@ -20,6 +20,7 @@ export async function commitAckProxy(databaseUrl) {
     throw new Error("The commit fault requires an explicitly non-TLS PostgreSQL connection.");
   }
   let armed = false;
+  let skipCommits = 0;
   let observed = false;
   const sockets = new Set();
   const server = net.createServer((client) => {
@@ -63,8 +64,12 @@ export async function commitAckProxy(databaseUrl) {
           frame.subarray(5, -1).toString().trim().toUpperCase() === "COMMIT" &&
           armed
         ) {
-          dropping = true;
-          armed = false;
+          if (skipCommits > 0) {
+            skipCommits -= 1;
+          } else {
+            dropping = true;
+            armed = false;
+          }
         }
         startup = false;
         upstream.write(frame);
@@ -101,10 +106,15 @@ export async function commitAckProxy(databaseUrl) {
   proxyUrl.searchParams.delete("port");
   return {
     url: proxyUrl.toString(),
-    arm() {
+    arm(options = {}) {
+      const skip = options.skipCommits ?? 0;
+      if (!Number.isSafeInteger(skip) || skip < 0) {
+        throw new Error("Skipped COMMIT count must be a nonnegative integer.");
+      }
       if (armed || observed) {
         throw new Error("The single-use fault is already armed or consumed.");
       }
+      skipCommits = skip;
       armed = true;
     },
     get observedCommit() {

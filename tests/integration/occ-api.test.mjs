@@ -569,12 +569,21 @@ async function createInjectedFixture(options = {}) {
       ...(options.provisionAuthAccount === undefined
         ? {}
         : {
-            provisionAuthAccount: (seed, auditEvent) =>
-              options.provisionAuthAccount(seed, {
-                installAuthSeed,
-                state,
-                auditEvent,
-              }),
+            // The memory composition has no State transaction; write the prepared
+            // account first and remove it when the fixture's provisioning fails.
+            provisionAuthAccount: async (seed, auditEvent, prepared) => {
+              await authFixture.auth.writePreparedAccount(prepared);
+              try {
+                await options.provisionAuthAccount(seed, {
+                  installAuthSeed,
+                  state,
+                  auditEvent,
+                });
+              } catch (error) {
+                await authFixture.auth.deleteAccount(prepared);
+                throw error;
+              }
+            },
           }),
     });
     created.defaultSession = sessionsByPrincipalId.get(identity.id);
