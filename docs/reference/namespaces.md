@@ -158,9 +158,12 @@ workload is ready.
 - Teardown that fails permanently, exhausts its retries, or misses the worker's
   convergence deadline leaves the Namespace `deleting`. Correct the cause, for
   example a stuck Kubernetes finalizer, then have the caller who started
-  deletion repeat `DELETE`. That requeues the teardown and adds an audit event;
-  another caller receives `403`. The original deadline still applies, so the
-  retried pass succeeds only once the Compute namespace is gone.
+  deletion repeat `DELETE`. That requeues the teardown and adds an audit event.
+  Another caller receives `403` while the initiator still holds delete
+  permission; once it lost permission (for example, it was offboarded), another
+  permitted caller takes over as the work's actor, audited as `takeover`. The
+  original deadline still applies, so the retried pass succeeds only once the
+  Compute namespace is gone.
 
 ## Related
 
@@ -172,7 +175,7 @@ workload is ready.
 - [Kubernetes Compute Driver](drivers/kubernetes-compute.md)
 - [IAM](authorization.md)
 - [Controller configuration](settings.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)
 - [Namespace lifecycle implementation](../../packages/occ/src/index.ts)
 - [Local testing](../testing/local.md)
 

@@ -336,6 +336,7 @@ function shouldRemoveInheritedEnv(name) {
     name === "NODE_TEST_CONTEXT" ||
     name === "NODE_TEST_WORKER_ID" ||
     name.startsWith("OCC_TEST_") ||
+    name.startsWith("OCC_PROBE_") ||
     name.endsWith("_KEEP") ||
     name.endsWith("_DEBUG")
   );
@@ -490,6 +491,10 @@ function imageDigests(env) {
     prometheus: "OCC_TEST_OBSERVABILITY_PROMETHEUS_IMAGE",
     grafana: "OCC_TEST_OBSERVABILITY_GRAFANA_IMAGE",
     loki: "OCC_TEST_OBSERVABILITY_LOKI_IMAGE",
+    pairController: "OCC_PROBE_CONTROLLER_IMAGE",
+    pairBroker: "OCC_PROBE_BROKER_IMAGE",
+    pairOldController: "OCC_PROBE_OLD_CONTROLLER_IMAGE",
+    pairOldBroker: "OCC_PROBE_OLD_BROKER_IMAGE",
   };
   return Object.fromEntries(
     Object.entries(names).flatMap(([role, name]) => {

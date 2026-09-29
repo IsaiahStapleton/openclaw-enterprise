@@ -36,6 +36,14 @@ the saved device token for the same Gateway, or still refuses the code, as
 upstream `node run --pair-if-needed` already does.
 The source archive and patch hashes identify the resulting custom build.
 
+The selected commit does not support dedicated native OpenClaw. That Harness
+needs required worker placement (`cloudWorkers.requiredProfile`) and native
+worker inference (`nodeHost.workerRuns.nativeInferenceConfig`), which are not in
+upstream main yet. This image's configuration validation rejects both keys, so
+its Gateway and Harness exit at startup rather than place sessions on the
+Gateway. The images-packaging lane runs both entrypoints against this image and
+fails when that gap changes.
+
 | Input                                        | Selection                                                                                                    |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Build base                                   | `docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584` |

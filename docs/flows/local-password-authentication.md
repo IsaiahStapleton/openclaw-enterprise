@@ -137,7 +137,8 @@ in its HttpOnly cookie and is omitted from session-inspection responses.
 under the auth secret (`apps/controller/src/auth/session-binding.ts`), alongside
 public user identity. Console compares it to invalidate retained views and drafts
 after a new session, including for the same user. Sign-out revokes the session,
-and public signup is disabled.
+and public signup is disabled. Without an external provider,
+`auth/admission.ts:passwordFailureAdmission` limits failed password sign-ins.
 
 `requireSessionKey` applies the optional `x-occ-session-key` header after the
 cookie session resolves, in `ControllerAdmissionVerifier.verify` (protected API

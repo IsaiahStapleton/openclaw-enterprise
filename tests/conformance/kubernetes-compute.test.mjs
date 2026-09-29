@@ -1148,10 +1148,20 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     auth: { trustedProxy: { requiredHeaders: ["x-real-ip"], allowLoopback: false } },
   });
   assert.equal(state.setupCalls, 0);
-  assert.equal(
+  // A first deploy creates the Gateway alongside the Harness. Its peer status read
+  // goes through the agent Service, which already selects this revision's Harness;
+  // endpoints list only ready pods, so the Gateway waits until the Harness reports.
+  assert.ok(
     objects.has(key("Deployment", gatewayName, kubernetesGatewayNamespaceName(tenant.id))),
-    false,
+    "the first Gateway starts alongside the Harness",
   );
+  assert.deepEqual(read("Service", `agent-${digest(revision.agentId)}`).spec.selector, {
+    "openclaw.dev/namespace": revision.namespaceId,
+    "openclaw.dev/agent": revision.agentId,
+    "openclaw.dev/revision": revision.id,
+    "openclaw.dev/workload-role": "agent",
+    "app.kubernetes.io/name": agentName,
+  });
   assert.ok(
     objects.has(key("Deployment", agentName)),
     "Harness can initialize plugins without the node",
@@ -1164,11 +1174,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   );
   markReady(agentName);
   assert.equal((await prepare()).ready, false);
-  assert.ok(
-    objects.has(key("Deployment", gatewayName, kubernetesGatewayNamespaceName(tenant.id))),
-    "plugin readiness permits Gateway startup",
-  );
-  assert.equal(state.setupCalls, 0);
+  assert.equal(state.setupCalls, 0, "enrollment waits for Gateway readiness");
   markReady(gatewayName);
   const harnessBeforeSetup = read("Deployment", agentName);
   assert.equal((await prepare()).ready, false, "running workloads alone are not node readiness");
@@ -1232,9 +1238,6 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   assert.ok(Buffer.byteLength(JSON.stringify(command)) <= EXEC_STRING_BUDGET);
 });
 
-// Ratchet for deploy time: a first dedicated deploy starts its workloads
-// serially, and every start repeats login, the model probe and plugin install.
-// Lower these counts when a change removes a start; never raise them silently.
 // Every Agent enrolled before file delivery has a recorded deviceId and an
 // env-era setupCode in its Secret. The upgrade removes the leftover code without
 // a new setup, and a Harness Pod that is gone (404) does not fail the pass.
@@ -1313,7 +1316,11 @@ test("an upgraded file-delivered node drops its leftover setup code and tolerate
   );
 });
 
-test("a first dedicated deploy pins its serial workload starts through activation", async () => {
+// Ratchet for deploy time: every workload start of a first dedicated deploy
+// repeats login, the model probe and plugin install, and every pending pass is a
+// wait on a start. Lower these counts when a change removes a start or a pass;
+// never raise them silently.
+test("a first dedicated deploy pins its workload starts through activation", async () => {
   const { state, driver, revision, gatewayName, agentName, templates, prepare, markReady } =
     dedicatedFirstDeployFixture();
   const environment = (template) =>
@@ -1326,15 +1333,23 @@ test("a first dedicated deploy pins its serial workload starts through activatio
     pendingPasses += Number(!ready);
     return ready;
   };
-  assert.equal(await pass(), false, "the Harness starts first, with its node wiring");
+  assert.equal(
+    await pass(),
+    false,
+    "the Harness starts with its node wiring, and the Gateway alongside it",
+  );
+  // Both start in the first pass (the Gateway Deployment is reconciled first).
+  assert.deepEqual(
+    templates.map(({ name }) => (name === agentName ? "harness" : name)),
+    [gatewayName, "harness"],
+  );
   markReady(agentName);
-  assert.equal(await pass(), false, "the Gateway waits for Harness plugin status");
   markReady(gatewayName);
   // The setup reaches the running Harness through its volume; the node pairs
   // without a workload start, so this pass completes.
   state.connected = true;
   assert.equal(await pass(), true);
-  assert.equal(pendingPasses, 2);
+  assert.equal(pendingPasses, 1);
   await assert.rejects(
     driver.activateRevision(revision, authContext(revision)),
     /gateway is not ready/,
@@ -1346,9 +1361,9 @@ test("a first dedicated deploy pins its serial workload starts through activatio
 
   assert.deepEqual(
     templates.map(({ name }) => (name === agentName ? "harness" : name)),
-    ["harness", gatewayName, gatewayName],
+    [gatewayName, "harness", gatewayName],
   );
-  const [harness, gateway, activeGateway] = templates.map(({ template }) => template);
+  const [gateway, harness, activeGateway] = templates.map(({ template }) => template);
   // Harness start 1 already runs the node supervisor; no setup code in its pod spec.
   assert.equal(environment(harness).has("OPENCLAW_NODE_SETUP_CODE"), false);
   assert.equal(environment(harness).has("OPENCLAW_NODE_SETUP_PATH"), true);
@@ -1356,14 +1371,42 @@ test("a first dedicated deploy pins its serial workload starts through activatio
   assert.equal(environment(gateway).has("OPENCLAW_WORKSPACE_NODE_ID"), false);
   assert.equal(environment(activeGateway).has("OPENCLAW_WORKSPACE_NODE_ID"), true);
   // A Gateway container restarts in place when its Harness peer restarts
-  // (GATEWAY_RUNTIME_ENTRYPOINT peer poll). The Harness template never changes
-  // after the Gateway starts, so there is no such restart.
-  const gatewayCreated = templates.findIndex(({ name }) => name === gatewayName);
-  const inPodGatewayRestarts = templates
-    .slice(gatewayCreated)
-    .filter(({ name }) => name === agentName).length;
+  // (GATEWAY_RUNTIME_ENTRYPOINT peer poll). The Gateway starts alongside the
+  // first Harness, whose status it waits for, and the Harness template never
+  // changes afterwards, so there is no such restart.
+  const inPodGatewayRestarts = templates.filter(({ name }) => name === agentName).slice(1).length;
   assert.equal(inPodGatewayRestarts, 0);
   assert.equal(templates.length + inPodGatewayRestarts, 3, "Harness 1 + Gateway 2");
+});
+
+test("a dedicated redeploy keeps the agent Service on the serving revision until activation", async () => {
+  const { state, driver, revision, gatewayName, agentName, templates, read, prepare, markReady } =
+    dedicatedFirstDeployFixture();
+  state.connected = true;
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  markReady(gatewayName);
+  assert.equal((await prepare()).ready, true);
+  await assert.rejects(
+    driver.activateRevision(revision, authContext(revision)),
+    /gateway is not ready/,
+  );
+  markReady(gatewayName);
+  await driver.activateRevision(revision, authContext(revision));
+  const serviceName = `agent-${digest(revision.agentId)}`;
+  const servingSelector = read("Service", serviceName).spec.selector;
+  assert.equal(servingSelector["openclaw.dev/revision"], revision.id);
+  const successor = { ...structuredClone(revision), id: "revision-routed-2", revision: 2 };
+  const successorName = `agent-${digest(revision.agentId)}-rev-${digest(successor.id)}`;
+  const gatewayTemplates = templates.filter(({ name }) => name === gatewayName).length;
+  // The serving Gateway exists, so the successor's Harness starts alone and the
+  // Service does not select it before it is ready.
+  assert.equal((await driver.prepareRevision(successor, authContext(successor))).ready, false);
+  assert.ok(templates.some(({ name }) => name === successorName));
+  assert.equal(templates.filter(({ name }) => name === gatewayName).length, gatewayTemplates);
+  assert.deepEqual(read("Service", serviceName).spec.selector, servingSelector);
+  // After successor readiness the Service still stays put until activation:
+  // "dedicated Harness Service selector satisfies the gateway policy during cutover".
 });
 
 test("dedicated replacement starts a candidate Gateway when the predecessor cannot enroll its workspace node", async () => {

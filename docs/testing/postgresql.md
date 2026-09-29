@@ -199,7 +199,8 @@ The same composition covers the GitHub profile against the fixture provider:
   Installation `administer` gets `403` on every account and recovery route, and two
   administrators attaching one GitHub identity at once get one `200` and one `409`.
 - `postgres-github-admin-scope.test.mjs`: a created administrator cannot attach
-  an identity to, or revoke, the broader bootstrap administrator's account.
+  an identity to, or revoke, the broader bootstrap administrator's account, or
+  take its recovery designation.
 - `postgres-github-tab-binding.test.mjs`: Playwright over the HTTPS Origin. A tab
   signed in with GitHub signs out after another tab's password sign-in, and the
   login receipt is one-use and needs the exact Origin.
