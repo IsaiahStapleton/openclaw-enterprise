@@ -1152,8 +1152,19 @@ export interface ChannelDirectoryResult {
   readonly complete: boolean;
 }
 
+/** Values stay inside the Secret Driver callback; adapters own native field semantics. */
+export type ChannelCredentialReader = (
+  binding: string,
+  path: string,
+  validate: (value: string) => Promise<void>,
+) => Promise<void>;
+
 export interface ChannelDriver extends Driver {
   readonly capability: "channel";
+  validateCredentials?(
+    values: Readonly<Record<string, unknown>>,
+    withSecret: ChannelCredentialReader,
+  ): Promise<void>;
   lookupDirectory(
     input: ChannelDirectoryLookupInput,
     signal?: AbortSignal,

@@ -1,16 +1,16 @@
 ---
 created: "2026-09-18"
 updated: 2026-09-28
-last_updated_session: "01a0e6ca-0480-79a1-ab5d-31a7cfb42228"
+last_updated_session: "authoring-run/75044c27-6c5b-4cff-a6cf-9e31fd688ac2"
 ---
 
 # Agent repository credential flow
 
 ## Overview
 
-The Console lists approved repositories, admission saves selections, and deployment
-freezes grants. The worker delivers sessions to Kubernetes-owned embedded OpenClaw
-or dedicated Codex workloads that use compatible Harness authentication and no Sandbox Driver.
+The Console lists approved repositories; admission saves selections and deployment
+freezes grants. The worker delivers sessions to Kubernetes embedded OpenClaw
+or dedicated Codex with compatible Harness authentication and no Sandbox Driver.
 See [service forwarding and retirement](repository-credentials.md) and
 [runtime qualification](../testing/repository-credentials.md).
 
@@ -20,13 +20,12 @@ See [service forwarding and retirement](repository-credentials.md) and
   Agent lifecycle routes. Options and creation share Namespace-scoped Agent-create
   authorization.
 - `apps/controller/src/console/agents/repositories.mjs:createRepositoryFields`
-  renders optional repository selection and a common access level.
+  renders repository and access-level selection.
 - `apps/controller/src/worker.ts:ControllerWorker.prepareRevision` prepares
-  repository sessions before invoking the selected Compute Driver.
+  repository sessions before invoking Compute.
 
 The Installation selects a repository Driver and Backend. API, worker and service
-share one immutable registry; the Namespace is ready. Unbound Agents bypass this
-capability.
+share an immutable registry; the Namespace is ready. Unbound Agents bypass this.
 
 ## Flow
 
@@ -77,9 +76,9 @@ graph TD
   Queue --> Close
   Close -->|Confirmed disposal| Terminal["<b>Terminal receipt</b><br/>Commit exact result"]
   Terminal --> Done["<b>Cleanup settled</b><br/>Retain immutable evidence"]
-  Pod -->|Delete Agent| Delete["<b>Agent deletion</b><br/>Close and retire Compute"]
-  Delete --> Close
-  Done -->|Deleting Agent| Finalize["<b>State finalizer</b><br/>Detach and remove live rows"]
+  Pod -->|Delete Agent| Delete["<b>Agent deletion</b><br/>Queue cleanup and retire Compute"]
+  Delete -->|Independent cleanup| Queue
+  Delete -->|Runtime retired| Finalize["<b>State finalizer</b><br/>Detach and remove live rows"]
 
   classDef state fill:#EDF2F7,stroke:#879AB0,color:#25364A,stroke-width:1px
   classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
@@ -181,18 +180,18 @@ before terminal commit remains unknown; transport failure cannot establish absen
 ### 4. Deliver and retain one complete runtime generation
 
 `apps/controller/src/drivers/compute/kubernetes/repository-material.ts:repositoryMaterialSpec`
-checks the complete `new | retained` binding set against the revision and derives
-a generation from sorted reference/session pairs.
+validates `new | retained` bindings against the revision and hashes sorted
+reference/session pairs.
 `apps/controller/src/drivers/compute/kubernetes/repository-material-store.ts:RepositoryMaterialStore.prepare`
-validates exact ownership and file contents before creating immutable
-Agent/revision/session-owned Secrets. It reports the precise missing retained
-subset. The worker's `RepositoryCredentialLifecycle.repair` closes that subset
+validates ownership and contents before creating immutable
+Agent/revision/session-owned Secrets. It reports missing retained bindings. The worker's `RepositoryCredentialLifecycle.repair` closes that subset
 and requires disposal before replacement, then retries Compute once. Missing
 inventory fails the revision. Pending closure blocks replacement until bounded
 retry or active-revision continuation confirms disposal.
 
 `apps/controller/src/drivers/compute/kubernetes/repository-material.ts:repositoryMaterialDeployment`
-mounts Secret projections only in the first init container.
+mounts Secrets only in the first init container. Sorted projection items prevent
+key-order changes from triggering rollouts; session replacement still does.
 `apps/controller/src/drivers/compute/kubernetes/repository-material-init.ts:REPOSITORY_MATERIAL_INIT_ENTRYPOINT`
 validates a complete projection, then writes mode-0700 directories and mode-0600
 files into memory-backed storage. `REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT` mounts
@@ -295,16 +294,16 @@ and calls Compute's `stopRevision` for that revision. Compute mismatch or stop
 failure remains retryable beyond foreground limits. Completion requires settled
 sessions and runtime retirement. Session-only repair/rotation never stops healthy
 workloads. `CLOSED` denies local use but awaits disposal; missing inventory or
-invalidation does not prove provider settlement.
+invalidation does not prove provider settlement. Retained attempts support
+cleanup after revision deletion.
 
-`ControllerWorker.processAgentDeletion` closes and registers each revision's
-attempts, then retires Compute even while service cleanup is pending. Deleted-Agent
-Work covers only its exact owner and admitted revisions; the same boundary governs failed and stale Work transfer.
-`PostgresWorkQueue.completeAgentDeletion` calls `occ.finalize_agent_deletion` under
-the current claim. The function locks Namespace, Agent and attempts and returns a
-distinct pending outcome unless every attempt is disposed. The worker defers that
-outcome without consuming its retry budget. Once settled, the finalizer detaches
-live revision pointers, removes live rows and records deletion atomically.
+`ControllerWorker.processAgentDeletion` queues cleanup and retires Compute without
+waiting for sessions. After owner detachment, cleanup Work uses its revision key
+for dispatch and audits. Under the current claim,
+`PostgresWorkQueue.completeAgentDeletion` calls `occ.finalize_agent_deletion` to
+detach attempts, delete live rows and audit deletion atomically. Attempts and cleanup Work survive without fabricated disposal. Sessions block
+neither admission nor completion. Unresolved provisioning effects
+still defer completion without consuming retries.
 
 Compute retirement waits for owned Pods to stop before removing their material.
 It preserves Secrets referenced by actual Pods and current Deployments, and
@@ -346,6 +345,10 @@ Ready Pods and local commands do not prove live writes.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 21:24: Stabilize retained projection ordering. (public authoring-run/75044c27-6c5b-4cff-a6cf-9e31fd688ac2 - 8352c0932bcbde43e88b44c6975496ca5431ff55)
+
+- 2026-09-28 17:25: Decouple Agent deletion from repository-session cleanup in the accompanying worker and finalizer changes. (authoring-run/df373b87-44bc-442f-bce4-03ca8ab4e3f7 - 33a2528163d5bbff311bb685345e60aadb24a70a)
 
 - 2026-09-28 12:09: Check broker capability before fresh admission and worker readiness. (01a0e6ca-0480-79a1-ab5d-31a7cfb42228 - 5b66ac97aa3b805099aeebfaadeb846eb957707d)
 

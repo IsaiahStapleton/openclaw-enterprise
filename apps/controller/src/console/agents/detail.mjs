@@ -94,18 +94,20 @@ function deploymentFailure(error) {
   );
 }
 
-function deploymentProgress(status) {
+function deploymentProgress(status, progress) {
+  const workDescriptions = {
+    queued: progress?.lastAttempt
+      ? "Waiting to continue deployment."
+      : "Waiting for a worker claim.",
+    running: "A worker claim is active.",
+    failed: "Deployment work failed; check the recorded error and current version.",
+    succeeded: "Work completed or the version was already active.",
+  };
   const stages = [
     ["Admitted", "An immutable version was created.", "complete"],
     [
       "Deployment work",
-      status === "queued"
-        ? "Waiting for a worker claim."
-        : status === "running"
-          ? "A worker claim is active."
-          : status === "failed"
-            ? "Deployment work failed; check the recorded error and current version."
-            : "Work completed or the version was already active.",
+      workDescriptions[status],
       status === "queued"
         ? "waiting"
         : status === "running"
@@ -209,7 +211,32 @@ function createDeploymentStatusPanel(context, path, revision, onAgentChange, onS
     return element(
       "div",
       {},
-      deploymentProgress(state.status.status),
+      deploymentProgress(state.status.status, state.status.progress),
+      state.status.progress
+        ? element(
+            "div",
+            { className: "deployment-pending-progress" },
+            state.status.progress.lastAttempt
+              ? element(
+                  "dl",
+                  { className: "credential-status-list" },
+                  element("dt", {}, "Last recorded result"),
+                  element("dd", {}, state.status.progress.lastAttempt.message),
+                  element("dt", {}, "Reason"),
+                  element("dd", {}, state.status.progress.lastAttempt.code),
+                  element("dt", {}, "Last checked"),
+                  element("dd", {}, displayDate(state.status.progress.lastAttempt.at)),
+                )
+              : element("p", { className: "muted" }, "No reconciliation result is available yet."),
+            state.status.progress.nextAttemptAt
+              ? element(
+                  "p",
+                  { className: "muted" },
+                  `Eligible for next attempt: ${displayDate(state.status.progress.nextAttemptAt)}. Start time depends on worker availability.`,
+                )
+              : null,
+          )
+        : null,
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
       deploymentFailure(state.status.error),
       state.status.warnings?.length
@@ -1690,6 +1717,31 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       editing = true;
       render();
     });
+    const password = values.gateway?.auth?.password;
+    const usesGeneratedGatewayPassword =
+      password?.source === "env" &&
+      (password.provider === undefined || password.provider === "default") &&
+      password.id === "OPENCLAW_GATEWAY_PASSWORD";
+    const enableGatewayPassword = button("Enable Gateway password access", () => {
+      // Stage the native reference through the same draft and save checks as JSON edits.
+      // The Compute Driver delivers the generated value only after deployment.
+      editor.value = JSON.stringify(
+        {
+          ...values,
+          gateway: {
+            ...values.gateway,
+            auth: {
+              ...values.gateway?.auth,
+              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+            },
+          },
+        },
+        null,
+        2,
+      );
+      editing = true;
+      render();
+    });
     const save = button("Save Configuration", () => void saveConfiguration(), {
       className: "primary",
     });
@@ -1747,6 +1799,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       save.disabled = pending || outcomeUnknown || reloadRequired || !dirty;
       cancel.disabled = pending || outcomeUnknown || reloadRequired;
       edit.disabled = pending || outcomeUnknown;
+      enableGatewayPassword.disabled = pending || outcomeUnknown || reloadRequired;
       editor.readOnly = pending || outcomeUnknown || reloadRequired;
       if (outcomeUnknown) {
         feedback.textContent =
@@ -1856,7 +1909,19 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     function render() {
       if (!editing) {
         container.replaceChildren(
-          element("div", { className: "form-actions" }, edit),
+          element(
+            "p",
+            { className: "hint" },
+            usesGeneratedGatewayPassword
+              ? "Gateway password access is enabled in the saved Configuration. Deploy a new version to apply it."
+              : "Use generated credentials for direct Gateway password access. Enable access, save Configuration, then deploy a new version.",
+          ),
+          element(
+            "div",
+            { className: "form-actions" },
+            edit,
+            usesGeneratedGatewayPassword ? null : enableGatewayPassword,
+          ),
           nativeDocument(values, "View native Configuration"),
         );
         return;

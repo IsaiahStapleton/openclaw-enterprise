@@ -10,7 +10,7 @@ export type RepositorySessionPhase = "opening" | "open" | "closing" | "disposed"
 
 /** Safe recovery identifiers only; gateway bearer material never belongs in State. */
 export interface RepositorySessionAttempt extends RepositoryRevisionOwner {
-  /** Cleared only after disposal, when the live revision is physically deleted. */
+  /** Cleared when the live revision is physically deleted; phase retains disposal evidence. */
   readonly liveRevisionId: string | null;
   readonly cleanupContext: {
     readonly driver: NonNullable<AgentRevision["repositoryCredentials"]>["driver"];

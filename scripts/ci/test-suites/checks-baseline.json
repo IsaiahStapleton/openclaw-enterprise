@@ -94,6 +94,9 @@
       "path": "tests/integration/presets-controller.test.mjs"
     },
     {
+      "path": "tests/integration/profile-renderer.test.mjs"
+    },
+    {
       "path": "tests/integration/bootstrap-output.test.mjs"
     },
     {
@@ -388,6 +391,9 @@
     },
     {
       "path": "tests/integration/repository-runtime-materialization.test.mjs"
+    },
+    {
+      "path": "tests/integration/codex-plugin-startup-reads.test.mjs"
     },
     {
       "path": "tests/integration/kubernetes-peer-status.test.mjs",
