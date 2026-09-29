@@ -10,6 +10,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 import { watchBrowserContext } from "../helpers/browser-failure-diagnostics.mjs";
+import { keepRequestInterceptionEnabled } from "../helpers/browser-request-interception.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
@@ -61,6 +62,7 @@ async function newPage(t, fixture) {
   });
   context = await browser.newContext();
   diagnostics = await watchBrowserContext(t, context);
+  await keepRequestInterceptionEnabled(context);
   return { page: await context.newPage(), artifacts };
 }
 
