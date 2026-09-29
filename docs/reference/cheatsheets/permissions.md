@@ -82,6 +82,8 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
   also requires `read` on its exact target. [Listing Backends](../api.md#get-backends)
   uses `installation:administer`; Backend and IAM policy objects have no
   separate permission resource kinds.
+- [Reading the observability destination](../api.md#get-observability) uses
+  `installation:administer`. The configured external service enforces its own access.
 
 The [Namespace policy API](../authorization.md#manage-namespace-policy) accepts
 every action name on `agent`, `agent_revision`, `configuration`,

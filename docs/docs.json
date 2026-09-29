@@ -834,6 +834,7 @@
               "flows/platform-console",
               "flows/platform-console/agent-editing",
               "flows/platform-console/agent-sharing",
+              "flows/platform-console/observability-link",
               "flows/configuration-driver",
               "flows/configuration-driver/persistence-and-revisions",
               "flows/local-password-authentication",

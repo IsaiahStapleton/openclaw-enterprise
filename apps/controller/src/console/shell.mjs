@@ -66,9 +66,29 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
   let session = null;
   let namespaces = [];
   let namespaceId = null;
+  let observabilityUrl = null;
   let menuControls = null;
   let drawerControls = null;
   let namespaceSelect = null;
+
+  function externalLinkIcon() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "external-link-icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute(
+      "d",
+      "M15 3h6v6m0-6L10 14m11-1v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6",
+    );
+    svg.append(path);
+    return svg;
+  }
 
   function publicPanel(title, description, actionLabel, action) {
     app.replaceChildren(
@@ -203,7 +223,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
   }
 
   function renderShell(feature, state) {
-    ({ session, namespaces, namespaceId } = state);
+    ({ session, namespaces, namespaceId, observabilityUrl } = state);
     namespaceSelect = null;
     const nav = element("nav", { className: "nav", "aria-label": "Main navigation" });
     const icons = { agents: "◇", namespaces: "▤" };
@@ -228,6 +248,21 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
         navigate(name);
       });
       nav.append(link);
+    }
+    if (session && observabilityUrl) {
+      nav.append(
+        element(
+          "a",
+          {
+            href: observabilityUrl,
+            target: "_blank",
+            rel: "noopener noreferrer",
+          },
+          element("span", { className: "nav-icon", "aria-hidden": "true" }, "◉"),
+          "Observability",
+          externalLinkIcon(),
+        ),
+      );
     }
     const revision = document.querySelector('meta[name="occ-build-revision"]')?.content;
     const knownRevision = /^[a-f0-9]{40}$/.test(revision ?? "");
@@ -438,6 +473,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       session = null;
       namespaces = [];
       namespaceId = null;
+      observabilityUrl = null;
     },
   };
 }
