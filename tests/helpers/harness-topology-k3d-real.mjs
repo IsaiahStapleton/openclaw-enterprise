@@ -1262,7 +1262,7 @@ async function ensureHarnessAdminPrincipal(
   if (existingPrincipal.rows.length === 1) {
     return;
   }
-  const seed = auth.principalSeed(account);
+  const seed = auth.principalSeed(account, { grant: "administrator" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

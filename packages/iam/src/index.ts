@@ -68,7 +68,9 @@ export function createBootstrapAdministratorSeed(
   issuer: string,
   account: { readonly id: string },
 ): BootstrapAdministratorSeed {
-  const human = createAuthPrincipalSeed(installationId, issuer, account);
+  const human = createAuthPrincipalSeed(installationId, issuer, account, {
+    grant: "administrator",
+  });
   const administratorRole = human.roles[0];
   if (administratorRole === undefined) {
     throw new Error("Bootstrap administrator seed requires an administrator Role.");
@@ -92,12 +94,20 @@ export function createBootstrapAdministratorSeed(
   };
 }
 
-/** IAM owns the Principal, administrator permissions, and exact account Role binding. */
+/**
+ * Every auth Principal seed names its grant explicitly: bind an existing Role,
+ * create a fresh administrator Role, or grant nothing.
+ */
+export type AuthPrincipalSeedOptions =
+  | { readonly roleId: string; readonly grant?: undefined }
+  | { readonly grant: "administrator" | "none"; readonly roleId?: undefined };
+
+/** IAM owns the Principal plus explicit administrator creation, exact Role binding, or no grant. */
 export function createAuthPrincipalSeed(
   installationId: string,
   issuer: string,
   account: { readonly id: string },
-  options: { readonly roleId?: string } = {},
+  options: AuthPrincipalSeedOptions,
 ): AuthPrincipalSeed {
   const principal: Principal = {
     kind: "principal",
@@ -105,9 +115,29 @@ export function createAuthPrincipalSeed(
     issuer,
     subject: account.id,
   };
-  const existingRoleId = options.roleId;
-  if (existingRoleId !== undefined && !isNonEmptyString(existingRoleId)) {
+  // Fail closed: untyped JavaScript callers can omit or misspell the options, and
+  // a missing or unknown grant must never fall through to a new administrator.
+  const requested = options as
+    { readonly roleId?: unknown; readonly grant?: unknown } | null | undefined;
+  const requestedRoleId = requested?.roleId;
+  const grant = requested?.grant;
+  if (requestedRoleId !== undefined && grant !== undefined) {
+    throw new Error("Auth account Role binding and an explicit grant are mutually exclusive.");
+  }
+  if (requestedRoleId !== undefined && !isNonEmptyString(requestedRoleId)) {
     throw new Error("Additional auth accounts require a Role id.");
+  }
+  if (requestedRoleId === undefined && grant !== "administrator" && grant !== "none") {
+    throw new Error("Auth Principal seeds require a Role id or an explicit grant.");
+  }
+  const existingRoleId = typeof requestedRoleId === "string" ? requestedRoleId : undefined;
+
+  if (grant === "none") {
+    return {
+      principal,
+      roles: [],
+      bindings: [],
+    };
   }
 
   const roleId = existingRoleId ?? `role_admin_${randomUUID()}`;
@@ -172,9 +202,6 @@ export function validateAuthAccountPrincipalSeed(
   }
   if (seed.principal.kind !== "principal" || seed.principal.namespaceId !== undefined) {
     throw new Error("Auth account creation requires one Installation-scoped Principal.");
-  }
-  if (seed.bindings.length === 0) {
-    throw new Error("Auth account creation requires an existing IAM Role binding.");
   }
   for (const binding of seed.bindings) {
     const role = state.roles.find((candidate) => candidate.id === binding.roleId);

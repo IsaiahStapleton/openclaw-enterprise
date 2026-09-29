@@ -288,7 +288,104 @@ test(
       configurationDriver: createTestConfigurationDriver(),
     });
 
+    const iamBeforeNoGrant = await state.loadNativeIAMState(installation.id);
+    const adminNamespaces = await appA.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+    });
+    assert.equal(adminNamespaces.statusCode, 200, adminNamespaces.body);
+    const deniedNamespaceId = adminNamespaces.json().data[0].id;
+    const noGrantAuditBefore = await observerPool.query(
+      `SELECT id FROM occ.audit_events WHERE action = 'openclaw.auth.accounts.create'`,
+    );
+    const noGrantEmail = `postgres-no-grant-${randomUUID()}@example.com`;
+    const noGrantPassword = `generated-password-${randomUUID()}`;
+    const noGrant = await appA.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: { email: noGrantEmail, password: noGrantPassword, name: "Postgres No Grant" },
+    });
+    assert.equal(noGrant.statusCode, 201, noGrant.body);
+    const noGrantSession = await signInWithEmailPassword({
+      fetch: (request) => fetchFromInjectedApp(appB, request),
+      email: noGrantEmail,
+      password: noGrantPassword,
+    });
+    const noGrantInstallation = await appB.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(noGrantInstallation.statusCode, 403, noGrantInstallation.body);
+    // The zero-grant create is audited exactly once as an administrator mutation.
+    const noGrantAudit = await observerPool.query(
+      `SELECT id, kind, actor_id, resource_kind, resource_id, outcome
+       FROM occ.audit_events
+       WHERE action = 'openclaw.auth.accounts.create' AND NOT (id = ANY($1::text[]))`,
+      [noGrantAuditBefore.rows.map(({ id }) => id)],
+    );
+    assert.equal(noGrantAudit.rows.length, 1);
+    assert.deepEqual(
+      {
+        kind: noGrantAudit.rows[0].kind,
+        actorId: noGrantAudit.rows[0].actor_id,
+        resourceKind: noGrantAudit.rows[0].resource_kind,
+        resourceId: noGrantAudit.rows[0].resource_id,
+        outcome: noGrantAudit.rows[0].outcome,
+      },
+      {
+        kind: "mutation",
+        actorId: installationPrincipal(iamBeforeNoGrant).id,
+        resourceKind: "installation",
+        resourceId: installation.id,
+        outcome: "success",
+      },
+    );
+    // Before any grant the human sees an empty Namespace list and is denied everywhere else.
+    const noGrantNamespaces = await appB.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(noGrantNamespaces.statusCode, 200, noGrantNamespaces.body);
+    assert.deepEqual(noGrantNamespaces.json().data, []);
+    for (const [method, url, payload] of [
+      ["POST", "/namespaces", { name: "postgres-zero-grant-namespace" }],
+      ["GET", `/namespaces/${deniedNamespaceId}`],
+      ["DELETE", `/namespaces/${deniedNamespaceId}`],
+      ["GET", `/namespaces/${deniedNamespaceId}/agents`],
+      ["GET", `/namespaces/${deniedNamespaceId}/iam/roles`],
+      [
+        "POST",
+        `/namespaces/${deniedNamespaceId}/iam/roles`,
+        { permissions: [{ action: "read", resourceKind: "namespace" }] },
+      ],
+      [
+        "POST",
+        "/api/auth/accounts",
+        {
+          email: `postgres-zero-grant-escalation-${randomUUID()}@example.com`,
+          password: `generated-password-${randomUUID()}`,
+          name: "Postgres Zero Grant Escalation",
+        },
+      ],
+    ]) {
+      const denied = await appB.inject({
+        method,
+        url,
+        headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+        ...(payload === undefined ? {} : { payload }),
+      });
+      assert.equal(denied.statusCode, 403, `${method} ${url}: ${denied.body}`);
+      assert.equal(denied.json().error.code, "FORBIDDEN");
+    }
     const iamBefore = await state.loadNativeIAMState(installation.id);
+    assert.equal(iamBefore.identities.length, iamBeforeNoGrant.identities.length + 1);
+    assert.equal(iamBefore.bindings.length, iamBeforeNoGrant.bindings.length);
+    assert.ok(iamBefore.identities.some(({ id }) => id === noGrant.json().data.principalId));
+
     const role = iamBefore.roles.find((candidate) =>
       candidate.permissions.some(
         (permission) => permission.action === "read" && permission.resourceKind === "installation",
@@ -376,6 +473,52 @@ test(
        WHERE action = 'openclaw.auth.accounts.create'`,
     );
     assert.equal(afterAudit.rows[0].count, beforeAudit.rows[0].count + 1);
+
+    // Grant the existing human exact Namespace access through the public policy API.
+    // The second controller must observe it without gaining Installation or sibling access.
+    const namespaces = await appA.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+    });
+    assert.equal(namespaces.statusCode, 200, namespaces.body);
+    const namespaceId = namespaces.json().data[0].id;
+    const namespaceRole = await appA.inject({
+      method: "POST",
+      url: `/namespaces/${namespaceId}/iam/roles`,
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: { permissions: [{ action: "read", resourceKind: "namespace" }] },
+    });
+    assert.equal(namespaceRole.statusCode, 201, namespaceRole.body);
+    const binding = await appA.inject({
+      method: "POST",
+      url: `/namespaces/${namespaceId}/iam/access-bindings`,
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: {
+        subjectKind: "identity",
+        subjectId: noGrant.json().data.principalId,
+        roleId: namespaceRole.json().data.id,
+        resourceKind: "namespace",
+        resourceId: namespaceId,
+      },
+    });
+    assert.equal(binding.statusCode, 201, binding.body);
+    const visibleNamespaces = await appB.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(visibleNamespaces.statusCode, 200, visibleNamespaces.body);
+    assert.deepEqual(
+      visibleNamespaces.json().data.map(({ id }) => id),
+      [namespaceId],
+    );
+    const stillDenied = await appB.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(stillDenied.statusCode, 403, stillDenied.body);
   },
 );
 

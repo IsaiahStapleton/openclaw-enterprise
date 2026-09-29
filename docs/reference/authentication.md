@@ -282,9 +282,9 @@ singleton Installation, and stays available with GitHub sign-in enabled. One
 transaction writes the account, Principal, grant, enrollment and an optional
 `"github":{"subject":"<numeric id>"}` identity (`409` if GitHub is off or taken).
 
-The request must supply the `roleId` of an existing Role; the endpoint cannot
-create a Role or infer a grant from the account's email or session.
-Creating an account does not sign it in or issue a session.
+An optional `roleId` binds an existing Role; without one the account has no
+grants. The endpoint cannot create a Role or infer a grant from email or session.
+Creation does not sign the account in or issue a session.
 
 A representative provisioning body is:
 
@@ -298,7 +298,7 @@ A representative provisioning body is:
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
 Provisioning has no public email-verification or signup flow; duplicates are
-rejected. The controller API exposes no password reset.
+rejected. There is no password reset API.
 
 ## Authorization and failures
 

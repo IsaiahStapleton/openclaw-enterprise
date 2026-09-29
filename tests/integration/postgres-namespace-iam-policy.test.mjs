@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { createBootstrapAdministratorSeed, NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import {
+  createAuthPrincipalSeed,
+  createBootstrapAdministratorSeed,
+  NativeIAMDriver,
+} from "../../packages/iam/src/index.ts";
 import { AuthorizationDeniedError, OpenClawController } from "../../packages/occ/src/index.ts";
 import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-state.ts";
 
@@ -118,15 +122,19 @@ async function createNamespaceServicePrincipal(state, namespaceId) {
 }
 
 async function createHumanPrincipal(state) {
-  const principal = {
-    id: identifier("principal"),
-    kind: "principal",
-    issuer: "https://identity.example.com",
-    subject: randomUUID(),
-  };
-  // Provision a real identity without a Namespace service identity or a grant.
-  await state.appendNativeIAMPrincipal({ principal, roles: [], bindings: [] });
-  return principal;
+  // Enroll through the zero-grant auth account seed: a real Installation-scoped
+  // Principal with no Namespace service identity, Role, or binding. The
+  // Installation ID is unused because no-grant seeds create no bindings.
+  const seed = createAuthPrincipalSeed(
+    "installation-unused-by-zero-grant-seed",
+    "https://identity.example.com",
+    { id: randomUUID() },
+    { grant: "none" },
+  );
+  assert.deepEqual(seed.roles, []);
+  assert.deepEqual(seed.bindings, []);
+  await state.appendNativeIAMPrincipal(seed);
+  return seed.principal;
 }
 
 function deferred() {

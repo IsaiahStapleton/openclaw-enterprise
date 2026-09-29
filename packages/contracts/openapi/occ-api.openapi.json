@@ -509,7 +509,7 @@
   "paths": {
     "/api/auth/accounts": {
       "post": {
-        "description": "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
+        "description": "Requires administer permission on the Installation. Creates a Better Auth account and an explicit IAM Principal in one transaction. Supplying roleId also creates a binding to that existing IAM Role; omitting roleId creates no grants. Public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
         "operationId": "createAuthAccount",
         "requestBody": {
           "content": {
@@ -530,7 +530,7 @@
                   "password": { "maxLength": 128, "minLength": 12, "type": "string" },
                   "roleId": { "maxLength": 200, "minLength": 1, "type": "string" }
                 },
-                "required": ["email", "password", "roleId"],
+                "required": ["email", "password"],
                 "type": "object"
               }
             }
@@ -13625,7 +13625,7 @@
         ]
       },
       "post": {
-        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.",
+        "description": "Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Namespace when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.",
         "operationId": "createIAMAccessBinding",
         "parameters": [
           {
@@ -13836,6 +13836,12 @@
             "action": "read",
             "condition": "iam_binding_target",
             "resourceKind": "configuration",
+            "scope": "request_body"
+          },
+          {
+            "action": "read",
+            "condition": "iam_binding_target",
+            "resourceKind": "namespace",
             "scope": "request_body"
           },
           {

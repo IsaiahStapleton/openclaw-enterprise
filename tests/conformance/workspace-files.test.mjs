@@ -50,7 +50,7 @@ async function createFixture(options = {}) {
     password: readerPassword,
     name: "Workspace file reader",
   });
-  const tenantAReader = adminAuth.auth.principalSeed(readerAccount).principal;
+  const tenantAReader = adminAuth.auth.principalSeed(readerAccount, { grant: "none" }).principal;
   const state = {
     identities: [administrator, tenantAReader],
     groups: [],

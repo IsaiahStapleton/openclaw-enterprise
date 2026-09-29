@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { InMemoryPlatformState } from "../../packages/occ/src/state/platform-state.ts";
 import {
+  createAuthPrincipalSeed,
   createBootstrapAdministratorSeed,
   evaluateAuthorization,
   NativeIAMDriver,
@@ -424,6 +425,43 @@ test("managed Namespace Roles grant only Namespace read so a Namespace binding c
     ).allowed;
   assert.equal(await decide("read"), true);
   assert.equal(await decide("delete"), false);
+});
+
+test("auth Principal seeds fail closed unless a Role id or explicit grant is given", () => {
+  const seed = (options) =>
+    createAuthPrincipalSeed("ins_seed", "issuer", { id: "user-seed" }, options);
+  for (const options of [undefined, null, {}, { grant: "admin" }, { grant: undefined }]) {
+    assert.throws(() => seed(options), /require a Role id or an explicit grant/);
+  }
+  for (const roleId of ["", null, 42]) {
+    assert.throws(() => seed({ roleId }), /require a Role id/);
+  }
+  for (const grant of ["none", "administrator"]) {
+    assert.throws(
+      () => seed({ roleId: "role-existing", grant }),
+      /Role binding and an explicit grant are mutually exclusive/,
+    );
+  }
+
+  const none = seed({ grant: "none" });
+  assert.deepEqual(none.roles, []);
+  assert.deepEqual(none.bindings, []);
+
+  const bound = seed({ roleId: "role-existing" });
+  assert.deepEqual(bound.roles, []);
+  assert.deepEqual(
+    bound.bindings.map(({ roleId, resourceKind, resourceId }) => ({
+      roleId,
+      resourceKind,
+      resourceId,
+    })),
+    [{ roleId: "role-existing", resourceKind: "installation", resourceId: "ins_seed" }],
+  );
+
+  const administrator = seed({ grant: "administrator" });
+  assert.equal(administrator.roles.length, 1);
+  assert.equal(administrator.bindings.length, 1);
+  assert.equal(administrator.bindings[0].roleId, administrator.roles[0].id);
 });
 
 test("fresh bootstrap seed creates human and service administrators on one shared Role", async () => {

@@ -550,6 +550,12 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
       },
       {
         action: "read",
+        resourceKind: "namespace",
+        scope: "request_body",
+        condition: "iam_binding_target",
+      },
+      {
+        action: "read",
         resourceKind: "secret",
         scope: "request_body",
         condition: "iam_binding_target",
@@ -1057,7 +1063,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       body: {
         type: "object",
         additionalProperties: false,
-        required: ["email", "password", "roleId"],
+        required: ["email", "password"],
         properties: {
           email: { type: "string", minLength: 3, maxLength: 320 },
           password: { type: "string", minLength: 12, maxLength: 128 },
@@ -3892,7 +3898,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: createAuthAccountOperation.operationId,
           summary: createAuthAccountOperation.summary,
           description:
-            "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
+            "Requires administer permission on the Installation. Creates a Better Auth account and an explicit IAM Principal in one transaction. Supplying roleId also creates a binding to that existing IAM Role; omitting roleId creates no grants. Public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
           tags: [...createAuthAccountOperation.tags],
           security: [{ sessionCookie: [] }],
           "x-openclaw-permissions": [
@@ -3934,7 +3940,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         if (
           !isNonEmptyString(email) ||
           !isNonEmptyString(password) ||
-          !isNonEmptyString(roleId) ||
+          (roleId !== undefined && !isNonEmptyString(roleId)) ||
           (name !== undefined && !isNonEmptyString(name)) ||
           (github !== undefined && !isNonEmptyString(github.subject))
         ) {
@@ -3966,7 +3972,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           password,
           ...(name === undefined ? {} : { name }),
         });
-        const seed = options.auth.principalSeed(prepared, { roleId });
+        const seed = options.auth.principalSeed(
+          prepared,
+          roleId === undefined ? { grant: "none" } : { roleId },
+        );
         const auditEvent = event(
           createAuthAccountOperation,
           request,
