@@ -63,6 +63,12 @@ async function setup(
     "persisted IAM must contain a Principal authorized for Agent lifecycle and Secret cleanup",
   );
 
+  const namespace = {
+    id: `ns_${randomUUID()}`,
+    name: `revision-worker-${randomUUID()}`,
+    status: "ready",
+    createdAt: new Date().toISOString(),
+  };
   let worker;
   context.after(async () => {
     if (worker === undefined) {
@@ -70,15 +76,25 @@ async function setup(
     } else {
       await worker.stop();
     }
+    // Every case in this file shares one database, and every worker claims from
+    // the whole queue. Close this case's unfinished work (deferred repository
+    // cleanup, retries, abandoned claims) so a later case's worker cannot run it
+    // through that case's recording Compute and repository doubles.
+    await observerPool.query(
+      `UPDATE occ.controller_work
+       SET state = 'failed_permanent',
+           claim_token = NULL,
+           lease_expires_at = NULL,
+           completed_at = clock_timestamp(),
+           reason_code = 'TEST_FIXTURE_CLEANUP',
+           result_data = NULL,
+           updated_at = clock_timestamp()
+       WHERE namespace_id = $1 AND state IN ('queued', 'claimed')`,
+      [namespace.id],
+    );
     await observerPool.end();
   });
 
-  const namespace = {
-    id: `ns_${randomUUID()}`,
-    name: `revision-worker-${randomUUID()}`,
-    status: "ready",
-    createdAt: new Date().toISOString(),
-  };
   await state.transact((unit) => unit.namespaces.createNamespace(namespace));
   const compute = {
     ...createDevelopmentComputeDriver(),
@@ -3021,20 +3037,27 @@ test(
     );
     assert.deepEqual(retainedCounts.rows, [{ attempts: 3, revisions: 0, work: 2 }]);
     cleanupBarrier.resolve();
+    let missing;
     await waitFor("retained repository cleanup to run after Agent deletion", async () => {
       const afterCleanup = await repositoryAttempts(fixture, pendingRevision);
-      return afterCleanup.some(
-        ({ phase, repositoryRef, liveRevisionId }) =>
-          repositoryRef === repository.snapshot.bindings[1].repositoryRef &&
-          phase === "disposed" &&
-          liveRevisionId === null,
-      )
-        ? true
-        : undefined;
+      missing = await fixture.state.read((view) =>
+        view.repositorySessions.findAttempt(missingAdmissionId),
+      );
+      if (
+        missing.phase !== "closing" &&
+        afterCleanup.some(
+          ({ phase, repositoryRef, liveRevisionId }) =>
+            repositoryRef === repository.snapshot.bindings[1].repositoryRef &&
+            phase === "disposed" &&
+            liveRevisionId === null,
+        )
+      ) {
+        return true;
+      }
+      // Incomplete cleanup defers by the boundary Driver's hourly interval.
+      await advanceCleanupRetries(fixture, pendingRevision);
+      return undefined;
     });
-    const missing = await fixture.state.read((view) =>
-      view.repositorySessions.findAttempt(missingAdmissionId),
-    );
     assert.equal(missing.phase, "invalidated");
     assert.equal(missing.liveRevisionId, null);
     assert.equal(missing.sessionId, undefined);
@@ -4767,20 +4790,55 @@ test(
     const owner = await fixture.agent("slow-runtime");
     const candidate = await fixture.revision(owner, 1);
     let observations = 0;
+    const events = [];
 
-    await fixture.start({
-      ...fixture.compute,
-      async prepareRevision(revision) {
-        const observation = await fixture.compute.prepareRevision(revision);
-        observations += 1;
-        // Image pulls and app-server startup remain ordinary pending observations, not failures.
-        return observations <= 7 ? { ...observation, ready: false } : observation;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          const observation = await fixture.compute.prepareRevision(revision);
+          observations += 1;
+          // Image pulls and app-server startup remain ordinary pending observations, not failures.
+          return observations <= 7 ? { ...observation, ready: false } : observation;
+        },
       },
-    });
+      (event) => events.push(event),
+    );
 
     const completed = await fixture.work(candidate, "succeeded");
     assert.equal(observations, 8);
     assert.equal(completed.attempt_count, 1);
+
+    // Each pass reports its deployment phase timing; the successful pass carries
+    // the totals across all eight passes of this one work item.
+    const passes = await waitFor("the successful deployment pass to be reported", () => {
+      const reported = events.filter(
+        (event) => event.event === "worker.completed" && event.workId === candidate.idempotencyKey,
+      );
+      return reported.at(-1)?.outcome === "success" ? reported : undefined;
+    });
+    assert.deepEqual(
+      passes.map(({ outcome, code, deployPasses }) => ({ outcome, code, deployPasses })),
+      [
+        ...Array.from({ length: 7 }, (_, index) => ({
+          outcome: "pending",
+          code: "REVISION_INCOMPLETE",
+          deployPasses: index + 1,
+        })),
+        { outcome: "success", code: "REVISION_ACTIVATED", deployPasses: 8 },
+      ],
+    );
+    for (const pass of passes.slice(0, 7)) {
+      assert.equal(pass.activationMs, undefined, "an unready pass has no activation phase");
+    }
+    const success = passes.at(-1);
+    // Seven jittered readiness retries separate the first unready and the ready observation.
+    assert.ok(success.readinessWaitMs > 0);
+    assert.ok(success.readinessWaitMs >= passes[6].readinessWaitMs);
+    assert.ok(success.elapsedMs >= success.readinessWaitMs);
+    assert.ok(success.prepareMs >= 0 && success.prepareMs <= success.elapsedMs);
+    assert.ok(success.activationMs >= 0 && success.activationMs <= success.durationMs);
+    assert.ok(success.durationMs <= success.elapsedMs);
 
     // Every deferred observation is durable and attributable while the Agent activates exactly once.
     const pending = await fixture.observerPool.query(
@@ -4853,6 +4911,77 @@ test(
       data: { timeoutMs: 1, runtimeFailure },
     });
     assert.deepEqual(status.warnings, []);
+  },
+);
+
+test(
+  "rejected runtime credentials fail deployment before the convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("rejected-runtime");
+    const candidate = await fixture.revision(owner, 1);
+    const failure = (code) => ({
+      component: "agent",
+      check: "model-probe",
+      checkedAt: "2026-09-29T08:00:00.000Z",
+      code,
+    });
+    let observations = 0;
+
+    // The default 900-second deadline stays in force: a transient probe failure
+    // remains pending, and only the credential rejection ends the deployment.
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        observations += 1;
+        return {
+          ...(await fixture.compute.prepareRevision(revision)),
+          ready: false,
+          runtimeFailure: failure(
+            observations === 1 ? "MODEL_PROBE_TIMEOUT" : "AUTHENTICATION_FAILED",
+          ),
+        };
+      },
+    });
+
+    const failed = await fixture.work(candidate, "failed_permanent");
+    assert.equal(observations, 2);
+    assert.equal(failed.attempt_count, 1);
+    const result = await fixture.observerPool.query(
+      "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(result.rows, [
+      { reason_code: "RUNTIME_AUTHENTICATION_FAILED", result_data: null },
+    ]);
+    const active = await fixture.observerPool.query(
+      "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+      [fixture.namespace.id, owner.id],
+    );
+    assert.equal(active.rows[0].active_revision_id, null);
+    const evidence = await fixture.observerPool.query(
+      `SELECT details->>'reasonCode' AS reason FROM occ.audit_events
+       WHERE resource_id = $1 AND details->>'reasonCode' IN
+         ('REVISION_INCOMPLETE', 'RUNTIME_AUTHENTICATION_FAILED')
+       ORDER BY occurred_at`,
+      [candidate.id],
+    );
+    assert.deepEqual(
+      evidence.rows.map(({ reason }) => reason),
+      ["REVISION_INCOMPLETE", "RUNTIME_AUTHENTICATION_FAILED"],
+    );
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "RUNTIME_AUTHENTICATION_FAILED",
+      message: "Deployment runtime credentials were rejected.",
+    });
   },
 );
 

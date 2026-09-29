@@ -256,6 +256,12 @@
       "path": "tests/integration/container-release.test.mjs"
     },
     {
+      "path": "tests/integration/cli-release.test.mjs",
+      "expectedTests": [
+        "CLI release builds four installable platform binaries and rejects changed assets"
+      ]
+    },
+    {
       "path": "tests/integration/container-resume.test.mjs"
     },
     {
