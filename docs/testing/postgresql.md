@@ -123,6 +123,12 @@ The same composition covers the GitHub profile against the fixture provider:
   login receipt is one-use and needs the exact Origin.
 - `postgres-github-recovery-replacement.test.mjs`: online recovery replacement
   moves the reserved password lane and survives a restart with the original seed.
+- `postgres-google-sign-in.test.mjs`: Google sign-in against a fixture OpenID
+  Connect provider (`fakeGoogle` in `tests/helpers/production-sign-in.mjs`) that
+  signs RS256 ID tokens with a local key. It covers attached-only admission, bad
+  ID-token claims, state and binding-cookie replay, password fallback, detach,
+  disablement, and GitHub plus Google together. No real Google client is used;
+  `google-id-token` and `google-login-transport` cover the verifier and transport.
 - `postgres-break-glass-auth-maintain.test.mjs`: also needs
   `OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL`. With the API stopped,
   `auth:maintain` resets the recovery password and deactivates GitHub sign-in.
