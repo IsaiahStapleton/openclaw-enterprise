@@ -1432,6 +1432,110 @@ test(
   },
 );
 
+test(
+  "exhausted repository maintenance during a dependency outage keeps the active runtime",
+  requiresPostgres,
+  async (context) => {
+    const repository = repositoryBoundary();
+    // One attempt makes the first unavailable dependency exhaust the claim, as
+    // a longer outage exhausts the default retries.
+    const fixture = await setup(context, { repoDriver: repository.driver, maxAttempts: 1 });
+    const owner = await fixture.agent("repository-maintenance-outage");
+    const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
+    const stopped = [];
+    let iamUnavailable = false;
+    const compute = {
+      ...fixture.compute,
+      async stopRevision(revision) {
+        stopped.push(revision.id);
+        return fixture.compute.stopRevision(revision);
+      },
+    };
+    const withUnavailableIAM = (drivers) => {
+      const createIAMDriver = drivers.createIAMDriver;
+      return {
+        ...drivers,
+        createIAMDriver(state) {
+          const iam = createIAMDriver(state);
+          return {
+            id: iam.id,
+            implementation: iam.implementation,
+            capability: iam.capability,
+            lookupIdentity: iam.lookupIdentity.bind(iam),
+            async authorize(request) {
+              if (iamUnavailable) {
+                throw new Error("IAM is temporarily unavailable");
+              }
+              return iam.authorize(request);
+            },
+          };
+        },
+      };
+    };
+    const startWorker = () =>
+      fixture.start(
+        compute,
+        () => {},
+        undefined,
+        undefined,
+        fixture.createWorkerPool(),
+        withUnavailableIAM,
+      );
+    await startWorker();
+    await fixture.work(candidate, "succeeded");
+    await fixture.stop();
+
+    iamUnavailable = true;
+    const maintenance = await fixture.observerPool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+       RETURNING idempotency_key`,
+      [candidate.id, `agent_revision:${candidate.id}:maintenance:%`],
+    );
+    assert.equal(maintenance.rowCount, 1);
+    const outage = { id: candidate.id, idempotencyKey: maintenance.rows[0].idempotency_key };
+    await startWorker();
+    await fixture.work(outage, "failed_permanent");
+    await fixture.stop();
+    const failed = await fixture.observerPool.query(
+      "SELECT reason_code FROM occ.controller_work WHERE idempotency_key = $1",
+      [outage.idempotencyKey],
+    );
+    assert.equal(failed.rows[0].reason_code, "DEPENDENCY_UNAVAILABLE");
+    const retirement = await fixture.observerPool.query(
+      `SELECT idempotency_key FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+    );
+    assert.equal(retirement.rowCount, 0, "an outage must not retire the authorized runtime");
+    assert.deepEqual(stopped, []);
+    const agent = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(agent.activeRevisionId, candidate.id);
+    assert.equal(agent.desiredRuntimeState, "running");
+
+    // The maintenance chain continues, so the runtime is kept current once
+    // the dependency recovers.
+    iamUnavailable = false;
+    const next = await fixture.observerPool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+       RETURNING idempotency_key`,
+      [candidate.id, `agent_revision:${candidate.id}:maintenance:%`],
+    );
+    assert.equal(next.rowCount, 1);
+    assert.notEqual(next.rows[0].idempotency_key, outage.idempotencyKey);
+    await startWorker();
+    await fixture.work(
+      { id: candidate.id, idempotencyKey: next.rows[0].idempotency_key },
+      "succeeded",
+    );
+    await fixture.stop();
+    assert.deepEqual(stopped, []);
+  },
+);
+
 for (const loss of ["missing", "closed-repair"]) {
   test(
     loss === "missing"

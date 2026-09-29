@@ -142,9 +142,8 @@ Revision work reloads its Namespace, Agent, admitted revision, and active revisi
 `processRevision()` rejects mismatched owners, an unready Namespace, an invalid
 Agent Principal, a changed Harness descriptor, or a different Compute Driver.
 `authorizeRevision()` rechecks current `deploy` and, for a ServiceAccount
-snapshot, `read` on that exact ServiceAccount. Admission-time permission is
-insufficient. Before Compute effects, the worker resolves frozen Backend metadata
-and rechecks each managed credential's exact Backend, Driver, workspace, and issued
+snapshot, `read` on that exact ServiceAccount. Before Compute effects, the worker resolves
+frozen Backend metadata and rechecks each managed credential's exact Backend, Driver, workspace, and issued
 account binding. This read-only path has no Backend client or admin key. The
 [Backend-managed credential delivery flow](service-account-driver-credential-delivery.md) owns these checks.
 
@@ -297,8 +296,7 @@ live claim; deployment status derives `error` and `warnings` from that result.
 Completion needs no runtime receipt acknowledgment or post-commit cleanup.
 Maintenance cannot rewrite deployment warnings.
 
-See [deployment status](../reference/agents.md#deployment-status) for authorization
-and persisted result semantics.
+See [deployment status](../reference/agents.md#deployment-status) for result semantics.
 
 Indexed `workId` scopes progress to work; maintenance and unbound history cannot
 supply it. `getDeploymentStatus` reads
@@ -310,15 +308,14 @@ reconcile audit evidence, otherwise `LEGACY_OUTCOME_UNKNOWN`. Their
 `result_data` remains `NULL`; pending rows have no terminal outcome.
 
 If Compute declares maintenance, activation schedules exact-revision observations.
-Incomplete observations or Compute bindings close the bounded item and schedule
-another, preserving authorized-runtime reconciliation through outages. Each claim
-reauthorizes its original actor. Successor keys use strictly later time buckets
-to prevent clock-skew collisions with completed work.
+Incomplete observations, Compute bindings, and exhausted dependency retries close
+the item and schedule another while the revision stays active and running within
+its credential deadline; outages never retire it. Each claim reauthorizes its
+actor. Successor keys use strictly later time buckets despite clock skew.
 
-`worker.completed` reports the target, outcome, and code; polling then continues.
-Lease loss is reported as `worker.error` with `CLAIM_LOST` rather than publishing
-stale lifecycle state. On `SIGTERM` or `SIGINT`, shutdown removes readiness,
-aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
+`worker.completed` reports the target, outcome, and code; polling continues.
+Lease loss reports `worker.error` `CLAIM_LOST` instead of stale lifecycle state.
+On `SIGTERM` or `SIGINT`, shutdown removes readiness, aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 `worker.stopped`. Later workers recover expired claims.
 Each `PostgresWorkQueue.recoverStale()` statement atomically publishes exhausted
 work, failure of a still-provisioning Namespace targeted for `ready`, and audit
@@ -365,6 +362,8 @@ final-attempt crashes from stranding provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 12:00: Continue maintenance after dependency exhaustion.
 
 - 2026-09-28 22:10: Expose exact-work pending reconciliation results through deployment status and the Console. (01a0eb85-73a8-7572-92a9-a6a06fbdf0a5 - 0aedecfd)
 
