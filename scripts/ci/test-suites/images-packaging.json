@@ -77,6 +77,19 @@
       "expectedTests": [
         "publication updates aliases using real Skopeo and a multi-platform registry"
       ]
+    },
+    {
+      "path": "tests/integration/codex-model-probe.test.mjs",
+      "expectedTests": [
+        "generated Codex launcher bounds model-probe recovery",
+        "timeout then success",
+        "two timeouts",
+        "credential rejection",
+        "external SIGKILL",
+        "malformed output",
+        "tool event",
+        "termination during backoff exits without another probe"
+      ]
     }
   ],
   "env": {

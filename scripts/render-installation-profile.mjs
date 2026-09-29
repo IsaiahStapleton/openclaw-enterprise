@@ -1,0 +1,1057 @@
+#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(scriptDir, "..");
+const profilesDir = resolve(repoRoot, "deploy/profiles");
+const allowedProfiles = new Set(["openclaw", "codex"]);
+const digestImage = /^[^@\s]+@sha256:[a-f0-9]{64}$/i;
+const proxyUrl = /^https?:\/\/(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}:[1-9][0-9]{0,4}$/;
+const dnsHostname =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+function fail(message) {
+  process.stderr.write(`render-installation-profile: ${message}\n`);
+  process.exit(1);
+}
+
+function usage() {
+  return `Usage: node scripts/render-installation-profile.mjs --profile openclaw|codex \\
+  --input <site-inputs.json> --out-dir <rendered-directory>
+
+The renderer writes values.yaml, installation.yaml, and preflight.json. Missing
+or invalid required inputs write preflight.json and exit nonzero.
+`;
+}
+
+function parseArgs(argv) {
+  const parsed = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = () => {
+      index += 1;
+      if (index >= argv.length || argv[index].startsWith("--")) {
+        fail(`${arg} requires a value.\n\n${usage()}`);
+      }
+      return argv[index];
+    };
+    if (arg === "--profile") {
+      parsed.profile = next();
+    } else if (arg === "--input") {
+      parsed.input = next();
+    } else if (arg === "--out-dir") {
+      parsed.outDir = next();
+    } else if (arg === "--help" || arg === "-h") {
+      process.stdout.write(usage());
+      process.exit(0);
+    } else {
+      fail(`unsupported argument ${arg}.\n\n${usage()}`);
+    }
+  }
+  if (!allowedProfiles.has(parsed.profile)) {
+    fail("--profile must be one of: openclaw, codex.");
+  }
+  if (parsed.input === undefined) {
+    fail("--input is required.");
+  }
+  if (parsed.outDir === undefined) {
+    fail("--out-dir is required.");
+  }
+  return parsed;
+}
+
+function record(value, path, diagnostics) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    diagnostics.errors.push(`${path} must be an object.`);
+    return {};
+  }
+  return value;
+}
+
+function closed(value, path, keys, diagnostics) {
+  for (const key of Object.keys(value)) {
+    if (!keys.includes(key)) {
+      diagnostics.errors.push(`${path}.${key} is not supported by installation profiles.`);
+    }
+  }
+}
+
+async function readJson(path, label) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    fail(`${label} ${path} is unavailable or invalid JSON.`);
+  }
+}
+
+async function readProfile(name) {
+  const diagnostics = { errors: [] };
+  const profile = record(
+    await readJson(resolve(profilesDir, `${name}.json`), `profile ${name}`),
+    `profile ${name}`,
+    diagnostics,
+  );
+  if (diagnostics.errors.length > 0) {
+    fail(diagnostics.errors.join("\n"));
+  }
+  if (profile.name !== name) {
+    fail(`profile ${name} must declare matching name.`);
+  }
+  if (profile.name === "default") {
+    fail("default is not an installation profile.");
+  }
+  return profile;
+}
+
+function clone(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => clone(entry));
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, clone(entry)]));
+  }
+  return value;
+}
+
+function yamlScalar(value) {
+  if (typeof value === "string") {
+    if (value.length === 0) {
+      return '""';
+    }
+    if (
+      /^[A-Za-z0-9_./:@-]+$/.test(value) &&
+      !/^(?:true|false|null|~|-?\d+(?:\.\d+)?)$/i.test(value)
+    ) {
+      return value;
+    }
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value === null) {
+    return "null";
+  }
+  fail(`cannot render unsupported scalar ${typeof value}.`);
+}
+
+function toYaml(value, indent = 0) {
+  const pad = " ".repeat(indent);
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return "[]";
+    }
+    return value
+      .map((entry) => {
+        if (typeof entry === "object" && entry !== null) {
+          return `${pad}- ${toYaml(entry, indent + 2).trimStart()}`;
+        }
+        return `${pad}- ${yamlScalar(entry)}`;
+      })
+      .join("\n");
+  }
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value).filter(([, entry]) => entry !== undefined);
+    if (entries.length === 0) {
+      return "{}";
+    }
+    return entries
+      .map(([key, entry]) => {
+        if (typeof entry === "object" && entry !== null) {
+          const rendered = toYaml(entry, indent + 2);
+          return `${pad}${key}:${rendered === "{}" || rendered === "[]" ? ` ${rendered}` : `\n${rendered}`}`;
+        }
+        return `${pad}${key}: ${yamlScalar(entry)}`;
+      })
+      .join("\n");
+  }
+  return yamlScalar(value);
+}
+
+function renderYaml(value) {
+  return `${toYaml(value)}\n`;
+}
+
+async function writeYaml(path, value) {
+  await writeFile(path, renderYaml(value));
+}
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function asString(source, path, diagnostics, { pattern, validate, description } = {}) {
+  const value = source[path.at(-1)];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    diagnostics.errors.push(`${path.join(".")} must be a nonempty string.`);
+    return "";
+  }
+  if (
+    (pattern !== undefined && !pattern.test(value)) ||
+    (validate !== undefined && !validate(value))
+  ) {
+    diagnostics.errors.push(`${path.join(".")} must be ${description}.`);
+  }
+  return value;
+}
+
+function optionalString(source, path, diagnostics, { pattern, validate, description } = {}) {
+  const value = source[path.at(-1)];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    diagnostics.errors.push(`${path.join(".")} must be a nonempty string when supplied.`);
+    return undefined;
+  }
+  if (
+    (pattern !== undefined && !pattern.test(value)) ||
+    (validate !== undefined && !validate(value))
+  ) {
+    diagnostics.errors.push(`${path.join(".")} must be ${description}.`);
+  }
+  return value;
+}
+
+function asBoolean(source, path, diagnostics, fallback = false) {
+  const value = source[path.at(-1)];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value !== "boolean") {
+    diagnostics.errors.push(`${path.join(".")} must be a boolean.`);
+    return fallback;
+  }
+  return value;
+}
+
+function optionalPositiveInteger(source, path, diagnostics) {
+  const value = source[path.at(-1)];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    diagnostics.errors.push(`${path.join(".")} must be a positive integer when supplied.`);
+    return undefined;
+  }
+  return value;
+}
+
+function labelMap(source, path, diagnostics, { nonempty = true } = {}) {
+  const value = source[path.at(-1)];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    diagnostics.errors.push(`${path.join(".")} must be an object of Kubernetes labels.`);
+    return {};
+  }
+  if (nonempty && Object.keys(value).length === 0) {
+    diagnostics.errors.push(`${path.join(".")} must contain at least one Kubernetes label.`);
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string" || entry.length === 0) {
+      diagnostics.errors.push(`${path.join(".")}.${key} must be a nonempty string.`);
+    }
+  }
+  return value;
+}
+
+function stringArray(
+  source,
+  path,
+  diagnostics,
+  { pattern, validate, description, nonempty = true } = {},
+) {
+  const value = source[path.at(-1)];
+  if (!Array.isArray(value) || (nonempty && value.length === 0)) {
+    diagnostics.errors.push(`${path.join(".")} must be a${nonempty ? " nonempty" : ""} list.`);
+    return [];
+  }
+  value.forEach((entry, index) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      diagnostics.errors.push(`${path.join(".")}[${index}] must be a nonempty string.`);
+    } else if (
+      (pattern !== undefined && !pattern.test(entry)) ||
+      (validate !== undefined && !validate(entry))
+    ) {
+      diagnostics.errors.push(`${path.join(".")}[${index}] must be ${description}.`);
+    }
+  });
+  return value;
+}
+
+function isIpv4Cidr(value, requiredPrefix) {
+  const [address, rawPrefix, extra] = value.split("/");
+  if (extra !== undefined || rawPrefix === undefined || isIP(address) !== 4) {
+    return false;
+  }
+  if (!/^[0-9]+$/.test(rawPrefix)) {
+    return false;
+  }
+  const prefix = Number(rawPrefix);
+  if (!Number.isSafeInteger(prefix) || prefix < 1 || prefix > 32) {
+    return false;
+  }
+  return requiredPrefix === undefined || prefix === requiredPrefix;
+}
+
+function validateNativeAdminDomains(domain, sharedCookieDomain, diagnostics) {
+  const lowerDomain = domain.toLowerCase();
+  const lowerSharedCookieDomain = sharedCookieDomain.toLowerCase();
+  if (!dnsHostname.test(lowerDomain)) {
+    diagnostics.errors.push(
+      "controlPlane.agentNativeAdminDomain must be a DNS hostname without a wildcard, port, scheme, or path.",
+    );
+  }
+  if (!dnsHostname.test(lowerSharedCookieDomain)) {
+    diagnostics.errors.push(
+      "controlPlane.sharedCookieDomain must be a DNS hostname without a wildcard, port, scheme, or path.",
+    );
+  }
+  if (
+    dnsHostname.test(lowerDomain) &&
+    dnsHostname.test(lowerSharedCookieDomain) &&
+    lowerDomain !== lowerSharedCookieDomain &&
+    !lowerDomain.endsWith(`.${lowerSharedCookieDomain}`)
+  ) {
+    diagnostics.errors.push(
+      "controlPlane.agentNativeAdminDomain must be inside controlPlane.sharedCookieDomain.",
+    );
+  }
+}
+
+function clientSelectors(source, diagnostics) {
+  if (!Array.isArray(source.apiClients) || source.apiClients.length === 0) {
+    diagnostics.errors.push("controlPlane.apiClients must be a nonempty list.");
+    return [];
+  }
+  return source.apiClients.map((client, index) => {
+    const current = record(client, `controlPlane.apiClients[${index}]`, diagnostics);
+    closed(current, `controlPlane.apiClients[${index}]`, ["namespace", "podLabels"], diagnostics);
+    return {
+      namespace: asString(
+        current,
+        ["controlPlane", "apiClients", String(index), "namespace"],
+        diagnostics,
+      ),
+      podLabels: labelMap(
+        current,
+        ["controlPlane", "apiClients", String(index), "podLabels"],
+        diagnostics,
+      ),
+    };
+  });
+}
+
+function section(source, key, diagnostics, required = true) {
+  const value = source[key];
+  if (value === undefined) {
+    if (required) {
+      diagnostics.errors.push(`${key} is required.`);
+    }
+    return {};
+  }
+  return record(value, key, diagnostics);
+}
+
+function buildInput(rawInput, diagnostics) {
+  const input = record(rawInput, "input", diagnostics);
+  closed(
+    input,
+    "input",
+    ["controlPlane", "runtime", "channels", "codex", "repository", "presets"],
+    diagnostics,
+  );
+  const controlPlane = section(input, "controlPlane", diagnostics);
+  const runtime = section(input, "runtime", diagnostics);
+  const channels = section(input, "channels", diagnostics, false);
+  const codex = section(input, "codex", diagnostics, false);
+  const repository = section(input, "repository", diagnostics, false);
+  const presets = section(input, "presets", diagnostics, false);
+  closed(presets, "presets", ["files"], diagnostics);
+  closed(
+    controlPlane,
+    "controlPlane",
+    [
+      "releaseName",
+      "namespace",
+      "clusterName",
+      "controllerImage",
+      "authBaseUrl",
+      "adminEmail",
+      "bootstrapPasswordClaimName",
+      "apiClients",
+      "databaseCidrs",
+      "clusterCidrs",
+      "dns",
+      "gatewayClassName",
+      "gatewayApiKeySecretName",
+      "agentNativeAdminDomain",
+      "sharedCookieDomain",
+      "gatewayTrustedProxyCidrs",
+      "pluginStatusProxySourceCidrs",
+      "nodeSelector",
+      "envoyNamespace",
+      "metrics",
+      "databaseCa",
+      "loggingCollector",
+    ],
+    diagnostics,
+  );
+  closed(
+    runtime,
+    "runtime",
+    [
+      "image",
+      "gatewayStorageClassName",
+      "nodeSelector",
+      "gatewayNodeSelector",
+      "transportSecretPrefix",
+      "codexSeccompProfile",
+    ],
+    diagnostics,
+  );
+  closed(
+    channels,
+    "channels",
+    ["runtimeProxyUrl", "directoryProxyUrl", "managedSlackProxy"],
+    diagnostics,
+  );
+  closed(codex, "codex", ["managedServiceAccounts", "modelDiscoveryCidrs"], diagnostics);
+  closed(
+    repository,
+    "repository",
+    [
+      "enabled",
+      "image",
+      "backendId",
+      "registryConfigMapName",
+      "serviceConfigSecretName",
+      "appKeySecretName",
+      "tlsSecretName",
+      "publicCaSecretName",
+      "serviceName",
+      "upstreamCidrs",
+    ],
+    diagnostics,
+  );
+
+  const dns = section(controlPlane, "dns", diagnostics);
+  closed(dns, "controlPlane.dns", ["namespace", "podLabels"], diagnostics);
+  const metrics = section(controlPlane, "metrics", diagnostics, false);
+  closed(
+    metrics,
+    "controlPlane.metrics",
+    ["scraperNamespaceLabels", "scraperPodLabels"],
+    diagnostics,
+  );
+  const databaseCa = section(controlPlane, "databaseCa", diagnostics, false);
+  closed(databaseCa, "controlPlane.databaseCa", ["secretName", "key", "mountPath"], diagnostics);
+  const loggingCollector = section(controlPlane, "loggingCollector", diagnostics, false);
+  closed(loggingCollector, "controlPlane.loggingCollector", ["enabled"], diagnostics);
+  const managedServiceAccounts = section(codex, "managedServiceAccounts", diagnostics, false);
+  closed(
+    managedServiceAccounts,
+    "codex.managedServiceAccounts",
+    ["workspaceId", "adminSecretName", "adminSecretKey", "providerCidr", "credentialTtlSeconds"],
+    diagnostics,
+  );
+
+  return {
+    controlPlane,
+    runtime,
+    channels,
+    codex,
+    repository,
+    dns,
+    metrics,
+    databaseCa,
+    loggingCollector,
+    managedServiceAccounts,
+    presets,
+  };
+}
+
+function buildRendered(profile, parsed, diagnostics) {
+  const {
+    controlPlane,
+    runtime,
+    channels,
+    codex,
+    repository,
+    dns,
+    metrics,
+    databaseCa,
+    loggingCollector,
+    managedServiceAccounts,
+    presets,
+  } = parsed;
+  const releaseName = asString(controlPlane, ["controlPlane", "releaseName"], diagnostics);
+  const namespace = asString(controlPlane, ["controlPlane", "namespace"], diagnostics);
+  const clusterName = asString(controlPlane, ["controlPlane", "clusterName"], diagnostics);
+  const controllerImage = asString(controlPlane, ["controlPlane", "controllerImage"], diagnostics, {
+    pattern: digestImage,
+    description: "an immutable image reference with a SHA-256 digest",
+  });
+  const runtimeImage = asString(runtime, ["runtime", "image"], diagnostics, {
+    pattern: digestImage,
+    description: "an immutable image reference with a SHA-256 digest",
+  });
+  const agentNativeAdminDomain = asString(
+    controlPlane,
+    ["controlPlane", "agentNativeAdminDomain"],
+    diagnostics,
+  );
+  const sharedCookieDomain = asString(
+    controlPlane,
+    ["controlPlane", "sharedCookieDomain"],
+    diagnostics,
+  );
+  validateNativeAdminDomains(agentNativeAdminDomain, sharedCookieDomain, diagnostics);
+  const envoyNamespace =
+    optionalString(controlPlane, ["controlPlane", "envoyNamespace"], diagnostics) ??
+    "envoy-gateway-system";
+  const repositoryEnabled = asBoolean(repository, ["repository", "enabled"], diagnostics, false);
+  const managedSlackProxyEnabled = asBoolean(
+    channels,
+    ["channels", "managedSlackProxy"],
+    diagnostics,
+  );
+  const managedSlackProxyHost = `openclaw-enterprise-slack-proxy.${namespace}.svc`;
+  if (profile.name === "openclaw" && Object.keys(codex).length > 0) {
+    diagnostics.errors.push("codex inputs are only consumed by the codex profile.");
+  }
+  if (profile.name === "openclaw" && runtime.codexSeccompProfile !== undefined) {
+    diagnostics.errors.push("runtime.codexSeccompProfile is only consumed by the codex profile.");
+  }
+  if (!repositoryEnabled && Object.keys(repository).some((key) => key !== "enabled")) {
+    diagnostics.errors.push(
+      "repository fields other than enabled are only consumed when repository.enabled is true.",
+    );
+  }
+  if (managedSlackProxyEnabled && channels.directoryProxyUrl !== undefined) {
+    diagnostics.errors.push(
+      "channels.directoryProxyUrl is not consumed when channels.managedSlackProxy enables the chart-managed Slack proxy.",
+    );
+  }
+  if (managedSlackProxyEnabled && channels.runtimeProxyUrl !== undefined) {
+    diagnostics.errors.push(
+      "channels.runtimeProxyUrl is not consumed when channels.managedSlackProxy enables the chart-managed Slack proxy.",
+    );
+  }
+  if (
+    codex.managedServiceAccounts !== undefined &&
+    Object.keys(managedServiceAccounts).length === 0
+  ) {
+    diagnostics.errors.push(
+      "codex.managedServiceAccounts must include managed Backend inputs when supplied.",
+    );
+  }
+  if ((metrics.scraperNamespaceLabels === undefined) !== (metrics.scraperPodLabels === undefined)) {
+    diagnostics.errors.push(
+      "controlPlane.metrics requires both scraperNamespaceLabels and scraperPodLabels, or neither.",
+    );
+  }
+
+  const values = {
+    images: {
+      controller: controllerImage,
+    },
+    installation: {
+      name: clusterName,
+    },
+    auth: {
+      baseUrl: asString(controlPlane, ["controlPlane", "authBaseUrl"], diagnostics),
+    },
+    agentNativeAdmin: {
+      enabled: true,
+      domain: agentNativeAdminDomain,
+      sharedCookieDomain,
+    },
+    bootstrap: {
+      adminEmail: asString(controlPlane, ["controlPlane", "adminEmail"], diagnostics),
+      password: {
+        claimName: asString(
+          controlPlane,
+          ["controlPlane", "bootstrapPasswordClaimName"],
+          diagnostics,
+        ),
+      },
+    },
+    database: {
+      cidrs: stringArray(controlPlane, ["controlPlane", "databaseCidrs"], diagnostics, {
+        validate: (value) => isIpv4Cidr(value, 32),
+        description: "an IPv4 /32 CIDR",
+      }),
+      ...(Object.keys(databaseCa).length === 0
+        ? {}
+        : {
+            caSecretName: asString(
+              databaseCa,
+              ["controlPlane", "databaseCa", "secretName"],
+              diagnostics,
+            ),
+            caKey:
+              optionalString(databaseCa, ["controlPlane", "databaseCa", "key"], diagnostics) ??
+              "ca.pem",
+            caMountPath:
+              optionalString(
+                databaseCa,
+                ["controlPlane", "databaseCa", "mountPath"],
+                diagnostics,
+              ) ?? "/etc/openclaw/database-ca",
+          }),
+    },
+    api: {
+      clients: clientSelectors(controlPlane, diagnostics),
+      ...(managedSlackProxyEnabled || channels.directoryProxyUrl === undefined
+        ? {}
+        : {
+            channelDirectoryProxyUrl: asString(
+              channels,
+              ["channels", "directoryProxyUrl"],
+              diagnostics,
+              {
+                pattern: proxyUrl,
+                description: "an HTTP(S) literal IPv4 endpoint with an explicit port",
+              },
+            ),
+          }),
+      modelDiscoveryCidrs:
+        profile.name === "codex"
+          ? stringArray(codex, ["codex", "modelDiscoveryCidrs"], diagnostics, {
+              validate: (value) => isIpv4Cidr(value, 32),
+              description: "an IPv4 /32 CIDR",
+              nonempty: false,
+            })
+          : [],
+    },
+    cluster: {
+      cidrs: stringArray(controlPlane, ["controlPlane", "clusterCidrs"], diagnostics, {
+        validate: (value) => isIpv4Cidr(value, 32),
+        description: "an IPv4 /32 CIDR",
+      }),
+    },
+    controlPlane: {
+      ...(controlPlane.nodeSelector === undefined
+        ? {}
+        : { nodeSelector: labelMap(controlPlane, ["controlPlane", "nodeSelector"], diagnostics) }),
+    },
+    dns: {
+      namespace: asString(dns, ["controlPlane", "dns", "namespace"], diagnostics),
+      podLabels: labelMap(dns, ["controlPlane", "dns", "podLabels"], diagnostics),
+    },
+    gatewayRouting: {
+      enabled: true,
+      gatewayClassName: asString(controlPlane, ["controlPlane", "gatewayClassName"], diagnostics),
+      apiKeySecretName: asString(
+        controlPlane,
+        ["controlPlane", "gatewayApiKeySecretName"],
+        diagnostics,
+      ),
+      envoyNamespace,
+    },
+    metrics: {
+      enabled: true,
+      ...(metrics.scraperNamespaceLabels === undefined
+        ? {}
+        : {
+            scraperNamespaceLabels: labelMap(
+              metrics,
+              ["controlPlane", "metrics", "scraperNamespaceLabels"],
+              diagnostics,
+            ),
+          }),
+      ...(metrics.scraperPodLabels === undefined
+        ? {}
+        : {
+            scraperPodLabels: labelMap(
+              metrics,
+              ["controlPlane", "metrics", "scraperPodLabels"],
+              diagnostics,
+            ),
+          }),
+    },
+    logging: {
+      collector: {
+        enabled: asBoolean(
+          loggingCollector,
+          ["controlPlane", "loggingCollector", "enabled"],
+          diagnostics,
+          false,
+        ),
+      },
+    },
+    repositoryCredentials: {
+      enabled: repositoryEnabled,
+    },
+    ...(managedSlackProxyEnabled
+      ? {
+          slackProxy: {
+            enabled: true,
+          },
+        }
+      : {}),
+  };
+
+  const installation = {
+    occ: {
+      cluster: clusterName,
+    },
+    backend: [],
+    presets: {
+      includeDefaults: true,
+      ...(presets.files === undefined
+        ? {}
+        : { files: stringArray(presets, ["presets", "files"], diagnostics, { nonempty: false }) }),
+    },
+    drivers: {
+      plugin: clone(profile.installation.drivers.plugin),
+      configuration: {
+        id: "config-kubernetes",
+        configuration: {
+          authentication: { mode: "inCluster" },
+        },
+      },
+      iam: {
+        id: "native-iam",
+        configuration: {},
+      },
+      compute: {
+        id: "compute-kubernetes",
+        configuration: {
+          authentication: { mode: "inCluster" },
+          images: {
+            gateway: runtimeImage,
+            agent: runtimeImage,
+            requireImmutableDigest: true,
+          },
+          resources: {
+            gateway: {
+              requests: { cpu: "100m", memory: "128Mi" },
+              limits: { cpu: "500m", memory: "2Gi" },
+            },
+            agent: {
+              requests: { cpu: "100m", memory: "128Mi" },
+              limits: { cpu: "500m", memory: "2Gi" },
+            },
+            namespace: {
+              quota: { pods: "10" },
+              containerDefaults: {
+                requests: { cpu: "100m", memory: "128Mi" },
+                limits: { cpu: "500m", memory: "2Gi" },
+              },
+            },
+          },
+          network: {
+            dns: {
+              namespace: values.dns.namespace,
+              podLabels: values.dns.podLabels,
+            },
+            gatewayPort: 8080,
+            gatewayTrustedProxyCidrs: stringArray(
+              controlPlane,
+              ["controlPlane", "gatewayTrustedProxyCidrs"],
+              diagnostics,
+              { validate: isIpv4Cidr, description: "an IPv4 CIDR" },
+            ),
+            pluginStatusProxySourceCidrs: stringArray(
+              controlPlane,
+              ["controlPlane", "pluginStatusProxySourceCidrs"],
+              diagnostics,
+              { validate: isIpv4Cidr, description: "an IPv4 CIDR" },
+            ),
+          },
+          gatewayRouting: {
+            gatewayName: `${releaseName}-agent-gateways`.slice(0, 63).replace(/-$/, ""),
+            gatewayNamespace: namespace,
+            envoyNamespace,
+          },
+          servicePrincipalCredentials: {
+            mode: "projectedServiceAccountToken",
+            audience: "openclaw-enterprise",
+            expirationSeconds: 900,
+          },
+          runtime: {
+            gatewayStorageClassName: asString(
+              runtime,
+              ["runtime", "gatewayStorageClassName"],
+              diagnostics,
+            ),
+            nodeSelector: labelMap(runtime, ["runtime", "nodeSelector"], diagnostics),
+            gatewayNodeSelector: labelMap(runtime, ["runtime", "gatewayNodeSelector"], diagnostics),
+            transportSecretPrefix: asString(
+              runtime,
+              ["runtime", "transportSecretPrefix"],
+              diagnostics,
+            ),
+            ...(profile.name === "codex"
+              ? {
+                  codexSeccompProfile: asString(
+                    runtime,
+                    ["runtime", "codexSeccompProfile"],
+                    diagnostics,
+                  ),
+                }
+              : {}),
+            ...(managedSlackProxyEnabled
+              ? {
+                  channels: {
+                    proxyUrl: `http://${managedSlackProxyHost}:3128`,
+                    managedProxy: {
+                      hostname: managedSlackProxyHost,
+                      namespace,
+                      podLabels: {
+                        "app.kubernetes.io/name": "openclaw-enterprise",
+                        "app.kubernetes.io/instance": releaseName,
+                        "app.kubernetes.io/component": "slack-proxy",
+                      },
+                      port: 3128,
+                    },
+                  },
+                }
+              : channels.runtimeProxyUrl === undefined
+                ? {}
+                : {
+                    channels: {
+                      proxyUrl: asString(channels, ["channels", "runtimeProxyUrl"], diagnostics, {
+                        pattern: proxyUrl,
+                        description: "an HTTP(S) literal IPv4 endpoint with an explicit port",
+                      }),
+                    },
+                  }),
+          },
+        },
+      },
+      secret: {
+        id: "secret-kubernetes",
+        configuration: {
+          authentication: { mode: "inCluster" },
+        },
+      },
+    },
+  };
+
+  if (profile.name === "codex") {
+    if (Object.keys(managedServiceAccounts).length > 0) {
+      const serviceAccountDriverId = "chatgpt-service-accounts";
+      values.backend = {
+        chatgpt: {
+          enabled: true,
+          secretName: asString(
+            managedServiceAccounts,
+            ["codex", "managedServiceAccounts", "adminSecretName"],
+            diagnostics,
+          ),
+          key:
+            optionalString(
+              managedServiceAccounts,
+              ["codex", "managedServiceAccounts", "adminSecretKey"],
+              diagnostics,
+            ) ?? "admin-key",
+          providerCidr: asString(
+            managedServiceAccounts,
+            ["codex", "managedServiceAccounts", "providerCidr"],
+            diagnostics,
+            { validate: (value) => isIpv4Cidr(value, 32), description: "an IPv4 /32 CIDR" },
+          ),
+        },
+      };
+      installation.backend.push({
+        id: "chatgpt-primary",
+        type: "chatgpt",
+        configuration: {
+          workspaceId: asString(
+            managedServiceAccounts,
+            ["codex", "managedServiceAccounts", "workspaceId"],
+            diagnostics,
+          ),
+          apiKeyPath: "/etc/openclaw/chatgpt/admin-key",
+          credentialTtlSeconds:
+            optionalPositiveInteger(
+              managedServiceAccounts,
+              ["codex", "managedServiceAccounts", "credentialTtlSeconds"],
+              diagnostics,
+            ) ?? 2_592_000,
+        },
+        drivers: {
+          service_account: serviceAccountDriverId,
+        },
+      });
+      installation.drivers.service_account = {
+        id: serviceAccountDriverId,
+        configuration: {},
+      };
+    }
+  }
+
+  if (repositoryEnabled) {
+    const repoDriverId = "repository-credentials";
+    values.repositoryCredentials = {
+      enabled: true,
+      image: asString(repository, ["repository", "image"], diagnostics, {
+        pattern: digestImage,
+        description: "an immutable image reference with a SHA-256 digest",
+      }),
+      backendId: asString(repository, ["repository", "backendId"], diagnostics),
+      registryConfigMapName: asString(
+        repository,
+        ["repository", "registryConfigMapName"],
+        diagnostics,
+      ),
+      serviceConfigSecretName: asString(
+        repository,
+        ["repository", "serviceConfigSecretName"],
+        diagnostics,
+      ),
+      appKeySecretName: asString(repository, ["repository", "appKeySecretName"], diagnostics),
+      tlsSecretName: asString(repository, ["repository", "tlsSecretName"], diagnostics),
+      publicCaSecretName: asString(repository, ["repository", "publicCaSecretName"], diagnostics),
+      serviceName: optionalString(repository, ["repository", "serviceName"], diagnostics) ?? "git",
+      upstreamCidrs: stringArray(repository, ["repository", "upstreamCidrs"], diagnostics, {
+        validate: isIpv4Cidr,
+        description: "an IPv4 CIDR",
+      }),
+    };
+    installation.backend.push({
+      id: values.repositoryCredentials.backendId,
+      type: "github",
+      configuration: {
+        registryPath: "/etc/openclaw/repository-registry/registry.json",
+      },
+      drivers: {
+        repo: repoDriverId,
+      },
+    });
+    installation.drivers.repo = {
+      id: repoDriverId,
+      configuration: {
+        controlSocket: "/run/openclaw/repository-control/private/control.sock",
+        sessionDurationSeconds: 86_400,
+        publicCaPath: "/etc/openclaw/repository-ca/ca.crt",
+      },
+    };
+    installation.drivers.compute.configuration.network.repositoryCredentials = {
+      namespace,
+      podLabels: {
+        "app.kubernetes.io/name": "openclaw-enterprise",
+        "app.kubernetes.io/instance": releaseName,
+        "app.kubernetes.io/component": "worker",
+      },
+      port: 8443,
+    };
+  }
+
+  diagnostics.prerequisites.push(
+    "Default ReadWriteOnce storage class available for dedicated Codex workspace claims.",
+    "Envoy Gateway and cert-manager installed before applying gatewayRouting values.",
+    "Wildcard DNS and TLS configured for the native admin domain and shared cookie parent.",
+  );
+  if (profile.name === "codex") {
+    diagnostics.prerequisites.push(
+      "Configured Codex seccomp profile installed and verified on every node selected by runtime.nodeSelector.",
+      "Hosted discovery and codex_pat runtime tokens stored later as Namespace Secrets or entered in the Console; the renderer does not create or verify those credentials.",
+    );
+    if (Object.keys(managedServiceAccounts).length === 0) {
+      diagnostics.warnings.push(
+        "Managed ChatGPT service-account issuance is not configured; Codex Agents must use an existing codex_pat token until backend provisioning is supplied and verified.",
+      );
+    } else {
+      diagnostics.prerequisites.push(
+        "ChatGPT service-account app connections configured outside OCE before Agents use chatgpt_service_account auth.",
+      );
+      diagnostics.warnings.push(
+        "Managed ChatGPT service-account issuance is wired but remains unverified until a live admin credential flow is qualified.",
+      );
+    }
+  }
+  if (
+    channels.runtimeProxyUrl !== undefined ||
+    channels.directoryProxyUrl !== undefined ||
+    managedSlackProxyEnabled
+  ) {
+    diagnostics.prerequisites.push(
+      "Slack consumers remain inactive until Agent channel configuration and credentials are supplied.",
+    );
+  }
+  if (managedSlackProxyEnabled) {
+    diagnostics.prerequisites.push(
+      "The managed Slack proxy permits Slack hostnames on HTTPS and public IPv4 egress, excluding private and reserved ranges.",
+    );
+    diagnostics.nextSteps.push(
+      `The managed Slack proxy Service is openclaw-enterprise-slack-proxy.${namespace}.svc:3128; keep Agent Slack channel consumers disabled until credentials and channel policy are configured.`,
+    );
+  }
+  if (repositoryEnabled) {
+    diagnostics.warnings.push(
+      "Repository support is optional. Active repository sessions are not restored after broker loss. Sessions lost without confirmed disposal remain unresolved and can fail affected revisions; a new authorized revision does not settle old cleanup obligations.",
+    );
+    diagnostics.nextSteps.push(
+      "After the first bootstrap creates Namespace IDs, create the repository registry ConfigMap and then rerender/apply the repository-enabled inputs.",
+    );
+  }
+
+  diagnostics.nextSteps.push(
+    `Create or update the ${namespace}/occ-installation-startup Secret from installation.yaml.`,
+    `Run helm upgrade --install ${releaseName} deploy/helm/openclaw-enterprise --namespace ${namespace} --values values.yaml.`,
+    "Retrieve the bootstrap service key from the protected bootstrap PVC and verify authenticated OCC access.",
+  );
+
+  return { values, installation };
+}
+
+async function writePreflight(outDir, profile, diagnostics, output = {}) {
+  const preflight = {
+    ok: diagnostics.errors.length === 0,
+    profile,
+    errors: diagnostics.errors,
+    warnings: diagnostics.warnings,
+    prerequisites: diagnostics.prerequisites,
+    nextSteps: diagnostics.nextSteps,
+    outputs: output,
+  };
+  await writeFile(resolve(outDir, "preflight.json"), `${JSON.stringify(preflight, null, 2)}\n`);
+  return preflight;
+}
+
+const args = parseArgs(process.argv.slice(2));
+const outDir = resolve(args.outDir);
+await mkdir(outDir, { recursive: true });
+const output = {
+  values: resolve(outDir, "values.yaml"),
+  installation: resolve(outDir, "installation.yaml"),
+  preflight: resolve(outDir, "preflight.json"),
+};
+// A failed rerender must not expose artifacts or a success report from a prior run.
+await Promise.all(Object.values(output).map((path) => rm(path, { force: true })));
+const diagnostics = { errors: [], warnings: [], prerequisites: [], nextSteps: [] };
+const [profile, rawInput] = await Promise.all([
+  readProfile(args.profile),
+  readJson(resolve(args.input), "input"),
+]);
+const parsed = buildInput(rawInput, diagnostics);
+const { values, installation } = buildRendered(profile, parsed, diagnostics);
+
+if (diagnostics.errors.length === 0) {
+  const installationYaml = renderYaml(installation);
+  values.controlPlane = {
+    ...(values.controlPlane ?? {}),
+    installationChecksum: sha256Hex(installationYaml),
+  };
+  await Promise.all([
+    writeYaml(output.values, values),
+    writeFile(output.installation, installationYaml),
+  ]);
+}
+const preflight = await writePreflight(
+  outDir,
+  profile.name,
+  diagnostics,
+  diagnostics.errors.length === 0 ? output : { preflight: output.preflight },
+);
+process.stdout.write(`${JSON.stringify(preflight, null, 2)}\n`);
+if (!preflight.ok) {
+  process.exit(1);
+}

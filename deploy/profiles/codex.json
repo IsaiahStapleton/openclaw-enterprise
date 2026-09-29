@@ -1,0 +1,17 @@
+{
+  "name": "codex",
+  "description": "Dedicated Codex profile with hosted plugin discovery and managed ChatGPT ServiceAccount runtime loading.",
+  "recommendedPreset": "Standard Codex",
+  "agentHarness": "dedicated-codex",
+  "pluginSelection": "hosted-discovery-pat",
+  "installation": {
+    "drivers": {
+      "plugin": {
+        "id": "codex-plugin",
+        "configuration": {
+          "catalogSource": "hosted"
+        }
+      }
+    }
+  }
+}
