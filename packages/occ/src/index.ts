@@ -2843,8 +2843,8 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
   ): Promise<readonly Readonly<SecretMetadata>[]> {
+    const namespace = await this.getNamespace(principalId, namespaceId);
     return this.read(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       const readable: Readonly<SecretMetadata>[] = [];
       for (const secret of await state.secrets.listSecrets(namespace.id)) {
         if (
@@ -3095,8 +3095,8 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
   ): Promise<readonly Readonly<CredentialSourceMetadata>[]> {
+    const namespace = await this.getNamespace(principalId, namespaceId);
     return this.read(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       const readable: Readonly<CredentialSourceMetadata>[] = [];
       for (const source of await state.credentialSources.listCredentialSources(namespace.id)) {
         if (

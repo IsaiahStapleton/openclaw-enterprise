@@ -13488,7 +13488,7 @@
     },
     "/namespaces/{namespaceId}/credential-sources": {
       "get": {
-        "description": "Requires read permission for CredentialSource resources in the requested Namespace.",
+        "description": "Requires read permission on the requested Namespace. Only CredentialSource resources with individual read permission are returned.",
         "operationId": "listCredentialSources",
         "parameters": [
           {
@@ -13680,7 +13680,8 @@
         "summary": "List readable credential sources without revealing credential values",
         "tags": ["Credential sources"],
         "x-openclaw-permissions": [
-          { "action": "read", "resourceKind": "credential_source", "scope": "namespace" }
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          { "action": "read", "resourceKind": "credential_source", "scope": "each_returned" }
         ]
       },
       "post": {
@@ -16432,7 +16433,7 @@
     },
     "/namespaces/{namespaceId}/secrets": {
       "get": {
-        "description": "Requires read permission for Secret resources in the requested Namespace.",
+        "description": "Requires read permission on the requested Namespace. Only Secret resources with individual read permission are returned.",
         "operationId": "listSecrets",
         "parameters": [
           {
@@ -16552,7 +16553,8 @@
         "summary": "List readable Namespace-owned Secret metadata without revealing material",
         "tags": ["Secrets"],
         "x-openclaw-permissions": [
-          { "action": "read", "resourceKind": "secret", "scope": "namespace" }
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          { "action": "read", "resourceKind": "secret", "scope": "each_returned" }
         ]
       },
       "post": {

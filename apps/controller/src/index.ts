@@ -497,7 +497,7 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     ];
   }
 
-  if (operation.operationId === "createSecret" || operation.operationId === "listSecrets") {
+  if (operation.operationId === "createSecret") {
     return [{ ...permission, scope: "namespace" }];
   }
 
@@ -710,6 +710,8 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
         { ...permission, scope: "each_returned" },
       ];
     case "namespace_and_service_account_candidates":
+    case "namespace_and_secret_candidates":
+    case "namespace_and_credential_source_candidates":
       return [
         { action: "read", resourceKind: "namespace", scope: "requested" },
         { ...permission, scope: "each_returned" },

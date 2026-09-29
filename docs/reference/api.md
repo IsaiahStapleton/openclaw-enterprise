@@ -3410,11 +3410,12 @@ List readable credential sources without revealing credential values
 
 **Operation ID:** `listCredentialSources`
 
-**Permissions:** Requires read permission for CredentialSource resources in the requested Namespace.
+**Permissions:** Requires read permission on the requested Namespace. Only CredentialSource resources with individual read permission are returned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
-| `read` | `credential_source` | `namespace` |
+| `read` | `namespace` | `requested` |
+| `read` | `credential_source` | `each_returned` |
 
 ##### Parameters
 
@@ -4377,11 +4378,12 @@ List readable Namespace-owned Secret metadata without revealing material
 
 **Operation ID:** `listSecrets`
 
-**Permissions:** Requires read permission for Secret resources in the requested Namespace.
+**Permissions:** Requires read permission on the requested Namespace. Only Secret resources with individual read permission are returned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
-| `read` | `secret` | `namespace` |
+| `read` | `namespace` | `requested` |
+| `read` | `secret` | `each_returned` |
 
 ##### Parameters
 
