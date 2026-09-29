@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 const execute = promisify(execFile);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const helm = process.env.OCC_HELM_BIN ?? "helm";
-const productionValues = {
+export const productionValues = {
   "images.controller": `registry.example.invalid/controller@sha256:${"a".repeat(64)}`,
   "auth.baseUrl": "https://occ.example.invalid",
   "auth.secretName": "occ-auth",
@@ -35,6 +35,9 @@ export async function renderProductionChart(overrides = {}, options = {}) {
     "--namespace",
     options.namespace ?? "openclaw-system",
   ];
+  if (options.isUpgrade) {
+    args.push("--is-upgrade");
+  }
   for (const [key, value] of Object.entries({ ...productionValues, ...overrides })) {
     args.push("--set", `${key}=${value}`);
   }

@@ -170,7 +170,7 @@ export async function createProductionNetworkAccess(t, { selection, image }) {
     "cluster.cidrs[0]": `${targets.cluster.host}/32`,
     "cluster.port": targets.cluster.port,
     "logging.collector.exporter.cidr": `${targets.exporter.host}/32`,
-    "provider.chatgpt.providerCidr": `${targets.provider.host}/32`,
+    "backend.chatgpt.providerCidr": `${targets.provider.host}/32`,
     "gatewayRouting.envoyNamespace": envoyNamespace,
     "gatewayRouting.gatewayName": "access",
     "gatewayRouting.gatewayClassName": "fixture",
@@ -244,7 +244,7 @@ export async function createProductionNetworkAccess(t, { selection, image }) {
     async install(phase) {
       const documents =
         phase === "optional"
-          ? await chart({ "provider.chatgpt.enabled": true, "gatewayRouting.enabled": true })
+          ? await chart({ "backend.chatgpt.enabled": true, "gatewayRouting.enabled": true })
           : baseline;
       const policies = documents.filter(
         (object) =>

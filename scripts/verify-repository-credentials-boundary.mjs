@@ -8,7 +8,7 @@ const credentialDirectories = [
   "composition/repository-credentials",
   "drivers/repo/credentials",
   "drivers/repo/github",
-  "providers/repository-credentials",
+  "backends/repository-credentials",
 ];
 const processEntrypoints = ["repository-credentials.ts", "repository-credentials.mjs"];
 const requiredEntrypoints = [
@@ -83,11 +83,12 @@ const reviewedImports = {
     "node:tls": ["createSecureContext"],
   },
   "composition/repository-credentials/projected-inputs.ts": {
+    "node:crypto": ["X509Certificate"],
     "node:fs": ["constants"],
     "node:fs/promises": ["lstat", "mkdir", "open", "readdir", "readlink", "realpath", "unlink"],
   },
   "composition/repository-credentials/probe.ts": { "node:http": ["request"] },
-  "providers/repository-credentials/control-client.ts": { "node:http": ["request"] },
+  "backends/repository-credentials/control-client.ts": { "node:http": ["request"] },
   "composition/repository-credentials/registry.ts": {
     "node:fs": ["constants"],
     "node:fs/promises": ["open", "stat"],
@@ -97,6 +98,18 @@ const reviewedImports = {
   "drivers/repo/github/credentials/grants.ts": { "node:crypto": ["createHash"] },
   "drivers/repo/github/driver.ts": {
     "@openclaw-enterprise/occ": ["DependencyUnavailableError", "ScopeViolationError"],
+  },
+  // The isolated image probe reports only a synthetic binding and failure kind.
+  "drivers/repo/github/credentials/admission-probe.mjs": {
+    "@openclaw-enterprise/occ": ["DependencyUnavailableError"],
+  },
+  // The broker journal client writes only nonsecret receipts over a local Unix socket.
+  "drivers/repo/credentials/control.ts": { "node:crypto": ["randomUUID"] },
+  "drivers/repo/credentials/receipt-client.ts": { "node:http": ["request"] },
+  // The worker owns the private journal socket; parent and socket identity are checked.
+  "backends/repository-credentials/receipt-server.ts": {
+    "node:http": ["createServer"],
+    "node:fs/promises": ["chmod", "lstat", "mkdir", "realpath", "unlink"],
   },
   "drivers/repo/credentials/lifecycle.ts": { "node:crypto": ["randomUUID"] },
   "drivers/repo/credentials/server.ts": {
@@ -129,9 +142,15 @@ const senderConsumers = {
   "drivers/repo/credentials/transport/upstream.ts": {
     "drivers/repo/credentials/transport/agent.ts": ["createUpstreamSender"],
   },
-  "providers/repository-credentials/control-client.ts": {
+  "drivers/repo/credentials/receipt-client.ts": {
+    "drivers/repo/credentials/control.ts": ["RepositoryReceiptClient"],
+  },
+  "backends/repository-credentials/control-client.ts": {
     "composition/repository-credentials/platform.ts": ["UnixRepositoryCredentialControlClient"],
     "drivers/repo/github/driver.ts": ["RepositoryCredentialControlError"],
+    "drivers/repo/github/credentials/admission-probe.mjs": [
+      "UnixRepositoryCredentialControlClient",
+    ],
   },
 };
 const rawGlobals = new Set([
@@ -183,6 +202,7 @@ const reviewedProcessMembers = {
   ],
   "drivers/repo/github/credentials/client/router.ts": ["argv", "env", "exitCode", "stderr"],
   "drivers/repo/github/credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "drivers/repo/github/credentials/admission-probe.mjs": ["argv", "exitCode", "stderr", "stdout"],
   "drivers/repo/github/credentials/client/private-files.ts": ["getuid"],
   "composition/repository-credentials/protected-file.ts": ["getuid"],
   "composition/repository-credentials/service.ts": ["exit", "once", "stderr", "stdout"],
@@ -197,6 +217,7 @@ const reviewedProcessMembers = {
   "repository-credentials.ts": ["argv", "exitCode", "stderr", "stdout"],
   "repository-credentials.mjs": ["exitCode", "stderr"],
   "drivers/repo/credentials/server.ts": ["getuid"],
+  "backends/repository-credentials/receipt-server.ts": ["getuid"],
 };
 const runtimeTypeScript = new Set([
   "TSAsExpression",
@@ -217,18 +238,17 @@ function slash(path) {
   return path.split(sep).join("/");
 }
 
-async function sourceFiles(root) {
+async function collectSourceFiles(root, files) {
   if (!(await lstat(root)).isDirectory()) {
     throw new Error(`Credential source must be a directory: ${root}`);
   }
-  const files = [];
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
     if (entry.isSymbolicLink()) {
       throw new Error(`Credential source must not be a symlink: ${path}`);
     }
     if (entry.isDirectory()) {
-      files.push(...(await sourceFiles(path)));
+      await collectSourceFiles(path, files);
     } else if (sourceExtensions.has(extname(entry.name))) {
       if (!entry.isFile()) {
         throw new Error(`Credential source must be a regular file: ${path}`);
@@ -236,7 +256,6 @@ async function sourceFiles(root) {
       files.push(path);
     }
   }
-  return files.sort();
 }
 
 function name(node) {
@@ -487,11 +506,12 @@ export async function verifyRepositoryCredentialBoundary(root = sourceRoot) {
     if (!stat?.isDirectory() || stat.isSymbolicLink()) {
       throw new Error(`Missing or invalid credential source root: ${directory}`);
     }
-    const owned = await sourceFiles(path);
+    const owned = [];
+    await collectSourceFiles(path, owned);
     if (!owned.length) {
       throw new Error(`Empty credential source root: ${directory}`);
     }
-    files.push(...owned);
+    files.push(...owned.sort());
   }
   for (const entrypoint of processEntrypoints) {
     const path = join(root, entrypoint);

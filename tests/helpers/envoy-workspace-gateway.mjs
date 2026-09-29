@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, X509Certificate } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { request as requestHttps } from "node:https";
 import { promisify } from "node:util";
 
 const executeFile = promisify(execFile);
@@ -34,7 +35,9 @@ function hash(value) {
 }
 
 function gatewayHostname(platformNamespace) {
-  return `occ-gateway-${hash(`${platformNamespace}/${gatewayName}`)}.${envoyNamespace}.svc`;
+  return `occ-gateway-${hash(
+    `${platformNamespace}/${gatewayName}`,
+  )}.${envoyNamespace}.svc.cluster.local`;
 }
 
 async function command(
@@ -66,6 +69,8 @@ async function renderGatewayRoutingManifests({
   releaseNamespace,
   apiKeySecretName,
   gatewayClassName,
+  hostname,
+  sandbox,
 }) {
   const { stdout } = await command(
     helmBin,
@@ -77,6 +82,9 @@ async function renderGatewayRoutingManifests({
       releaseNamespace,
       "--values",
       "deploy/examples/production/values.yaml",
+      // The disposable fixture has one node; production role isolation is verified separately.
+      "--set-json",
+      'controlPlane.nodeSelector={"kubernetes.io/os":"linux"}',
       "--show-only",
       "templates/gateway-routing.yaml",
       "--set",
@@ -86,6 +94,8 @@ async function renderGatewayRoutingManifests({
       "--set",
       `gatewayRouting.envoyNamespace=${envoyNamespace}`,
       "--set",
+      `gatewayRouting.hostname=${hostname}`,
+      "--set",
       `gatewayRouting.apiKeySecretName=${apiKeySecretName}`,
       "--set",
       `gatewayRouting.issuerRef.name=${caIssuerName}`,
@@ -93,6 +103,9 @@ async function renderGatewayRoutingManifests({
       "gatewayRouting.issuerRef.kind=Issuer",
       "--set",
       "gatewayRouting.issuerRef.group=cert-manager.io",
+      ...(sandbox === undefined
+        ? []
+        : ["--set-json", `gatewayRouting.sandbox=${JSON.stringify(sandbox)}`]),
     ],
     { env: helmEnvironment },
   );
@@ -140,12 +153,56 @@ export async function ensureEnvoyGatewayControllers({ kubectl, waitFor }) {
   });
 }
 
-export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespace }, helpers) {
+export async function createEnvoyWorkspaceGatewayPlan(
+  context,
+  { platformNamespace, sandboxPreview = false },
+  helpers,
+) {
   let apiKey = randomBytes(32).toString("base64url");
   const apiKeySecretName = `oce-gateway-api-key-${hash(platformNamespace)}`;
 
   await applyGatewayApiKeySecret(helpers, platformNamespace, apiKeySecretName, apiKey);
   await ensureCertificateAuthority(platformNamespace, helpers);
+  const sandbox = sandboxPreview
+    ? {
+        enabled: true,
+        domain: `preview-${hash(platformNamespace)}.${envoyNamespace}.svc.cluster.local`,
+        tlsSecretName: `${gatewayName}-sandbox-tls`,
+        listenerPort: 8443,
+        ingressPeers: [
+          {
+            namespaceSelector: {
+              matchLabels: { "kubernetes.io/metadata.name": platformNamespace },
+            },
+            podSelector: { matchLabels: { "app.kubernetes.io/name": "approved-gateway-client" } },
+          },
+        ],
+      }
+    : undefined;
+  if (sandbox !== undefined) {
+    await helpers.applyManifest(
+      JSON.stringify({
+        apiVersion: "cert-manager.io/v1",
+        kind: "Certificate",
+        metadata: { name: sandbox.tlsSecretName, namespace: platformNamespace },
+        spec: {
+          secretName: sandbox.tlsSecretName,
+          dnsNames: [`*.${sandbox.domain}`],
+          issuerRef: { name: caIssuerName, kind: "Issuer" },
+        },
+      }),
+    );
+    await helpers.waitFor("sandbox certificate readiness", async () => {
+      const certificate = await helpers.resource(
+        "certificate",
+        sandbox.tlsSecretName,
+        platformNamespace,
+      );
+      return certificate.status?.conditions?.some(
+        ({ type, status }) => type === "Ready" && status === "True",
+      );
+    });
+  }
   const gatewayClassName = `oce-workspace-files-${hash(platformNamespace)}`;
   await ensureGatewayClass(helpers, gatewayClassName);
   context.after(async () => {
@@ -157,6 +214,8 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
     releaseNamespace: platformNamespace,
     apiKeySecretName,
     gatewayClassName,
+    hostname: gatewayHostname(platformNamespace),
+    sandbox,
   });
   registerRenderedExternalCleanup(context, gatewayRoutingManifests, platformNamespace, helpers);
   await helpers.applyManifest(gatewayRoutingManifests);
@@ -178,6 +237,8 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
       gatewayName,
       gatewayNamespace: platformNamespace,
       envoyNamespace,
+      hostname: gatewayHostname(platformNamespace),
+      ...(sandbox === undefined ? {} : { sandbox: { domain: sandbox.domain } }),
     },
     nativeOptions: {
       gatewayAuth: {
@@ -198,6 +259,65 @@ export async function createEnvoyWorkspaceGatewayPlan(context, { platformNamespa
       const probe = (input) => runControllerProbe(topology, input);
       return {
         url: gatewayUrl,
+        async assertSandboxPreview() {
+          assert.ok(sandbox, "sandbox preview must be selected before provisioning");
+          // The same native RPC used by the file panel starts the real sandbox
+          // listener. Fetch through Envoy, retaining TLS and backend CNI checks.
+          const preview = await probe({ action: "sandbox-preview", url: gatewayUrl, apiKey });
+          const origin = new URL(preview.sandboxOrigin);
+          assert(origin.hostname.endsWith(`.${sandbox.domain}`));
+          assert.equal(origin.protocol, "https:");
+          const forwarding = await helpers.startPortForwardTarget(
+            envoyNamespace,
+            `service/${envoyService.metadata.name}`,
+            "0:8443",
+          );
+          try {
+            const ca = await readFile(
+              process.env.OCC_TEST_GATEWAY_CA_CERT_PATH ?? process.env.NODE_EXTRA_CA_CERTS,
+            );
+            const get = (path, method = "GET", hostname = origin.hostname) =>
+              new Promise((resolve, reject) => {
+                const req = requestHttps(
+                  {
+                    hostname: "127.0.0.1",
+                    port: new URL(forwarding.url).port,
+                    servername: origin.hostname,
+                    ca,
+                    method,
+                    path,
+                    headers: { host: hostname },
+                  },
+                  (res) => {
+                    let body = "";
+                    res.setEncoding("utf8");
+                    res.on("data", (chunk) => {
+                      body += chunk;
+                    });
+                    res.on("end", () =>
+                      resolve({ status: res.statusCode, headers: res.headers, body }),
+                    );
+                  },
+                );
+                req.on("error", reject);
+                req.setTimeout(10_000, () => req.destroy(new Error("sandbox ingress timeout")));
+                req.end();
+              });
+            const shell = await get(preview.sandboxUrl);
+            assert.equal(shell.status, 200, shell.body);
+            assert.match(shell.headers["content-type"], /text\/html/);
+            assert.match(shell.headers["content-security-policy"], /default-src 'none'/);
+            assert.equal((await get(preview.sandboxUrl, "HEAD")).status, 200);
+            assert.equal((await get(preview.sandboxUrl, "POST")).status, 404);
+            assert.equal((await get("/api/config")).status, 404);
+            assert.equal(
+              (await get(preview.sandboxUrl, "GET", `unknown.${sandbox.domain}`)).status,
+              404,
+            );
+          } finally {
+            await forwarding.stop();
+          }
+        },
         requestModelTurn: (expectedMarker) =>
           probe({
             action: "model-turn",
