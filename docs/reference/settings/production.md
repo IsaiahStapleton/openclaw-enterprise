@@ -17,25 +17,28 @@ procedure in [Deploy native admin UI access](../../guides/deploy/native-admin.md
 Envoy and Agent gateway Services remain private, and OCC strips the shared OCE
 session cookie before forwarding to the native gateway.
 
-| Variable                          | Required value or format                                                    | Behavior                                                                                                                |
-| --------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                        | Exactly `production`.                                                       | Enables durable production controller composition.                                                                      |
-| `OCC_HOST`                        | One explicit Pod interface IP address.                                      | Wildcard addresses and implicit hostnames are rejected.                                                                 |
-| `OCC_PORT`                        | Decimal integer from `1` through `65535`.                                   | Selects the internal listener port exposed by the operator's Service.                                                   |
-| `OCC_DATABASE_URL`                | Explicit PostgreSQL application-role URL.                                   | Must connect to the already migrated controller database.                                                               |
-| `OCC_CONFIG_PATH`                 | Absolute path to trusted Installation startup YAML.                         | Selects Configuration, IAM, Compute, and optional account Drivers.                                                      |
-| `OCC_AUTH_SECRET`                 | Mounted high-entropy Better Auth secret.                                    | Signs and verifies session material without logging it.                                                                 |
-| `OCC_AUTH_BASE_URL`               | Absolute controller base URL.                                               | Defines the production Better Auth base URL and cookie origin.                                                          |
-| `OCC_GATEWAY_API_KEY_PATH`        | Optional absolute path to the private gateway service-key file.             | API only; validates at startup and reads each operation for rotation. Requires Compute endpoint resolution.             |
-| `OCC_CHANNEL_DIRECTORY_PROXY_URL` | Optional HTTP(S) proxy URL with one literal IPv4 address and explicit port. | API only; enables the bundled Slack directory Driver through an HTTP CONNECT tunnel. Invalid values fail startup.       |
-| `NODE_EXTRA_CA_CERTS`             | Optional PEM bundle for a private gateway CA.                               | Node reads it at process startup. Normal leaf renewal under that CA does not require a restart; root-bundle changes do. |
+| Variable                                   | Required value or format                                                                                           | Behavior                                                                                                                |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                 | Exactly `production`.                                                                                              | Enables durable production controller composition.                                                                      |
+| `OCC_HOST`                                 | One explicit Pod interface IP address.                                                                             | Wildcard addresses and implicit hostnames are rejected.                                                                 |
+| `OCC_PORT`                                 | Decimal integer from `1` through `65535`.                                                                          | Selects the internal listener port exposed by the operator's Service.                                                   |
+| `OCC_DATABASE_URL`                         | Explicit PostgreSQL application-role URL.                                                                          | Must connect to the already migrated controller database.                                                               |
+| `OCC_CONFIG_PATH`                          | Absolute path to trusted Installation startup YAML.                                                                | Selects Configuration, IAM, Compute, and optional account Drivers.                                                      |
+| `OCC_AUTH_SECRET`                          | Mounted high-entropy Better Auth secret.                                                                           | Signs and verifies session material without logging it.                                                                 |
+| `OCC_AUTH_BASE_URL`                        | Absolute controller base URL.                                                                                      | Defines the production Better Auth base URL and cookie origin.                                                          |
+| `OCC_GATEWAY_API_KEY_PATH`                 | Optional absolute path to the private gateway service-key file.                                                    | API only; validates at startup and reads each operation for rotation. Requires Compute endpoint resolution.             |
+| `OCC_CHANNEL_DIRECTORY_PROXY_URL`          | Optional HTTP(S) proxy URL with one literal IPv4 address and explicit port, or the exact Helm-managed Service URL. | API only; routes Slack lookup and credential validation through an HTTP CONNECT tunnel. Invalid values fail startup.    |
+| `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST` | Optional exact Helm-managed proxy Service host.                                                                    | API only; the one DNS host the Slack directory Driver accepts in the proxy URL instead of an IPv4 address.              |
+| `NODE_EXTRA_CA_CERTS`                      | Optional PEM bundle for a private gateway CA.                                                                      | Node reads it at process startup. Normal leaf renewal under that CA does not require a restart; root-bundle changes do. |
 
-For the Helm deployment, set `api.channelDirectoryProxyUrl` to the approved
-proxy IP and port. The chart passes that value only to the API Pod and grants
-egress only to that exact IPv4 `/32` and TCP port. The proxy must allow CONNECT
-to `slack.com:443`; restrict its other destinations at the proxy. An empty value
-renders no directory proxy egress rule and leaves production directory lookup
-unavailable with manual exact-ID entry. See the
+For the Helm deployment, prefer `slackProxy.enabled`. The chart then passes the
+managed Service URL and its matching host only to the API Pod and grants API
+egress only to the proxy Pods. For an external proxy, set
+`api.channelDirectoryProxyUrl` to the approved proxy IP and port; the chart grants
+egress only to that exact IPv4 `/32` and TCP port. The proxy must allow CONNECT to
+`slack.com:443`; restrict its other destinations at the proxy. When neither
+setting is used, the chart renders no proxy egress rule, and Slack lookup and
+credential validation require another approved network route. See the
 [Slack Channel Driver](../drivers/slack-channel.md#enable-lookup-in-production).
 
 When the native admin pilot is enabled, the API also requires:
@@ -105,6 +108,45 @@ for the procedure. Normal issuance and verification require no additional
 settings; initial-key delivery uses the bootstrap settings below.
 Auth-secret rotation takes effect after
 replacing the mounted Secret and restarting the process.
+
+### GitHub sign-in and trusted proxies
+
+These optional variables apply to the API only. The chart never passes them to
+the worker or initialization Job.
+
+| Variable                           | Helm value                                 | Behavior                                                                                                                             |
+| ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `OCC_AUTH_GITHUB_CLIENT_ID`        | `auth.github` Secret key `clientIdKey`     | GitHub App client ID. Set the client ID, client secret, and recovery user ID together or not at all.                                 |
+| `OCC_AUTH_GITHUB_CLIENT_SECRET`    | `auth.github` Secret key `clientSecretKey` | GitHub App client secret, read from the dedicated `auth.github.secretName` Secret.                                                   |
+| `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | `auth.recoveryUserId`                      | Existing local password administrator's user ID; designates the recovery account on first activation.                                |
+| `OCC_AUTH_TRUSTED_PROXY_CIDRS`     | `api.trustedProxy.cidrs`                   | Comma-separated IPv4 or IPv6 CIDRs, never `/0`. Requests whose socket peer is inside them may carry forwarded headers.               |
+| `OCC_AUTH_TRUSTED_PROXY_PRESET`    | `api.trustedProxy.preset`                  | `ingress-nginx` (default), `aws` or `generic`. Named presets read `x-forwarded-for`. Set with the CIDRs.                             |
+| `OCC_AUTH_CLIENT_IP_HEADER`        | `api.trustedProxy.clientAddressHeader`     | Lowercase header name, up to 64 characters, `generic` only. Sign-in limits key on the client address it carries from a trusted peer. |
+
+The chart's API Deployment always uses the `Recreate` strategy: an upgrade stops
+the old API Pod before starting the new one, so two controllers never serve
+together. Activation still requires closed ingress and stopped identity writers.
+
+With `auth.github.enabled`, the chart adds an API-only egress policy on TCP 443
+for `github.com` and `api.github.com`. Empty `auth.github.egressCidrs` allows
+`0.0.0.0/0`. To narrow it, list the `web` and `api` IPv4 ranges from
+`https://api.github.com/meta`, and update them when GitHub changes them.
+
+`api.trustedProxy` is off by default: the API rejects `Forwarded`,
+`X-Forwarded-*`, and `X-Real-IP` with `403` and keys sign-in limits on the socket
+peer. Presets:
+
+- `ingress-nginx`: `cidrs` is the ingress controller Pod CIDR; the header
+  is `x-forwarded-for`. Keep ingress-nginx `use-forwarded-headers` off.
+- `aws`: an Application Load Balancer targeting API Pods; `cidrs` are its
+  subnets and the header is `x-forwarded-for`. A Network Load Balancer
+  preserves the client source and needs no preset unless it fronts ingress-nginx.
+- `generic`: `cidrs` and `clientAddressHeader`, such as `x-real-ip`, are required.
+
+Trust only proxies that overwrite or append the header, and admit them through
+`api.clients`. Rendering fails on incomplete GitHub values, a shared Secret,
+`agentNativeAdmin.enabled` with GitHub, `/0` proxy CIDRs, another header with a
+named preset, or credential, routing and internal headers such as `cookie`.
 
 ### Production Installation bootstrap environment
 

@@ -49,6 +49,21 @@ Each selected Driver validates its own closed configuration schema; unknown
 fields fail startup. OCC routes authorization through the selected IAM Driver,
 whose reviewed implementation is trusted to enforce its policy.
 
+The optional `observability` block sets one external console destination:
+
+```yaml
+observability:
+  url: https://grafana.example.com/d/occ-observability
+```
+
+`url` must be an absolute HTTP or HTTPS URL without embedded credentials or a
+fragment. Unknown fields fail startup. The API exposes the URL only after an
+Installation `administer` check; the console hides the link when unset or
+unauthorized. The destination handles its own authentication. This setting does
+not select an OpenTelemetry exporter or embed a dashboard. Compose development
+can use this block alone with its default Drivers; mount the same file into API
+and worker containers.
+
 ## Create, read, update, and delete
 
 `POST /namespaces/:namespaceId/configurations` creates one reusable native

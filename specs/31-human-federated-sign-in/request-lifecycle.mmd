@@ -1,0 +1,40 @@
+---
+config:
+  theme: base
+  htmlLabels: true
+  themeVariables:
+    fontSize: 14px
+  sequence:
+    actorMargin: 15
+    width: 100
+    height: 45
+    messageMargin: 12
+    mirrorActors: true
+---
+sequenceDiagram
+  participant A as Administrator
+  participant B as Console
+  participant C as Controller
+  participant S as State
+  participant G as GitHub
+  A->>C: 1. Account read / attach
+  C->>C: IAM administer
+  C->>S: Version check, attach + audit
+  B->>C: 2. Start / callback
+  C->>S: Consume attempt
+  C->>G: Code exchange
+  G-->>C: Numeric ID
+  C->>S: Enrolled ID, session + audit
+  alt Saved
+    C-->>B: Cookie, redirect /console/
+    B->>C: 3. Agent read
+    C->>S: Check currentness
+    alt Allow
+      C->>C: IAM lookupIdentity / authorize
+      C-->>B: Authorized read
+    else Stop
+      C-->>B: Stop
+    end
+  else Stop
+    C-->>B: Redirect ?authError=github
+  end

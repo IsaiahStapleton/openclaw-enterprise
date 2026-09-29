@@ -81,6 +81,9 @@ scratch Dockerfile and fixed text marker. Repository source and revision labels
 link the image to Enterprise. Docker exports `linux/amd64` OCI bytes without
 copying the checkout, fetching a base image, or receiving registry credentials.
 Skopeo authenticates using the workflow token over stdin and a temporary auth file.
+For the chart marker, `scripts/ci/chart-package.mjs:pushChart` checks Helm's exit
+status and reads the pushed digest from stderr before bootstrap checks the remote
+manifest digest. A missing digest or failed push stops the run.
 
 Before each transfer, the helper repeats source, CI, environment, and package
 checks. Valid existing packages remain unchanged. A 404 permits copying the
@@ -142,7 +145,8 @@ without deleting the original archives or rerunning their producer.
   CLI with HTTP/transport fixtures; a hosted run must prove actual GHCR transfer.
 
 - `node --test tests/integration/container-release.test.mjs` checks shared gate
-  behavior and that only explicit bootstrap lookups tolerate API 404 responses.
+  behavior, bootstrap 404 handling, and stderr-only Helm push output. The
+  subprocess-stream case does not publish to GHCR.
 - Inspect the hosted job summary and authenticated package metadata for both
   destinations. Marker success proves package bootstrap, not Enterprise availability.
 - A package or metadata permission failure needs operator access repair. Keep

@@ -503,6 +503,8 @@ async function fixture(mode = "embedded", nodeEnrollment, options = {}) {
       data: {
         deviceId: Buffer.from(`node-${selected.id}`).toString("base64"),
         setupCode: Buffer.from("completed-setup").toString("base64"),
+        // A current setup code, as preparation keeps renewing it.
+        expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
       },
     });
   };
@@ -513,7 +515,12 @@ async function fixture(mode = "embedded", nodeEnrollment, options = {}) {
   }
   const markReady = () => {
     for (const object of deployments()) {
-      object.status = { observedGeneration: object.metadata.generation, readyReplicas: 1 };
+      object.status = {
+        observedGeneration: object.metadata.generation,
+        replicas: 1,
+        updatedReplicas: 1,
+        readyReplicas: 1,
+      };
       save(object);
     }
     pods = deployments().map((object) =>
@@ -1479,6 +1486,38 @@ for (const mode of ["embedded", "dedicated"]) {
       },
     );
 
+    for (const publicCa of [undefined, Buffer.from("fixture-public-ca")]) {
+      await t.test(
+        `repository file ordering preserves the Pod template (public CA: ${publicCa !== undefined})`,
+        async () => {
+          const f = await fixture(mode);
+          const binding = runtimeBinding(undefined, publicCa);
+          await f.driver.prepareRevision(f.revision, f.context([binding]));
+          const originalTemplate = structuredClone(f.consumer().spec.template);
+          const originalGeneration = f.consumer().metadata.generation;
+
+          // JSON object members may return in a different order after storage.
+          // That must not restart an unchanged credential-consuming workload.
+          const secret = f.secrets()[0];
+          secret.data = Object.fromEntries(Object.entries(secret.data).reverse());
+          f.save(secret);
+          const { files, ...retained } = binding;
+          retained.kind = "retained";
+          await f.driver.prepareRevision(f.revision, f.context([retained]));
+          assert.deepEqual(f.consumer().spec.template, originalTemplate);
+          assert.equal(f.consumer().metadata.generation, originalGeneration);
+
+          const reordered = {
+            ...binding,
+            files: Object.fromEntries(Object.entries(files).reverse()),
+          };
+          await f.driver.prepareRevision(f.revision, f.context([reordered]));
+          assert.deepEqual(f.consumer().spec.template, originalTemplate);
+          assert.equal(f.consumer().metadata.generation, originalGeneration);
+        },
+      );
+    }
+
     await t.test(
       "Kubernetes reports exact missing retained material without silently creating new custody",
       async () => {
@@ -1650,6 +1689,8 @@ for (const mode of ["embedded", "dedicated"]) {
         const deployment = f.consumer();
         deployment.status = {
           observedGeneration: deployment.metadata.generation,
+          replicas: 1,
+          updatedReplicas: 1,
           readyReplicas: 1,
         };
         f.save(deployment);

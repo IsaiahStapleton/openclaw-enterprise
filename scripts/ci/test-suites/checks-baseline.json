@@ -16,6 +16,9 @@
       "path": "tests/conformance/configuration-occ.test.mjs"
     },
     {
+      "path": "tests/conformance/console-api-client.test.mjs"
+    },
+    {
       "path": "tests/conformance/contracts.test.mjs"
     },
     {
@@ -92,6 +95,9 @@
     },
     {
       "path": "tests/integration/presets-controller.test.mjs"
+    },
+    {
+      "path": "tests/integration/profile-renderer.test.mjs"
     },
     {
       "path": "tests/integration/bootstrap-output.test.mjs"
@@ -190,6 +196,21 @@
       "path": "tests/integration/ci-runner.test.mjs"
     },
     {
+      "path": "tests/integration/metrics-monitoring-readiness.test.mjs",
+      "expectedTests": [
+        "datasource readiness retries a transient HTTP 400",
+        "non-retryable Grafana health failures retain their stage and status",
+        "non-retryable Grafana datasource failures retain their stage and status",
+        "malformed Grafana datasource responses retain their stage and status",
+        "datasource readiness retries an interrupted response body",
+        "invalid Grafana datasource response shapes retain their stage and status",
+        "a timed-out Prometheus response body retries and accepts a later valid query",
+        "Prometheus readiness retries an interrupted response body",
+        "a null Prometheus response retains its stage and status",
+        "malformed Prometheus responses remain query errors"
+      ]
+    },
+    {
       "path": "tests/integration/full-integration-preflight.test.mjs"
     },
     {
@@ -209,6 +230,12 @@
     },
     {
       "path": "tests/browser/console-agents.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-detail.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-presets.test.mjs"
     },
     {
       "path": "tests/browser/console-agent-plugin-approvers.test.mjs"
@@ -233,6 +260,12 @@
     },
     {
       "path": "tests/integration/container-release.test.mjs"
+    },
+    {
+      "path": "tests/integration/cli-release.test.mjs",
+      "expectedTests": [
+        "CLI release builds four installable platform binaries and rejects changed assets"
+      ]
     },
     {
       "path": "tests/integration/container-resume.test.mjs"
@@ -314,6 +347,9 @@
       "path": "tests/conformance/repository-credentials-ownership-boundaries.test.mjs"
     },
     {
+      "path": "tests/conformance/repository-credentials-tool-evidence.test.mjs"
+    },
+    {
       "path": "tests/conformance/repository-credentials-fixture-ownership.test.mjs",
       "expectedTests": [
         "runner timeout cancels and joins commands before teardown admits cleanup",
@@ -356,7 +392,10 @@
       "expectedTests": [
         "TEST-001: SIGKILL after confirmed GitHub issuance loses session inventory",
         "TEST-002: lost GitHub issuance response stays charged while service survives",
-        "TEST-002: SIGKILL before GitHub issuance response loses local reservation"
+        "TEST-002: SIGKILL before GitHub issuance response loses local reservation",
+        "a lost revocation response is not proof of disposal across broker loss",
+        "captured GitHub authority expires by elapsed time when revocation is unconfirmed",
+        "a broker restart cannot accept bound admissions without durable fencing"
       ]
     },
     {
@@ -387,6 +426,9 @@
       "path": "tests/integration/repository-runtime-materialization.test.mjs"
     },
     {
+      "path": "tests/integration/codex-plugin-startup-reads.test.mjs"
+    },
+    {
       "path": "tests/integration/kubernetes-peer-status.test.mjs",
       "expectedTests": [
         "real peer-status HTTPS transport authenticates its revision and verifies server trust"
@@ -404,6 +446,12 @@
         "repository source obeys its dependency policy with exact current exceptions",
         "repository policy allows a public root and rejects a new HTTP Driver import"
       ]
+    },
+    {
+      "path": "tests/integration/github-login-transport.test.mjs"
+    },
+    {
+      "path": "tests/integration/client-address.test.mjs"
     }
   ]
 }

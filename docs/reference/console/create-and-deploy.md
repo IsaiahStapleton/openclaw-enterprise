@@ -28,8 +28,8 @@ Presets and edited Configuration JSON retain their settings.
 3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
    **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
    **Codex** and also offers **OpenClaw**; Anthropic currently offers only
-   **OpenClaw**. **Execution mode** follows the harness: Dedicated for Codex,
-   Embedded for OpenClaw.
+   **OpenClaw**. **Execution mode** is Dedicated for Codex, Embedded for
+   Anthropic OpenClaw, and either for OpenAI OpenClaw.
    With OpenAI and Codex, choose **OpenAI API key** or **Service Accounts** under
    **Authentication method**. OpenClaw uses the selected provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
@@ -66,8 +66,8 @@ Presets and edited Configuration JSON retain their settings.
    [initial contents](../agents.md#initial-contents-at-creation) for limits.
 8. Select **Create Agent**. Supported Dedicated runtimes submit inline Configuration,
    Secret references, Agent inputs, repositories, and workspace files for provisioning.
-   Console follows the job through resource creation, credential provisioning, and
-   first-deployment activation, then opens that revision's Workspace files.
+   After provisioning, Console opens Agent details while deployment continues.
+   Follow startup and failures with **Deployment activity → Refresh deployment**.
    Ordinary creation saves Configuration first and opens a draft on **Create new version**,
    without a workload. After deployment, use the
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no

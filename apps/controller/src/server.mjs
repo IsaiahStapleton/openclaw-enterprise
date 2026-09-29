@@ -1,3 +1,4 @@
+import { clientAddressConfiguration, githubLoginConfiguration } from "./auth/index.ts";
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
@@ -167,6 +168,7 @@ function configuration() {
 
   const gatewayApiKeyPath = process.env.OCC_GATEWAY_API_KEY_PATH;
   const channelDirectoryProxyUrl = process.env.OCC_CHANNEL_DIRECTORY_PROXY_URL;
+  const channelDirectoryManagedProxyHost = process.env.OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST;
   if (gatewayApiKeyPath !== undefined) {
     if (gatewayApiKeyPath.trim().length === 0 || !isAbsolute(gatewayApiKeyPath)) {
       throw new Error("OCC_GATEWAY_API_KEY_PATH must identify an absolute mounted-file path.");
@@ -199,17 +201,27 @@ function configuration() {
     throw new Error("Development OCC_AUTH_BASE_URL must identify a loopback host.");
   }
 
+  const github = githubLoginConfiguration(process.env);
+  const clientAddress = clientAddressConfiguration(process.env);
   if (mode === "production") {
     return Object.freeze({
       ...settings,
       authSecret: requiredEnvironment("OCC_AUTH_SECRET"),
       authBaseURL,
+      ...(github === undefined ? {} : { github }),
+      ...(clientAddress === undefined ? {} : { clientAddress }),
       ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
       ...(channelDirectoryProxyUrl === undefined ? {} : { channelDirectoryProxyUrl }),
+      ...(channelDirectoryManagedProxyHost === undefined
+        ? {}
+        : { channelDirectoryManagedProxyHost }),
       ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
     });
   }
 
+  if (clientAddress !== undefined) {
+    throw new Error("OCC_AUTH_TRUSTED_PROXY_* settings are production-only.");
+  }
   const authSecret = optionalEnvironment(
     "OCC_AUTH_SECRET",
     "openclaw-development-auth-secret-minimum-32-bytes",
@@ -221,6 +233,7 @@ function configuration() {
     ...settings,
     authSecret,
     authBaseURL,
+    ...(github === undefined ? {} : { github }),
     ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
@@ -245,6 +258,9 @@ async function start() {
     logger,
     logging,
     metrics,
+    ...(startupConfiguration.observability === undefined
+      ? {}
+      : { observabilityUrl: startupConfiguration.observability.url }),
   };
   const drivers = await loadInstallationConfiguration({
     mode: settings.mode,

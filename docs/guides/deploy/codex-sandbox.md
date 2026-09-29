@@ -8,7 +8,7 @@ container; [security](../../reference/security.md#pod-and-container-hardening) d
 the remaining containment requirements.
 
 This guide covers syscall containment. Codex network proxy policy is a separate
-boundary. Repository-bound Codex consumers use stock Codex `0.156.0` with
+boundary. Repository-bound Codex consumers use stock Codex `0.158.0` with
 `allow_local_binding = true`, `mode = "full"`, and the exact broker hostname
 allowed. These settings permit local binding, disable Codex's additional
 private-address guard, and allow every HTTP method at otherwise allowed
@@ -73,7 +73,7 @@ From the OCE repository root, generate the compatibility artifact offline:
 ```sh
 node scripts/generate-codex-seccomp.mjs \
   --baseline runtime-default.json \
-  --codex-version 0.156.0 \
+  --codex-version 0.158.0 \
   --out codex-bwrap.json
 ```
 
@@ -90,6 +90,11 @@ architectures. Admission by the generator is not runtime proof. Inspect the
 delta and repeat live verification for your selected runtime and node versions.
 Do not substitute an arbitrary profile or `Unconfined` policy.
 
+The pinned runtime and automatic preparation use Codex `0.158.0`. Its reviewed
+default sandbox uses the same syscall rules; the optional inherited PID namespace
+mode is outside this profile's scope. Profile generation does not upgrade the
+deployed image.
+
 ## Install on eligible nodes
 
 Use your existing node provisioning mechanism to install the approved artifact
@@ -98,7 +103,7 @@ versioned, content-addressed name, for example:
 
 ```sh
 PROFILE_SHA256=$(jq -r .profileSha256 codex-bwrap.json.provenance.json)
-PROFILE_RELATIVE="openclaw/codex-0.156.0-${PROFILE_SHA256}.json"
+PROFILE_RELATIVE="openclaw/codex-0.158.0-${PROFILE_SHA256}.json"
 sha256sum codex-bwrap.json
 ```
 
@@ -122,7 +127,7 @@ drivers:
   compute:
     configuration:
       runtime:
-        codexSeccompProfile: openclaw/codex-0.156.0-<profile-sha256>.json
+        codexSeccompProfile: openclaw/codex-0.158.0-<profile-sha256>.json
 ```
 
 Replace the placeholder with the approved hash and preserve the other runtime

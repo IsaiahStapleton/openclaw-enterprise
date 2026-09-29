@@ -4,6 +4,7 @@ import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
+import { startAgentNamespaceCapture } from "./k3d-diagnostics.mjs";
 import { loadTestSuites } from "./test-suites.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -445,6 +446,10 @@ function emptyFileResult(path, issues) {
 function imageDigests(env) {
   const names = {
     controller: "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+    runtime: "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+    controllerUpgrade: "OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE",
+    runtimeUpgrade: "OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE",
+    repositoryCredentials: "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
     postgres: "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
     node: "OCC_TEST_PRODUCTION_NODE_IMAGE",
     fixture: "OCC_TEST_KUBERNETES_IMAGE",
@@ -516,8 +521,14 @@ async function runFile(root, lane, file, statePath, prepareFile) {
   let nodeResult = null;
   let tests = [];
   let fileFailure;
+  let agentActivity;
   try {
     if (issues.length === 0) {
+      agentActivity = await startAgentNamespaceCapture({
+        statePath,
+        lane: lane.name,
+        file: relativePath,
+      }).catch(() => undefined);
       nodeResult = spawnSync(
         process.execPath,
         ["--test", "--test-reporter", reporterPath, absolutePath],
@@ -570,6 +581,8 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       }),
     );
   } finally {
+    // Capture before cleanup so passing k3d runs keep their Agent Pod timeline.
+    await agentActivity?.finish();
     if (prepared.cleanup) {
       try {
         await prepared.cleanup();

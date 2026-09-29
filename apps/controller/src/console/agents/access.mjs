@@ -292,6 +292,7 @@ export function renderAgentAccess(context, agent) {
     return mutate(async () => {
       await context.request(`${path}/access-bindings/${encodeURIComponent(binding.id)}`, {
         method: "DELETE",
+        expectedStatus: 204,
       });
       if (!context.isCurrent()) {
         return;

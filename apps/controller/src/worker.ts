@@ -43,6 +43,7 @@ import {
   OpenClawController,
   WorkClaimLostError,
   isRepositoryCleanupWork,
+  repositoryCleanupRevisionId,
   isRepositoryRuntimeRetirementWork,
   provisioningEffectReceipt as provisioningEffectReceiptForRecord,
   provisioningPendingEffect,
@@ -85,6 +86,11 @@ export interface ControllerWorkerOptions {
 
 type Observation = NamespaceEnsureResult | NamespaceDeleteResult;
 type Outcome = "success" | "pending" | "retry" | "permanent";
+
+// A revision whose runtime is not ready yet is progress, not a failure. Recheck
+// it on a short fixed cadence so earlier transient failures on the same Work do
+// not stretch readiness waits through the queue's exponential retry backoff.
+const REVISION_READINESS_RECHECK_MS = 500;
 
 interface DispatchResult {
   readonly outcome: Outcome;
@@ -140,6 +146,19 @@ function workOperation(claim: ClaimedWork): string {
   }
   return "work.reconcile";
 }
+
+// Worker-local phase timing for one deployment work item. It spans the passes
+// this process observes; a restart or eviction starts a new record.
+interface DeployTiming {
+  passes: number;
+  passStartedAt: number;
+  prepareMs: number;
+  firstUnreadyAt: number | undefined;
+  readinessWaitMs: number | undefined;
+  readyAt: number | undefined;
+}
+
+const MAX_DEPLOY_TIMINGS = 256;
 
 function workLogFields(claim: ClaimedWork): {
   readonly workId: string;
@@ -355,6 +374,8 @@ function uniqueSecretRefs(bindings: SecretBindings): SecretReference[] {
   return [...refs.values()];
 }
 
+const MAX_STOPPED_PREDECESSOR_RECORDS = 4_096;
+
 export class ControllerWorker {
   private readonly metrics: OccMetrics | undefined;
   private passOutcome: WorkOutcome = "error";
@@ -392,6 +413,20 @@ export class ControllerWorker {
   private stopping = false;
   private lastHealthAt = 0;
   private pendingHealth: Promise<void> | undefined;
+  /**
+   * Predecessors this process stopped for an exclusive successor, by revision ID.
+   * The dispatch guard supersedes a predecessor's own work once an exclusive
+   * successor exists, so only a late effect from a lost claim (or an edit outside
+   * the worker) can recreate it. Compute reports such a predecessor as a
+   * not-ready successor rather than an error, so each record is stopped again
+   * after one lease, then after two, four and so on: a returned predecessor is
+   * always stopped again, at a cost that grows only logarithmically with time.
+   */
+  private readonly stoppedPredecessors = new Map<
+    string,
+    { readonly stoppedAt: number; readonly restopAfterMs: number }
+  >();
+  private readonly deployTimings = new Map<string, DeployTiming>();
 
   constructor(options: ControllerWorkerOptions) {
     this.metrics = options.metrics;
@@ -509,7 +544,8 @@ export class ControllerWorker {
         typeof driver.resolve !== "function" ||
         typeof driver.open !== "function" ||
         typeof driver.status !== "function" ||
-        typeof driver.close !== "function"
+        typeof driver.close !== "function" ||
+        (driver.durableBrokerReceipts === true && typeof driver.checkAdmissionReady !== "function")
       ) {
         throw new Error("The selected repository credential Driver is unavailable.");
       }
@@ -658,6 +694,7 @@ export class ControllerWorker {
     this.lastHealthAt = now;
     this.pendingHealth = (async () => {
       const pending = await this.queue.pending();
+      await this.repoDriver?.checkAdmissionReady?.(AbortSignal.timeout(2000));
       await this.onHealthy?.();
       this.emit({ event: "worker.health", status: "ready", pending });
     })()
@@ -735,6 +772,9 @@ export class ControllerWorker {
     const stage = this.compute[operation];
     if (typeof stage !== "function") {
       throw new Error(`The selected production Compute Driver requires ${operation}.`);
+    }
+    if (operation === "activateRevision") {
+      this.stoppedPredecessors.delete(revision.id);
     }
     await stage.call(this.compute, revision, context);
   }
@@ -884,17 +924,87 @@ export class ControllerWorker {
     revision: Readonly<AgentRevision>,
     context: ComputeRevisionContext,
   ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
+    const timing = this.deployTimings.get(claim.idempotencyKey);
+    const started = Date.now();
+    try {
+      const prepared = await this.prepareRevisionPass(claim, revision, context);
+      if (timing !== undefined) {
+        const now = Date.now();
+        if (!prepared.observation.ready) {
+          timing.firstUnreadyAt ??= now;
+        } else {
+          timing.readyAt = now;
+          if (timing.readinessWaitMs === undefined && timing.firstUnreadyAt !== undefined) {
+            timing.readinessWaitMs = now - timing.firstUnreadyAt;
+          }
+        }
+      }
+      return prepared;
+    } finally {
+      if (timing !== undefined) {
+        timing.prepareMs += Date.now() - started;
+      }
+    }
+  }
+
+  private async prepareRevisionPass(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+    context: ComputeRevisionContext,
+  ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
+    // Preparing a revision can recreate its runtime, so it is no longer known stopped.
+    this.stoppedPredecessors.delete(revision.id);
+    let earlier: readonly Readonly<AgentRevision>[] = [];
     if (this.compute.requiresStoppedPredecessors?.(revision) === true) {
-      const earlier = await this.state.read(async (view) =>
+      earlier = await this.state.read(async (view) =>
         (await view.revisions.listRevisions(revision.namespaceId, revision.agentId)).filter(
           (candidate) => candidate.revision < revision.revision,
         ),
       );
+      await this.stopPredecessors(claim, earlier);
+    }
+    try {
+      return await this.prepareAfterPredecessors(claim, revision, context);
+    } catch (error) {
+      // A failed pass may stem from a predecessor that came back; sweep it again.
       for (const previous of earlier) {
-        await this.closeRevisionCredentials(claim, previous);
-        await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(previous));
+        this.stoppedPredecessors.delete(previous.id);
+      }
+      throw error;
+    }
+  }
+
+  private async stopPredecessors(
+    claim: ClaimedWork,
+    earlier: readonly Readonly<AgentRevision>[],
+  ): Promise<void> {
+    for (const previous of earlier) {
+      const record = this.stoppedPredecessors.get(previous.id);
+      if (record !== undefined && Date.now() - record.stoppedAt < record.restopAfterMs) {
+        continue;
+      }
+      await this.closeRevisionCredentials(claim, previous);
+      await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(previous));
+      this.stoppedPredecessors.delete(previous.id);
+      this.stoppedPredecessors.set(previous.id, {
+        stoppedAt: Date.now(),
+        restopAfterMs: record === undefined ? this.leaseDurationMs : record.restopAfterMs * 2,
+      });
+      if (this.stoppedPredecessors.size > MAX_STOPPED_PREDECESSOR_RECORDS) {
+        // Forgetting a record only costs one repeated idempotent stop.
+        const oldest = this.stoppedPredecessors.keys().next().value;
+        if (oldest !== undefined) {
+          this.stoppedPredecessors.delete(oldest);
+        }
       }
     }
+  }
+
+  private async prepareAfterPredecessors(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+    context: ComputeRevisionContext,
+  ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
     let prepared = context;
     if (revision.repositoryCredentials !== undefined) {
       const repositoryCredentials = await this.repositoryCredentials.prepare(claim, revision);
@@ -950,10 +1060,18 @@ export class ControllerWorker {
 
   private async processRepositoryCleanup(claim: ClaimedWork): Promise<void> {
     let complete = false;
+    const cleanupRevisionId = repositoryCleanupRevisionId(claim);
+    if (cleanupRevisionId === undefined) {
+      await this.finalize(claim, undefined, { outcome: "permanent", code: "INVALID_TARGET" });
+      return;
+    }
     try {
-      const revision = await this.state.read((view) =>
-        view.revisions.findRevision(claim.namespaceId, claim.agentId!, claim.revisionId!),
-      );
+      const revision = await this.state.read(async (view) => {
+        if (claim.agentId === undefined) {
+          return undefined;
+        }
+        return view.revisions.findRevision(claim.namespaceId, claim.agentId, cleanupRevisionId);
+      });
       if (revision !== undefined) {
         const retireRuntime = isRepositoryRuntimeRetirementWork(claim);
         complete = await this.repositoryCredentials.cleanup(claim, revision, { retireRuntime });
@@ -983,6 +1101,13 @@ export class ControllerWorker {
           // Session service outages cannot delay exact workload/material retirement.
           await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
         }
+      } else {
+        const attempts = await this.state.read(async (view) =>
+          (await view.repositorySessions.listNamespaceAttempts(claim.namespaceId)).filter(
+            (attempt) => attempt.revisionId === cleanupRevisionId,
+          ),
+        );
+        complete = await this.repositoryCredentials.cleanupRetained(claim, attempts);
       }
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
@@ -994,11 +1119,16 @@ export class ControllerWorker {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
-      const attempts = await unit.repositorySessions.listRevisionAttempts({
-        namespaceId: claim.namespaceId,
-        agentId: claim.agentId!,
-        revisionId: claim.revisionId!,
-      });
+      const attempts =
+        claim.agentId === undefined
+          ? (await unit.repositorySessions.listNamespaceAttempts(claim.namespaceId)).filter(
+              (attempt) => attempt.revisionId === cleanupRevisionId,
+            )
+          : await unit.repositorySessions.listRevisionAttempts({
+              namespaceId: claim.namespaceId,
+              agentId: claim.agentId,
+              revisionId: cleanupRevisionId,
+            });
       if (complete) {
         complete = !attempts.some(
           (attempt) => attempt.phase === "closing" || attempt.phase === "invalidated",
@@ -1010,9 +1140,7 @@ export class ControllerWorker {
         await queue.defer(
           claim,
           { code: "REPOSITORY_CLEANUP_PENDING" },
-          attempts.some((attempt) => attempt.phase === "invalidated")
-            ? { delayMs: this.repositoryCleanupRetryMs }
-            : undefined,
+          { delayMs: this.repositoryCleanupRetryMs },
         );
       }
     }, this.queueOptions);
@@ -1021,7 +1149,7 @@ export class ControllerWorker {
       ...workLogFields(claim),
       namespaceId: claim.namespaceId,
       agentId: claim.agentId,
-      revisionId: claim.revisionId,
+      revisionId: cleanupRevisionId,
       outcome: complete ? "success" : "pending",
       code: complete ? "REPOSITORY_CLEANUP_COMPLETE" : "REPOSITORY_CLEANUP_PENDING",
     });
@@ -1030,10 +1158,11 @@ export class ControllerWorker {
   private async closeRevisionCredentials(
     claim: ClaimedWork,
     revision: Readonly<AgentRevision>,
+    options: { readonly awaitCleanup?: boolean } = {},
   ): Promise<void> {
     if (revision.repositoryCredentials !== undefined) {
       // An unavailable service leaves durable cleanup work; workload shutdown continues.
-      await this.repositoryCredentials.closeRevision(claim, revision);
+      await this.repositoryCredentials.closeRevision(claim, revision, options);
     }
   }
 
@@ -1394,7 +1523,7 @@ export class ControllerWorker {
         });
       }
       for (const revision of revisions) {
-        await this.closeRevisionCredentials(claim, revision);
+        await this.closeRevisionCredentials(claim, revision, { awaitCleanup: false });
         await this.withClaimHeartbeat(claim, () => this.compute.retireRevision(revision));
       }
       if (this.compute.deleteAgentRuntimeCredentials !== undefined) {
@@ -1681,7 +1810,63 @@ export class ControllerWorker {
     });
   }
 
+  private beginDeployPass(claim: ClaimedWork): void {
+    // Maintenance, cleanup and stop work are not deployments.
+    if (claim.idempotencyKey !== `agent_revision:${claim.revisionId}:reconcile`) {
+      return;
+    }
+    let timing = this.deployTimings.get(claim.idempotencyKey);
+    if (timing === undefined) {
+      if (this.deployTimings.size >= MAX_DEPLOY_TIMINGS) {
+        this.deployTimings.delete(this.deployTimings.keys().next().value!);
+      }
+      timing = {
+        passes: 0,
+        passStartedAt: 0,
+        prepareMs: 0,
+        firstUnreadyAt: undefined,
+        readinessWaitMs: undefined,
+        readyAt: undefined,
+      };
+      this.deployTimings.set(claim.idempotencyKey, timing);
+    }
+    timing.passes += 1;
+    timing.passStartedAt = Date.now();
+    timing.readyAt = undefined;
+  }
+
+  /**
+   * Phase timing for the deployment pass that is finishing. Milliseconds are
+   * worker wall clock: `durationMs` is this pass, `prepareMs` sums Compute
+   * preparation across passes, `readinessWaitMs` runs from the first unready
+   * observation to the first ready one (or now), `activationMs` runs from this
+   * pass's ready observation to completion, and `elapsedMs` is since admission.
+   */
+  private deployTimingFields(claim: ClaimedWork): Readonly<Record<string, number>> {
+    const timing = this.deployTimings.get(claim.idempotencyKey);
+    if (timing === undefined) {
+      return {};
+    }
+    const now = Date.now();
+    if (this.passOutcome === "success" || this.passOutcome === "permanent") {
+      this.deployTimings.delete(claim.idempotencyKey);
+    }
+    let readinessWaitMs = timing.readinessWaitMs ?? 0;
+    if (timing.readinessWaitMs === undefined && timing.firstUnreadyAt !== undefined) {
+      readinessWaitMs = now - timing.firstUnreadyAt;
+    }
+    return {
+      durationMs: now - timing.passStartedAt,
+      deployPasses: timing.passes,
+      prepareMs: timing.prepareMs,
+      readinessWaitMs,
+      ...(timing.readyAt === undefined ? {} : { activationMs: now - timing.readyAt }),
+      elapsedMs: Math.max(0, now - claim.createdAt.getTime()),
+    };
+  }
+
   private async processRevision(claim: ClaimedWork): Promise<void> {
+    this.beginDeployPass(claim);
     let result: RevisionDispatchResult;
     try {
       if (
@@ -2428,20 +2613,27 @@ export class ControllerWorker {
     claim: ClaimedWork,
     result: RevisionDispatchResult,
   ): Promise<void> {
+    const runtimeFailure =
+      result.outcome === "pending"
+        ? safeRuntimeFailureEvidence(result.data?.runtimeFailure)
+        : undefined;
     const expired =
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
-    let resolved: RevisionDispatchResult = expired
-      ? {
-          ...result,
-          outcome: "permanent",
-          code: "CONVERGENCE_DEADLINE_EXCEEDED",
-          data: convergenceDeadlineResultData(
-            this.convergenceTimeoutMs,
-            safeRuntimeFailureEvidence(result.data?.runtimeFailure),
-          ),
-        }
-      : result;
+    // Runtime entrypoints publish AUTHENTICATION_FAILED only for provider 401/403
+    // or invalid-key rejections and then hold unready until restart, so waiting
+    // for the deadline cannot change the result. Other failures may recover.
+    let resolved: RevisionDispatchResult =
+      runtimeFailure?.code === "AUTHENTICATION_FAILED"
+        ? { outcome: "permanent", code: "RUNTIME_AUTHENTICATION_FAILED" }
+        : expired
+          ? {
+              ...result,
+              outcome: "permanent",
+              code: "CONVERGENCE_DEADLINE_EXCEEDED",
+              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+            }
+          : result;
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);
@@ -2522,7 +2714,11 @@ export class ControllerWorker {
           ...(resolved.resultData === undefined ? {} : { resultData: resolved.resultData }),
         });
       } else if (resolved.outcome === "pending") {
-        await queue.defer(claim, { code: resolved.code });
+        await queue.defer(
+          claim,
+          { code: resolved.code },
+          resolved.code === "REVISION_INCOMPLETE" ? { delayMs: REVISION_READINESS_RECHECK_MS } : {},
+        );
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
         await queue.fail(claim, {
           code: resolved.code,
@@ -2590,6 +2786,7 @@ export class ControllerWorker {
       result: resolved.outcome,
       outcome: resolved.outcome,
       code: resolved.code,
+      ...this.deployTimingFields(claim),
     });
   }
 
@@ -2615,6 +2812,7 @@ export class ControllerWorker {
       result: "success",
       outcome: "success",
       code,
+      ...this.deployTimingFields(claim),
     });
   }
 
@@ -2692,6 +2890,7 @@ export class ControllerWorker {
       result: result.outcome,
       outcome: result.outcome,
       code: result.code,
+      ...this.deployTimingFields(claim),
     });
   }
 

@@ -79,6 +79,12 @@ settings:
 - `readOnlyRootFilesystem: true`.
 - Explicit CPU and memory requests and limits for each container.
 
+Tenant Gateway and Agent Pods that set `fsGroup: 1000` for private state
+(including the Harness workspace and node-state claims) also set
+`fsGroupChangePolicy: OnRootMismatch`. The kubelet then changes volume ownership
+only when the volume root does not already match, instead of walking every file
+on each Pod start.
+
 Tenant gateway and Agent bounds come from `resources.gateway` and
 `resources.agent` in the selected Compute Driver configuration. Controller API,
 worker and initialization containers use the chart's explicit `resources`
@@ -116,7 +122,7 @@ runtime verification. Profile generation and CI use the same reviewed rules;
 host installation remains operator-owned.
 
 The optional profile is for cases where `RuntimeDefault` blocks the
-user-namespace `clone`, `unshare`, `mount`, and `pivot_root` calls used by Codex `0.156.0`
+user-namespace `clone`, `unshare`, `mount`, and `pivot_root` calls used by Codex `0.158.0`
 and bubblewrap. The profile is a syscall compatibility allowlist, not the
 filesystem or network boundary. Codex and bubblewrap continue to own runtime
 filesystem enforcement, and Kubernetes NetworkPolicies plus the configured

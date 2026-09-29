@@ -6,7 +6,14 @@
 
 ### Authentication accounts
 
+- [`getAuthAccount`](../api.md#get-apiauthaccountsuserid): Inspect current human account state.
 - [`createAuthAccount`](../api.md#post-apiauthaccounts): Create an administrator-controlled local auth account.
+- [`attachGitHubIdentity`](../api.md#post-apiauthaccountsuseridprovidersgithub): Attach an exact GitHub identity to an existing account.
+- [`detachAuthMethod`](../api.md#post-apiauthaccountsuseridmethodsmethodiddetach): Detach an external sign-in identity from an account.
+- [`disableAuthAccount`](../api.md#post-apiauthaccountsuseriddisable): Disable a human account.
+- [`enableAuthAccount`](../api.md#post-apiauthaccountsuseridenable): Re-enable a disabled human account.
+- [`enrolAuthAccount`](../api.md#post-apiauthaccountsuseridenrol): Enrol an existing account that activation skipped.
+- [`revokeAuthAccountSessions`](../api.md#post-apiauthaccountsuseridrevoke): Revoke all sessions for a human account.
 
 ### Authentication sessions
 
@@ -19,10 +26,20 @@
 - [`createServiceKey`](../api.md#post-apiauthservicekeys): Issue a service API key.
 - [`revokeServiceKey`](../api.md#delete-apiauthservicekeyskeyid): Revoke a service API key.
 
+### Authentication
+
+- [`completeGitHubSignIn`](../api.md#get-apiauthprovidersgithubcallback): Complete an enrolled GitHub sign-in.
+- [`getAuthProviders`](../api.md#get-apiauthproviders): List configured browser sign-in methods.
+- [`getAuthRecovery`](../api.md#get-apiauthrecovery): Inspect the recovery account designation.
+- [`confirmGitHubSignIn`](../api.md#post-apiauthprovidersgithubresult): Confirm which session a GitHub sign-in created.
+- [`replaceAuthRecovery`](../api.md#post-apiauthrecovery): Move the recovery designation to another administrator.
+- [`startGitHubSignIn`](../api.md#post-apiauthprovidersgithubstart): Start GitHub sign-in for an enrolled account.
+
 ### Installation
 
 - [`getInstallation`](../api.md#get-installation): Get the singleton Installation.
 - [`getInstallationDeploymentInventory`](../api.md#get-installationdeploymentinventory): Get the complete authorized Agent deployment inventory.
+- [`getObservability`](../api.md#get-observability): Get the configured external observability destination.
 - [`bootstrapInstallation`](../api.md#post-installationbootstrap): Bootstrap the singleton Installation.
 
 ### Namespaces
@@ -53,7 +70,7 @@
 - [`retryAgentProvisioning`](../api.md#post-namespacesnamespaceidagentsprovisionworkidretry): Retry failed first-time provisioning for one exact work item.
 - [`stopAgent`](../api.md#post-namespacesnamespaceidagentsagentidstop): Stop one Agent while retaining its revision and persistent state.
 - [`getAgentNativeAdmin`](../api.md#get-namespacesnamespaceidagentsagentidnativeadmin): Resolve native admin UI launch availability for one Agent.
-- [`deleteAgent`](../api.md#delete-namespacesnamespaceidagentsagentid): Begin deletion of an exact Namespace-owned Agent and its AgentRevisions.
+- [`deleteAgent`](../api.md#delete-namespacesnamespaceidagentsagentid): Begin or retry deletion of an exact Namespace-owned Agent and its AgentRevisions.
 
 ### Agent deployments
 

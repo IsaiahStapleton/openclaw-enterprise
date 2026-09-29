@@ -1023,7 +1023,21 @@ export class OpenShellSandboxDriver implements SandboxDriver {
 
   configureAgent(
     configuration: Readonly<OpenClawConfigurationDocument>,
+    harness: Readonly<AgentRevision["harness"]>,
   ): OpenClawConfigurationDocument {
+    if (harness.mode !== "dedicated") {
+      throw new OpenShellSandboxConfigurationFailure(
+        "OpenShell SandboxDriver supports only dedicated Harness revisions.",
+      );
+    }
+    if (harness.id === "openclaw") {
+      return { ...configuration };
+    }
+    if (harness.id !== "codex") {
+      throw new OpenShellSandboxConfigurationFailure(
+        "OpenShell SandboxDriver does not support the selected Harness runtime.",
+      );
+    }
     const plugins = optionalAgentConfiguration(
       configuration.plugins,
       "OpenShell Sandbox plugin configuration",
@@ -1098,9 +1112,12 @@ export class OpenShellSandboxDriver implements SandboxDriver {
 
   async provisionHarness(context: SandboxHarnessContext): Promise<SandboxResourceRef> {
     this.requireOperatorWorkspaceMode("provision a Harness");
-    if (context.revision.harness.mode !== "dedicated" || context.revision.harness.id !== "codex") {
+    if (
+      context.revision.harness.mode !== "dedicated" ||
+      (context.revision.harness.id !== "codex" && context.revision.harness.id !== "openclaw")
+    ) {
       throw new OpenShellSandboxConfigurationFailure(
-        "OpenShell SandboxDriver only supports dedicated Codex Harness revisions.",
+        "OpenShell SandboxDriver supports only dedicated Codex or OpenClaw Harness revisions.",
       );
     }
     if (
@@ -1113,7 +1130,10 @@ export class OpenShellSandboxDriver implements SandboxDriver {
     }
     labels(context.requirements.labels, "Harness workload labels");
     const sandbox = this.sandboxRef(context);
-    const targetPort = harnessPort(context.requirements);
+    const codex = context.revision.harness.id === "codex";
+    const serviceExposures = codex
+      ? [{ service: "", targetPort: harnessPort(context.requirements) }]
+      : [];
     let created;
     try {
       created = await this.gatewayClientForNamespace(sandbox.namespaceName).createSandbox(
@@ -1128,7 +1148,7 @@ export class OpenShellSandboxDriver implements SandboxDriver {
             "openclaw.dev/revision-id": context.revision.id,
           },
           spec: sandboxSpec(this.options, context.requirements),
-          serviceExposures: [{ service: "", targetPort }],
+          serviceExposures,
         },
         context.signal,
       );
@@ -1145,7 +1165,13 @@ export class OpenShellSandboxDriver implements SandboxDriver {
         "OpenShell returned a different Sandbox name than requested.",
       );
     }
-    validateHarnessServiceUrl(created.serviceUrls[""]);
+    if (codex) {
+      validateHarnessServiceUrl(created.serviceUrls[""]);
+    } else if (Object.keys(created.serviceUrls).length !== 0) {
+      throw new OpenShellSandboxConfigurationFailure(
+        "OpenShell exposed an unexpected service for the native OpenClaw Harness.",
+      );
+    }
     return Object.freeze(sandbox);
   }
 

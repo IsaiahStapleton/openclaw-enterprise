@@ -130,6 +130,12 @@ bodyless operations through the compiled OCC CLI. See
 [PostgreSQL tests](postgresql.md#service-key-persistence) for database-backed
 verification.
 
+GitHub's opted-in profile requires real PostgreSQL; the memory-backed suites do
+not prove its account/method versions, one-use attempts, or atomic session/audit
+commit. Run the [GitHub PostgreSQL and browser proof](postgresql.md#github-human-sign-in)
+for that path. Keep provider discovery failure and callback-error recovery
+separate from successful provider authentication when reporting Console results.
+
 ## Packaged-driver integration
 
 `tests/integration/driver-plugin-installation.test.mjs` installs scoped,
@@ -149,7 +155,7 @@ OpenClaw gateway, or a Codex model turn.
 
 The [console](../reference/console.md) uses real controller routes in
 `tests/integration/console-api.test.mjs`, `tests/browser/console.test.mjs`, and
-`tests/browser/console-agents.test.mjs`. The shared browser fixture runs
+the `tests/browser/console-agent*.test.mjs` files. The shared browser fixture runs
 Fastify, Better Auth memory storage, Native IAM, and in-memory platform storage
 on an ephemeral loopback port. Configuration and Compute helpers are test-only.
 The Agent browser suite seeds active revision pointers only to render admitted
@@ -268,7 +274,7 @@ Preset case posts the shipped JSON through Fastify with native IAM, reads it
 from the Namespace catalog, renders variables, and creates a Configuration
 and dedicated Agent. It checks credential references, native policy retention,
 and rejection of a cross-Namespace model credential. The password workflow in
-`tests/browser/console-agents.test.mjs` exercises the real chooser, masked input,
+`tests/browser/console-agent-presets.test.mjs` exercises the real chooser, masked input,
 same-Namespace Secret creation, credential grant, and retry after a name conflict.
 The API suite also loads Installation YAML and checks default seeding, preserved
 customizations, and authorization rollback. The

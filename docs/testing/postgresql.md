@@ -3,7 +3,71 @@
 Verify persistence, authentication, queue behavior, and bootstrap against
 disposable PostgreSQL databases. Start with the [shared requirements](README.md#requirements-and-credentials).
 
-## PostgreSQL
+## Revision-worker tests
+
+Run the revision-worker suite with an owned PostgreSQL
+fixture. It allocates disposable databases under that run's owner so another
+test cannot consume its queue. Four cross-Namespace cases explicitly share
+a database within their test. Tests still connect as `occ_app`; preparation
+uses the existing administrator and migrator paths. The suite rejects a standalone
+`OCC_TEST_DATABASE_URL` without prepared ownership before changing that database.
+Other direct PostgreSQL suites retain their application-role URL setup below.
+
+From the repository root, after the shared requirements, run the complete
+application lane:
+
+```sh
+(
+  set -eu
+  umask 077
+  PG_APPLICATION_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/oce-postgres-application.XXXXXX")"
+  printf 'PostgreSQL run directory: %s\n' "$PG_APPLICATION_RUN_DIR"
+  trap 'pg_run_status=$?; node scripts/ci/cleanup.mjs --state "$PG_APPLICATION_RUN_DIR/state.json" || pg_run_status=1; exit "$pg_run_status"' EXIT
+
+  node scripts/ci/prepare.mjs --lane postgres-application \
+    --state "$PG_APPLICATION_RUN_DIR/state.json" \
+    --github-env "$PG_APPLICATION_RUN_DIR/owner.env"
+  node scripts/ci/run-tests.mjs run postgres-application \
+    --state "$PG_APPLICATION_RUN_DIR/state.json" \
+    --results "$PG_APPLICATION_RUN_DIR/results.json"
+)
+```
+
+For only the revision-worker file, use a fresh run directory:
+
+```sh
+(
+  set -eu
+  umask 077
+  PG_WORKER_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/oce-postgres-worker.XXXXXX")"
+  printf 'PostgreSQL run directory: %s\n' "$PG_WORKER_RUN_DIR"
+  trap 'pg_run_status=$?; node scripts/ci/cleanup.mjs --state "$PG_WORKER_RUN_DIR/state.json" || pg_run_status=1; exit "$pg_run_status"' EXIT
+
+  node scripts/ci/prepare.mjs --lane postgres-application \
+    --state "$PG_WORKER_RUN_DIR/state.json" \
+    --github-env "$PG_WORKER_RUN_DIR/owner.env"
+  node scripts/ci/prepare.mjs --lane postgres-application \
+    --file tests/integration/postgres-worker-agent-revision.test.mjs \
+    --state "$PG_WORKER_RUN_DIR/state.json" \
+    --github-env "$PG_WORKER_RUN_DIR/test.env"
+  env -u OCC_TEST_DATABASE_URL -u OPENCLAW_ENTERPRISE_CI_STATE \
+    -u OPENCLAW_ENTERPRISE_CI_PREFIX \
+    node --env-file="$PG_WORKER_RUN_DIR/test.env" --test \
+    tests/integration/postgres-worker-agent-revision.test.mjs
+)
+```
+
+Each invocation needs its own state file; do not run two commands against the
+same prepared state concurrently. The commands clean up that run's databases
+and Compose server when they finish, including after a test failure. The
+application lane writes its result JSON in the printed run directory. If the
+shell is interrupted before cleanup completes, rerun
+`node scripts/ci/cleanup.mjs --state /printed/run/directory/state.json`.
+Retain failed-run output and result JSON while investigating.
+
+<a id="postgresql"></a>
+
+## Other PostgreSQL suites
 
 Requires Docker Compose. Use disposable databases: tests can initialize or
 change singleton platform state. The production bootstrap database must be
@@ -40,10 +104,20 @@ production bootstrap still needs its own URL:
 (
   export OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_test_local
   export OCC_PRODUCTION_WIREUP_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_bootstrap_local
-  pnpm test:postgres
-  node --test tests/integration/compute-singleton-worker-postgres.test.mjs
+  node --test --test-concurrency=1 \
+    tests/integration/postgres-platform-state.test.mjs \
+    tests/integration/postgres-production-wireup.test.mjs \
+    tests/integration/compute-singleton-worker-postgres.test.mjs
 )
 ```
+
+This example selects platform persistence, production bootstrap, and
+singleton-worker coverage. Omitting the general URL skips most persistence and
+queue cases; omitting `OCC_PRODUCTION_WIREUP_DATABASE_URL` skips production
+bootstrap. Use the prepared `postgres-application` lane above for its complete
+file selection. Broad `test:postgres`, `test:integration`, and `test` commands
+include the revision-worker suite, which requires prepared ownership when
+selected with a database URL.
 
 The production bootstrap test also exercises existing-person Agent sharing through
 real cookie-authenticated HTTP, native IAM and restricted PostgreSQL State. It
@@ -54,11 +128,6 @@ Installation-reader Role; account creation and password sign-in use ordinary API
 This is not atomic-enrollment proof. Its passive Compute and test Configuration/Secret
 Drivers do not establish native Gateway execution or closure of open streams.
 
-The two PostgreSQL URLs select different coverage. Omitting the general URL
-skips most persistence tests, including queue coverage; omitting
-`OCC_PRODUCTION_WIREUP_DATABASE_URL` skips production bootstrap. `test:postgres`
-does not include the singleton-worker file, hence the second command.
-
 Four optional live Configuration cases additionally require
 `OCC_TEST_KUBERNETES_CONFIGURATION=1` and an already configured live Kubernetes
 Configuration Driver in the subprocess startup environment. The flag alone
@@ -67,6 +136,94 @@ already has an Installation. See [PostgreSQL settings](#postgresql-test-environm
 
 For a repeat of production bootstrap, prepare a fresh migrated database and
 change its URL. Keep the general and bootstrap databases separate.
+
+## GitHub human sign-in
+
+`tests/integration/postgres-github-sign-in.test.mjs` exercises ordinary PostgreSQL
+development composition, real controller routes across a stopped maintenance restart,
+and a Playwright browser using the Console. It selects the application-role
+`OCC_TEST_DATABASE_URL`; use a fresh disposable database prepared by the migrator.
+The test provisions its own Installation and local recovery administrator.
+Select an already prepared browser with `OCC_TEST_BROWSER_EXECUTABLE` when needed:
+
+```sh
+node --test tests/integration/postgres-github-sign-in.test.mjs
+```
+
+The suite checks existing-account enrollment, unchanged Principals and grants,
+the one-use attempt receipt exchange and `x-occ-session-key` narrowing, password parity, rejection of older unbound sessions, one-use callback handling,
+account-wide revocation, protected recovery, and browser access to an already
+permitted Namespace and existing Agent detail. It checks actual listener stop, admitted-request drain, activation and restart in the loopback composition; installed ingress and deployment controls remain a separate qualification. Provider exchange/profile HTTP responses are controlled
+fixtures. They allow deterministic optional-email and rejected-identity cases;
+they do not establish live GitHub registration, provider availability, or deployed
+HTTPS cookie behavior. Missing database configuration skips the case; a missing
+browser fails it. A command invocation or green memory-backed suite does not
+establish that this PostgreSQL/browser proof ran successfully.
+
+The same PostgreSQL lane also runs
+`tests/integration/postgres-human-authentication.test.mjs` for the original State
+transaction, account/method currentness, recovery protections, and concurrent
+issuance/revocation, actor-session revocation races, account-version conflicts,
+attachment invalidation, State deadlines and persisted attempt bounds.
+`tests/integration/postgres-github-cookie-commit.test.mjs` checks audit rollback
+and lost COMMIT acknowledgements through the controller. It drops a real
+PostgreSQL COMMIT response through the loopback protocol proxy and verifies
+persisted state, withheld cookies, and no replay. It also checks the ordinary
+HTTP cookie boundary for login and logout, unknown administrative completion,
+and a guarded present-state read. Password sign-in runs without a browser
+Origin header; a headerless sign-out is rejected with `403` and leaves the
+session current, and the other sign-outs send the configured Origin. No live
+provider credential
+is needed for these cases. Hosted PostgreSQL CI prepares Chromium after the
+frozen workspace dependencies; local runs use the prepared browser above.
+
+## Password-default sign-in
+
+GitHub sign-in is optional; these suites prove the default. Each needs a fresh
+`OCC_TEST_DATABASE_URL` and composes the production API from the settings the
+example Helm values render, after the real production bootstrap:
+
+- `postgres-password-default.test.mjs`: GitHub unconfigured. Administrator
+  onboarding, account creation, Origin-checked sign-out, refused GitHub routes,
+  and wrong passwords that never lock the administrator out.
+- `postgres-password-default-activation.test.mjs`: the GitHub upgrade enrols
+  earlier password accounts, logs skipped ones, and keeps account creation.
+- `postgres-github-outage.test.mjs`: a fixture provider that errors, then stalls
+  past the ten-second deadline. GitHub sign-in fails closed, passwords keep
+  working, and the recovery administrator signs in while the shared lane is full.
+
+The same composition covers the GitHub profile against the fixture provider:
+
+- `postgres-github-admin-attach.test.mjs`: administrators attach, detach and
+  re-attach GitHub identities, and disable and enable accounts.
+- `postgres-github-tab-binding.test.mjs`: Playwright over the HTTPS Origin. A tab
+  signed in with GitHub signs out after another tab's password sign-in, and the
+  login receipt is one-use and needs the exact Origin.
+- `postgres-github-recovery-replacement.test.mjs`: online recovery replacement
+  moves the reserved password lane and survives a restart with the original seed.
+- `postgres-break-glass-auth-maintain.test.mjs`: also needs
+  `OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL`. With the API stopped,
+  `auth:maintain` resets the recovery password and deactivates GitHub sign-in.
+
+`tests/integration/password-default-chart.test.mjs` and
+`sign-in-chart-parity.test.mjs` (Images and Packaging lane, Helm and yq) check
+that the chart renders exactly those settings, and that the API entrypoint
+accepts the rendered settings for every trusted-proxy preset, with and without
+GitHub, and refuses what the chart refuses. Accepted settings get as far as the
+PostgreSQL connection, which the suite points at an unreachable address, so it
+does not prove that the API starts with every preset. The PostgreSQL scenarios
+above start the API with their own settings.
+
+## Authentication maintenance
+
+`tests/integration/auth-maintain.test.mjs` runs the real `scripts/auth-maintain.mjs`
+command against a fresh database: `OCC_TEST_DATABASE_URL` as `occ_app` and
+`OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL` as `occ_migrator` for the same database.
+It covers activation, the refusal while another client is connected, enrolment
+repair, recovery password reset, session purge, and deactivation back to the
+legacy profile, including the disabled-account refusal. The suite closes its own
+connections before each command; any other client on the database makes the
+commands exit 2. It does not exercise a Kubernetes Job or a scaled-down API.
 
 ## Canonical migration compatibility
 
@@ -106,11 +263,12 @@ provider operation. Developer recovery is documented under
 
 | Variable                                       | Required by                                | Behavior                                                                                                                                                                                   |
 | ---------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OCC_TEST_DATABASE_URL`                        | Real PostgreSQL integration tests.         | Must use an initialized application-role database. General PostgreSQL and queue cases are skipped when absent.                                                                             |
+| `OCC_TEST_DATABASE_URL`                        | Real PostgreSQL integration tests.         | Must use an initialized application-role database. Skipped when absent; [revision-worker tests](#revision-worker-tests) additionally require prepared ownership.                           |
 | `OCC_MIGRATION_DATABASE_URL`                   | `db:migrate` setup before tests.           | Uses the separate migrator role for schema and migration-history ownership; the test process should use application-role URLs.                                                             |
 | `OCC_PRODUCTION_WIREUP_DATABASE_URL`           | Production bootstrap integration.          | Uses a separately migrated, disposable, initially empty application-role database; the production bootstrap skips when absent.                                                             |
 | `OCC_BOOTSTRAP_FAILURE_DATABASE_URL`           | Bootstrap race and uncertain-commit tests. | Application-role URL for a migrated, disposable loopback database named `openclaw_failures_*`. The suite resets its tables; skipped when absent.                                           |
 | `OCC_BOOTSTRAP_FAILURE_MIGRATION_DATABASE_URL` | Bootstrap failure fixture setup/reset.     | Optional for the local `occ_app` fixture, which uses `occ_migrator` and its local test password; otherwise required. Must target the same host, port, and database as the application URL. |
+| `OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL`     | Authentication maintenance integration.    | Migrator-role URL for the same fresh database as `OCC_TEST_DATABASE_URL`; the case is skipped when absent.                                                                                 |
 | `OCC_TEST_KUBERNETES_CONFIGURATION`            | Optional live Configuration coverage.      | Set to `1` only when the PostgreSQL integration also has an explicitly configured live Kubernetes Configuration Driver.                                                                    |
 
 The bootstrap integration creates its own exact Installation and administrators;

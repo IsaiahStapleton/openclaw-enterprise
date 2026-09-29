@@ -1,19 +1,19 @@
 # Authentication
 
 OpenClaw Control Plane (OCC) authenticates human controller API clients with
-user sessions established through email/password sign-in. Programmatic
-non-Agent automation authenticates with service API keys. Better Auth owns
+user sessions established through email/password sign-in or an administrator-enrolled
+GitHub identity. Programmatic non-Agent automation authenticates with service
+API keys. Better Auth owns
 password verification, revocable session cookies, and hashed API-key storage.
 The selected IAM Driver resolves the authenticated account or service identity
 to an explicitly provisioned Principal or ServicePrincipal and owns
 [authorization](authorization.md).
 
-This page defines the currently supported authentication behavior. For a
-working sign-in procedure, see
+For a working sign-in procedure, see
 [human administrator sign-in](authentication/service-api-keys.md#sign-in-as-a-human-administrator).
 For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
-The [platform console](console.md) provides email/password login at `/console/`
-and uses these same session endpoints. Public signup, OIDC, and bearer
+The [platform console](console.md) provides login at `/console/` and uses these
+same session endpoints. Public signup, Google, enterprise OIDC, and bearer
 credentials are not supported controller API authentication paths.
 
 ## Installation and account ownership
@@ -78,11 +78,9 @@ Bootstrap makes one attempt. Any error emits `installation.bootstrap-failed`
 with available non-secret IDs and paths, then exits unsuccessfully. Created
 accounts, keys, and files remain, including partial output from a failed write.
 Bootstrap does not automatically revoke, delete, retry, repair, or reset them.
-The Helm initialization Job uses `backoffLimit: 0` and does not retry a failed
-attempt. Better Auth persistence and the Installation/IAM commit are separate;
-an error does not establish whether the transaction committed. Operators must
-resolve that outcome before manual repair, or explicitly reset an identified
-disposable Installation. See [incomplete bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
+The Helm initialization Job uses `backoffLimit: 0`. Better Auth persistence and the Installation/IAM commit are separate,
+so an error leaves the commit outcome unknown; resolve it before manual repair
+or reset an identified disposable Installation. See [incomplete bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 File existence alone is not proof of successful initialization.
 
 ## Browser request origin
@@ -100,79 +98,195 @@ not require Origin, and an invalid key never falls back to a session cookie.
 
 ## Session lifecycle
 
-| Operation                      | Supported behavior                                                                                                                                          |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/sign-in/email` | Verifies an existing account's email and password and issues a session cookie. The JSON response confirms authentication without returning a session token. |
-| `GET /api/auth/session`        | Returns safe account identity and a noncredential `sessionKey`, or `data: null` without a valid session.                                                    |
-| `POST /api/auth/sign-out`      | Revokes the current session. Protected API requests using that session subsequently return `401`.                                                           |
+| Operation                      | Supported behavior                                                                                                                                                                             |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/sign-in/email` | Verifies an existing account's email and password and issues a session cookie. The JSON response confirms authentication, and with GitHub enabled returns `sessionKey`, never a session token. |
+| `GET /api/auth/session`        | Returns safe account identity and a noncredential `sessionKey`, or `data: null` without a valid session.                                                                                       |
+| `POST /api/auth/sign-out`      | Revokes the current session. Protected API requests using that session subsequently return `401`.                                                                                              |
 
-The `sessionKey` identifies the current session record, stays stable across reads,
-and changes on a new sign-in, including for the same account. It cannot authenticate
-requests; the session token remains in its HttpOnly cookie. Console uses this key
-to discard retained content and drafts when the session changes.
+The `sessionKey` names the current session, stays stable across reads, and changes
+on each sign-in. It cannot authenticate; the token stays in its HttpOnly cookie.
+Sending it back as `x-occ-session-key` narrows a request to that session: a
+foreign, malformed, or duplicated key returns `401`, and such a sign-out neither
+revokes nor clears the cookie. Without the header, requests are unchanged. Console
+pins each tab's key this way.
 
-For example, the sign-in body is:
-
-```json
-{
-  "email": "admin@example.invalid",
-  "password": "<account-password>"
-}
-```
-
-The successful sign-in response contains `data: { "authenticated": true }` and
-request metadata. The session credential is delivered through `Set-Cookie`, not
-the JSON body. Protected OCC API calls use that cookie.
+Sign-in takes `{"email": "...", "password": "..."}`. The session credential
+arrives only through `Set-Cookie`; protected OCC API calls use that cookie.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
 HTTP-only, use `SameSite=Lax`, and cover `/`. Production enables secure cookies;
 the configured base URL is also the trusted origin. Session inspection exposes
-only `authenticated` and the account's `id`, `email`, and `name`.
+only `authenticated`, `sessionKey`, and the account's `id`, `email`, and `name`.
 
 Protected requests resolve the current stored session with cookie caching
-disabled. A missing, expired, revoked, or forged session is rejected. Supplying
-an `Authorization` header is rejected even if a session cookie is also present.
+disabled. A missing, expired, revoked, or forged session is rejected, as is an
+`Authorization` header even alongside a session cookie.
+
+## GitHub sign-in for existing accounts
+
+GitHub sign-in requires one serving controller, one Installation, PostgreSQL with
+its restricted application role, native IAM, one GitHub App on github.com, and one
+canonical HTTPS Console origin with host-only cookies. Shared-cookie native
+administration, other session readers, rolling or mixed-version serving, and
+mutable Installation policy are unsupported. Keep bootstrap, seeding, external
+policy writers, and recovery-affecting changes stopped.
+Native IAM's policy read remains separate from State's actor guard. Loopback
+development does not qualify deployed HTTPS.
+
+HTTPS sessions use `__Host-openclaw_occ.session_token`, `Secure`, `HttpOnly`,
+`Path=/`, and no `Domain`, preventing sibling hosts from planting that cookie.
+Session reads, protected requests, and logout reject duplicate session cookies.
+
+Activation enrolls qualifying existing accounts and reports the rest, which cannot
+sign in. Creation continues and enrolls new accounts in the same transaction (see
+[Account provisioning](#account-provisioning)).
+Set all three API-process variables; partial configuration fails startup:
+
+| Variable                           | Purpose                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| `OCC_AUTH_GITHUB_CLIENT_ID`        | GitHub App client ID, not App ID; determines the provider-instance key. |
+| `OCC_AUTH_GITHUB_CLIENT_SECRET`    | GitHub App client secret in protected server configuration.             |
+| `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | Local password administrator seeding the first recovery designation.    |
+
+Helm renders them from `auth.github` and `auth.recoveryUserId`; see
+[production settings](settings/production.md#github-sign-in-and-trusted-proxies).
+
+Use the repository integration's GitHub App. Register `OCC_AUTH_BASE_URL` +
+`/api/auth/providers/github/callback` as its callback. Login receives the
+[client ID and secret](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app);
+the private key stays with the existing repository credential consumer.
+
+OCE requests no OAuth scopes. [App permissions and user access](https://docs.github.com/en/apps/creating-github-apps/writing-code-for-a-github-app/building-a-login-with-github-button-with-a-github-app#specify-additional-parameters)
+govern the bearer token, which may carry repository authority; `read:user` would
+not restrict it. Login uses only [`GET /user`](https://docs.github.com/en/rest/users/users#get-the-authenticated-user),
+then discards tokens, expiry, and scope data. It performs no refresh, creates no
+repository grants, and gives no provider credentials to repository consumers or Agents.
+
+A new client ID requires reattachment under a new provider instance; then detach
+old methods by `methodId`. Secret rotation preserves enrollment and invalidates
+pending attempts. Emails and login names are not identity keys.
+
+A human Installation administrator reads `GET /api/auth/accounts/:userId`
+([requirements](#session-and-recovery-controls)). Its no-store response
+contains `userId`, `principalId`, `version`, `disabled`, and `methods` with
+`methodId`, `providerId`, and `subject`. Attach a verified positive decimal GitHub
+user ID (1–20 digits, no leading zero) through
+`POST /api/auth/accounts/:userId/providers/github` with
+`{"subject":"12345678","expectedVersion":1}`, using the version just read.
+
+Attachment preserves the user, Principal, and grants, advances the account version,
+and invalidates existing sessions and pending proofs. Subjects owned by another
+user, email association, signup, identity transfer, and self-service linking are
+rejected. For unknown identities, follow the
+[enrollment procedure](../guides/deploy/production-installation.md#enable-github-browser-sign-in).
+
+`GET /api/auth/providers` returns `github` and `sessionBinding` as `true` when enabled. A
+same-origin `POST /api/auth/providers/github/start` returns `data.url` and a public
+`data.attemptId`, and sets a browser-binding cookie. Other provider names return `404`; callers cannot select
+callback or return destinations. The [Console flow](../flows/platform-console.md#2-resolve-the-session-before-private-reads)
+owns button and error display.
+
+The callback consumes a short-lived, browser-bound attempt once before code
+exchange and resolves the immutable numeric GitHub user ID's exact enrollment.
+Unknown identities fail without signup. Success returns to exactly `/console/`
+and sets a two-minute HttpOnly, `SameSite=Strict` login receipt; failure returns
+to `/console/?authError=github` without automatic retry. The starting tab sends its
+`attemptId` with the configured Origin to `POST /api/auth/providers/github/result`,
+which returns the callback session's `sessionKey` once, only while that session's
+cookie is current. It never issues or extends a session.
+
+### Session and recovery controls
+
+Enabling this profile applies the same admission rules to password and GitHub
+sessions: an eight-hour absolute lifetime without refresh, current account and
+method checks, and required audit before a cookie is released or, on logout,
+cleared. Older sessions without account/method binding are
+rejected; users sign in again. Activation is one-way: removing GitHub
+configuration fails startup, and the database refuses sessions from older
+binaries. Returning to password-only sign-in needs [stopped maintenance](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in).
+
+The recovery user needs one local password, its Installation Principal, and
+native IAM Installation `administer`; disabling it returns `409`. Keep its password
+in protected custody; out-of-band database or policy changes can still remove
+recovery. Password login never depends on GitHub.
+
+`POST /api/auth/recovery` (`userId`, `expectedCurrentUserId`, target
+`expectedVersion`) moves the designation (`GET` reads it) to another qualifying
+user. The variable, like `auth:maintain activate --recovery-user`, then only
+seeds first activation; a differing value warns, and each start re-checks the holder.
+
+Account reads and mutations require a human session, exact `Origin`, and
+Installation `administer`; service keys are refused. State locks actor and target
+accounts (retryable `503` after five-second lock waits) and rechecks the actor
+session, which logout or revocation can invalidate. A stale
+`expectedVersion` or disabled target returns `409 RESOURCE_CONFLICT`.
+
+Send the version just read, such as `{"expectedVersion":1}`:
+
+| Operation                                                  | Effect                                                                                     |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `POST /api/auth/accounts/:userId/disable`                  | Disables the account, invalidating sessions and pending proofs; refuses the recovery user. |
+| `POST /api/auth/accounts/:userId/enable`                   | Re-enables a disabled account; users sign in again.                                        |
+| `POST /api/auth/accounts/:userId/revoke`                   | Invalidates all account sessions and pending proofs; fresh sign-in still works.            |
+| `POST /api/auth/accounts/:userId/methods/:methodId/detach` | Removes one attached external identity and its sessions; password methods return `409`.    |
+
+`POST /api/auth/accounts/:userId/enrol` (no body) enrolls a skipped account holding
+its Principal and one password. These operations serialize with session issuance
+and leave IAM grants unchanged.
+An unknown administrative COMMIT returns `503 DEPENDENCY_UNAVAILABLE` with an
+unknown-outcome message, never success, automatic replay, or compensation. An
+account read shows present state, **not a receipt**: the original transaction may
+still be running. Resolve uncertainty before choosing a new action and version.
+Password reset and deletion remain deferred.
+
+Password sign-in allows 10 requests/minute, two active, per client address and
+per email; GitHub start/callback, including invalid callbacks, allows 30 and four
+per address. Global caps: four and eight active. The recovery email has a
+reserved lane (20, two active). A 4,096-key table bounds memory. Clients behind
+an ingress share its address unless
+[trusted proxies](cheatsheets/environment-variables.md#controller-and-authentication)
+are set. Pending attempts cap at 1,000. Provider calls share a ten-second
+deadline, refuse redirects, and read at most 64 KiB. Limits are per controller.
 
 ## Native admin shared sessions
 
 Agent native admin UI access starts from an ordinary controller browser session.
-When the trusted-operator pilot is enabled, the server parses
-`nativeAdmin.sharedCookieDomain` and configures the Better Auth session cookie
-for that explicit shared OCE parent domain so the console host and derived Agent
-hosts can use the same human session. Service API keys do not create browser
-sessions and cannot open native admin UI access. When native admin is disabled,
-leftover shared-cookie-domain configuration is ignored and Better Auth keeps the
-legacy host-only `openclaw_occ` cookie prefix and scope.
+With the trusted-operator pilot enabled, the session cookie is scoped to the
+explicit `nativeAdmin.sharedCookieDomain` parent so the console and derived Agent
+hosts share one human session. Service API keys cannot open native admin UI.
+When native admin is disabled, leftover shared-cookie-domain configuration is
+ignored and the host-only `openclaw_occ` cookie remains.
 
-The shared cookie parent domain is configured explicitly and validated against
-the console origin and Agent host suffix on DNS-label boundaries. Public
-suffixes, malformed domains, and hosts outside the configured parent are
-rejected; OCC does not infer a broader parent domain from either host. A
-domain-scoped cookie cannot use a host-only `__Host-` prefix. The shared-domain
-session uses the Better Auth cookie prefix `openclaw_occ_shared`; on HTTPS its
-cookie name is `__Secure-openclaw_occ_shared.session_token`. During migration,
-successful sign-in/sign-out responses clear prior host-only `openclaw_occ` and
-`openclaw_occ_shared` session-cookie names without a `Domain` attribute so
-browsers do not choose between duplicate host-only and domain cookies.
+The explicit parent domain is validated against the console origin and Agent host
+suffix on DNS-label boundaries. Public suffixes, malformed domains, and outside
+hosts are rejected; OCC never infers a broader parent. Because a domain cookie
+cannot use `__Host-`, the shared session uses prefix `openclaw_occ_shared`
+(`__Secure-openclaw_occ_shared.session_token` on HTTPS). Successful sign-in and
+sign-out clear prior host-only `openclaw_occ` and `openclaw_occ_shared` cookie
+names so browsers never choose between duplicates.
 
 Native-host requests authenticate the shared OCE session, resolve the exact
 Agent represented by the requested host, authorize exact Agent `administer`, and
 validate the current active revision and supported native configuration before
-proxying. OCC strips browser cookies, `Authorization`, API keys, forwarded
-identity, and native scope headers before forwarding upstream, so the native
+proxying. OCC strips browser cookies, `Authorization`, API and session keys,
+forwarded identity, and native scope headers before forwarding upstream, so the native
 gateway never receives the OCE session cookie. Native chat or other Agent-host
 activity does not renew the console session.
 
 ## Account provisioning
 
-`POST /api/auth/accounts` requires a human session and `administer` on the singleton Installation.
-It creates a Better Auth account and its explicit IAM Principal. Supplying
-`roleId` also creates an AccessBinding to that existing Role. Omitting `roleId`
-creates no grants; the account can sign in, but protected API calls fail until an
-administrator adds exact IAM bindings. Account creation cannot implicitly create
-a Role or infer a grant from the account's email or session. Creating an account
-does not sign it in or issue a session.
+`POST /api/auth/accounts` requires a human session and `administer` on the
+singleton Installation, and stays available with GitHub sign-in enabled. One
+transaction writes the account, Principal, optional grant, enrollment and an optional
+`"github":{"subject":"<numeric id>"}` identity (`409` if GitHub is off or taken).
+
+Supplying `roleId` binds the account to that existing Role. Omitting `roleId`
+creates no grants: the account can sign in, but protected calls fail until an
+administrator adds exact IAM bindings. The endpoint cannot create a Role or
+infer a grant from the account's email or session.
+Creating an account does not sign it in or issue a session.
 
 A representative provisioning body is:
 
@@ -187,9 +301,8 @@ A representative provisioning body is:
 To create the account before assigning any IAM access, omit `roleId`.
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
-The backend provisions the account without a public email-verification or
-signup flow. Duplicate accounts are rejected. General account management and
-password reset endpoints are not exposed by the controller API.
+Provisioning has no public email-verification or signup flow; duplicates are
+rejected. The controller API exposes no password reset.
 
 ## Authorization and failures
 

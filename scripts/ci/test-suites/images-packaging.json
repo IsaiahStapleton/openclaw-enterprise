@@ -1,4 +1,8 @@
 {
+  "env": {
+    "OCC_TEST_CONTAINER_REGISTRY": "1",
+    "OCC_TEST_DOCKER_TOKEN_RETRY": "1"
+  },
   "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE", "OCC_TEST_PRODUCTION_IMAGE"],
   "prepare": {
     "defaultEnv": {
@@ -11,9 +15,15 @@
   },
   "files": [
     {
+      "path": "tests/integration/docker-compute-token-retry.test.mjs",
+      "expectedTests": [
+        "Docker driver keeps dedicated transport coherent and rejects foreign owners across retries"
+      ]
+    },
+    {
       "path": "tests/integration/runtime-image-startup.test.mjs",
       "expectedTests": [
-        "runtime image shares Codex 0.156.0 between the plugin and Dedicated command",
+        "runtime image shares Codex 0.158.0 between the plugin and Dedicated command",
         "runtime image gateway ignores inherited OPENCLAW_LOG_LEVEL in favor of native configuration",
         "runtime image starts an embedded OpenClaw gateway with the Docker driver entrypoint",
         "runtime image discovers the bundled Codex plugin from a fresh gateway home",
@@ -50,6 +60,20 @@
       ]
     },
     {
+      "path": "tests/integration/password-default-chart.test.mjs",
+      "expectedTests": [
+        "the example install renders password-only sign-in and GitHub only as an upgrade"
+      ]
+    },
+    {
+      "path": "tests/integration/sign-in-chart-parity.test.mjs",
+      "expectedTests": [
+        "the API accepts exactly the sign-in settings the chart renders for every proxy preset, with and without GitHub",
+        "values the chart refuses are settings the API also refuses",
+        "proxy CIDRs without a preset are refused by the chart and default to ingress-nginx in the API"
+      ]
+    },
+    {
       "path": "tests/integration/development-packaging.test.mjs",
       "expectedTests": [
         "development packaging isolates bootstrap service key output to the bootstrap service"
@@ -77,9 +101,19 @@
       "expectedTests": [
         "publication updates aliases using real Skopeo and a multi-platform registry"
       ]
+    },
+    {
+      "path": "tests/integration/codex-model-probe.test.mjs",
+      "expectedTests": [
+        "generated Codex launcher bounds model-probe recovery",
+        "timeout then success",
+        "two timeouts",
+        "credential rejection",
+        "external SIGKILL",
+        "malformed output",
+        "tool event",
+        "termination during backoff exits without another probe"
+      ]
     }
-  ],
-  "env": {
-    "OCC_TEST_CONTAINER_REGISTRY": "1"
-  }
+  ]
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,9 @@ import { createKubernetesInstallationConfiguration } from "../helpers/kubernetes
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preparePath = join(repositoryRoot, "scripts/ci/prepare.mjs");
+const { loadYaml } = createRequire(new URL("../../apps/controller/package.json", import.meta.url))(
+  "@kubernetes/client-node",
+);
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "ci-prepare-test-"));
@@ -82,6 +86,21 @@ function finish(stdout = "") {
 
 if (command === "docker" || command === "podman") {
   if (equals(args, ["version", "--format", "{{.Server.Version}}"])) finish("29.4.0\n");
+  for (const [list, format] of [
+    [["ps", "-a"], "{{.Names}}"],
+    [["network", "ls"], "{{.Name}}"],
+    [["volume", "ls"], "{{.Name}}"],
+  ]) {
+    if (equals(args.slice(0, list.length), list)) {
+      assert.ok(state.clusterDeleted, "cluster inventory is checked after deletion");
+      assert.ok([
+        "label=k3d.cluster=" + state.cluster,
+        "name=k3d-" + state.cluster,
+      ].includes(args[list.length + 1]));
+      assert.deepEqual(args.slice(list.length), ["--filter", args[list.length + 1], "--format", format]);
+      finish();
+    }
+  }
   if ((scenario.startsWith("nodes-unready") || scenario === "cluster-create-failed") &&
       ["server-0", "agent-0"].some((suffix) => args.at(-1) === "k3d-" + state.cluster + "-" + suffix)) {
     if (state.containersAvailable === false) {
@@ -105,8 +124,17 @@ if (command === "docker" || command === "podman") {
       });
       process.exit(1);
     }
-    if (scenario === "inspect-failed" || (["image-absent", "podman-image-absent"].includes(scenario) && !state.pulled)) {
-      process.stderr.write(scenario === "inspect-failed" ? "Cannot connect to the Docker daemon\n" : scenario === "podman-image-absent" ? "Error: image not known\n" : "Error response from daemon: No such image\n");
+    if (
+      scenario === "inspect-failed" ||
+      (["image-absent", "podman-image-absent"].includes(scenario) && !state.pulled)
+    ) {
+      process.stderr.write(
+        scenario === "inspect-failed"
+           ? "Cannot connect to the Docker daemon\n"
+           : scenario === "podman-image-absent"
+             ? "failed to find image: image not known\n"
+             : "Error response from daemon: No such image\n",
+      );
       process.exit(1);
     }
     const matching = scenario === "local-digest" || (state.pulled && scenario !== "pull-mismatch");
@@ -272,7 +300,13 @@ if (command === "k3d") {
     finish();
   }
   if (equals(args, ["kubeconfig", "get", state.cluster])) finish("apiVersion: v1\n");
-  if (equals(args, ["cluster", "delete", state.cluster])) finish();
+  if (equals(args, ["cluster", "list", "-o", "json"])) {
+    finish(JSON.stringify(state.clusterDeleted ? [] : [{ name: state.cluster }]));
+  }
+  if (equals(args, ["cluster", "delete", state.cluster])) {
+    state.clusterDeleted = true;
+    finish();
+  }
 }
 if (command === "kubectl") {
   if (equals(args, ["version", "--client=true"])) finish("{}\n");
@@ -394,7 +428,10 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
     RUNNER_TEMP: root,
     CI_FIXTURE_ROOT: root,
     CI_FIXTURE_SCENARIO: scenario,
-    OCC_DOCKER_BIN: join(bin, scenario === "podman-success" ? "podman" : "docker.mjs"),
+    OCC_DOCKER_BIN: join(
+      bin,
+      ["podman-success", "podman-image-absent"].includes(scenario) ? "podman" : "docker.mjs",
+    ),
     OPENCLAW_CI_K3D_BIN: join(bin, "k3d.mjs"),
     OCC_KUBECTL_BIN: join(bin, "kubectl.mjs"),
     ...extraEnv,
@@ -675,7 +712,9 @@ test("k3d preparation reuses only matching local immutable images and verifies f
     const result = commands.prepare();
     assert.equal(result.status, 1);
     const calls = await commands.commands();
-    const pulls = calls.filter(({ command, args }) => command === "docker" && args[0] === "pull");
+    const pulls = calls.filter(
+      ({ command, args }) => ["docker", "podman"].includes(command) && args[0] === "pull",
+    );
     assert.equal(
       pulls.length,
       ["local-digest", "inspect-failed"].includes(scenario) ? 0 : 1,
@@ -1034,6 +1073,97 @@ test("installed repository preparation requires explicit authorization and prote
   assert.equal(invalidScope.status, 1);
   assert.match(invalidScope.stderr, /approved public IPv4/);
   await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  const releaseEnv = {
+    ...env,
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
+    OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "release",
+    OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: immutableImage,
+    OCC_TEST_KUBERNETES_RUNTIME_IMAGE: immutableImage,
+    NODE_BASE_IMAGE: "",
+  };
+  for (const [override, expected] of [
+    [{ OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: "" }, /OCC_TEST_PRODUCTION_CONTROLLER_IMAGE/],
+    [{ OCC_TEST_KUBERNETES_RUNTIME_IMAGE: "runtime:latest" }, /OCC_TEST_KUBERNETES_RUNTIME_IMAGE/],
+    [{ OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "unexpected" }, /must be source or release/],
+    [{ OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "source" }, /NODE_BASE_IMAGE/],
+  ]) {
+    const rejected = runPrepare(args, { ...releaseEnv, ...override });
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, expected);
+    await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+  }
+
+  // A complete release selection reaches tool discovery without a build base;
+  // no cluster or image is created by this preflight check.
+  const admitted = runPrepare(args, { ...releaseEnv, OCC_HELM_BIN: join(root, "missing-helm") });
+  assert.equal(admitted.status, 1);
+  assert.match(admitted.stderr, /missing-helm/);
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(state.resources, []);
+});
+
+test("production upgrade preparation requires two distinct immutable image pairs before creating resources", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "upgrade-state.json");
+  const image = (name, digit) => `registry.example/${name}@sha256:${digit.repeat(64)}`;
+  const env = {
+    OPENAI_API_KEY: "test-only-model-key",
+    OCC_TEST_OPENAI_MODEL: "test-model",
+    NODE_BASE_IMAGE: "",
+    OCC_TEST_PRODUCTION_POSTGRES_IMAGE: image("postgres", "a"),
+    OCC_TEST_PRODUCTION_NODE_IMAGE: image("node", "b"),
+    OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: image("controller", "c"),
+    OCC_TEST_KUBERNETES_RUNTIME_IMAGE: image("runtime", "d"),
+    OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: image("controller", "e"),
+    OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE: image("runtime", "f"),
+  };
+  const args = ["--lane", "production-tui", "--state", statePath];
+  for (const [override, expected] of [
+    [{ OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: "" }, /OCC_TEST_PRODUCTION_CONTROLLER_IMAGE/],
+    [
+      { OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE: "" },
+      /OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE/,
+    ],
+    [
+      { OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: "controller:latest" },
+      /OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE/,
+    ],
+    [
+      { OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: image("another-controller", "c") },
+      /must select a different digest/,
+    ],
+    [
+      {
+        OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: image("another-controller", "C").replace(
+          "@sha256:",
+          "@SHA256:",
+        ),
+      },
+      /must select a different digest/,
+    ],
+  ]) {
+    const rejected = runPrepare(args, { ...env, ...override });
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, expected);
+    await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+  }
+
+  // A complete release selection reaches tool discovery without a source build
+  // or secret-bearing preparation state; no cluster is created in this check.
+  const admitted = runPrepare(args, { ...env, OCC_HELM_BIN: join(root, "missing-helm") });
+  assert.equal(admitted.status, 1);
+  assert.match(admitted.stderr, /missing-helm/);
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(state.resources, []);
+  assert.ok(!JSON.stringify(state).includes(env.OPENAI_API_KEY));
+
+  const unprepared = runPrepare(
+    [...args, "--file", "tests/integration/production-tui-k3d-real.test.mjs"],
+    env,
+  );
+  assert.equal(unprepared.status, 1);
+  assert.match(unprepared.stderr, /must match the prepared lane state/);
 });
 
 test("ordinary CI groups require platform proof and exclude installed live repository writes", async () => {
@@ -1045,6 +1175,27 @@ test("ordinary CI groups require platform proof and exclude installed live repos
       assert.notEqual(manifest.lanes[lane].env?.OCC_TEST_REPOSITORY_CREDENTIALS_REAL, "1");
     }
   }
+});
+
+test("CI installs browsers for the PostgreSQL sign-in suite's owning lane", async () => {
+  const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
+  const owners = Object.entries(manifest.lanes).filter(([, lane]) =>
+    lane.files.some((file) => file.path === "tests/integration/postgres-github-sign-in.test.mjs"),
+  );
+  assert.equal(owners.length, 1);
+  const [lane] = owners[0];
+  const action = loadYaml(
+    await readFile(join(repositoryRoot, ".github/actions/run-ci-lane/action.yml"), "utf8"),
+  );
+  const browserSetup = action.runs.steps.find(
+    (step) => step.run === "bash scripts/ci/setup-tools.sh browser",
+  );
+  assert.ok(browserSetup);
+  // Moving the browser suite between lanes must carry its Chromium prerequisite.
+  assert.ok(
+    browserSetup.if.split(/\s*\|\|\s*/).includes(`inputs.lane == '${lane}'`),
+    `${lane} must install browsers before running the PostgreSQL sign-in suite`,
+  );
 });
 
 test("Kubernetes test helper passes an explicit Codex localhost seccomp profile into runtime config", () => {
@@ -1080,7 +1231,7 @@ test("codex seccomp preparation fails closed for unverified Codex versions and f
         execFile,
         codexVersion: "0.153.0",
       }),
-    /reviewed Codex versions: 0\.152\.1, 0\.154\.0, 0\.156\.0/,
+    /reviewed Codex versions: 0\.152\.1, 0\.154\.0, 0\.156\.0, 0\.158\.0/,
   );
   await assert.rejects(
     () =>
@@ -1180,7 +1331,7 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
         cluster,
         image: immutableImage,
         // The current runtime must still reject unrelated setup failures before node writes.
-        codexVersion: "0.156.0",
+        codexVersion: "0.158.0",
         execFile: execFileForRuntimeDefaultFailure((command, args) => {
           const commandText = `${command} ${args.join(" ")}`;
           assert.match(commandText, /--namespace/);
@@ -1218,7 +1369,7 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
         image: immutableImage,
         execFile: execFileForRuntimeDefaultFailure((command, args) => {
           const error = new Error(`${command} ${args.join(" ")} failed: version mismatch`);
-          error.stderr = "Codex version mismatch: expected 0.156.0, got 0.152.1";
+          error.stderr = "Codex version mismatch: expected 0.158.0, got 0.152.1";
           error.stdout = "";
           error.exitCode = 64;
           error.timedOut = false;
@@ -1361,7 +1512,7 @@ test("codex seccomp preparation publishes a reviewed Docker profile for native s
   assert.match(seccomp.profileSha256, /^[a-f0-9]{64}$/);
   assert.equal(
     seccomp.dockerProfilePath,
-    join(clusterDirectory, "docker-seccomp", `codex-0.156.0-${seccomp.profileSha256}.json`),
+    join(clusterDirectory, "docker-seccomp", `codex-0.158.0-${seccomp.profileSha256}.json`),
   );
   const profileData = await readFile(seccomp.dockerProfilePath, "utf8");
   assert.deepEqual(JSON.parse(profileData), installedProfile);

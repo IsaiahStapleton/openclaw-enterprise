@@ -19,18 +19,15 @@ for revision, execution, and stop behavior.
 
 ## Supported operations
 
-Agent operations are scoped beneath `/namespaces/:namespaceId/agents`. Creation
-returns `201`, reads and updates return `200`, and deployment returns `202`
-with the newly admitted AgentRevision. Stop and deletion also return `202`;
-their Compute effects remain asynchronous. Stop sets the Agent's
-`desiredRuntimeState` to `stopped`. Collection reads include only Agents the
-caller has an exact `read` grant for. The [API reference](api.md) documents route
-schemas, response envelopes, and permissions.
+Operations beneath `/namespaces/:namespaceId/agents` return `201` for creation,
+`200` for reads/updates, and `202` for deployment, stop, or deletion. Deployment
+returns the admitted AgentRevision; Compute work remains asynchronous. Stop sets
+`desiredRuntimeState` to `stopped`. Lists require each Agent's exact `read`.
+See [API schemas, envelopes, and permissions](api.md).
 
-Authorized Agent responses include immutable, read-only `servicePrincipalId`.
-Use this value for [Namespace IAM bindings](authorization.md#manage-namespace-policy);
-clients must not derive the identity from the Agent ID. Create and update
-requests reject a supplied `servicePrincipalId`.
+Responses include immutable `servicePrincipalId` for
+[Namespace IAM bindings](authorization.md#manage-namespace-policy). Do not derive
+it from the Agent ID; create/update reject caller-supplied values.
 
 Creation body:
 
@@ -43,12 +40,20 @@ Creation body:
 }
 ```
 
-Creation requires an existing Namespace in `provisioning` or `ready` status
-and a same-Namespace Configuration with `kind: "agent"`. The caller needs
-Agent `create` permission in that Namespace and `read` permission on the
-exact Configuration. A selected model credential requires separate permissions;
-see [Harness authentication](#harness-authentication). [Authentication](authentication.md)
-establishes the caller; [authorization](authorization.md) defines its grants.
+Creation requires a `provisioning` or `ready` Namespace, a same-Namespace
+Configuration with `kind: "agent"`, Namespace Agent `create`, and exact
+Configuration `read`. See [Harness authentication](#harness-authentication)
+for model credential permissions, [authentication](authentication.md) for caller
+identity, and [authorization](authorization.md) for grants.
+
+### Unreadable saved settings
+
+Agent and revision list/detail GETs preserve readable metadata with unreadable settings,
+adding `configurationReadError` with `code: "SAVED_CONFIGURATION_UNREADABLE"`
+and the affected `field`. Settings are omitted without defaults; readable
+siblings remain available. Authorization and strict mutation/runtime validation
+are unchanged. Query failures still fail requests. See the
+[Console warning](../guides/console/agent-details.md#unreadable-saved-settings).
 
 ## Deployment status
 
@@ -63,28 +68,33 @@ Poll the original deployment work with:
 GET /namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId
 ```
 
-The caller needs read access to that exact AgentRevision. Responses include the
-original `deploymentId`, `namespaceId`, `agentId`, a `status`, nullable
-`error`, and plugin `warnings`. `queued` means no live worker claim currently owns the original work,
-including after a claim lease expires. `running` means a worker claim is still
-live. `succeeded` means the original deployment work completed activation or
-was already active; it is historical completion evidence, not a live health
-probe. `failed` means the original work reached a terminal failed outcome or
-completed without activating the requested revision.
+Exact AgentRevision read permission is required; Agent `operate` is unnecessary.
+Responses include `deploymentId`, `namespaceId`, `agentId`, `status`, nullable
+`error`, plugin `warnings`, and nullable `progress`.
 
-Errors use fixed platform codes, messages, and allowlisted `error.data`.
-For `CONVERGENCE_DEADLINE_EXCEEDED`, data contains positive `timeoutMs` and may
-include `runtimeFailure` with safe `component`, `check`, `checkedAt`, and `code`
-fields captured by Compute from that revision's runtime. The primary code and
-message remain unchanged. Missing evidence leaves the cause unspecified.
-The result is persisted with terminal work and survives runtime deletion or
-controller restart. Polling this endpoint reads stored state only; it performs
-no runtime, provider, or model probes and requires no Agent `operate` permission.
-A successful deployment can include plugin warnings containing a closed code
-and admitted `pluginId`; see [Agent plugins](agent-plugins.md#lifecycle). These
-warnings record the observed startup result, not live plugin health.
-A later deployment admits a new revision with its own deployment status and does
-not rewrite the original result.
+- `queued`: no live claim, including after lease expiry.
+- `running`: a live worker claim.
+- `succeeded`: original work activated the revision or found it already active.
+- `failed`: terminal failure or completion without activation.
+
+Pending `progress.lastAttempt` contains the latest exact-work result's `at`,
+allowlisted `code`, and fixed `message`, even when deferral resets the retry
+count. Null means no bound evidence, not proof work never ran. Maintenance and
+cleanup results are excluded. `progress.nextAttemptAt` is the earliest queued
+eligibility, not a promised start; it is null while claimed. Terminal `progress`
+is null. Results describe recorded checks, not current runtime health.
+
+Errors have fixed codes, messages, and allowlisted `error.data`.
+`CONVERGENCE_DEADLINE_EXCEEDED` data includes positive `timeoutMs` and optional
+`runtimeFailure` (`component`, `check`, `checkedAt`, `code`) captured by Compute
+from that revision. The primary error remains unchanged; missing evidence
+leaves the cause unspecified. `RUNTIME_AUTHENTICATION_FAILED` ends deployment
+early when the runtime reports a rejected credential (HTTP 401/403); fix it and redeploy. Success can include [plugin warnings](agent-plugins.md#lifecycle)
+with a closed code and admitted `pluginId`.
+
+Polling reads persisted state without runtime, provider, or model probes.
+Terminal results survive runtime deletion and controller restart. Later
+deployments have separate records and cannot rewrite earlier results.
 
 ### Current runtime diagnostics
 
@@ -209,7 +219,7 @@ removed after activation or Agent deletion. Pending inputs have no read/update
 API; correction requires deleting and recreating the Agent.
 
 The optional `workspaceDefaultsId` is a SHA-256 defaults identity. Console sends
-all four rendered `2026.9.6` defaults with this identity. A stale identity rejects
+all four rendered `2026.9.7` defaults with this identity. A stale identity rejects
 creation with `409 RESOURCE_CONFLICT`; runtime mismatch blocks initial setup.
 See the [workspace guide](../guides/topics/workspace-files.md) and
 [setup flow](../flows/workspace-files.md) for recovery and runtime requirements.
@@ -307,24 +317,25 @@ you cannot restart an old revision directly.
 
 ## Deletion
 
-An authorized bodyless `DELETE /namespaces/:namespaceId/agents/:agentId`
-sets `status` to `deleting`, sets desired runtime state to `stopped`, queues
-teardown, and returns `202`. A deleting Agent remains readable while work is in
-flight, but update, deployment, runtime-credential provisioning, and workspace
-writes return `409`. Repeating deletion while the Agent exists converges on the
-same queued operation.
+A bodyless `DELETE /namespaces/:namespaceId/agents/:agentId` requires exact-Agent
+`delete`, sets `status: deleting` and desired state `stopped`, queues teardown,
+and returns `202`. Reads remain available; updates, deployment, credential
+provisioning, and workspace writes return `409`. Repeated DELETE leaves queued
+or running work unchanged.
 
-The worker reauthorizes the original caller, binds the persisted Agent identity
-into Compute, retires every revision, and removes the Agent's runtime credentials
-before atomically deleting the Agent, its
-revision history, service principal, service-principal API keys, and exact IAM
-bindings and restrictions. Kubernetes revision retirement waits for exact
-workload Pods and removes Agent-owned compute artifacts, including workspace
-data. Namespace-owned Configurations and Secrets survive. After success,
-the Agent disappears from reads and its name can be reused. Retryable cleanup
-failures leave the Agent in `deleting` while bounded queue retries continue.
-Permanent failures fail closed in `failed_permanent`; the Agent remains
-`deleting`, and the current API has no requeue or operator recovery path.
+The worker reauthorizes the original caller, binds the persisted identity into
+Compute, retires all revisions, and removes runtime credentials. It then
+atomically deletes the Agent, revisions, service principal, its API keys, and
+exact IAM bindings and restrictions. Kubernetes retirement waits for owned Pods
+and removes owned artifacts, including workspace data. Namespace Configurations
+and Secrets survive. Deletion releases its name;
+[repository cleanup](repository-credentials.md#repo-driver-contract) continues independently.
+
+Teardown retries are bounded. After permanent failure or exhaustion, the Agent
+stays `deleting`. Once the cause is corrected, the initiating caller can repeat
+DELETE to replenish the attempt budget. OCC and the worker recheck permission;
+another actor cannot take over. Work identity and prior failure audits remain,
+and the retry adds an audit event. This recovery covers Agent deletion only.
 
 ## Editable configuration
 
