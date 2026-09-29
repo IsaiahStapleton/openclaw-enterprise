@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,9 @@ import { createKubernetesInstallationConfiguration } from "../helpers/kubernetes
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const preparePath = join(repositoryRoot, "scripts/ci/prepare.mjs");
+const { loadYaml } = createRequire(new URL("../../apps/controller/package.json", import.meta.url))(
+  "@kubernetes/client-node",
+);
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "ci-prepare-test-"));
@@ -1157,6 +1161,27 @@ test("ordinary CI groups require platform proof and exclude installed live repos
       assert.notEqual(manifest.lanes[lane].env?.OCC_TEST_REPOSITORY_CREDENTIALS_REAL, "1");
     }
   }
+});
+
+test("CI installs browsers for the PostgreSQL sign-in suite's owning lane", async () => {
+  const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
+  const owners = Object.entries(manifest.lanes).filter(([, lane]) =>
+    lane.files.some((file) => file.path === "tests/integration/postgres-github-sign-in.test.mjs"),
+  );
+  assert.equal(owners.length, 1);
+  const [lane] = owners[0];
+  const action = loadYaml(
+    await readFile(join(repositoryRoot, ".github/actions/run-ci-lane/action.yml"), "utf8"),
+  );
+  const browserSetup = action.runs.steps.find(
+    (step) => step.run === "bash scripts/ci/setup-tools.sh browser",
+  );
+  assert.ok(browserSetup);
+  // Moving the browser suite between lanes must carry its Chromium prerequisite.
+  assert.ok(
+    browserSetup.if.split(/\s*\|\|\s*/).includes(`inputs.lane == '${lane}'`),
+    `${lane} must install browsers before running the PostgreSQL sign-in suite`,
+  );
 });
 
 test("Kubernetes test helper passes an explicit Codex localhost seccomp profile into runtime config", () => {
