@@ -522,6 +522,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
   let tests = [];
   let fileFailure;
   let agentActivity;
+  let measurements = [];
   try {
     if (issues.length === 0) {
       agentActivity = await startAgentNamespaceCapture({
@@ -559,6 +560,9 @@ async function runFile(root, lane, file, statePath, prepareFile) {
             : {}),
         };
       }
+      measurements = events
+        .filter((event) => event.type === "test:diagnostic" && event.data?.kind === "measurement")
+        .map((event) => event.data.measurement);
       tests = events
         .filter((event) => isRealTestEvent(event, absolutePath))
         .map((event) => ({
@@ -661,6 +665,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
     ...(fileFailure ? { fileFailure } : {}),
     counts,
     tests,
+    ...(measurements.length > 0 ? { measurements } : {}),
     issues,
     cleanup: cleanupResult,
     imageDigests: imageDigests(env),

@@ -1607,3 +1607,75 @@ test("aggregate fails when a supplied non-lane need failed even if lane artifact
   );
   assert.equal(summary.issues[0].need, "audit");
 });
+
+test("run records only allowlisted measurements from test diagnostics", async (t) => {
+  const root = await fixture(t);
+  const resultsPath = join(root, "results/measurements.json");
+  const measurement = (value) => `openclaw-ci-measurement ${JSON.stringify(value)}`;
+  await writeFile(
+    join(root, "tests/integration/measurements.test.mjs"),
+    [
+      'import test from "node:test";',
+      'test("measures", (t) => {',
+      ...[
+        measurement({
+          kind: "kubelet-volume-refresh",
+          volume: "secret",
+          nudge: "pod-annotation",
+          sample: 1,
+          seconds: 1.234,
+          extra: "secretauthvalue-extra",
+        }),
+        measurement({
+          kind: "kubelet-volume-refresh",
+          volume: "secretauthvalue-volume",
+          nudge: "none",
+          sample: 0,
+          seconds: 1,
+        }),
+        measurement({
+          kind: "kubelet-volume-refresh",
+          volume: "configmap",
+          nudge: "none",
+          sample: 0,
+          seconds: "secretauthvalue-seconds",
+        }),
+        "openclaw-ci-measurement secretauthvalue-not-json",
+        "secretauthvalue-plain-diagnostic",
+      ].map((message) => `  t.diagnostic(${JSON.stringify(message)});`),
+      "});",
+      "",
+    ].join("\n"),
+  );
+  await writeJson(join(root, "manifest.json"), {
+    version: 1,
+    lanes: { measure: { files: [{ path: "tests/integration/measurements.test.mjs" }] } },
+    groups: { ci: ["measure"] },
+  });
+
+  const result = run(root, [
+    "run",
+    "measure",
+    "--manifest",
+    "manifest.json",
+    "--root",
+    root,
+    "--state",
+    "state/measurements.jsonl",
+    "--results",
+    resultsPath,
+  ]);
+  const artifact = await readFile(resultsPath, "utf8");
+  const summary = JSON.parse(artifact);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(summary.files[0].measurements, [
+    {
+      kind: "kubelet-volume-refresh",
+      volume: "secret",
+      nudge: "pod-annotation",
+      sample: 1,
+      seconds: 1.2,
+    },
+  ]);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}\n${artifact}`, /secretauthvalue/);
+});
