@@ -710,12 +710,13 @@ export function createOpenShellKubernetesFixture({
       },
       360_000,
     );
-    // Compute copies the ordinary network profile onto the Sandbox; without it every ordinary
-    // grant (DNS, model, auth, gateway) would miss the Harness Pod.
+    // Compute gives the Sandbox the provider-fenced profile: the Pod keeps Gateway transport
+    // ingress but receives none of Compute's DNS, model or auth egress, so OpenShell's own
+    // egress fence is not unioned away.
     assert.equal(
       pod.metadata.labels?.["openclaw.dev/network-profile"],
-      "broad-egress-v1",
-      "the OpenShell-owned Harness Pod must carry the ordinary network profile.",
+      "provider-fenced-v1",
+      "the OpenShell-owned Harness Pod must carry the provider-fenced network profile.",
     );
     return pod;
   }
