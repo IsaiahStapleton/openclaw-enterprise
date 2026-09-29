@@ -88,8 +88,7 @@ The Preset does not create Secrets, Slack apps, infrastructure, or account
 enrollment. It relies on OCE's workspace routing and leaves additional plugins,
 embedding-backed memory, and scheduling configuration to the operator.
 
-Local template rendering, credential validation, and Kubernetes provisioning
-configuration checks pass, but this example has no live deployment or Slack
+Local template rendering passes, but this example has no live deployment or Slack
 acceptance result. Verify an actual reply and workspace access on your
 selected runtime before relying on it.
 
