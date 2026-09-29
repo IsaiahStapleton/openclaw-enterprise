@@ -17,7 +17,7 @@ import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { createControllerApp, createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
-import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import { NativeIAMDriver, validateAuthAccountPrincipalSeed } from "../../packages/iam/src/index.ts";
 import {
   AgentDeletingError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
@@ -3064,8 +3064,10 @@ test("session inspection stays optional and never exposes session or credential 
 test("administrator-created auth accounts sign in and receive only provisioned IAM access", async () => {
   let provisionedSeed;
   const fixture = await createInjectedFixture({
-    provisionAuthAccount(seed, { installAuthSeed, auditEvent }) {
+    provisionAuthAccount(seed, { installAuthSeed, state, auditEvent }) {
       provisionedSeed = seed;
+      // Use the production validator so Role errors map exactly as they do on PostgreSQL.
+      validateAuthAccountPrincipalSeed(seed, state, fixture.installationId);
       return installAuthSeed(seed, { auditEvent });
     },
   });
@@ -3101,6 +3103,11 @@ test("administrator-created auth accounts sign in and receive only provisioned I
   assert.equal(noGrantEvents[0].kind, "mutation");
   assert.equal(noGrantEvents[0].action, "openclaw.auth.accounts.create");
   assert.equal(noGrantEvents[0].outcome, "success");
+  assert.equal(noGrantEvents[0].details?.principalId, noGrant.data.principalId);
+  assert.equal(noGrantEvents[0].details?.grant, "none");
+  assert.equal(noGrantEvents[0].details?.roleId, undefined);
+  assert.ok(!JSON.stringify(noGrantEvents[0]).includes(noGrantEmail));
+  assert.ok(!JSON.stringify(noGrantEvents[0]).includes(noGrantPassword));
   assert.deepEqual(noGrantEvents[0].resource, {
     kind: "installation",
     id: fixture.installationId,
@@ -3159,6 +3166,46 @@ test("administrator-created auth accounts sign in and receive only provisioned I
     },
   });
   assert.equal(unknownRole.status, 400);
+
+  // A Namespace-scoped Role exists but cannot back an Installation account binding.
+  fixture.state.roles.push({
+    id: "role-namespace-auth-account",
+    name: "Namespace reader",
+    namespaceId,
+    permissions: [{ action: "read", resourceKind: "namespace" }],
+  });
+  const beforeNamespaceRole = {
+    identities: fixture.state.identities.length,
+    bindings: fixture.state.bindings.length,
+    auditEvents: fixture.auditSink.events.length,
+  };
+  const namespaceRoleEmail = `namespace-role-${randomUUID()}@example.com`;
+  const namespaceRolePassword = `generated-password-${randomUUID()}`;
+  const namespaceRole = await injectedRequest(fixture.app, "POST", "/api/auth/accounts", {
+    body: {
+      email: namespaceRoleEmail,
+      password: namespaceRolePassword,
+      name: "Namespace Role Operator",
+      roleId: "role-namespace-auth-account",
+    },
+  });
+  assert.equal(namespaceRole.status, 400, JSON.stringify(namespaceRole.body));
+  assert.equal(namespaceRole.body.error.code, "INVALID_REQUEST");
+  assert.deepEqual(
+    {
+      identities: fixture.state.identities.length,
+      bindings: fixture.state.bindings.length,
+      auditEvents: fixture.auditSink.events.length,
+    },
+    beforeNamespaceRole,
+  );
+  await assert.rejects(
+    signInWithEmailPassword({
+      fetch: fixture.app.fetch.bind(fixture.app),
+      email: namespaceRoleEmail,
+      password: namespaceRolePassword,
+    }),
+  );
 
   // An explicit but blank or null roleId is a malformed request, never the zero-grant path.
   for (const roleId of ["", null]) {
@@ -3249,6 +3296,11 @@ test("administrator-created auth accounts sign in and receive only provisioned I
   assert.equal(accountEvents[0].kind, "mutation");
   assert.equal(accountEvents[0].action, "openclaw.auth.accounts.create");
   assert.deepEqual(accountEvents[0].details?.iamEvidence?.groupIds, ["original-admin-evidence"]);
+  assert.equal(accountEvents[0].details?.principalId, created.data.principalId);
+  assert.equal(accountEvents[0].details?.roleId, readOnlyRole.id);
+  assert.equal(accountEvents[0].details?.grant, undefined);
+  assert.ok(!JSON.stringify(accountEvents[0]).includes(email));
+  assert.ok(!JSON.stringify(accountEvents[0]).includes(password));
   assert.deepEqual(accountEvents[0].resource, {
     kind: "installation",
     id: fixture.installationId,

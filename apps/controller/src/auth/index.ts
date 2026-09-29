@@ -115,6 +115,7 @@ export interface ProvisionAuthAccountInput {
 }
 
 export {
+  AuthAccountRoleInvalidError,
   AuthAccountRoleNotFoundError,
   type AuthPrincipalSeed,
   type AuthPrincipalSeedOptions,

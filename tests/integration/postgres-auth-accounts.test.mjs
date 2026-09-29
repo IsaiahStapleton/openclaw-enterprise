@@ -321,12 +321,17 @@ test(
     assert.equal(noGrantInstallation.statusCode, 403, noGrantInstallation.body);
     // The zero-grant create is audited exactly once as an administrator mutation.
     const noGrantAudit = await observerPool.query(
-      `SELECT id, kind, actor_id, resource_kind, resource_id, outcome
+      `SELECT id, kind, actor_id, resource_kind, resource_id, outcome, details
        FROM occ.audit_events
        WHERE action = 'openclaw.auth.accounts.create' AND NOT (id = ANY($1::text[]))`,
       [noGrantAuditBefore.rows.map(({ id }) => id)],
     );
     assert.equal(noGrantAudit.rows.length, 1);
+    assert.equal(noGrantAudit.rows[0].details.principalId, noGrant.json().data.principalId);
+    assert.equal(noGrantAudit.rows[0].details.grant, "none");
+    assert.equal(noGrantAudit.rows[0].details.roleId, undefined);
+    assert.ok(!JSON.stringify(noGrantAudit.rows[0].details).includes(noGrantEmail));
+    assert.ok(!JSON.stringify(noGrantAudit.rows[0].details).includes(noGrantPassword));
     assert.deepEqual(
       {
         kind: noGrantAudit.rows[0].kind,
@@ -473,6 +478,15 @@ test(
        WHERE action = 'openclaw.auth.accounts.create'`,
     );
     assert.equal(afterAudit.rows[0].count, beforeAudit.rows[0].count + 1);
+    const createdAudit = await observerPool.query(
+      `SELECT details FROM occ.audit_events
+       WHERE action = 'openclaw.auth.accounts.create' AND details->>'principalId' = $1`,
+      [created.json().data.principalId],
+    );
+    assert.equal(createdAudit.rows.length, 1);
+    assert.equal(createdAudit.rows[0].details.roleId, role.id);
+    assert.equal(createdAudit.rows[0].details.grant, undefined);
+    assert.ok(!JSON.stringify(createdAudit.rows[0].details).includes(email));
 
     // Grant the existing human exact Namespace access through the public policy API.
     // The second controller must observe it without gaining Installation or sibling access.
@@ -490,6 +504,38 @@ test(
       payload: { permissions: [{ action: "read", resourceKind: "namespace" }] },
     });
     assert.equal(namespaceRole.statusCode, 201, namespaceRole.body);
+    // A Namespace-scoped Role cannot back an account's Installation binding: 400, no writes.
+    const namespaceRoleEmail = `postgres-namespace-role-${randomUUID()}@example.com`;
+    const auditBeforeNamespaceRole = await observerPool.query(
+      `SELECT count(*)::integer AS count FROM occ.audit_events
+       WHERE action = 'openclaw.auth.accounts.create'`,
+    );
+    const namespaceRoleAccount = await appA.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: {
+        email: namespaceRoleEmail,
+        password: `generated-password-${randomUUID()}`,
+        roleId: namespaceRole.json().data.id,
+      },
+    });
+    assert.equal(namespaceRoleAccount.statusCode, 400, namespaceRoleAccount.body);
+    assert.equal(namespaceRoleAccount.json().error.code, "INVALID_REQUEST");
+    assert.deepEqual(
+      (await observerPool.query(`SELECT id FROM occ."user" WHERE email = $1`, [namespaceRoleEmail]))
+        .rows,
+      [],
+    );
+    assert.deepEqual(
+      (
+        await observerPool.query(
+          `SELECT count(*)::integer AS count FROM occ.audit_events
+           WHERE action = 'openclaw.auth.accounts.create'`,
+        )
+      ).rows,
+      auditBeforeNamespaceRole.rows,
+    );
     const binding = await appA.inject({
       method: "POST",
       url: `/namespaces/${namespaceId}/iam/access-bindings`,

@@ -282,9 +282,10 @@ singleton Installation, and stays available with GitHub sign-in enabled. One
 transaction writes the account, Principal, grant, enrollment and an optional
 `"github":{"subject":"<numeric id>"}` identity (`409` if GitHub is off or taken).
 
-An optional `roleId` binds an existing Role; without one the account has no
-grants. The endpoint cannot create a Role or infer a grant from email or session.
-Creation does not sign the account in or issue a session.
+An optional `roleId` binds an existing Installation Role (`400` if unknown or
+Namespace-scoped); without one the account has no grants. It cannot create Roles
+or infer grants. Audit records `principalId` and `roleId` or `grant: "none"`.
+Creation issues no session.
 
 A representative provisioning body is:
 
