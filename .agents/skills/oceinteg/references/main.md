@@ -8,10 +8,11 @@ repository root. Use current supported procedures from the
 [Agent setup guide](../../../../docs/guides/deploy/production-agents.md), and
 [repository installation guide](../../../../docs/guides/repository-credentials/installation.md).
 
-This scenario sends test messages in the selected Slack channel and creates and
-deletes uniquely named disposable Git branches. Resolve the targets and existing
-authorization before those actions. Do not open PRs, merge, force-push, alter
-protected refs, or change unrelated installations. Use only test-owned resources.
+This scenario sends test messages in the selected Slack channel and attempts
+uniquely named disposable Git branch pushes that must be denied by repository
+authorization. Resolve the targets and existing authorization before those
+actions. Do not open PRs, merge, force-push, alter protected refs, or change
+unrelated installations. Use only test-owned resources.
 
 ## Resolve inputs before provisioning
 
@@ -24,8 +25,8 @@ nonsecret selections in the run report. Never record credential values.
 | Images and source       | Choose a compatible published release or operator-supplied custom immutable controller/runtime/broker images. Record source revision, chart version, image digests, architecture, and runtime provenance. Resolve “latest” once; fail explicitly if no compatible published pair is available.           |
 | Model authentication    | Use the user-selected existing service-account credential and supported model. For a directly supplied token, select dedicated Codex and Console **Service Accounts** (`codex_pat`). Do not silently substitute an API key or another account when authentication, quota, or model access fails.         |
 | Slack                   | Resolve the supplied credential item to its app-level and bot tokens without printing either. Record workspace, bot identity, channel ID, and authorized test sender. Confirm app subscriptions/scopes and channel membership. Only one test deployment may consume the same Slack identity at a time.   |
-| GitHub App              | Obtain operator-supplied App ID, installation ID, private-key reference, numeric repository IDs, and approved permissions for both repositories below. Keep inputs protected and outside chart values and Agent configuration.                                                                           |
-| Linear                  | Supply the selected workspace, a known readable issue, and any required plugin authentication. Catalog visibility or an enabled badge alone is not authentication proof.                                                                                                                                 |
+| GitHub App              | Obtain operator-supplied App ID, installation ID, private-key reference, numeric repository IDs, and approved `git-read` policy for both repositories below. Keep inputs protected and outside chart values and Agent configuration.                                                                     |
+| Linear                  | Supply the selected workspace, a known readable issue, and a selected Codex account that already has Linear connected for the selected plugin. Catalog visibility or an enabled badge alone is not authentication proof.                                                                                 |
 | Browser access          | Supply Console URL, operator login, native UI domain and certificate, and the required routing/cookie-domain inputs.                                                                                                                                                                                     |
 | Ownership and retention | Record a run ID, disposable branch names, owned infrastructure and resource IDs, evidence directory outside the checkout, timeouts, and whether successful resources should be retained. Preserve unrelated state and the default kubeconfig/context.                                                    |
 
@@ -88,19 +89,21 @@ patch, or manual runtime-file repair fails the Console-only criterion.
 2. Configure the test channel, default `oce-feedback-test`, using its exact ID.
    The preset's existing allowlist does not include this channel. Set no-mention
    handling and reply-in-thread behavior explicitly through supported controls.
-3. Bind `openclaw/openclaw-enterprise` with `git-write` and
-   `openclaw/openclaw` with `git-read`. Select permissions explicitly; do not
-   infer them from the App's installation repository list or Console defaults.
-   If Console cannot represent these different permissions, record a product
-   failure rather than supplying the binding through an API.
-4. Resolve the preset's read-only role before the Git-write test. Through the
-   Console, add a narrow Agent-specific instruction authorizing the designated
-   sender's disposable branch test in the two selected repositories. Preserve
-   the preset globally and its other restrictions. If no supported Console path
-   exists, report the conflict; a model refusal cannot prove broker enforcement.
-5. Enable Linear from the curated catalog and complete its required authentication
-   through supported Console/plugin flows. Keep the Community role's Linear
-   access read-only.
+3. Bind both `openclaw/openclaw-enterprise` and `openclaw/openclaw` with the
+   Console's shared **Read-only** access level (`git-read`). Select permissions
+   explicitly; do not infer them from the App's installation repository list or
+   Console defaults. Current Console repository selection uses one profile for
+   every selected repository; per-repository mixed profiles are future scope.
+4. Preserve the preset's read-only role. Do not add an Agent instruction that
+   tells the model to refuse repository writes or otherwise substitutes prompt
+   behavior for credential enforcement. Push-denial evidence must come from a
+   real attempted Git operation against each selected repository.
+5. Enable Linear from the curated catalog only after confirming the selected
+   Codex account already has Linear connected for the chosen workspace. Preserve
+   the Community role's instruction to read, not change, Linear items; that
+   instruction is not provider-enforced read-only access. If the account is not
+   connected, record a credential blocker before provisioning rather than
+   proceeding through a nonexistent Console authentication flow.
 6. Deploy. Require the selected revision to become active, its real workloads to
    become Ready, and a genuine model turn to succeed. Reload Console and confirm
    saved selections. Record the Agent and revision IDs for later attribution.
@@ -116,9 +119,9 @@ override reply mode; that fixture is not proof of this scenario.
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Unmentioned channel message   | Send a relevant top-level question without mentioning the bot. Receive an answer from the selected Agent in that message's thread, with matching `thread_ts` and no stray top-level response.                                                                                                                                                                                                                                                                         |
 | Thread follow-up              | Send an unmentioned follow-up in the same thread. Verify a contextual reply in the same thread from the same Agent.                                                                                                                                                                                                                                                                                                                                                   |
-| Linear                        | Ask for the known permitted issue. Verify a real successful Linear tool call and accurate issue identity, title/status, and link. The preset's graceful fallback is useful behavior but is not a passed Linear test.                                                                                                                                                                                                                                                  |
-| Allowed repository            | From Slack, request sandboxed clone, fetch, one harmless file/commit, and push to a unique disposable branch in `openclaw-enterprise`. Verify native tool execution and independently read back the remote SHA and exact file. No host-run push may substitute for the Agent operation.                                                                                                                                                                               |
-| Read-only repository          | First prove clone/fetch of `openclaw` succeeds. Request a push to a unique disposable branch there. Require an actual authorization denial, not a model refusal, missing credential, timeout, DNS failure, or broken Git command. Independently confirm the remote ref stayed absent/unchanged. If it unexpectedly succeeds, record the failure and remove only that owned ref after verifying ownership.                                                             |
+| Linear                        | Ask for the known permitted issue. Verify a real successful Linear tool call and accurate issue identity, title/status, and link. The preset's graceful fallback is useful behavior but is not a passed Linear test. `PLUGIN_AUTH_REQUIRED`, an unconnected account, or missing workspace consent is a blocked Linear test, not a Console step to complete during provisioning.                                                                                       |
+| Repository reads              | From Slack, request sandboxed clone/fetch and harmless read-only inspection of both `openclaw/openclaw-enterprise` and `openclaw/openclaw`. Verify native tool execution and independently read back the exact remote commit or file identity for each repository. No host-run Git command may substitute for the Agent operation.                                                                                                                                    |
+| Repository write denial       | For each selected repository, request a push of a unique disposable branch created inside the sandbox. Require an actual authorization denial, not a model refusal, missing credential, timeout, DNS failure, or broken Git command. Independently confirm each remote ref stayed absent or unchanged. If any push unexpectedly succeeds, record the product failure and remove only that owned ref after verifying ownership.                                        |
 | Broker and sandbox boundaries | Confirm valid TLS to the rendered host, wrong-host/untrusted-CA rejection, an explicit Codex domain deny with a positive reachability control, and denied out-of-workspace writes with a writable positive control. Distinguish client-side refusal from server-side authorization. When needed, use a separately identified trusted observer probe with valid scoped credentials to establish broker denial; do not expose those credentials to the model or report. |
 | Native Control UI             | Launch from the selected Agent's Console action. Require authenticated content, a live connection, a harmless read, and successful reload. Verify an unauthenticated browser cannot reach Agent content. Opening an empty tab is not a pass.                                                                                                                                                                                                                          |
 | Persistence                   | Redeploy once through Console. Verify saved repository permissions, plugin and channel settings, then repeat a Slack/model response and Control UI launch. Verify working state survives the expected lifecycle.                                                                                                                                                                                                                                                      |
@@ -135,9 +138,10 @@ or repair the running Agent outside Console to obtain a pass. If a fix is within
 the task's authorization, retain the failed evidence and rerun the affected
 supported path from a clean state; otherwise report the blocker.
 
-After an uncertain write or transport timeout, independently inspect provider
-state before retrying. Never blindly replay a push. Verify ownership and the
-current ref SHA before deleting only the run's branches. Stop the test Agent
+After an uncertain write-denial attempt or transport timeout, independently
+inspect provider state before retrying. Never blindly replay a push. Verify
+ownership and the current ref SHA before deleting only unexpectedly created
+run branches. Stop the test Agent
 through Console and verify runtime/material cleanup before removing owned
 installation resources, unless the user requested retention. Do not falsify
 repository disposal state or delete unknown historical cleanup records. Preserve
