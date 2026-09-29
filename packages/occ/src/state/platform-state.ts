@@ -1140,6 +1140,20 @@ function repositories(
     },
   };
 
+  // Deleting a Namespace resource also removes the AccessBindings that grant
+  // on it (as Agent deletion does), so none outlive their target or keep
+  // blocking deletion of the Role they reference. Resource ids are unique.
+  const deleteResourceAccessBindings = (
+    resourceKind: "configuration" | "preset" | "secret" | "credential_source" | "service_account",
+    resourceId: string,
+  ): void => {
+    for (const [key, binding] of snapshot.bindings) {
+      if (binding.resourceKind === resourceKind && binding.resourceId === resourceId) {
+        snapshot.bindings.delete(key);
+      }
+    }
+  };
+
   const findPreset: PresetReadRepository["findPreset"] = async (namespaceId, presetId) => {
     if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) {
       return undefined;
@@ -1201,7 +1215,9 @@ function repositories(
       if ((await findPreset(namespaceId, presetId)) === undefined) {
         return false;
       }
-      return snapshot.presets.delete(agentKey(namespaceId, presetId));
+      snapshot.presets.delete(agentKey(namespaceId, presetId));
+      deleteResourceAccessBindings("preset", presetId);
+      return true;
     },
   };
 
@@ -1305,6 +1321,7 @@ function repositories(
         throw new ScopeViolationError("The Configuration is referenced by an Agent.");
       }
       snapshot.configurations.delete(agentKey(namespaceId, configurationId));
+      deleteResourceAccessBindings("configuration", configurationId);
       return true;
     },
   };
@@ -1413,6 +1430,7 @@ function repositories(
         throw new ScopeViolationError("The Secret is referenced by active platform state.");
       }
       snapshot.secrets.delete(agentKey(namespaceId, secretId));
+      deleteResourceAccessBindings("secret", secretId);
       return true;
     },
   };
@@ -1543,6 +1561,7 @@ function repositories(
         );
       }
       snapshot.credentialSources.delete(agentKey(namespaceId, credentialSourceId));
+      deleteResourceAccessBindings("credential_source", credentialSourceId);
       return true;
     },
   };
@@ -1660,6 +1679,7 @@ function repositories(
         throw new ScopeViolationError("The ServiceAccount is referenced by active platform state.");
       }
       snapshot.serviceAccounts.delete(agentKey(namespaceId, serviceAccountId));
+      deleteResourceAccessBindings("service_account", serviceAccountId);
       return true;
     },
   };
