@@ -64,11 +64,11 @@ Production composition selects the bundled Slack ChannelDriver only when the
 API has an approved `OCC_CHANNEL_DIRECTORY_PROXY_URL`. Without it, an authorized
 lookup returns `501` before the Secret value is read. Development selects the
 Driver directly. In production the Driver tunnels requests to `slack.com:443`
-through the configured proxy. Helm can set that proxy to its managed
-`openclaw-enterprise-slack-proxy.<namespace>.svc` Service, pass the exact managed
-host in `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST`, and grant API egress only to
-the proxy Pod selector. Otherwise it can use an external literal IPv4 proxy and
-grant API egress only to that IP and port. The managed proxy accepts CONNECT
+through the configured proxy. With the managed proxy enabled, Helm points the
+API at the `openclaw-enterprise-slack-proxy.<namespace>.svc` Service, sets that
+exact host in `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST`, and limits API egress
+to the proxy Pod selector. With an external literal IPv4 proxy, Helm limits API
+egress to that IP and port. The managed proxy accepts CONNECT
 only for Slack hostnames on port 443, while its NetworkPolicy limits upstream
 egress to operator-supplied CIDRs.
 The selected SecretDriver invokes `withValue` and verifies backend ownership.
