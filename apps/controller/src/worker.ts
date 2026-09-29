@@ -398,13 +398,15 @@ export class ControllerWorker {
   /**
    * Predecessors this process stopped for an exclusive successor, by revision ID.
    * The dispatch guard supersedes a predecessor's own work once an exclusive
-   * successor exists, so only a late effect from a lost claim can recreate it.
-   * Such an effect lands within one lease, so each record is re-stopped once
-   * after a lease has elapsed; later preparation passes skip it.
+   * successor exists, so only a late effect from a lost claim (or an edit outside
+   * the worker) can recreate it. Compute reports such a predecessor as a
+   * not-ready successor rather than an error, so each record is stopped again
+   * after one lease, then after two, four and so on: a returned predecessor is
+   * always stopped again, at a cost that grows only logarithmically with time.
    */
   private readonly stoppedPredecessors = new Map<
     string,
-    { readonly stoppedAt: number; readonly confirmed: boolean }
+    { readonly stoppedAt: number; readonly restopAfterMs: number }
   >();
 
   constructor(options: ControllerWorkerOptions) {
@@ -931,10 +933,7 @@ export class ControllerWorker {
   ): Promise<void> {
     for (const previous of earlier) {
       const record = this.stoppedPredecessors.get(previous.id);
-      if (
-        record !== undefined &&
-        (record.confirmed || Date.now() - record.stoppedAt < this.leaseDurationMs)
-      ) {
+      if (record !== undefined && Date.now() - record.stoppedAt < record.restopAfterMs) {
         continue;
       }
       await this.closeRevisionCredentials(claim, previous);
@@ -942,7 +941,7 @@ export class ControllerWorker {
       this.stoppedPredecessors.delete(previous.id);
       this.stoppedPredecessors.set(previous.id, {
         stoppedAt: Date.now(),
-        confirmed: record !== undefined,
+        restopAfterMs: record === undefined ? this.leaseDurationMs : record.restopAfterMs * 2,
       });
       if (this.stoppedPredecessors.size > MAX_STOPPED_PREDECESSOR_RECORDS) {
         // Forgetting a record only costs one repeated idempotent stop.

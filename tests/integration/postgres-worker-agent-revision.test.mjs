@@ -634,6 +634,8 @@ test(
     const replacement = await fixture.revision(owner, 2);
     await fixture.work(replacement, "succeeded", 30_000);
     assert.ok(driver.preparations(replacement) >= 5, "the replacement must repeat pending passes");
+    // Exactly one stop holds because the fixture lease (30 s) outlasts this pending
+    // window; with a shorter lease the scheduled re-stop would add more.
     assert.equal(driver.count(first), 1, "pending passes must not repeat the predecessor stop");
 
     for (let index = 0; index < 2; index += 1) {
@@ -653,24 +655,26 @@ test(
   "a predecessor that comes back after the sweep is stopped again",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
-    for (const { leaseDurationMs, label } of [
+    for (const { leaseDurationMs, label, returns } of [
       // A late Compute effect makes the next pass fail, which forgets the record.
-      { leaseDurationMs: 30_000, label: "failed-pass" },
+      { leaseDurationMs: 30_000, label: "failed-pass", returns: 1 },
       // A late effect keeps the candidate pending until one lease has elapsed.
-      { leaseDurationMs: 1_000, label: "lease-confirmation" },
+      { leaseDurationMs: 1_000, label: "lease-restop", returns: 1 },
+      // It comes back again after that re-stop; the next one follows two leases later.
+      { leaseDurationMs: 1_000, label: "repeated-restop", returns: 2 },
     ]) {
       const fixture = await setup(context, { leaseDurationMs });
       const owner = await fixture.agent(`exclusive-resurrection-${label}`, "dedicated");
       let first;
-      let resurrected = false;
+      let resurrections = 0;
       const driver = countingExclusiveCompute(fixture, {
         async onPrepare(revision, overlap) {
           if (revision.revision !== 2) {
             return;
           }
-          if (!resurrected) {
-            // Model a lost claim's late Compute write landing after the sweep.
-            resurrected = true;
+          if (resurrections < returns && driver.count(first) > resurrections) {
+            // Model a lost claim's late Compute write landing after each stop.
+            resurrections += 1;
             driver.running.add(first.id);
           } else if (overlap.length > 0 && label === "failed-pass") {
             driver.running.delete(revision.id);
@@ -683,8 +687,12 @@ test(
       await fixture.work(first, "succeeded");
       const replacement = await fixture.revision(owner, 2);
       await fixture.work(replacement, "succeeded", 30_000);
-      assert.equal(resurrected, true);
-      assert.equal(driver.count(first), 2, `${label}: the returned predecessor is stopped again`);
+      assert.equal(resurrections, returns);
+      assert.equal(
+        driver.count(first),
+        returns + 1,
+        `${label}: the returned predecessor is stopped again`,
+      );
       assert.deepEqual([...driver.running], [replacement.id]);
       const current = await fixture.state.read((view) =>
         view.agents.findAgent(fixture.namespace.id, owner.id),
