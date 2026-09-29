@@ -613,6 +613,30 @@ export const scenarios = {
     description:
       "Installation-wide Namespace identity and status cards, without a Namespace selector.",
   },
+  namespacesUnavailable: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    description: "Recover from a stale Namespace URL using the selector inside the message.",
+    steps: [
+      "Choose Engineering under Choose a valid namespace; the URL changes and the warning disappears without leaving Namespaces.",
+      "Use browser Back to return to the unavailable selection and recover again.",
+    ],
+  },
+  namespacesUnavailableMobile: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection mobile",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    mobile: true,
+    description: "Recover inline at 390px without opening navigation.",
+  },
+  namespacesUnavailableEmpty: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection without access",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    emptyNamespaces: true,
+    description: "No readable alternatives: show access guidance instead of a selection action.",
+  },
   namespacesEmpty: {
     group: "Pages/Namespaces",
     name: "Empty",

@@ -88,17 +88,24 @@ Back/Forward and tab changes. Refresh reloads. **Return access denied** and
 
 ## Agent flows and UI gaps
 
-In **Components → Navigation → Namespace switcher**, use the header selector to
-switch between Engineering and Research. Check the URL, collection, and browser
-Back behavior; confirm the Namespaces page omits the selector. **Mobile Namespace
-selector** checks long-name truncation before the chevron and switching without the
-drawer. Existing no-readable, unavailable, loading, and denied stories cover
-restricted selector states.
+**Components → Navigation → Namespace switcher**: switch Engineering and
+Research; check the URL, collection, Back, and the selector-free Namespaces
+header. **Mobile Namespace selector** checks chevron truncation and drawer-free
+switching. Other stories cover no-readable, unavailable, loading, and denied
+states.
 
-Simulated examples: [desktop selector](../assets/console-namespace-selector/desktop.png),
-[mobile empty collection](../assets/console-namespace-selector/mobile.png),
-[Namespaces page without a selector](../assets/console-namespace-selector/namespaces.png),
-and a [switching walkthrough](../assets/console-namespace-selector/namespace-switching.webm).
+In **Pages → Namespaces → Unavailable selection**, a readable choice in the
+warning updates the URL and clears it; Back restores it. Variants: mobile, no
+access. Simulated:
+[desktop](../assets/console-namespace-recovery/desktop.png),
+[mobile](../assets/console-namespace-recovery/mobile.png),
+[recovered](../assets/console-namespace-recovery/recovered.png),
+[no-access](../assets/console-namespace-recovery/no-access.png),
+[walkthrough](../assets/console-namespace-recovery/walkthrough.webm),
+[selector](../assets/console-namespace-selector/desktop.png),
+[empty](../assets/console-namespace-selector/mobile.png),
+[Namespaces](../assets/console-namespace-selector/namespaces.png), and
+[switching](../assets/console-namespace-selector/namespace-switching.webm).
 
 ### Create and deploy
 
