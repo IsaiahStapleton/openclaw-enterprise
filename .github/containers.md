@@ -1,11 +1,15 @@
 # Enterprise container publication
 
+The [OCC CLI release](cli-publication.md) publishes matching versioned command
+line binaries through a separate protected workflow.
+
 [`container-publish.yml`](workflows/container-publish.yml) prepares the existing
 controller (`Dockerfile`, target `runtime`) and combined gateway/Agent runtime
 (`deploy/runtime/Dockerfile`) as OCI archives containing both `linux/amd64` and
 `linux/arm64`. Each image has one multi-platform index digest; Docker selects
-the matching architecture when pulling it. It does not change recipes,
-package versions, Kubernetes deployment, or the existing CI test matrix.
+the matching architecture when pulling it. Publishing also packages the OCC
+Helm chart under the same OCE release version. It does not deploy Kubernetes
+resources or change the existing CI test matrix.
 
 ## Source visibility
 
@@ -43,10 +47,10 @@ approval or approval-comment requirement. Complete these prerequisites first.
   approved Node 24 digest used by `scripts/ci/test-suites/images-packaging.json`
   and the runtime Dockerfile. All three must agree. This is an explicit approval,
   not a default.
-- Bootstrap two **private**, pre-existing GHCR container packages,
-  link each to `openclaw/openclaw-enterprise`, and grant this repository Actions
-  access. GHCR packages are first created by pushing an image; the Enterprise
-  publisher deliberately cannot perform that initial push. Use the manual
+- Bootstrap three **private**, pre-existing GHCR container packages: the two
+  images and `ghcr.io/openclaw/charts/openclaw-enterprise`. Link each to
+  `openclaw/openclaw-enterprise` and grant this repository Actions access. The
+  Enterprise publisher requires these packages to exist. Use the manual
   [marker bootstrap](#bootstrap-private-packages), then confirm private
   visibility and linkage.
 - Set environment variables `GHCR_CONTROLLER_IMAGE` and `GHCR_RUNTIME_IMAGE`
@@ -96,11 +100,11 @@ organization permits creation of private container packages under those names.
 Dispatch **Bootstrap Enterprise Container Packages** on `main` with that
 `ci_run_id`. The manual dispatch authorizes the run.
 
-The workflow uses its short-lived `GITHUB_TOKEN` to build and push a scratch
-image containing only a fixed marker. Its temporary context contains no checkout
-files or credentials. Existing packages must be private and are left unchanged;
-explicit conflicting repository metadata fails. An authenticated metadata 404 permits only this harmless
-push; it is not proof that a package is absent rather than inaccessible. Other
+The workflow uses its short-lived `GITHUB_TOKEN` to push scratch image markers
+and a nondeployable Helm chart marker. Its temporary image contexts and chart
+contain no checkout files or credentials. Existing private packages remain
+unchanged; conflicting repository metadata fails. An authenticated metadata 404
+permits only this harmless push; it does not prove the package is absent. Other
 metadata errors stop the run. After each push, the metadata lookup retries only
 404 responses up to five times at two-second intervals for registry propagation;
 persistent 404 responses fail. Private visibility and the remote digest must
@@ -108,7 +112,7 @@ verify before bootstrap succeeds. Confirm package linkage during setup before
 real-image publication.
 
 The job summary records package coordinates and marker digests. The unique
-`bootstrap-<run-id>-<attempt>` tags are not runnable Enterprise images. Bootstrap
+`bootstrap-<run-id>-<attempt>` image tags and chart version are not deployable. Bootstrap
 does not change visibility or access grants; if verification fails, inspect the
 package settings and fix the reported cause before retrying. A partial result is retained,
 and a subsequent dispatch leaves valid existing packages untouched. The ordinary
@@ -143,10 +147,16 @@ grant a workstation credential additional scopes.
    archive and all child manifests with Skopeo and verifies the remote index digests. Source, CI attempt,
    environment branch policy, and package visibility are rechecked before transfer.
 4. Use the `image@sha256:...` references in the job summary and
-   `container-publication-<run-id>-<attempt>` receipt for deployment. Each image
-   receives an immutable `sha-<source-sha>` tag and the selected mutable alias;
-   the receipt records both. Existing source tags cannot be replaced by different
-   bytes. Publication does not create a Git tag, GitHub release, or deployment.
+   `chart-publication-<run-id>-<attempt>` receipt for deployment. Each image
+   receives an immutable `sha-<source-sha>` tag, the selected mutable alias,
+   and an OCE version tag matching the chart. The image-only
+   `container-publication` receipt records the source tags and alias for
+   promotion and recovery. Existing source and version tags cannot be replaced
+   by different bytes. Publication does not create a Git tag, GitHub release,
+   or deployment.
+
+Follow [chart publication and installation](chart-publication.md) to advance the
+shared version, inspect the chart metadata, and pull the private OCI package.
 
 The multi-platform publisher requires both architectures in every seal. Earlier
 amd64-only tags retain their original bytes and digests; building this workflow

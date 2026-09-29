@@ -37,6 +37,8 @@ import {
   CredentialSourceResponse,
   occApiRoutes,
   type Agent,
+  type AgentRead,
+  type AgentRevisionRead,
   type ProvisionAgentBody,
   type AgentRevision,
   type AgentRuntimeCredentialsBody,
@@ -812,7 +814,10 @@ function clientInstallation(
   };
 }
 
-function clientAgent(agent: Readonly<Agent>): Record<string, unknown> {
+function clientAgent(agent: Readonly<AgentRead>): Record<string, unknown> {
+  if ("configurationReadError" in agent) {
+    return { ...agent };
+  }
   return {
     id: agent.id,
     namespaceId: agent.namespaceId,
@@ -858,7 +863,10 @@ function clientAgentProvisioning(
   };
 }
 
-function clientRevision(revision: Readonly<AgentRevision>): Record<string, unknown> {
+function clientRevision(revision: Readonly<AgentRevisionRead>): Record<string, unknown> {
+  if ("configurationReadError" in revision) {
+    return { ...revision };
+  }
   return {
     id: revision.id,
     namespaceId: revision.namespaceId,
@@ -2451,7 +2459,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
     if (operation.operationId === "getAgent") {
       reply.send({
-        data: clientAgent(await controller.getAgent(context.actorId, namespaceId, agentId)),
+        data: clientAgent(
+          await controller.getAgentForBrowsing(context.actorId, namespaceId, agentId),
+        ),
         meta: { requestId: request.id },
       });
       return;
@@ -2814,7 +2824,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     }
 
     if (operation.operationId === "getAgentRevision") {
-      const revision = await controller.getRevision(
+      const revision = await controller.getRevisionForBrowsing(
         context.actorId,
         namespaceId,
         agentId,
