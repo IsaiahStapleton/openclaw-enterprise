@@ -151,3 +151,16 @@ export class PluginPolicyValidationError extends Error {
     this.name = "PluginPolicyValidationError";
   }
 }
+
+/** Sanitized admission outcome. The path identifies configuration, never Secret contents. */
+export class ChannelCredentialError extends Error {
+  readonly reason: "role_mismatch" | "credentials_rejected" | "unavailable" | "binding_required";
+  readonly path: string;
+
+  constructor(reason: ChannelCredentialError["reason"], path: string) {
+    super("Channel credential validation failed.");
+    this.name = "ChannelCredentialError";
+    this.reason = reason;
+    this.path = path;
+  }
+}
