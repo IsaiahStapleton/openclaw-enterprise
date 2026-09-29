@@ -279,14 +279,12 @@ activity does not renew the console session.
 
 `POST /api/auth/accounts` requires a human session and `administer` on the
 singleton Installation, and stays available with GitHub sign-in enabled. One
-transaction writes the account, Principal, optional grant, enrollment and an optional
+transaction writes the account, Principal, grant, enrollment and an optional
 `"github":{"subject":"<numeric id>"}` identity (`409` if GitHub is off or taken).
 
-Supplying `roleId` binds the account to that existing Role. Omitting `roleId`
-creates no grants: the account can sign in, but protected calls fail until an
-administrator adds exact IAM bindings. The endpoint cannot create a Role or
-infer a grant from the account's email or session.
-Creating an account does not sign it in or issue a session.
+An optional `roleId` binds an existing Role; without one the account has no
+grants. The endpoint cannot create a Role or infer a grant from email or session.
+Creation does not sign the account in or issue a session.
 
 A representative provisioning body is:
 
@@ -298,11 +296,9 @@ A representative provisioning body is:
 }
 ```
 
-To create the account before assigning any IAM access, omit `roleId`.
-
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
 Provisioning has no public email-verification or signup flow; duplicates are
-rejected. The controller API exposes no password reset.
+rejected. There is no password reset API.
 
 ## Authorization and failures
 
