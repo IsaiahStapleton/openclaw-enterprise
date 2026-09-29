@@ -1388,9 +1388,8 @@ export class PostgresPlatformState implements PlatformStateStore {
     // still receive the original query failure or the exact unknown-COMMIT outcome.
     let transportError: Error | undefined;
     const onTransportError = (error: Error) => {
-      transportError = error;
+      transportError ??= error;
     };
-    client.on?.("error", onTransportError);
     const lifetime = new RepositoryTransactionLifetime();
     let started = false;
     let committing = false;
@@ -1399,6 +1398,15 @@ export class PostgresPlatformState implements PlatformStateStore {
     let discard = false;
     let unit: PlatformUnitOfWork | undefined;
     try {
+      try {
+        client.on?.("error", onTransportError);
+      } catch (error) {
+        discard = true;
+        throw error;
+      }
+      if (transportError !== undefined) {
+        throw transportError;
+      }
       await client.query(
         readOnly
           ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
@@ -1407,13 +1415,22 @@ export class PostgresPlatformState implements PlatformStateStore {
             : "BEGIN",
       );
       started = true;
+      if (transportError !== undefined) {
+        throw transportError;
+      }
       const context: TransactionContext = {
         lifetime,
         client: {
           query: async (statement, parameters) => {
             lifetime.assertActive();
+            if (transportError !== undefined) {
+              throw transportError;
+            }
             const result = await client.query(statement, parameters);
             lifetime.assertActive();
+            if (transportError !== undefined) {
+              throw transportError;
+            }
             return result;
           },
           release: () => {
@@ -1442,6 +1459,9 @@ export class PostgresPlatformState implements PlatformStateStore {
         committing = false;
         throw error;
       }
+      if (transportError !== undefined) {
+        throw new PostgresCommitOutcomeUnknownError();
+      }
       // Inspect acknowledgment separately: a throwing projection is not a server
       // rejection, even if its exception happens to contain a SQLSTATE.
       const command = (completion as { command?: unknown } | null)?.command;
@@ -1459,7 +1479,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       return result;
     } catch (error) {
       failed = true;
-      discard = committing || transportError !== undefined;
+      discard ||= committing || transportError !== undefined;
       await lifetime.finish();
       // An uncertain COMMIT or broken transport must not be queried again.
       if (started && !committing && transportError === undefined) {
@@ -1474,6 +1494,11 @@ export class PostgresPlatformState implements PlatformStateStore {
           throw error;
         }
         throw new PostgresCommitOutcomeUnknownError();
+      }
+      // An observed client error means the connection is broken, whatever code it
+      // carries; classify it as unavailable rather than as a server verdict.
+      if (transportError !== undefined && error === transportError) {
+        throw new DependencyUnavailableError("The platform persistence repository is unavailable.");
       }
       throw databaseError(error);
     } finally {
@@ -1494,7 +1519,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       }
       // Preserve the original failure. A failure after acknowledged COMMIT can
       // never be reported as definite rollback or authorize an automatic replay.
-      if (!failed && cleanupFailed && acknowledged) {
+      if (!failed && (cleanupFailed || transportError !== undefined) && acknowledged) {
         throw new PostgresCommitOutcomeUnknownError();
       }
     }
