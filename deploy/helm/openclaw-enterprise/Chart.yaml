@@ -1,6 +1,6 @@
 apiVersion: v2
 name: openclaw-enterprise
-description: Private OpenClaw Enterprise controller and authenticated Codex runtime
+description: Private OpenClaw Control Plane (OCC) and authenticated Codex runtime for OpenClaw Enterprise (OCE)
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
