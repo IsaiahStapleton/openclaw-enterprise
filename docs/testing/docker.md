@@ -48,6 +48,58 @@ with `--volumes`. It uses disposable project resources and no model credentials
 or Agent runtime image. Failure cleanup uses Compose directly without masking
 the CLI failure. This proves the cleanup lifecycle, not Agent execution.
 
+## Docker transport-token retry fixture
+
+With Docker Engine available at `/var/run/docker.sock` and workspace dependencies
+already installed, run from the repository root:
+
+```sh
+OCC_TEST_DOCKER_TOKEN_RETRY=1 NODE_BASE_IMAGE=node:24-bookworm \
+  node --test tests/integration/docker-compute-token-retry.test.mjs
+```
+
+The fixture calls the real Docker Driver directly and runs its runtime entrypoints
+in disposable containers. Minimal gateway and app-server binaries exercise
+WebSocket authentication, including invalid and missing bearer rejection. Login
+and model-probe responses are simulated solely to satisfy launcher startup. The
+case checks both peer-loss directions, retained token reuse, token rotation,
+replacement of a healthy gateway holding a stale token, and preservation of
+foreign-owned same-name containers and their siblings.
+
+This is Driver regression coverage without an Agent authentication binding. It
+does not pass through current OCC Agent admission or prove genuine OpenClaw,
+Codex, model calls, or the Compose control plane. The authentication support
+boundary at the top of this page still applies.
+
+The test builds an image from `NODE_BASE_IMAGE` (default `node:24-bookworm`)
+and the installed WebSocket dependency, without installing packages. It uses an
+inert fixture provider key and removes its own containers, network, and image.
+A selected run fails on missing prerequisites or cleanup failure. CI selects
+this case in the `images-packaging` lane.
+
+## Verify Codex startup probe recovery
+
+Use an existing immutable Node 24+ Linux image and a running Docker engine:
+
+```sh
+OCC_TEST_CODEX_PROBE_IMAGE=sha256:<local-image-id> \
+  node --test tests/integration/codex-model-probe.test.mjs
+```
+
+The image selector also accepts a repository digest. The test never pulls an
+image. It runs the generated dedicated Codex launcher in disposable containers
+with networking disabled, a read-only root, and temporary writable state. A
+fixture CLI supplies failures and success; no provider credentials are needed.
+The `images-packaging` CI lane uses its selected Node base image for this test.
+
+Expect timeout recovery, two-attempt exhaustion, nonretryable rejection, malformed
+output, tool events, external `SIGKILL`, and termination during backoff to pass.
+The tests exercise real 30-second subprocess deadlines and verify the readiness
+file, HTTP runtime status, cleanup, and sanitized logs. They take about 95 seconds
+and remove their own containers and temporary files. They do not establish real
+Codex/provider compatibility or Kubernetes deployment success; use the
+[Kubernetes runtime journey](kubernetes.md) for those checks.
+
 ## Docker Compose development test environment
 
 `tests/integration/docker-compute-real.test.mjs` retains the Docker and Podman

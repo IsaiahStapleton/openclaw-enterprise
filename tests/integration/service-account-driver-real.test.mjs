@@ -645,15 +645,15 @@ test(
         const response = JSON.parse(
           await kubectl("get", "networkpolicies", "--namespace", tenantNamespace, "-o", "json"),
         );
+        // The policy is named per Agent; its selector pins the exact revision.
         return response.items.find(
-          ({ metadata }) =>
-            metadata.name ===
-            `allow-agent-auth-${hash(agent.data.id)}-rev-${hash(revision.data.id)}`,
+          ({ metadata }) => metadata.name === `allow-agent-auth-${hash(agent.data.id)}`,
         );
       },
     );
     assert.equal(authenticationPolicy.metadata.annotations["openclaw.dev/agent-id"], agent.data.id);
     assert.deepEqual(authenticationPolicy.spec.podSelector.matchLabels, {
+      "openclaw.dev/network-profile": "broad-egress-v1",
       "openclaw.dev/workload-role": "agent",
       "openclaw.dev/agent": agent.data.id,
       "openclaw.dev/revision": revision.data.id,

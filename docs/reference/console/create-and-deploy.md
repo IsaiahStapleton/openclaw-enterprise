@@ -23,12 +23,14 @@ are insufficient. Presets and edited Configuration JSON retain their settings.
    **Use Preset**. Review the editable defaults. **Start with default Preset**
    loads the installed `default-codex` copy.
    To start independently of installed Presets, select **Start without Preset**.
-3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
-   **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
-   **Codex** and also offers **OpenClaw**; Anthropic offers **OpenClaw** only.
-   **Execution mode** follows the harness: Dedicated for Codex, Embedded for OpenClaw.
-   With OpenAI and Codex, choose **OpenAI API key** or **Service Accounts** under
-   **Authentication method**. OpenClaw uses the selected provider's API key.
+3. Enter a unique name within the Namespace. Choose **Provider**, then
+   **Harness**. OpenAI offers **Codex** by default and **OpenClaw**;
+   Anthropic offers only **OpenClaw**. **Execution mode** is Dedicated for Codex,
+   Embedded for Anthropic OpenClaw, and selectable for OpenAI OpenClaw. Dedicated
+   OpenClaw is experimental. Verify its runtime supports native worker inference;
+   released images may not.
+   For Codex, choose **OpenAI API key** or **Service Accounts**. OpenClaw uses
+   the provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
    Service Accounts, open [OpenAI admin](https://admin.openai.com/), choose your
    workspace, open **Service accounts**, and create a token with Codex scope.
@@ -61,8 +63,8 @@ are insufficient. Presets and edited Configuration JSON retain their settings.
    submits LF newlines. See [initial contents](../agents.md#initial-contents-at-creation) for limits.
 8. Select **Create Agent**. Supported Dedicated runtimes submit inline Configuration,
    Secret references, Agent inputs, repositories, and workspace files for provisioning.
-   Console follows the job through resource creation, credential provisioning, and
-   first-deployment activation, then opens that revision's Workspace files.
+   After provisioning, Console opens Agent details while deployment continues.
+   Follow startup and failures with **Deployment activity → Refresh deployment**.
    Ordinary creation saves Configuration first and opens a draft on **Create new version**,
    without a workload. After deployment, use the
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no

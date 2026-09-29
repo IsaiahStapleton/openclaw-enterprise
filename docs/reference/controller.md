@@ -7,7 +7,8 @@ activates admitted Agent revisions. It runs separately from the OpenClaw Control
 Driver. The default development Docker Compute Driver creates one Docker
 network per Namespace. It rejects the Harness authentication required by the
 public deployment API and cannot deploy Agents. Select Kubernetes to deploy
-Agents locally; it supports embedded OpenClaw and dedicated Codex. Reviewed
+Agents locally; it supports embedded OpenClaw, dedicated Codex, and dedicated
+native OpenClaw when a full-facet provisioning SandboxDriver is selected. Reviewed
 bundled or installed Drivers can reconcile their supported operations in both
 development and production. See the [deployment guide](../guides/deploy.md).
 
@@ -120,7 +121,13 @@ The worker emits fixed operational event classes through the same logger:
 - `worker.health`: reports readiness and pending work count at debug level.
 - `worker.completed`: includes `namespaceId`, work identity, attempt, outcome,
   and a stable result code; AgentRevision operations also include `agentId` and
-  `revisionId`.
+  `revisionId`. Each deployment pass adds worker wall-clock milliseconds:
+  `durationMs` for the pass, `deployPasses` and summed Compute `prepareMs` so
+  far, `readinessWaitMs` from the first unready observation to the first ready
+  one (or to now while pending), `activationMs` from the ready observation to
+  completion, and `elapsedMs` since admission. Totals cover the passes this
+  worker process ran; a restart starts them again. Maintenance, cleanup, and
+  stop work carry no deployment timing.
 - `worker.error`: reports `CLAIM_LOST` or `WORKER_UNAVAILABLE` without exposing
   credentials.
 - `worker.stopped`: confirms graceful shutdown.
@@ -192,4 +199,4 @@ worker does not expose an HTTP health endpoint.
 - [Namespace Configuration and Kubernetes ConfigMaps](configuration.md)
 - [Kubernetes Compute Driver and local-cluster verification](drivers/kubernetes-compute.md)
 - [Identity and access management](authorization.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)

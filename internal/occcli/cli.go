@@ -2,6 +2,7 @@ package occcli
 
 import (
 	"cmp"
+	"context"
 	"encoding/json/jsontext"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ type application struct {
 	namespace      string
 	output         string
 	parsedTimeout  time.Duration
+	ctx            context.Context
 }
 
 // New builds the OCC domain command tree.
@@ -39,7 +41,8 @@ func New(out, errOut io.Writer) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
+			app.ctx = command.Context()
 			return app.validateOptions()
 		},
 	}
@@ -915,7 +918,56 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent)
+	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent, app.agentRuntimeCredentialsCommand())
+	return command
+}
+
+func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
+	command := commandGroup("runtime-credentials", "Manage generated Agent runtime credentials")
+
+	get := &cobra.Command{
+		Use:   "get AGENT_ID",
+		Short: "Show runtime credential metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			credentials, err := client.GetAgentRuntimeCredentials(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printRuntimeCredentials(credentials)
+		},
+	}
+
+	provision := &cobra.Command{
+		Use:   "provision AGENT_ID",
+		Short: "Provision initial runtime credentials with an empty request body",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			credentials, err := client.ProvisionAgentRuntimeCredentials(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printRuntimeCredentials(credentials)
+		},
+	}
+
+	command.AddCommand(get, provision)
 	return command
 }
 
@@ -956,6 +1008,7 @@ func (app *application) client() (*occclient.Client, error) {
 		ServiceKeyFile: app.serviceKeyFile,
 		CABundle:       app.caBundle,
 		Timeout:        app.parsedTimeout,
+		Context:        app.ctx,
 	})
 }
 

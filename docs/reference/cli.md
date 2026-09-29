@@ -17,13 +17,16 @@ Command-line flags override the corresponding environment variables.
 | `--timeout-seconds`  | `OCC_TIMEOUT_SECONDS`  | Positive whole seconds for an HTTP request. Default: `30`.                                                                       |
 | `--output`, `-o`     | —                      | Output format: `table` (default), `json`, or `yaml`.                                                                             |
 | `--help`, `-h`       | —                      | Prints help for the command.                                                                                                     |
-| `--version`, `-v`    | —                      | Prints the CLI version. Source builds report `dev` unless release packaging sets a version.                                      |
+| `--version`, `-v`    | —                      | Prints the CLI version. Source builds report `dev`; published binaries report their OCE release version.                         |
 
 The service-key JSON must contain a nonempty `data.key` with no line breaks.
 The client sends it as `x-api-key` and does not follow redirects. Use a trusted
 HTTPS endpoint unless connecting to a local loopback development Installation.
 See [Service API Keys](authentication/service-api-keys.md) for issuing or rotating
 keys.
+
+Pressing Ctrl-C, or sending `SIGTERM`, cancels an in-flight request and exits
+with an error instead of waiting for `--timeout-seconds` to expire.
 
 ## Resource commands
 
@@ -67,6 +70,8 @@ input is not supported. The server validates document fields against the
 | `occ agent update ID --file FILE`              | Updates editable Agent fields; the body must include `configurationId`.                                                                                          |
 | `occ agent deploy ID`                          | Requests deployment and creates an immutable revision.                                                                                                           |
 | `occ agent deployment-status ID DEPLOYMENT_ID` | Reads the durable status of one exact Agent deployment.                                                                                                          |
+| `occ agent runtime-credentials get ID`         | Reads whether generated runtime credentials are configured for the Agent.                                                                                        |
+| `occ agent runtime-credentials provision ID`   | Creates the initial generated runtime credential bundle (empty request body).                                                                                    |
 | `occ agent stop ID`                            | Requests a stop while retaining revisions and persistent state.                                                                                                  |
 
 Use the [HTTP API](api.md) to inspect revision history or to work with

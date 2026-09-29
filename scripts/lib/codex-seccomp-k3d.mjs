@@ -527,7 +527,7 @@ async function prepareCodexSeccompProfile({
   execFile,
   kubectl: kubectlBin,
   docker,
-  codexVersion = "0.156.0",
+  codexVersion = "0.158.0",
   commandTimeoutMs = timeoutMs + 15_000,
   env = process.env,
 } = {}) {
@@ -695,6 +695,17 @@ async function selectedDevelopmentCluster(directory) {
   };
 }
 
+// Names the localhost profile installed for the dedicated Codex sandbox. The
+// lifecycle in internal/occdev/openshell_k3d.go parses this name, so the format
+// is a contract between the two; it matches the shape rather than repeating the
+// reviewed version, which this module owns.
+function developmentCodexProfileName(profile, codexVersion) {
+  assertReviewedCodexVersion(codexVersion);
+  const name = `openclaw/codex-${codexVersion}-${sha256Hex(stableJson(profile))}.json`;
+  assertLocalhostProfileName(name);
+  return name;
+}
+
 async function installDevelopmentProfile(nodeName, profileName, profile, directory, options) {
   const profileData = stableJson(profile);
   const digest = sha256Hex(profileData);
@@ -765,7 +776,7 @@ async function prepareDevelopmentCodexSeccompProfile({ directory, image, execFil
   const cluster = await selectedDevelopmentCluster(directory);
   assertImmutableImageReference(image);
   const execute = requireExecFile(execFile);
-  const codexVersion = "0.156.0";
+  const codexVersion = "0.158.0";
   assertReviewedCodexVersion(codexVersion);
   const selection = { kubeconfig: cluster.kubeconfig, context: cluster.context };
   const namespace = `openclaw-dev-seccomp-${randomSuffix(4)}`;
@@ -809,8 +820,8 @@ async function prepareDevelopmentCodexSeccompProfile({ directory, image, execFil
       }
       const profile = deriveCodexBwrapProfile(baseline, { codexVersion });
       const digest = sha256Hex(stableJson(profile));
-      const profileName = `openclaw/codex-${codexVersion}-${digest}.json`;
-      assertLocalhostProfileName(profileName);
+      const profileName = developmentCodexProfileName(profile, codexVersion);
+
       await installDevelopmentProfile(nodes[0], profileName, profile, temporaryDirectory, options);
       await verifyInstalledProfile(
         selection,
@@ -863,6 +874,7 @@ export {
   codexBwrapSourceProvenance,
   defaultProfileName,
   deriveCodexBwrapProfile,
+  developmentCodexProfileName,
   prepareCodexSeccompProfile,
   prepareDevelopmentCodexSeccompProfile,
   validateRuntimeDefaultSeccompProfile,

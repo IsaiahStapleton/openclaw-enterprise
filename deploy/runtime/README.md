@@ -7,11 +7,16 @@ entrypoints:
 - OpenClaw gateway: `node /app/openclaw.mjs`.
 - Dedicated Codex app-server: `codex app-server`.
 
+The image sets `NPM_CONFIG_UPDATE_NOTIFIER=false` so local npm commands do not
+start npm's background version check. This avoids unrelated network approval
+requests during commands such as `npm test`; package installation and explicit
+network requests still use the configured network policy.
+
 The Dockerfile builds OpenClaw from a verified public source archive, using its
 pinned package manager, frozen dependency lockfile, and upstream Docker assembly.
-The reviewed `stock-codex-0.156.0-dependency-pin.patch` updates only Codex dependency
-versions and package integrities before the frozen install; it does not modify the Codex binary. Both
-Codex entrypoints use the same stock `0.156.0` installation.
+The selected upstream source pins Codex `0.158.0` in its package manifest and
+lockfile. Both Codex entrypoints use that same stock installation; no dependency
+version override or Codex binary patch is applied.
 Codex and Slack come from that same source. The selected commit contains
 the restricted workspace-node commands and saved-token-first pairing required by
 split storage; published `2026.9.5` packages do not contain that complete contract.
@@ -22,18 +27,33 @@ an equivalent implementation is available upstream, the build applies its
 `readOnlyPaths` compatibility change as
 `openclaw-codex-read-only-paths.patch`. This preserves the restricted Codex
 filesystem profile required by the repository broker and selected plugins.
+The build also applies `openclaw-connect-ephemeral-expired-setup.patch`. Upstream
+`connect --ephemeral` rejects an expired setup code before it checks saved node
+credentials, so a dedicated native worker that restarts more than ten minutes
+after enrollment cannot reconnect. The patch lets that path decode an expired
+code and hands the expiry to the node host. The node host then reconnects with
+the saved device token for the same Gateway, or still refuses the code, as
+upstream `node run --pair-if-needed` already does.
 The source archive and patch hashes identify the resulting custom build.
+
+The selected commit does not support dedicated native OpenClaw. That Harness
+needs required worker placement (`cloudWorkers.requiredProfile`) and native
+worker inference (`nodeHost.workerRuns.nativeInferenceConfig`), which are not in
+upstream main yet. This image's configuration validation rejects both keys, so
+its Gateway and Harness exit at startup rather than place sessions on the
+Gateway. The images-packaging lane runs both entrypoints against this image and
+fails when that gap changes.
 
 | Input                                        | Selection                                                                                                    |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Build base                                   | `docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584` |
-| OpenClaw source commit                       | `000d03942c8703a4c18615ab8d1a5f18c85b5674`                                                                   |
-| Source archive SHA-256                       | `7fddb3787c64b8d0dc22595abc19e23862903b0349714e61dbac18240b2b5ced`                                           |
-| Dedicated Codex CLI (`OPENAI_CODEX_VERSION`) | `0.156.0`                                                                                                    |
+| OpenClaw source commit                       | `9d9c8568c51e340540f634f71bd7c7582a70debc`                                                                   |
+| Source archive SHA-256                       | `175260a3e26e6de4c1225ff27d8c2b17b01b700640db915a8bac9ee3d4cf903f`                                           |
+| Dedicated Codex CLI (`OPENAI_CODEX_VERSION`) | `0.158.0`                                                                                                    |
 
 The source's package version is `2026.9.6`; it does not identify this custom
 build. `/opt/oce/runtime/provenance.json` records the source commit, verified archive
-hash, bridge patch hash, lockfile hash, pinned package manager, selected plugins, architecture, stock Codex
+hash, both bridge patch hashes, lockfile hash, pinned package manager, selected plugins, architecture, stock Codex
 package identity, and the SHA-256 of `contents.json`, which inventories
 packaged files, modes, hashes, and symlinks after final-stage permission
 normalization. The final stage copies the assembled
@@ -74,7 +94,7 @@ installing packages at gateway startup. Slack credentials remain operator-owned
 runtime Secrets; do not put them in the image.
 
 Keep the source commit and archive checksum together when updating OpenClaw.
-Follow the [pinned upstream Docker assembly](https://github.com/openclaw/openclaw/blob/000d03942c8703a4c18615ab8d1a5f18c85b5674/Dockerfile)
+Follow the [pinned upstream Docker assembly](https://github.com/openclaw/openclaw/blob/9d9c8568c51e340540f634f71bd7c7582a70debc/Dockerfile)
 to keep plugin dependencies and runtime assets consistent. Its plugin-local
 dependency layout preserves dependencies that differ from core versions.
 Plugin chunks emitted directly under `dist` also need package-root resolution.
@@ -84,7 +104,7 @@ The custom npm-distribution packer rejects that combination because it requires
 one shared dependency version. Alternate
 `NODE_BASE_IMAGE` values must provide Node.js 24.16 or newer within the 24 series.
 The Dedicated command and bundled plugin both resolve the same
-[Codex 0.156.0](https://github.com/openai/codex/releases/tag/rust-v0.156.0) installation.
+[Codex 0.158.0](https://github.com/openai/codex/releases/tag/rust-v0.158.0) installation.
 For multi-architecture builds, the frozen npm install selects the stock
 `@openai/codex-linux-x64` or `@openai/codex-linux-arm64` package for the target
 architecture. The image rebuilds `/opt/oce/runtime/contents.json` from
@@ -96,7 +116,7 @@ The OpenClaw bridge forwards the repository-bound Agent's stock
 `allow_local_binding = true` and `mode = "full"` settings; the
 [networking contract](../../docs/reference/drivers/kubernetes-compute/networking-and-isolation.md#networking)
 defines their scope and remaining controls.
-Update the reviewed dependency patch and compatibility assertion together when
+Update the upstream source selection and compatibility assertion together when
 changing that version. Run the compatibility
 check below against the resulting image. Provider model availability still
 requires a real model turn with the selected credential.
@@ -140,7 +160,8 @@ Manual `CI` dispatches also call this native verification workflow, including on
 a branch before its first merge. The default Blacksmith runner labels can be overridden with repository
 variables `CONTAINER_AMD64_RUNNER` and `CONTAINER_ARM64_RUNNER`. Each override must
 name a provisioned Linux runner with the matching architecture, at least four
-CPUs and 12 GiB RAM, and sufficient disk.
+CPUs and 12 GiB RAM, and sufficient disk. The workflow installs checksum-pinned
+kubectl, k3d, Helm, and yq for both Linux architectures before runtime verification.
 
 ## Verify the local image
 
@@ -169,7 +190,7 @@ The smoke starts task-owned containers with the Docker Compute Driver gateway
 entrypoint, the Kubernetes Compute Driver gateway entrypoint, and the native
 Codex command execution path, UID `1000:1000`, a read-only root filesystem, and
 tmpfs-backed runtime directories. The private broker endpoint smoke requires the
-reviewed Codex 0.156.0 seccomp profile above so the nested bubblewrap sandbox can
+reviewed Codex 0.158.0 seccomp profile above so the nested bubblewrap sandbox can
 start without broadening to an unconfined Docker seccomp profile.
 Passing means an embedded OpenClaw gateway reaches `/readyz` from a fresh home,
 the bundled Codex and Slack plugins load without missing package dependencies,

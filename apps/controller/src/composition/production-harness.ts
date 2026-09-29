@@ -6,7 +6,7 @@ export const DEVELOPMENT_HARNESS_DESCRIPTOR: HarnessDescriptor = Object.freeze({
   version: "1.0.0",
 });
 
-/** Dedicated execution connects to the approved Codex app-server protocol. */
+/** Dedicated Codex execution connects to the approved app-server protocol. */
 export const PRODUCTION_HARNESS_DESCRIPTOR: HarnessDescriptor = Object.freeze({
   id: "codex",
   version: "1.0.0",
@@ -19,7 +19,7 @@ export function resolveApprovedHarness(
   if (executionMode === "dedicated" && harnessId === PRODUCTION_HARNESS_DESCRIPTOR.id) {
     return PRODUCTION_HARNESS_DESCRIPTOR;
   }
-  if (executionMode === "embedded" && harnessId === DEVELOPMENT_HARNESS_DESCRIPTOR.id) {
+  if (harnessId === DEVELOPMENT_HARNESS_DESCRIPTOR.id) {
     return DEVELOPMENT_HARNESS_DESCRIPTOR;
   }
   return undefined;

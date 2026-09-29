@@ -1,8 +1,7 @@
 # Console Storybook
 
-Browse console pages, component states, and Agent workflows without starting OCC
-or a cluster. Previews run production console modules and styles against an
-in-memory fixture; they do not contact services or run workloads. Use only dummy
+Browse production Console pages, components, and Agent workflows against an
+in-memory fixture. Previews contact no services and run no workloads. Use dummy
 credentials.
 
 ## Run locally
@@ -14,8 +13,9 @@ npm run storybook:install
 npm run storybook
 ```
 
-Open `http://127.0.0.1:6006`. **Reset story** discards changes; each story has an
-independent fixture and does not use Installations or other browser tabs.
+Open `http://127.0.0.1:6006`. Each story starts an independent fixture;
+**Reset story** discards its changes. Existing Installations and other tabs'
+sessions are not used.
 
 To build and serve a static copy:
 
@@ -25,8 +25,8 @@ python3 -m http.server 6006 --bind 127.0.0.1 \
   --directory scripts/console-storybook/dist/site
 ```
 
-Serve at the origin root for `/console/` URLs. Build fingerprints prevent stale
-fixture pages and imports. **Reset story** restarts the fixture. CI uploads a static
+Serve at the origin root for absolute `/console/` URLs. Build fingerprints version
+fixture pages and module imports against stale cached UI. CI uploads a static
 artifact without publishing the documentation site.
 
 ## Appearance review
@@ -55,18 +55,18 @@ OpenClaw's disconnected gateway screen at the revision above.
 
 ## Pages and components
 
-The sidebar groups stories that reach dialogs and errors through real controls.
+Stories reach error states through real controls after loading fixture data.
 
 | Group                   | Coverage                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sign in                 | Signed out, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                                                                                                                   |
+| Sign in                 | Password and GitHub sign-in, discovery failure, GitHub errors, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                                                                |
 | Agents                  | Populated and empty collections, no search matches, inaccessible Namespace, no readable Namespaces, permission denial, read failure, loading.                                                                                                                                                                                                                                                                     |
 | Backends                | Configured, empty, and discovery failure.                                                                                                                                                                                                                                                                                                                                                                         |
 | Namespaces              | Ready and provisioning, empty, permission denial.                                                                                                                                                                                                                                                                                                                                                                 |
 | Settings and navigation | Signed-in account and unknown route.                                                                                                                                                                                                                                                                                                                                                                              |
 | Create Agent            | Installed default, missing/loading/denied Presets, Preset variables, fixed model choices before credential entry and manual model IDs, OpenAI Codex/OpenClaw and Anthropic OpenClaw harnesses, Service Accounts switching and bound Presets, seeded workspace files, storage/grant denial, repository selection/discovery and rejected-grant recovery, invalid JSON, partial save/conflict, unknown save outcome. |
 | Agent detail            | First and later drafts, version details, native JSON and plugin editors, immutable plugin snapshot, queued/running/succeeded/failed activity, exact-version diagnostics, error and permission states.                                                                                                                                                                                                             |
-| Navigation components   | Account menu, Namespace switcher, mobile drawer, OCE branding, simulated OCC revision, missing development metadata, debug runtime image identities and unavailable metadata.                                                                                                                                                                                                                                     |
+| Navigation components   | Account menu, Namespace switcher, mobile drawer, admin link and denial, OCE branding, simulated OCC revision, missing development metadata, debug runtime image identities and unavailable metadata.                                                                                                                                                                                                              |
 | Channels                | Unconfigured cards, Slack editor with pairing/open/disabled policies, everyone and restricted channel sender access, incomplete sender access, unsupported mixed sender lists, unsupported wildcard channel maps, read-only snapshot, save conflict.                                                                                                                                                              |
 | Credentials             | Named Secret selection and creation, API-key and Slack Secret switching, denied metadata and grants, partially missing tokens, missing authentication, operator-managed credentials, issued ChatGPT account, model Secret replacement, pending grants, and unknown authentication saves.                                                                                                                          |
 | Native admin            | Available launch, stopped or unsupported runtime, denied panel hidden. The launch target is an explanatory fixture page.                                                                                                                                                                                                                                                                                          |
@@ -74,7 +74,6 @@ The sidebar groups stories that reach dialogs and errors through real controls.
 | Stop Agent              | Confirmation, stopped requested state, permission denial, unknown outcome requiring refresh.                                                                                                                                                                                                                                                                                                                      |
 | Deletion                | Confirmation, pending cleanup, permission denial, conflict, unknown outcome.                                                                                                                                                                                                                                                                                                                                      |
 
-Stories use the production UI's controls and views.
 Pending-read stories use the real client's 15-second timeout; reset them to replay
 loading.
 
@@ -87,12 +86,20 @@ Back/Forward and tab changes. Refresh reloads. **Return access denied** and
 
 ## Agent flows and UI gaps
 
-In **Components → Navigation → Namespace switcher**, use the header selector to
-switch between Engineering and Research. Check the URL, collection, and browser
-Back behavior; confirm the Namespaces page omits the selector. **Mobile Namespace
-selector** checks long-name truncation before the chevron and switching without the
-drawer. Existing no-readable, unavailable, loading, and denied stories cover
-restricted selector states.
+In **Components → Navigation → Namespace switcher**, switch Engineering/Research
+and check URL, collection, and Back behavior. Namespaces omits the header selector.
+**Mobile Namespace selector** checks long-name truncation and switching without
+the drawer. No-readable, unavailable, loading, and denied stories cover restrictions.
+
+Use **Pages → Namespaces → Unavailable selection** to recover inline. Check the
+URL, dismissed warning, unchanged page, and Back navigation. **Unavailable selection
+mobile** repeats this at 390px; **Unavailable selection without access** shows access
+guidance. Simulated examples:
+[desktop](../assets/console-namespace-recovery/desktop.png),
+[mobile](../assets/console-namespace-recovery/mobile.png),
+[recovered](../assets/console-namespace-recovery/recovered.png),
+[no access](../assets/console-namespace-recovery/no-access.png), and
+[walkthrough](../assets/console-namespace-recovery/walkthrough.webm).
 
 Simulated examples: [desktop selector](../assets/console-namespace-selector/desktop.png),
 [mobile empty collection](../assets/console-namespace-selector/mobile.png),
@@ -101,9 +108,13 @@ and a [switching walkthrough](../assets/console-namespace-selector/namespace-swi
 
 ### Create and deploy
 
-In **Pages/Agent detail → First deployment creates credentials**, deploy a draft
-with **Deploy new version**. The fixture needs no separate credential action and
-does not label the initial state a Stop request. It does not test OCC generation.
+Compare **New version queued**, **Deployment waiting for runtime**, and
+**Deployment retry after dependency failure**; switch versions and check
+**Last checked**.
+
+**First deployment creates credentials** accepts **Deploy new version** without
+a separate credential action. Its initial state is not a Stop request; OCC
+generation is simulated.
 
 Choose a Preset, fill its variables, review seeded workspace files, and create
 an Agent with the Codex harness. The Console submits its inline Configuration
@@ -112,14 +123,11 @@ activation, and opens Workspace files for the returned revision. A separate flow
 loads the default Preset, selects OpenAI with Codex, creates or selects a model
 Secret, selects a model, edits IDENTITY.md, and clears USER.md before creation.
 OpenClaw and unsupported-runtime stories retain the draft workflow: provision
-credentials and deploy from Agent detail. These transitions demonstrate
-presentation only; they do not prove a worker ran.
+credentials and deploy from Agent detail.
 
 DevDay previews default-codex, SWE, Community, Q&A, Oncall, and standard presets
 with models, workspace templates, six Slack channels, model Secrets, Linear, and
-repository choices. Choose or create a model Secret, configure Linear from the
-simulated catalog, and select `openclaw/openclaw-enterprise` or `openclaw/openclaw`.
-The catalog works with any Preset or Secret choice. **Plugins Curated** exercises
+repository choices. The simulated catalog works with any Preset or Secret choice. **Plugins Curated** exercises
 token-free discovery with simulated Driver responses; actual access is unverified.
 Hosted discovery requires an eligible Codex service-account token. Workspace and
 Standard OpenClaw stories preview file and harness settings. Preset Secret stories
@@ -129,11 +137,11 @@ Q&A, and Oncall Agents remain disabled in the example Installation YAML.
 Use the [DevDay storyboard](../../scripts/console-storybook/devday-storyboard.md)
 for presenter actions, expected visible states, and fallbacks.
 
-**Choose provider, harness, and authentication** covers OpenAI Codex,
-OpenClaw, Anthropic, and switching an unsaved service-account token to API-key
-authentication. Console model choices appear before credentials; **Enter another
-model ID** supports manual entry. These choices do not prove model access.
-Execution mode follows the harness; the saved-token Preset fixes it to Codex.
+**Choose provider, harness, and authentication** covers the supported
+combinations. Models appear before credentials; **Enter another model ID**
+supports manual entry but does not prove access. Execution mode follows the
+harness; saved tokens require Codex. **Experimental Dedicated OpenClaw** shows
+the runtime-build warning; Embedded OpenClaw does not.
 
 The fixture supplies a ready Namespace, Preset, and model Secret. Namespace
 provisioning, Preset CRUD, and service-account issuance have no dedicated console
@@ -248,27 +256,32 @@ or live Agent turns.
 
 **New version in progress** shows v7 deployment work while v6 stays current;
 **Current version during deployment** opens v6 details while activity follows
-v7. Compare queued, failed, activated, and unavailable activity stories. The
-version list has only readable versions. No story proves live serving.
+v7. Compare queued, failed, activated, and unavailable activity stories.
+Version metadata stays visible when saved settings are unreadable. Follow the
+[walkthrough](../../scripts/console-storybook/unreadable-configuration-workflow.md)
+in **Unreadable Agent draft** and **Unreadable revision snapshot** to check
+banner scope and navigation. No story proves live serving.
 
-The default stories leave **Current observations** unrequested. Compare
+**Current observations** starts unrequested. Compare
 **Current observations for v7**, **Unknown observation for v6**, and
-**Current observation unavailable**. Each click requests the viewed version's
-diagnostics through a bodyless POST; the fixture returns timestamped checks or
-an error without changing the persisted deployment result.
+**Current observation unavailable**. Clicking requests that version's diagnostics
+through a bodyless POST, returning timestamped checks or an error; the recorded
+deployment result stays unchanged.
 
-**Create new version** opens saved settings. Edit and save native JSON or Slack,
-then select **Deploy new version** to admit a new immutable snapshot. Browsing an
-older version does not deploy it. Credential edits also need deployment;
-workspace-file writes apply immediately. Native JSON does not edit Agent-owned
-Backend or execution mode. Slack channel `users` can include `["*"]` for
-everyone; DM settings remain separate. See
+**Create new version** opens saved settings. Save edits, then **Deploy new version**
+to admit an immutable snapshot. Browsing does not deploy. Credentials need deployment;
+workspace writes apply immediately. Native JSON excludes Agent-owned Backend and
+execution mode. Slack channel `users: ["*"]` allows everyone; DMs remain separate. See
 [Agent revisions](../guides/topics/agent-revisions.md).
 
-The DevDay Admin UI segment starts from a deployed `oceclaw` Agent whose Slack
-fixture represents `#openclaw-feedback`. Its native Admin UI target is a
-simulated page with a chat-shaped transcript and visible reply. It does not
-connect to a gateway, Slack, credentials, or a model.
+**Enable Gateway password access** stages a reference. Cancel discards it; Save
+Configuration, then Deploy new version applies it. Compare **Gateway password access configured**, **Gateway
+password save denied**, and **Gateway password save in progress**. These simulated
+Agent detail stories do not prove credential delivery or login.
+
+The DevDay Admin UI segment uses a deployed `oceclaw` Agent and simulated
+`#openclaw-feedback` Slack channel. Its native Admin UI simulates a transcript
+and reply, with no gateway, Slack, credential, or model connection.
 
 ### Stop
 
@@ -294,8 +307,8 @@ model responses require runtime verification outside Storybook. The console disp
 
 ## Maintain coverage
 
-`scripts/console-storybook/` has its own manifest, lockfile, and dependencies.
-It uses the seven-day dependency release-age policy without changing root dependencies.
+`scripts/console-storybook/` installs from its own manifest and lockfile under the
+repository's seven-day release-age policy, independently of root dependencies.
 
 - `prepare-assets.mjs` copies the current console assets and the shared contract
   modules served by the controller into ignored `dist/assets/`. Run the build
@@ -311,10 +324,9 @@ It uses the seven-day dependency release-age policy without changing root depend
 - `*.stories.mjs` exports named stories by group; `story.mjs` adds instructions,
   UI-gap notices, the preview, and Reset story.
 
-When changing console pages, shared components, or lifecycle controls, update the
-corresponding scenarios and flow instructions in the same PR. Add an export to
-the owning story file for a new scenario. Keep visible failure messages owned by
-the console; configure API responses instead of writing replacement UI markup.
+Update scenarios and instructions alongside console changes. Export new scenarios
+from their owning story file. Configure API responses; the console owns failure
+messages and UI markup.
 
 ## Debug image walkthrough
 

@@ -8,6 +8,86 @@
 {{- end -}}
 {{- if not .Values.auth.baseUrl -}}{{- fail "auth.baseUrl must identify the public Better Auth base URL" -}}{{- end -}}
 {{- if or (not .Values.auth.secretName) (not .Values.auth.secretKey) -}}{{- fail "auth must reference an operator-created Better Auth signing Secret" -}}{{- end -}}
+{{- $github := .Values.auth.github -}}
+{{- $recoveryUserId := toString (default "" .Values.auth.recoveryUserId) -}}
+{{- if hasKey (default dict $github) "recoveryUserId" -}}{{- fail "auth.github.recoveryUserId is not a chart value; set auth.recoveryUserId" -}}{{- end -}}
+{{- if and $recoveryUserId (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" $recoveryUserId)) -}}{{- fail "auth.recoveryUserId must be the existing local password administrator's user ID" -}}{{- end -}}
+{{- $google := .Values.auth.google -}}
+{{- if and $recoveryUserId (not (or (and $github $github.enabled) (and $google $google.enabled))) -}}{{- fail "auth.recoveryUserId requires auth.github.enabled or auth.google.enabled" -}}{{- end -}}
+{{- if and $github $github.enabled -}}
+{{- if not $recoveryUserId -}}{{- fail "auth.github.enabled requires auth.recoveryUserId: install without GitHub first, then upgrade with the administrator's user ID" -}}{{- end -}}
+{{- if or (not $github.secretName) (not $github.clientIdKey) (not $github.clientSecretKey) -}}{{- fail "auth.github requires a dedicated operator-created Secret name, client ID key, and client secret key" -}}{{- end -}}
+{{- if eq $github.clientIdKey $github.clientSecretKey -}}{{- fail "auth.github client ID and client secret must use different Secret keys" -}}{{- end -}}
+{{- if or (eq $github.secretName .Values.installation.secretName) (eq $github.secretName .Values.database.secretName) (eq $github.secretName .Values.auth.secretName) (and .Values.backend.chatgpt.enabled (eq $github.secretName .Values.backend.chatgpt.secretName)) (and .Values.gatewayRouting.enabled (eq $github.secretName .Values.gatewayRouting.apiKeySecretName)) -}}
+{{- fail "auth.github credentials must use a dedicated Secret" -}}
+{{- end -}}
+{{- if .Values.repositoryCredentials.enabled -}}
+{{- range $name := list "serviceConfigSecretName" "appKeySecretName" "tlsSecretName" "publicCaSecretName" -}}
+{{- if eq $github.secretName (index $.Values.repositoryCredentials $name) -}}{{- fail (printf "auth.github credentials must use a Secret distinct from repositoryCredentials.%s" $name) -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not (hasPrefix "https://" .Values.auth.baseUrl) -}}{{- fail "auth.github requires an HTTPS auth.baseUrl" -}}{{- end -}}
+{{- if .Values.agentNativeAdmin.enabled -}}{{- fail "auth.github requires agentNativeAdmin.enabled: false; GitHub sign-in supports host-only cookies only" -}}{{- end -}}
+{{- if not (kindIs "slice" (default list $github.egressCidrs)) -}}{{- fail "auth.github.egressCidrs must be a list of IPv4 CIDRs; leave it empty for HTTPS egress to any address" -}}{{- end -}}
+{{- range $cidr := $github.egressCidrs -}}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$" (toString $cidr)) -}}{{- fail "auth.github.egressCidrs requires explicit IPv4 CIDRs with prefixes 1 through 32" -}}{{- end -}}
+{{- range $octet := splitList "." (first (splitList "/" (toString $cidr))) -}}
+{{- if gt (int $octet) 255 -}}{{- fail "auth.github.egressCidrs contains an invalid IPv4 address" -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and $google $google.enabled -}}
+{{- if not $recoveryUserId -}}{{- fail "auth.google.enabled requires auth.recoveryUserId: install without Google first, then upgrade with the administrator's user ID" -}}{{- end -}}
+{{- if or (not $google.secretName) (not $google.clientIdKey) (not $google.clientSecretKey) -}}{{- fail "auth.google requires a dedicated operator-created Secret name, client ID key, and client secret key" -}}{{- end -}}
+{{- if eq $google.clientIdKey $google.clientSecretKey -}}{{- fail "auth.google client ID and client secret must use different Secret keys" -}}{{- end -}}
+{{- if or (eq $google.secretName .Values.installation.secretName) (eq $google.secretName .Values.database.secretName) (eq $google.secretName .Values.auth.secretName) (and .Values.backend.chatgpt.enabled (eq $google.secretName .Values.backend.chatgpt.secretName)) (and .Values.gatewayRouting.enabled (eq $google.secretName .Values.gatewayRouting.apiKeySecretName)) (and $github $github.enabled (eq $google.secretName $github.secretName)) -}}
+{{- fail "auth.google credentials must use a dedicated Secret" -}}
+{{- end -}}
+{{- if .Values.repositoryCredentials.enabled -}}
+{{- range $name := list "serviceConfigSecretName" "appKeySecretName" "tlsSecretName" "publicCaSecretName" -}}
+{{- if eq $google.secretName (index $.Values.repositoryCredentials $name) -}}{{- fail (printf "auth.google credentials must use a Secret distinct from repositoryCredentials.%s" $name) -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not (hasPrefix "https://" .Values.auth.baseUrl) -}}{{- fail "auth.google requires an HTTPS auth.baseUrl" -}}{{- end -}}
+{{- if .Values.agentNativeAdmin.enabled -}}{{- fail "auth.google requires agentNativeAdmin.enabled: false; Google sign-in supports host-only cookies only" -}}{{- end -}}
+{{- if not (kindIs "slice" (default list $google.allowedDomains)) -}}{{- fail "auth.google.allowedDomains must be a list of DNS domain names" -}}{{- end -}}
+{{- range $domain := $google.allowedDomains -}}
+{{- $name := lower (trim (toString $domain)) -}}
+{{- if or (gt (len $name) 253) (not (regexMatch "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $name)) -}}{{- fail "auth.google.allowedDomains requires DNS domain names such as example.com" -}}{{- end -}}
+{{- end -}}
+{{- if not (kindIs "slice" (default list $google.egressCidrs)) -}}{{- fail "auth.google.egressCidrs must be a list of IPv4 CIDRs; leave it empty for HTTPS egress to any address" -}}{{- end -}}
+{{- range $cidr := $google.egressCidrs -}}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$" (toString $cidr)) -}}{{- fail "auth.google.egressCidrs requires explicit IPv4 CIDRs with prefixes 1 through 32" -}}{{- end -}}
+{{- range $octet := splitList "." (first (splitList "/" (toString $cidr))) -}}
+{{- if gt (int $octet) 255 -}}{{- fail "auth.google.egressCidrs contains an invalid IPv4 address" -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $proxy := default dict .Values.api.trustedProxy -}}
+{{- $preset := toString (default "" $proxy.preset) -}}
+{{- if not (has $preset (list "" "ingress-nginx" "aws" "generic")) -}}{{- fail "api.trustedProxy.preset must be empty, ingress-nginx, aws, or generic" -}}{{- end -}}
+{{- if not $preset -}}
+{{- if or $proxy.cidrs $proxy.clientAddressHeader -}}{{- fail "api.trustedProxy.cidrs and clientAddressHeader require api.trustedProxy.preset" -}}{{- end -}}
+{{- else -}}
+{{- if or (not (kindIs "slice" $proxy.cidrs)) (not $proxy.cidrs) -}}{{- fail (printf "api.trustedProxy.preset %s requires api.trustedProxy.cidrs: the proxy addresses the API Pod sees as the connecting peer" $preset) -}}{{- end -}}
+{{- range $cidr := $proxy.cidrs -}}
+{{- $value := toString $cidr -}}
+{{- if regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$" $value -}}
+{{- range $octet := splitList "." (first (splitList "/" $value)) -}}
+{{- if gt (int $octet) 255 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv4 address" -}}{{- end -}}
+{{- end -}}
+{{- else if not (regexMatch "^[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8])$" $value) -}}
+{{- fail "api.trustedProxy.cidrs requires IPv4 or IPv6 CIDRs with a nonzero prefix" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq $preset "generic") (not $proxy.clientAddressHeader) -}}{{- fail "api.trustedProxy.preset generic requires api.trustedProxy.clientAddressHeader" -}}{{- end -}}
+{{- $header := lower (toString (default "" $proxy.clientAddressHeader)) -}}
+{{- if $header -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,63}$" $header) -}}{{- fail "api.trustedProxy.clientAddressHeader must be a single HTTP header name of at most 64 characters" -}}{{- end -}}
+{{- if has $header (list "x-occ-client-ip" "cookie" "forwarded" "authorization" "host" "origin" "x-api-key") -}}{{- fail (printf "api.trustedProxy.clientAddressHeader cannot be %s; use a header that carries plain client addresses, such as x-forwarded-for or x-real-ip" $header) -}}{{- end -}}
+{{- if and (ne $preset "generic") (ne $header "x-forwarded-for") -}}{{- fail (printf "api.trustedProxy.preset %s reads x-forwarded-for; use the generic preset for %s" $preset $header) -}}{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.agentNativeAdmin.enabled -}}
 {{- if not .Values.agentNativeAdmin.domain -}}{{- fail "agentNativeAdmin.domain must identify the public Agent native admin DNS suffix when agentNativeAdmin.enabled is true" -}}{{- end -}}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$" .Values.agentNativeAdmin.domain) -}}{{- fail "agentNativeAdmin.domain must be a DNS hostname without a wildcard, port, scheme, or path" -}}{{- end -}}
@@ -87,6 +167,17 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.slackProxy.enabled -}}
+{{- $proxy := .Values.slackProxy -}}
+{{- if .Values.api.channelDirectoryProxyUrl -}}{{- fail "api.channelDirectoryProxyUrl must be empty when slackProxy.enabled uses the chart-managed Service" -}}{{- end -}}
+{{- if not (kindIs "bool" $proxy.enabled) -}}{{- fail "slackProxy.enabled must be a boolean" -}}{{- end -}}
+{{- if or (gt (len $proxy.serviceName) 63) (not (regexMatch "^[a-z]([-a-z0-9]*[a-z0-9])?$" $proxy.serviceName)) -}}
+{{- fail "slackProxy.serviceName must be a DNS-1035 Service name" -}}
+{{- end -}}
+{{- if or (not (regexMatch "^[0-9]+$" (toString $proxy.port))) (lt (int $proxy.port) 1) (gt (int $proxy.port) 65535) -}}
+{{- fail "slackProxy.port must be an integer TCP port from 1 to 65535" -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.repositoryCredentials.enabled -}}
 {{- $credentials := .Values.repositoryCredentials -}}
 {{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-fA-F0-9]{64}$" $credentials.image) -}}
@@ -154,6 +245,7 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.gatewayRouting.sandbox.enabled (not .Values.gatewayRouting.enabled) -}}{{- fail "gatewayRouting.sandbox requires gatewayRouting.enabled" -}}{{- end -}}
 {{- if .Values.gatewayRouting.enabled -}}
 {{- $routing := .Values.gatewayRouting -}}
 {{- $tlsSecretName := include "openclaw.gatewayRouting.tlsSecretName" . -}}
@@ -195,7 +287,21 @@
 {{- fail "gatewayRouting.envoyHttpsTargetPort must be a valid TCP port" -}}
 {{- end -}}
 {{- if not $routing.envoyGatewayPodLabels -}}{{- fail "gatewayRouting.envoyGatewayPodLabels must select the Envoy Gateway control-plane Pods for xDS egress" -}}{{- end -}}
+{{- if $routing.sandbox.enabled -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\.[a-z0-9-]+$" $routing.sandbox.domain) -}}{{- fail "gatewayRouting.sandbox.domain must be a DNS hostname without wildcard, scheme, port or path" -}}{{- end -}}
+{{- if not $routing.sandbox.tlsSecretName -}}{{- fail "gatewayRouting.sandbox.tlsSecretName must reference a wildcard certificate Secret" -}}{{- end -}}
+{{- if or (lt (int $routing.sandbox.listenerPort) 1024) (gt (int $routing.sandbox.listenerPort) 65535) (eq (int $routing.sandbox.listenerPort) (int $routing.envoyHttpsTargetPort)) -}}{{- fail "gatewayRouting.sandbox.listenerPort must be an unprivileged port distinct from private Envoy HTTPS" -}}{{- end -}}
+{{- if ge (int $routing.tenantGatewayPort) 65535 -}}{{- fail "gatewayRouting.tenantGatewayPort must leave room for the adjacent sandbox port" -}}{{- end -}}
+{{- if not $routing.sandbox.ingressPeers -}}{{- fail "gatewayRouting.sandbox.ingressPeers must explicitly select public ingress sources" -}}{{- end -}}
+{{- $cookieDomain := trimPrefix "." (lower .Values.agentNativeAdmin.sharedCookieDomain) -}}
+{{- if and $cookieDomain (or (eq $routing.sandbox.domain $cookieDomain) (hasSuffix (printf ".%s" $cookieDomain) $routing.sandbox.domain) (hasSuffix (printf ".%s" $routing.sandbox.domain) $cookieDomain)) -}}{{- fail "gatewayRouting.sandbox.domain must be outside the OCE shared session cookie domain" -}}{{- end -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "openclaw.trustedProxy.header" -}}
+{{- $proxy := default dict .Values.api.trustedProxy -}}
+{{- if eq (toString $proxy.preset) "generic" -}}{{- lower (toString $proxy.clientAddressHeader) -}}{{- else -}}x-forwarded-for{{- end -}}
 {{- end -}}
 
 {{- define "openclaw.labels" -}}
@@ -227,6 +333,14 @@ capabilities:
     secretKeyRef:
       name: {{ .secretName }}
       key: {{ .key }}
+{{- end -}}
+
+{{- define "openclaw.slackProxy.serviceName" -}}
+{{- .Values.slackProxy.serviceName -}}
+{{- end -}}
+
+{{- define "openclaw.slackProxy.url" -}}
+{{- printf "http://%s.%s.svc:%v" (include "openclaw.slackProxy.serviceName" .) .Release.Namespace (int .Values.slackProxy.port) -}}
 {{- end -}}
 
 {{- define "openclaw.gatewayRouting.gatewayName" -}}

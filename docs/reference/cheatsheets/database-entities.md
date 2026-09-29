@@ -173,10 +173,23 @@ Retains repository-session identity and cleanup context after AgentRevision dele
 - `admission_id`
 - `duration_seconds`
 - `deadline_wall_ms`
+- `broker_protocol`
 - `phase`
 - `session_id`
 - `created_at`
 - `updated_at`
+
+### `repository_broker_receipts`
+
+Retains nonsecret admission fences and broker-confirmed terminal evidence for an exact attempt.
+
+- `admission_id`
+- `state`
+- `generation`
+- `session_id`
+- `deadline_wall_ms`
+- `revoked`
+- `expired`
 
 ## Identity and access
 
@@ -307,7 +320,9 @@ Stores expiring browser sessions for signed-in users.
 
 ### `account`
 
-Links a user to their sign-in account; provisioned password accounts store a password hash.
+Links a user to their sign-in method. Password methods store a password hash;
+identity-only external methods reject password and provider-token storage.
+See [GitHub sign-in](../authentication/external-sign-in.md#github-sign-in-for-existing-accounts).
 
 - `id`
 - `account_id`
@@ -320,8 +335,56 @@ Links a user to their sign-in account; provisioned password accounts store a pas
 - `refresh_token_expires_at`
 - `scope`
 - `password`
+- `authentication_version`
+- `identity_only`
 - `created_at`
 - `updated_at`
+
+### `human_authentication_accounts`
+
+Binds each enrolled human user to its existing Installation Principal and current
+account version. Disabled accounts cannot issue or use profile-bound sessions.
+
+- `user_id`
+- `installation_id`
+- `principal_id`
+- `version`
+- `disabled`
+- `changed_at`
+
+### `human_authentication_sessions`
+
+Binds an ordinary browser session to its admitted account and method versions.
+
+- `session_id`
+- `user_id`
+- `method_id`
+- `version`
+- `method_version`
+
+### `human_authentication_recovery`
+
+Retains the fixed existing password recovery administrator for an Installation.
+
+- `installation_id`
+- `user_id`
+- `principal_id`
+- `method_id`
+
+### `human_authentication_attempts`
+
+Stores one-use external-login attempts with browser binding and a maximum
+five-minute lifetime. Stores the PKCE verifier, but no authorization code or
+provider token. Consumed attempts are deleted before exchange.
+
+- `state_hash`
+- `browser_hash`
+- `installation_id`
+- `provider_id`
+- `callback_url`
+- `code_verifier`
+- `created_at`
+- `expires_at`
 
 ### `verification`
 

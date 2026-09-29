@@ -15,6 +15,7 @@ import { createTestConfigurationDriver } from "../helpers/configuration-driver.m
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
+import { commitAckProxy } from "../fixtures/postgres-commit-ack-proxy.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "postgres-admin@openclaw.local";
@@ -288,7 +289,109 @@ test(
       configurationDriver: createTestConfigurationDriver(),
     });
 
+    const iamBeforeNoGrant = await state.loadNativeIAMState(installation.id);
+    const adminNamespaces = await appA.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+    });
+    assert.equal(adminNamespaces.statusCode, 200, adminNamespaces.body);
+    const deniedNamespaceId = adminNamespaces.json().data[0].id;
+    const noGrantAuditBefore = await observerPool.query(
+      `SELECT id FROM occ.audit_events WHERE action = 'openclaw.auth.accounts.create'`,
+    );
+    const noGrantEmail = `postgres-no-grant-${randomUUID()}@example.com`;
+    const noGrantPassword = `generated-password-${randomUUID()}`;
+    const noGrant = await appA.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: { email: noGrantEmail, password: noGrantPassword, name: "Postgres No Grant" },
+    });
+    assert.equal(noGrant.statusCode, 201, noGrant.body);
+    const noGrantSession = await signInWithEmailPassword({
+      fetch: (request) => fetchFromInjectedApp(appB, request),
+      email: noGrantEmail,
+      password: noGrantPassword,
+    });
+    const noGrantInstallation = await appB.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(noGrantInstallation.statusCode, 403, noGrantInstallation.body);
+    // The zero-grant create is audited exactly once as an administrator mutation.
+    const noGrantAudit = await observerPool.query(
+      `SELECT id, kind, actor_id, resource_kind, resource_id, outcome, details
+       FROM occ.audit_events
+       WHERE action = 'openclaw.auth.accounts.create' AND NOT (id = ANY($1::text[]))`,
+      [noGrantAuditBefore.rows.map(({ id }) => id)],
+    );
+    assert.equal(noGrantAudit.rows.length, 1);
+    assert.equal(noGrantAudit.rows[0].details.principalId, noGrant.json().data.principalId);
+    assert.equal(noGrantAudit.rows[0].details.grant, "none");
+    assert.equal(noGrantAudit.rows[0].details.roleId, undefined);
+    assert.ok(!JSON.stringify(noGrantAudit.rows[0].details).includes(noGrantEmail));
+    assert.ok(!JSON.stringify(noGrantAudit.rows[0].details).includes(noGrantPassword));
+    assert.deepEqual(
+      {
+        kind: noGrantAudit.rows[0].kind,
+        actorId: noGrantAudit.rows[0].actor_id,
+        resourceKind: noGrantAudit.rows[0].resource_kind,
+        resourceId: noGrantAudit.rows[0].resource_id,
+        outcome: noGrantAudit.rows[0].outcome,
+      },
+      {
+        kind: "mutation",
+        actorId: installationPrincipal(iamBeforeNoGrant).id,
+        resourceKind: "installation",
+        resourceId: installation.id,
+        outcome: "success",
+      },
+    );
+    // Before any grant the human sees an empty Namespace list and is denied everywhere else.
+    const noGrantNamespaces = await appB.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(noGrantNamespaces.statusCode, 200, noGrantNamespaces.body);
+    assert.deepEqual(noGrantNamespaces.json().data, []);
+    for (const [method, url, payload] of [
+      ["POST", "/namespaces", { name: "postgres-zero-grant-namespace" }],
+      ["GET", `/namespaces/${deniedNamespaceId}`],
+      ["DELETE", `/namespaces/${deniedNamespaceId}`],
+      ["GET", `/namespaces/${deniedNamespaceId}/agents`],
+      ["GET", `/namespaces/${deniedNamespaceId}/iam/roles`],
+      [
+        "POST",
+        `/namespaces/${deniedNamespaceId}/iam/roles`,
+        { permissions: [{ action: "read", resourceKind: "namespace" }] },
+      ],
+      [
+        "POST",
+        "/api/auth/accounts",
+        {
+          email: `postgres-zero-grant-escalation-${randomUUID()}@example.com`,
+          password: `generated-password-${randomUUID()}`,
+          name: "Postgres Zero Grant Escalation",
+        },
+      ],
+    ]) {
+      const denied = await appB.inject({
+        method,
+        url,
+        headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+        ...(payload === undefined ? {} : { payload }),
+      });
+      assert.equal(denied.statusCode, 403, `${method} ${url}: ${denied.body}`);
+      assert.equal(denied.json().error.code, "FORBIDDEN");
+    }
     const iamBefore = await state.loadNativeIAMState(installation.id);
+    assert.equal(iamBefore.identities.length, iamBeforeNoGrant.identities.length + 1);
+    assert.equal(iamBefore.bindings.length, iamBeforeNoGrant.bindings.length);
+    assert.ok(iamBefore.identities.some(({ id }) => id === noGrant.json().data.principalId));
+
     const role = iamBefore.roles.find((candidate) =>
       candidate.permissions.some(
         (permission) => permission.action === "read" && permission.resourceKind === "installation",
@@ -376,6 +479,93 @@ test(
        WHERE action = 'openclaw.auth.accounts.create'`,
     );
     assert.equal(afterAudit.rows[0].count, beforeAudit.rows[0].count + 1);
+    const createdAudit = await observerPool.query(
+      `SELECT details FROM occ.audit_events
+       WHERE action = 'openclaw.auth.accounts.create' AND details->>'principalId' = $1`,
+      [created.json().data.principalId],
+    );
+    assert.equal(createdAudit.rows.length, 1);
+    assert.equal(createdAudit.rows[0].details.roleId, role.id);
+    assert.equal(createdAudit.rows[0].details.grant, undefined);
+    assert.ok(!JSON.stringify(createdAudit.rows[0].details).includes(email));
+
+    // Grant the existing human exact Namespace access through the public policy API.
+    // The second controller must observe it without gaining Installation or sibling access.
+    const namespaces = await appA.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+    });
+    assert.equal(namespaces.statusCode, 200, namespaces.body);
+    const namespaceId = namespaces.json().data[0].id;
+    const namespaceRole = await appA.inject({
+      method: "POST",
+      url: `/namespaces/${namespaceId}/iam/roles`,
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: { permissions: [{ action: "read", resourceKind: "namespace" }] },
+    });
+    assert.equal(namespaceRole.statusCode, 201, namespaceRole.body);
+    // A Namespace-scoped Role cannot back an account's Installation binding: 400, no writes.
+    const namespaceRoleEmail = `postgres-namespace-role-${randomUUID()}@example.com`;
+    const auditBeforeNamespaceRole = await observerPool.query(
+      `SELECT count(*)::integer AS count FROM occ.audit_events
+       WHERE action = 'openclaw.auth.accounts.create'`,
+    );
+    const namespaceRoleAccount = await appA.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: {
+        email: namespaceRoleEmail,
+        password: `generated-password-${randomUUID()}`,
+        roleId: namespaceRole.json().data.id,
+      },
+    });
+    assert.equal(namespaceRoleAccount.statusCode, 400, namespaceRoleAccount.body);
+    assert.equal(namespaceRoleAccount.json().error.code, "INVALID_REQUEST");
+    assert.deepEqual(
+      (await observerPool.query(`SELECT id FROM occ."user" WHERE email = $1`, [namespaceRoleEmail]))
+        .rows,
+      [],
+    );
+    assert.deepEqual(
+      (
+        await observerPool.query(
+          `SELECT count(*)::integer AS count FROM occ.audit_events
+           WHERE action = 'openclaw.auth.accounts.create'`,
+        )
+      ).rows,
+      auditBeforeNamespaceRole.rows,
+    );
+    const binding = await appA.inject({
+      method: "POST",
+      url: `/namespaces/${namespaceId}/iam/access-bindings`,
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload: {
+        subjectKind: "identity",
+        subjectId: noGrant.json().data.principalId,
+        roleId: namespaceRole.json().data.id,
+        resourceKind: "namespace",
+        resourceId: namespaceId,
+      },
+    });
+    assert.equal(binding.statusCode, 201, binding.body);
+    const visibleNamespaces = await appB.inject({
+      method: "GET",
+      url: "/namespaces",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(visibleNamespaces.statusCode, 200, visibleNamespaces.body);
+    assert.deepEqual(
+      visibleNamespaces.json().data.map(({ id }) => id),
+      [namespaceId],
+    );
+    const stillDenied = await appB.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(noGrantSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(stillDenied.statusCode, 403, stillDenied.body);
   },
 );
 
@@ -477,5 +667,144 @@ test(
       [auditId],
     );
     assert.equal(duplicateAuditRows.rowCount, 1);
+  },
+);
+
+test(
+  "PostgreSQL auth account create with a lost COMMIT reply keeps the whole account and converges on retry",
+  requiresPostgres,
+  async (context) => {
+    const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+    const apps = [];
+    let proxy;
+    context.after(async () => {
+      for (const app of apps.reverse()) {
+        await app.close();
+      }
+      await proxy?.close();
+      await observerPool.end();
+    });
+
+    const config = {
+      mode: "development",
+      host: "127.0.0.1",
+      databaseUrl,
+      authBaseURL: "http://127.0.0.1",
+      authSecret: "openclaw-postgres-local-auth-secret-minimum-32-bytes",
+    };
+    await ensureDevelopmentBootstrap(context, {
+      databaseUrl,
+      email: adminEmail,
+      password: adminPassword,
+      authSecret: config.authSecret,
+      authBaseURL: config.authBaseURL,
+      installationName: "PostgreSQL account unknown commit",
+    });
+    const drivers = () => ({
+      computeDriver: createDevelopmentComputeDriver(),
+      configurationDriver: createTestConfigurationDriver(),
+    });
+    const ordinary = await composePostgresDevelopment(config, drivers());
+    apps.push(ordinary);
+    proxy = await commitAckProxy(databaseUrl);
+    const faulted = await composePostgresDevelopment(
+      { ...config, databaseUrl: proxy.url },
+      drivers(),
+    );
+    apps.push(faulted);
+    await faulted.ready();
+
+    const session = await signInWithEmailPassword({
+      fetch: (request) => fetchFromInjectedApp(ordinary, request),
+      email: adminEmail,
+      password: adminPassword,
+    });
+    const state = new PostgresPlatformState(observerPool);
+    const installation = await state.loadInstallation();
+    assert.ok(installation);
+    const iamBefore = await state.loadNativeIAMState(installation.id);
+    const role = iamBefore.roles.find((candidate) =>
+      candidate.permissions.some(
+        (permission) => permission.action === "read" && permission.resourceKind === "installation",
+      ),
+    );
+    assert.ok(role, "the persisted Installation must have an account-bindable Role");
+
+    const email = `postgres-unknown-commit-${randomUUID()}@example.com`;
+    const password = `generated-password-${randomUUID()}`;
+    const payload = { email, password, name: "Postgres Unknown Commit", roleId: role.id };
+    async function persisted() {
+      const { rows } = await observerPool.query(
+        `SELECT u.id AS user_id, h.principal_id,
+           (SELECT count(*)::int FROM occ.account a
+             WHERE a.user_id = u.id AND a.provider_id = 'credential') AS passwords,
+           (SELECT count(*)::int FROM occ.iam_identities i WHERE i.id = h.principal_id) AS principals,
+           (SELECT count(*)::int FROM occ.iam_access_bindings b
+             WHERE b.identity_subject_id = h.principal_id) AS bindings,
+           (SELECT count(*)::int FROM occ.audit_events e
+             WHERE e.action = 'openclaw.auth.accounts.create'
+               AND e.details->>'principalId' = h.principal_id) AS audits
+         FROM occ."user" u
+         LEFT JOIN occ.human_authentication_accounts h ON h.user_id = u.id
+         WHERE u.email = $1`,
+        [email],
+      );
+      return rows;
+    }
+
+    // The request's three earlier read transactions commit first. Drop the reply to
+    // the provisioning COMMIT, after PostgreSQL has committed the account, Principal,
+    // binding and audit.
+    proxy.arm({ skipCommits: 3 });
+    const unknown = await faulted.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload,
+    });
+    assert.equal(proxy.observedCommit, true);
+    assert.equal(unknown.statusCode, 503, unknown.body);
+    assert.equal(unknown.json().error.code, "DEPENDENCY_UNAVAILABLE");
+    assert.match(unknown.json().error.message, /outcome is unknown/i);
+
+    // Nothing was compensated: the login and its Principal committed together.
+    const committed = await persisted();
+    assert.equal(committed.length, 1);
+    assert.ok(committed[0].principal_id);
+    assert.deepEqual(
+      {
+        passwords: committed[0].passwords,
+        principals: committed[0].principals,
+        bindings: committed[0].bindings,
+        audits: committed[0].audits,
+      },
+      { passwords: 1, principals: 1, bindings: 1, audits: 1 },
+    );
+    const provisionedSession = await signInWithEmailPassword({
+      fetch: (request) => fetchFromInjectedApp(ordinary, request),
+      email,
+      password,
+    });
+    const authorized = await ordinary.inject({
+      method: "GET",
+      url: "/installation",
+      headers: authenticatedHeaders(provisionedSession, { host: "127.0.0.1" }),
+    });
+    assert.equal(authorized.statusCode, 200, authorized.body);
+
+    // A deliberate retry of the same request converges on the committed account:
+    // the email conflicts and no second login, Principal or audit event appears.
+    const retry = await ordinary.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: authenticatedHeaders(session, { host: "127.0.0.1" }),
+      payload,
+    });
+    assert.equal(retry.statusCode, 409, retry.body);
+    assert.equal(retry.json().error.code, "RESOURCE_CONFLICT");
+    assert.deepEqual(await persisted(), committed);
+    const iamAfter = await state.loadNativeIAMState(installation.id);
+    assert.equal(iamAfter.identities.length, iamBefore.identities.length + 1);
+    assert.equal(iamAfter.bindings.length, iamBefore.bindings.length + 1);
   },
 );

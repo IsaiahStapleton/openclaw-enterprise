@@ -201,10 +201,9 @@ test("Plugin approver translation keeps Agent, plugin, and exact scoped tool ove
       linear: { approvers: [], tools: { [toolId]: { approvers: [second.id] } } },
     },
   });
-  assert.deepEqual(codexOpenClawConfiguration({}, [], undefined, []), {
-    approvals: { plugin: { slack: { approvers: [] } } },
+  assert.deepEqual(codexOpenClawConfiguration({}, [], undefined, []).approvals, {
+    plugin: { slack: { approvers: [] } },
   });
-  assert.equal(codexOpenClawConfiguration({}), undefined);
   assert.deepEqual(
     codexOpenClawConfiguration(codexSelection(linearPluginId, { approvers: [] })).approvals.plugin
       .slack,
@@ -227,6 +226,39 @@ test("Plugin approver translation keeps Agent, plugin, and exact scoped tool ove
     validatePolicies("openclaw", {}, [{ channel: "slack", id: "team:X123:user:Y456" }]),
   );
   assert.throws(() => validatePolicies("openclaw", {}, [{ channel: "slack", id: "C123" }]));
+});
+
+test("Codex Plugin Driver admits only Agent-wide approvers; OpenClaw keeps plugin and tool overrides", () => {
+  const approver = { channel: "slack", id: "team:T123:user:U123" };
+  const toolId = "asdk_app_69a089a326dc8191b32a3f2553f5be2c/repos%2Fread";
+  const codex = new CodexPluginDriver();
+  const occ = new OCCPluginDriver();
+  // Codex approval requests carry no plugin or tool identity, so OpenClaw's Slack resolver
+  // denies every Codex request once any plugin list exists. Only the Agent default works.
+  assert.deepEqual(codex.policyCapabilities.approvers, {
+    agent: true,
+    plugin: false,
+    tools: false,
+  });
+  assert.deepEqual(occ.policyCapabilities.approvers, { agent: true, plugin: true, tools: true });
+  codex.validatePolicies(codexSelection(), [approver]);
+  for (const selection of [
+    codexSelection(linearPluginId, { approvers: [] }),
+    codexSelection(linearPluginId, { tools: { [toolId]: { approvers: [approver] } } }),
+    // A disabled plugin still renders its list into approvals.plugin.slack.plugins.
+    codexSelection(linearPluginId, { enabled: false, approvers: [approver] }),
+  ]) {
+    assert.throws(
+      () => codex.validatePolicies(selection, [approver]),
+      (error) =>
+        error.name === "PluginPolicyValidationError" &&
+        /does not support plugin or tool approvers.*Agent-wide pluginApprovers/.test(error.message),
+    );
+  }
+  occ.validatePolicies(
+    occSelection({ approvers: [approver], tools: { diffs: { approvers: [] } } }),
+    [approver],
+  );
 });
 
 test("OpenClaw plugin startup translation rejects unsupported policies", () => {
@@ -405,6 +437,17 @@ test("Codex startup default-denies plugins", () => {
   assert.deepEqual(empty.configuration.apps, { _default: { enabled: false } });
   assert.deepEqual(empty.configuration.plugins, {});
   assert.deepEqual(empty.installs, []);
+});
+
+test("Codex bridge keeps runtime binaries readable after the last plugin is removed", () => {
+  // A normal no-plugin revision still starts the packaged native sandbox helper.
+  // Plugin skill and credential directories must not survive as incidental grants.
+  const config = codexOpenClawConfiguration({}).plugins.entries.codex.config;
+  assert.deepEqual(config, {
+    appServer: {
+      networkProxy: { readOnlyPaths: ["/app/node_modules/openclaw"] },
+    },
+  });
 });
 
 test("Codex bridge configuration carries repository broker network policy without plugins", () => {

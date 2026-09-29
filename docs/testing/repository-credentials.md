@@ -58,6 +58,8 @@ whole-program dataflow analysis, prove that allowed owners handle secrets
 correctly, or sandbox malicious code. It does not replace capability design,
 runtime isolation, or the controlled and live tests below.
 
+For image-pair verification, use the [controller and broker compatibility probe](repository-credentials-platform.md#controller-and-broker-image-compatibility-probe).
+
 ## Run controlled tests
 
 ```sh
@@ -88,13 +90,10 @@ TLS switch or localhost `GH_HOST` substitute is used.
 node --test tests/integration/repository-credentials-service-loss.test.mjs
 ```
 
-These baseline cases run the production service, GitHub factory, custody and
-transports in a child process. A controlled provider survives its termination.
-They prove stale-bearer denial after actual `SIGKILL` and show that lost issuance
-responses remain charged while the service survives, without automatic remint.
-After process replacement, the provider can still hold an unexpired token while
-the service has lost its session and reservation. That observation documents the
-current limit; it does not establish durable cleanup or accounting.
+These cases run the service and GitHub factory in a child process against a
+controlled provider. They cover stale-bearer denial, uncertain issuance, a lost
+revocation response and monotonic cleanup time. Bound admission fails closed
+without the durable journal. These cases do not prove PostgreSQL recovery.
 
 The fixture joins each child death and removes only its verified stale socket
 before replacement. This setup does not prove automatic stale-socket recovery.
@@ -222,7 +221,7 @@ ordinary-Agent routing require the platform checks. The context case rebuilds
 both Docker inputs and rejects source files, compiler artifacts and linked inputs.
 
 Build the service and client images using the
-[operator guide](../guides/repository-credentials.md#container-images). Then
+[operator guide](../guides/repository-credentials/standalone-service.md#container-images). Then
 combine those artifacts in an owned test-only image. Use the same local Docker
 builder for all three builds so it resolves the delivered input images:
 

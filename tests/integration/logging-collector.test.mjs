@@ -85,11 +85,21 @@ async function collectorFixture(t, prefix) {
     out,
     backend,
     collector,
-    async startCollector({ receiverPath, publish }) {
+    network,
+    async startCollector({ receiverPath, publish, env = [], volumes = [], configs = [] }) {
       const args = ["run", "--detach", "--name", collector, "--network", network, "--user", user];
       for (const port of publish) {
         args.push("--publish", port);
       }
+      for (const entry of env) {
+        args.push("--env", entry);
+      }
+      for (const volume of volumes) {
+        args.push("--volume", volume);
+      }
+      configs.forEach((path, index) =>
+        args.push("--volume", `${path}:/etc/otel/extra-${index}.yaml:ro`),
+      );
       args.push(
         "--env",
         `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://${backend}:4318/v1/logs`,
@@ -105,6 +115,7 @@ async function collectorFixture(t, prefix) {
         "--config=/etc/otel/collector.yaml",
         "--config=/etc/otel/receiver.yaml",
         "--config=/etc/otel/exporter.yaml",
+        ...configs.map((_, index) => `--config=/etc/otel/extra-${index}.yaml`),
       );
       await docker(args);
     },
@@ -602,5 +613,168 @@ test(
       });
     }
     assert.doesNotMatch(JSON.stringify(workerRecords), /CANARY_/);
+  },
+);
+
+// Stands in for the API server behind k8sattributes: serves one Pod through
+// list or watch-list, and withholds every Pod response until the test releases it.
+const podMetadataServer = `
+const http = require('node:http');
+const pod = JSON.parse(process.env.POD);
+const requests = [];
+const held = [];
+let released = false;
+const answer = (url, res) => {
+  res.setHeader('content-type', 'application/json');
+  if (url.searchParams.get('watch') === 'true') {
+    res.writeHead(200);
+    if (url.searchParams.get('sendInitialEvents') === 'true') {
+      res.write(JSON.stringify({ type: 'ADDED', object: pod }) + '\\n');
+      res.write(JSON.stringify({ type: 'BOOKMARK', object: { kind: 'Pod', apiVersion: 'v1',
+        metadata: { resourceVersion: '10', annotations: { 'k8s.io/initial-events-end': 'true' } } } }) + '\\n');
+    }
+    return;
+  }
+  res.end(JSON.stringify({ apiVersion: 'v1', kind: 'PodList', metadata: { resourceVersion: '10' }, items: [pod] }));
+};
+http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://api');
+  if (url.pathname === '/fixture/requests') return res.end(JSON.stringify(requests));
+  if (url.pathname === '/fixture/release') {
+    released = true;
+    held.splice(0).forEach(([u, r]) => answer(u, r));
+    return res.end('released');
+  }
+  if (url.pathname !== '/api/v1/pods') { res.writeHead(404); return res.end('{}'); }
+  requests.push(req.url);
+  if (released) return answer(url, res);
+  held.push([url, res]);
+}).listen(8001, '0.0.0.0');
+`;
+
+test(
+  "native Collector keeps CRI records written before Kubernetes Pod metadata syncs",
+  {
+    skip: selected
+      ? false
+      : "Set OCC_TEST_LOGGING_COLLECTOR=1 for pinned Collector Kubernetes metadata proof.",
+    timeout: 180_000,
+  },
+  async (t) => {
+    const fixture = await collectorFixture(t, "sync");
+    const api = `oce-otel-sync-api-${fixture.suffix}`;
+    t.after(() => docker(["rm", "--force", api]).catch(() => {}));
+    const namespace = `system-${fixture.suffix}`;
+    const podName = `openclaw-enterprise-worker-${fixture.suffix}`;
+    const podUid = randomUUID();
+    const pod = {
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: {
+        name: podName,
+        namespace,
+        uid: podUid,
+        resourceVersion: "10",
+        labels: {
+          "app.kubernetes.io/name": "openclaw-enterprise",
+          "app.kubernetes.io/component": "worker",
+        },
+      },
+      spec: { nodeName: "fixture-node", containers: [{ name: "worker", image: "fixture" }] },
+      status: {
+        containerStatuses: [
+          {
+            name: "worker",
+            image: "fixture",
+            imageID: `registry.example.test/controller@sha256:${"b".repeat(64)}`,
+            containerID: `containerd://${fixture.suffix}`,
+            ready: true,
+            restartCount: 0,
+            state: { running: {} },
+          },
+        ],
+      },
+    };
+    // The worker's only startup event is already on disk when the Collector
+    // starts, exactly as for a DaemonSet added to (or restarted on) a live node.
+    const pods = join(fixture.directory, "pods");
+    const logDirectory = join(pods, `${namespace}_${podName}_${podUid}`, "worker");
+    await mkdir(logDirectory, { recursive: true });
+    await writeFile(
+      join(logDirectory, "0.log"),
+      `${new Date().toISOString()} stdout F ${JSON.stringify({ level: 30, event: "worker.started", computeDriverId: "kubernetes" })}\n`,
+    );
+    await docker([
+      "run",
+      "--detach",
+      "--name",
+      api,
+      "--network",
+      fixture.network,
+      "--publish",
+      "127.0.0.1::8001",
+      "--env",
+      `POD=${JSON.stringify(pod)}`,
+      nodeImage,
+      "node",
+      "-e",
+      podMetadataServer,
+    ]);
+    const control = `http://${(await docker(["port", api, "8001/tcp"])).split("\n")[0]}/fixture`;
+    const podRequests = async () =>
+      fetch(`${control}/requests`)
+        .then((response) => response.json())
+        .catch(() => []);
+    await waitFor(async () =>
+      fetch(`${control}/requests`)
+        .then((response) => response.ok)
+        .catch(() => false),
+    );
+    await writeFile(
+      join(fixture.directory, "kubeconfig"),
+      `${JSON.stringify({
+        apiVersion: "v1",
+        kind: "Config",
+        clusters: [{ name: "fixture", cluster: { server: `http://${api}:8001` } }],
+        users: [{ name: "fixture", user: {} }],
+        contexts: [{ name: "fixture", context: { cluster: "fixture", user: "fixture" } }],
+        "current-context": "fixture",
+      })}\n`,
+    );
+    // Only the credential source differs from the shipped receiver file.
+    await writeFile(
+      join(fixture.directory, "metadata-auth.yaml"),
+      "processors:\n  k8sattributes:\n    auth_type: kubeConfig\n",
+    );
+    await fixture.startCollector({
+      receiverPath: join(root, "deploy/logging/kubernetes.yaml"),
+      publish: [],
+      env: ["K8S_NODE_NAME=fixture-node", "KUBECONFIG=/etc/otel-fixture/kubeconfig"],
+      volumes: [
+        `${pods}:/var/log/pods:ro`,
+        `${join(fixture.directory, "kubeconfig")}:/etc/otel-fixture/kubeconfig:ro`,
+      ],
+      configs: [join(fixture.directory, "metadata-auth.yaml")],
+    });
+    const records = async () =>
+      exportedRecords(fixture.out, (resource, record) => ({
+        resource: attributes(resource.resource?.attributes),
+        record,
+      }));
+
+    // Hold Pod metadata well past filelog's first 200 ms poll. A pipeline that
+    // started without metadata has read, dropped and committed the record by now.
+    await waitFor(async () => (await podRequests()).length > 0);
+    await delay(3_000);
+    assert.deepEqual(await records(), []);
+    await fetch(`${control}/release`, { method: "POST" });
+
+    await waitFor(async () => (await records()).length > 0);
+    const exported = await records();
+    assert.equal(exported.length, 1);
+    assert.equal(exported[0].resource["service.name"], "occ-worker");
+    assert.equal(exported[0].resource["service.instance.id"], podUid);
+    assert.equal(exported[0].record.body?.stringValue, "worker.started");
+    assert.equal(exported[0].record.severityText, "INFO");
   },
 );

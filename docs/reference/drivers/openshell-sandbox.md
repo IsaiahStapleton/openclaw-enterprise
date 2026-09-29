@@ -1,24 +1,26 @@
 # OpenShell SandboxDriver
 
 The bundled OpenShell SandboxDriver integrates a deployment-paired OpenShell
-Gateway with a dedicated Codex Harness and the bundled
+Gateway with dedicated Codex and native OpenClaw Harnesses and the bundled
 [Kubernetes Compute Driver](kubernetes-compute.md). OCC retains ownership of
 Agents, revisions, Namespaces, routing, credentials, and authorization.
 
-**OpenShell is not supported for production Agent deployment.** The stock
-OpenShell version this integration targets,
-[`v0.1.0`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0), cannot accept the
-Secret-backed app-server token or projected workload identity a dedicated Codex
-Agent requires. The model API key is no longer a blocker: the paired
-[OpenShell Credential Gateway](openshell-credential-gateway.md) delivers it. The Enterprise Driver rejects deployment rather
-than starting an incorrectly credentialed Harness. The real integration keeps
-that rejection proof and has a separate verification-only compatibility bridge
-for a real in-Sandbox model turn. That bridge is not a supported deployment
-path. Use Kubernetes Compute without OpenShell when you need to run Agents.
+**The OpenShell integration is a work in progress.** Stock OpenShell
+[`v0.1.0`](https://github.com/NVIDIA/OpenShell/tree/v0.1.0) cannot accept the
+Secret-backed app-server token or projected workload identity a dedicated Agent
+requires. The model API key is no longer a blocker: the paired
+[OpenShell Credential Gateway](openshell-credential-gateway.md) delivers it. The
+Enterprise Driver rejects deployment rather than starting an incorrectly
+credentialed Harness. The real integration keeps that rejection proof and has a
+separate verification-only compatibility bridge for a real in-Sandbox model
+turn. That bridge is not a supported deployment path.
 
 Embedded OpenClaw also fails when OpenShell is selected; the integration is
-designed only for dedicated Codex. See the [upstream requirements](#current-upstream-preconditions)
-before evaluating OpenShell.
+designed only for dedicated Harnesses. Kubernetes Compute requires dedicated
+native OpenClaw to use a provisioning SandboxDriver that declares networking,
+filesystem, and process containment. The bundled OpenShell Driver is the current
+implementation of that contract. See the
+[upstream requirements](#current-upstream-preconditions) before evaluating it.
 
 ## Ownership model
 
@@ -49,10 +51,15 @@ The OpenShell SandboxDriver owns only the provider sandboxing delegation:
   namespace. Adoption requires OCC's exact ownership labels and an active
   Workspace.
 - `provisionHarness` asks the OpenShell gateway to create one OpenShell Sandbox
-  in that Workspace for the dedicated Codex Harness and expose its loopback Codex
-  app-server port in the same request. It adds each
+  in that Workspace. Dedicated Codex exposes its loopback app-server port in the
+  same request; native OpenClaw connects outbound and requests no inbound
+  service. The Driver adds each
   [credential attachment](#credential-attachments) to the Sandbox's providers,
   validates the returned service route, and returns the stable Sandbox reference.
+  The Sandbox
+  belongs to the AgentRevision. Its native OpenClaw node host admits the bounded,
+  configured set of session-owned workers instead of creating another Sandbox
+  for each session.
 - OpenShell's controller creates and owns the provider Harness Pod behind that
   Sandbox.
 - `cleanup` receives the immutable Agent revision during revision retirement and
@@ -203,9 +210,9 @@ startup YAML.
 workspace mount. It may not mount the PVC root, may not use `..`, and must mount
 under `/sandbox/`.
 
-OpenShell's `configureAgent` hook contributes the effective Codex configuration
-before OCC validates and freezes the revision, disabling the inner Codex
-app-server sandbox:
+For dedicated Codex, OpenShell's `configureAgent` hook contributes the effective
+configuration before OCC validates and freezes the revision, disabling the
+inner Codex app-server sandbox:
 
 ```json
 {
@@ -225,7 +232,16 @@ app-server sandbox:
 ```
 
 This avoids stacking the Codex sandbox inside OpenShell. OpenShell becomes the
-outer containment boundary for the dedicated Harness.
+outer containment boundary for the dedicated Harness. Native OpenClaw already
+runs with its inner runtime isolation disabled; the hook preserves its
+configuration unchanged because OpenShell supplies that outer boundary. Native
+session workers have separate managed workspaces, but they share the Sandbox's
+user, filesystem, process, and network boundary. OpenShell isolates the
+AgentRevision from other workloads; it does not isolate mutually untrusted
+sessions within one Agent. Kubernetes defaults to eight retained native workers
+and accepts an explicit `runtime.nativeOpenClawSessionCapacity` from `1` through
+`1024`. A stopped hosted session releases its slot; idle workers are not
+automatically retired.
 
 ## Credential attachments
 
@@ -240,7 +256,7 @@ Compute requires every attachment to report `ready` before activation.
 
 ## Create-time app-server exposure
 
-For a request that reaches OpenShell, the Driver reads the literal
+For a dedicated Codex request that reaches OpenShell, the Driver reads the literal
 `APP_SERVER_PORT` prepared by Compute and includes one unnamed service exposure
 in `CreateSandbox`. It uses the Agent revision UUID as OpenShell's `request_id`,
 so retries receive the same service URL. The Driver accepts only an HTTP or HTTPS
@@ -253,6 +269,10 @@ app server's `401` through this route and runs its real model turn on Pod
 loopback. It does not treat the test bridge as supported or replace Compute's
 Agent Service. A Sandbox without a replayable Create receipt must be removed;
 the Driver does not mutate it with a later `ExposeService` call.
+
+Native OpenClaw does not accept inbound Harness traffic. Its enrolled node host
+opens the connection to the Agent Gateway, so the Driver sends an empty service
+exposure list and rejects any unexpected service URL returned by OpenShell.
 
 ## Kubernetes and admission requirements
 
@@ -280,10 +300,23 @@ must allow only gateway, control-plane, callback, and approved provider
 connectivity needed for OpenShell to function. Broad namespace egress or ingress
 allows can bypass the intended boundary.
 
+Compute passes the provider-fenced network profile (`provider-fenced-v1`) to the
+provider Harness template; the provider must retain it on the resulting Pod.
+That profile admits Gateway transport ingress but none of Compute's DNS, model
+or authentication egress, so OpenShell's workload fence alone governs egress. The gateway's callers are
+OpenShell supervisor Pods (`openshell.ai/managed-by=openshell`,
+`openshell.ai/boundary-role=supervisor`), which carry no `openclaw.dev` labels,
+so gateway callback policies must select those supervisor labels rather than the
+Harness profile. The separately installed OpenShell gateway needs its own scoped
+DNS/API policies because it does not receive ordinary tenant DNS by omission.
+Existing Sandboxes keep their template: redeploy the Agent revision to apply the
+profile. See the
+[network profile reference](kubernetes-compute/networking-and-isolation.md#explicit-network-profiles).
+
 ## Current upstream preconditions
 
-The current integration cannot run production Agents. Production support would
-require upstream OpenShell to satisfy all of these conditions:
+The following upstream OpenShell capabilities are being worked on to enable
+production Agent deployment:
 
 - OpenShell must create Sandboxes with the per-Agent ServiceAccount that Compute
   creates for the Harness.
@@ -308,7 +341,7 @@ require upstream OpenShell to satisfy all of these conditions:
   workaround. The model API key uses the Credential Gateway instead.
 - OpenShell gateway authentication must be bound to the trusted caller and the
   requested Sandbox or Pod identity.
-- OpenShell service routing must securely carry Codex bearer authorization
+- For Codex, OpenShell service routing must securely carry bearer authorization
   without exposing gateway credentials. Stock v0.1.0 strips it before proxying.
 
 If any of these conditions are unavailable, OpenShell-selected deployments must
@@ -328,7 +361,7 @@ Common fail-closed errors include:
   provider's status in OpenShell.
 - `OpenShell gateway Service is unavailable.`
 - `OpenShell gateway Pod is not ready.`
-- `OpenShell SandboxDriver only supports dedicated Codex Harness revisions.`
+- `OpenShell SandboxDriver supports only dedicated Codex or OpenClaw Harness revisions.`
 - `OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
 
 ## Related documentation

@@ -18,7 +18,8 @@ export OCC_METRICS_GRAFANA_PASSWORD
 docker compose -f compose.yaml -f compose.metrics.yaml up -d --build
 ```
 
-Sign in at `http://127.0.0.1:3001` as `admin` and open **OCC → OCC development**.
+Sign in at `http://127.0.0.1:3001` as `admin` and open **OCC → OCC observability**.
+This development stack lists its metrics view; the Helm demo also lists logs.
 Provisioning is in `deploy/metrics/development/`; the shared dashboard is in
 `deploy/helm/openclaw-observability-demo/files/`. Prometheus is at
 `http://127.0.0.1:9090`. Override occupied ports with `OCC_GRAFANA_PORT` or
