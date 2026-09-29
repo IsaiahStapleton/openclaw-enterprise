@@ -70,6 +70,8 @@ The defaults are `blacksmith-16vcpu-ubuntu-2404` and
 Each job checks its architecture and logs CPU, memory, and available disk.
 Jobs require at least four CPUs and 12 GiB RAM; the reported runner label alone
 is not evidence of allocated capacity.
+`scripts/ci/setup-tools.sh` installs checksum-pinned kubectl, k3d, Helm, and yq
+for both native Linux architectures before runtime smoke tests.
 The standard AMD64 override retains guarded toolchain cleanup: required roots
 are checked, unsafe optional paths are skipped, and 36 GiB free is required.
 Larger runners do not depend on deleting preinstalled SDKs.
