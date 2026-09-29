@@ -9,6 +9,7 @@ import test from "node:test";
 
 import { chromium } from "playwright";
 
+import { watchBrowserContext } from "../helpers/browser-failure-diagnostics.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
@@ -39,9 +40,11 @@ async function newPage(t, fixture) {
   const artifacts = await artifactDirectory(t);
   const browser = await launchBrowser();
   let context;
+  let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
+      await diagnostics?.capture();
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
@@ -57,6 +60,7 @@ async function newPage(t, fixture) {
     }
   });
   context = await browser.newContext();
+  diagnostics = await watchBrowserContext(t, context);
   return { page: await context.newPage(), artifacts };
 }
 
