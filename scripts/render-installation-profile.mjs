@@ -981,7 +981,7 @@ function buildRendered(profile, parsed, diagnostics) {
   }
   if (repositoryEnabled) {
     diagnostics.warnings.push(
-      "Repository support is optional. Broker or worker Pod replacement loses active sessions; affected revisions fail closed and require explicit redeployment. New revisions do not settle old credential cleanup obligations.",
+      "Repository support is optional. Active repository sessions are not restored after broker loss. Sessions lost without confirmed disposal remain unresolved and can fail affected revisions; a new authorized revision does not settle old cleanup obligations.",
     );
     diagnostics.nextSteps.push(
       "After the first bootstrap creates Namespace IDs, create the repository registry ConfigMap and then rerender/apply the repository-enabled inputs.",

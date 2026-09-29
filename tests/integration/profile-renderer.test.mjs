@@ -347,7 +347,7 @@ test("repository opt-in is explicit and keeps the two-stage placeholders separat
   );
   assert.match(
     output.preflight.warnings.join("\n"),
-    /Broker or worker Pod replacement loses active sessions/,
+    /Active repository sessions are not restored after broker loss/,
   );
 });
 
