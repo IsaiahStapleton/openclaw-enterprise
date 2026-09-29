@@ -18,6 +18,7 @@ import {
 import {
   PostgresHumanAuthentication,
   type HumanAuthenticationActor,
+  type HumanAuthenticationRecovery,
   type HumanAuthenticationAccount,
   type PostgresPool,
   type PostgresPlatformState,
@@ -84,6 +85,8 @@ export interface PostgresControllerAuthOptions extends Omit<
   readonly state?: PostgresPlatformState;
   readonly iamDriver?: IAMDriver;
   readonly github?: GitHubLoginConfiguration;
+  /** Receives nonfatal startup conditions as structured log events. */
+  readonly onWarning?: (event: { readonly event: string; readonly message: string }) => void;
 }
 
 export interface AuthenticatedAccount {
@@ -116,6 +119,8 @@ export interface ControllerAuth {
   readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
   readonly githubEnabled: boolean;
+  /** Provider-instance key for GitHub identities; set only while GitHub sign-in is configured. */
+  readonly githubProviderId?: string;
   /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
   readonly activationSkipped?: readonly string[];
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
@@ -136,6 +141,18 @@ export interface ControllerAuth {
     actor: HumanAuthenticationActor,
     expectedVersion: number,
   ): Promise<void>;
+  readRecovery?(actor: HumanAuthenticationActor): Promise<HumanAuthenticationRecovery>;
+  replaceRecovery?(
+    userId: string,
+    principalId: string,
+    expectedCurrentUserId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<HumanAuthenticationRecovery & { changed: boolean }>;
+  enrolAccount?(
+    userId: string,
+    actor: HumanAuthenticationActor,
+  ): Promise<{ principalId: string; version: number; created: boolean }>;
   detachMethod?(
     userId: string,
     methodId: string,
@@ -1107,7 +1124,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, state, iamDriver, github, ...controllerOptions } = options;
+  const { pool, state, iamDriver, github, onWarning, ...controllerOptions } = options;
   const persistence =
     state === undefined
       ? undefined
@@ -1145,9 +1162,22 @@ export async function createPostgresControllerAuth(
   await auth.auth.$context;
   let activationSkipped: readonly string[] = [];
   if (github !== undefined) {
+    const existing = await persistence!.recoveryDesignation();
+    // The recovery user id seeds first activation only; an online replacement is authoritative.
+    const seedIgnored = existing !== undefined && existing.userId !== github.recoveryUserId;
+    if (seedIgnored) {
+      onWarning?.({
+        event: "authentication.recovery-seed-warning",
+        message:
+          "OCC_AUTH_GITHUB_RECOVERY_USER_ID differs from the recorded recovery designation, which is kept.",
+      });
+    }
+    // Every start re-checks the actual holder: its Principal must still administer the
+    // Installation, and activateRecovery re-checks enrolment, enabled state and the password.
+    const recoveryUserId = seedIgnored ? existing.userId : github.recoveryUserId;
     const principal = await iamDriver!.lookupIdentity({
       issuer: betterAuthIssuer(options.installationId),
-      subject: github.recoveryUserId,
+      subject: recoveryUserId,
     });
     if (!principal || principal.kind !== "principal") {
       throw new Error("Recovery Principal is unavailable.");
@@ -1160,13 +1190,13 @@ export async function createPostgresControllerAuth(
     if (!decision.allowed || decision.driverId !== iamDriver!.id) {
       throw new Error("Recovery account must administer the Installation.");
     }
-    activationSkipped = (await persistence!.activateRecovery(github.recoveryUserId, principal.id))
-      .skipped;
+    activationSkipped = (await persistence!.activateRecovery(recoveryUserId, principal.id)).skipped;
     const designation = await persistence!.recoveryDesignation();
     if (!designation) {
       throw new Error("Recovery designation is unavailable.");
     }
-    // The recovery account's password lane stays admitted under sign-in floods.
+    // The recovery account's password lane stays admitted under sign-in floods. It follows the
+    // stored designation, never the environment seed, which may name a replaced holder.
     humanLogin!.designateRecovery(designation.email);
   }
   return {
@@ -1175,6 +1205,7 @@ export async function createPostgresControllerAuth(
     ...(humanLogin === undefined
       ? {}
       : {
+          githubProviderId: humanLogin.providerId,
           readAccount: (userId: string, actor: HumanAuthenticationActor) =>
             persistence!.readAccount(userId, actor),
           attachGitHub: (
@@ -1196,6 +1227,29 @@ export async function createPostgresControllerAuth(
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
+          readRecovery: (actor: HumanAuthenticationActor) => persistence!.readRecovery(actor),
+          replaceRecovery: async (
+            userId: string,
+            principalId: string,
+            expectedCurrentUserId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => {
+            const { email, ...replaced } = await persistence!.replaceRecovery(
+              userId,
+              principalId,
+              expectedCurrentUserId,
+              actor,
+              expectedVersion,
+            );
+            // Move the reserved password lane to the committed holder's email. The email comes
+            // from the replacing transaction, so no later read can fail and leave the old holder
+            // on the lane.
+            humanLogin.designateRecovery(email);
+            return replaced;
+          },
+          enrolAccount: (userId: string, actor: HumanAuthenticationActor) =>
+            persistence!.enrolAccount(userId, actor),
           detachMethod: (
             userId: string,
             methodId: string,

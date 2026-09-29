@@ -18,6 +18,13 @@ export interface HumanAuthenticationAccount {
   readonly methods: readonly { methodId: string; providerId: string; subject: string }[];
 }
 
+/** The single recovery designation: the account whose password the database protects. */
+export interface HumanAuthenticationRecovery {
+  readonly userId: string;
+  readonly principalId: string;
+  readonly methodId: string;
+}
+
 export interface HumanAuthenticationUser {
   readonly id: string;
   readonly email: string;
@@ -344,9 +351,13 @@ export class PostgresHumanAuthentication {
     prepared: PreparedPasswordAccount,
     seed: PersistedNativeIAMPrincipalSeed,
     auditEvent?: AuditEvent,
+    external?: { readonly providerId: string; readonly subject: string },
   ): Promise<void> {
     if (seed.principal.issuer !== this.issuer || seed.principal.subject !== prepared.id) {
       throw new ScopeViolationError("The account Principal must identify the new account.");
+    }
+    if (external?.providerId === "credential") {
+      throw new ScopeViolationError("An external method cannot replace a password.");
     }
     await this.state.transact(async (unit) => {
       try {
@@ -385,6 +396,34 @@ export class PostgresHumanAuthentication {
         [prepared.id, this.installationId, seed.principal.id],
       );
       await this.enrolled(unit, prepared.id);
+      if (external !== undefined) {
+        // The optional external identity attaches in the same transaction as the account.
+        const methodId = randomUUID();
+        try {
+          await this.query(
+            unit,
+            `INSERT INTO occ.account (id, account_id, provider_id, user_id, created_at, updated_at, identity_only)
+             VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp(), true)`,
+            [methodId, external.subject, external.providerId, prepared.id],
+          );
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "23505" &&
+            "constraint" in error &&
+            error.constraint === "account_provider_account_unique"
+          ) {
+            throw new ResourceConflictError("The external identity is already assigned.");
+          }
+          throw error;
+        }
+        await this.audit(unit, "authentication.method.attach", auditEvent?.actorId ?? prepared.id, {
+          userId: prepared.id,
+          methodId,
+          principalId: seed.principal.id,
+        });
+      }
       if (auditEvent !== undefined) {
         await unit.audit.append(auditEvent);
       }
@@ -589,9 +628,30 @@ export class PostgresHumanAuthentication {
     actor: HumanAuthenticationActor,
     expectedVersion?: number,
   ): Promise<Row> {
+    await this.guardActor(unit, actor, [userId]);
+    const account = await this.enrolled(unit, userId);
+    if (
+      expectedVersion !== undefined &&
+      (!Number.isSafeInteger(expectedVersion) ||
+        expectedVersion < 1 ||
+        account.version !== expectedVersion)
+    ) {
+      throw new ResourceConflictError(
+        "The authentication account version changed. Read its current state before a new action.",
+      );
+    }
+    return account;
+  }
+
+  /** Locks the actor and the named users in one order, then requires the actor's session to be current. */
+  private async guardActor(
+    unit: PlatformUnitOfWork,
+    actor: HumanAuthenticationActor,
+    userIds: readonly string[],
+  ): Promise<void> {
     await this.query(unit, `SET LOCAL lock_timeout = '5s'`);
     await this.query(unit, `SET LOCAL statement_timeout = '10s'`);
-    for (const id of [...new Set([userId, actor.userId])].sort()) {
+    for (const id of [...new Set([...userIds, actor.userId])].sort()) {
       await this.lockUser(unit, id);
     }
     const [current] = await this.query(
@@ -609,18 +669,6 @@ export class PostgresHumanAuthentication {
     if (current === undefined) {
       throw new AuthorizationDeniedError("The human administrator session is no longer current.");
     }
-    const account = await this.enrolled(unit, userId);
-    if (
-      expectedVersion !== undefined &&
-      (!Number.isSafeInteger(expectedVersion) ||
-        expectedVersion < 1 ||
-        account.version !== expectedVersion)
-    ) {
-      throw new ResourceConflictError(
-        "The authentication account version changed. Read its current state before a new action.",
-      );
-    }
-    return account;
   }
 
   /** Present state under the same guards; this is not an operation-result receipt. */
@@ -776,6 +824,147 @@ export class PostgresHumanAuthentication {
       );
       await this.query(unit, `DELETE FROM occ.session WHERE user_id = $1`, [userId]);
       await this.audit(unit, `authentication.account.${operation}`, actor.principalId, { userId });
+    });
+  }
+
+  /** Present designation under the administrator guards; this is not an operation-result receipt. */
+  async readRecovery(actor: HumanAuthenticationActor): Promise<HumanAuthenticationRecovery> {
+    return this.state.transact(async (unit) => {
+      await this.guardActor(unit, actor, []);
+      const [row] = await this.query(
+        unit,
+        `SELECT user_id, principal_id, method_id FROM occ.human_authentication_recovery WHERE installation_id = $1`,
+        [this.installationId],
+      );
+      if (row === undefined) {
+        throw new ScopeViolationError("The recovery designation is unavailable.");
+      }
+      return {
+        userId: row.user_id as string,
+        principalId: row.principal_id as string,
+        methodId: row.method_id as string,
+      };
+    });
+  }
+
+  /**
+   * Moves the one designation to another enrolled administrator. The caller must first authorize
+   * this exact Principal through the selected IAM Driver. The row is updated, never deleted, so a
+   * designation always exists and the credential guard follows it to the new password.
+   */
+  async replaceRecovery(
+    userId: string,
+    principalId: string,
+    expectedCurrentUserId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<HumanAuthenticationRecovery & { changed: boolean; email: string }> {
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+      throw new ResourceConflictError("A current account version is required.");
+    }
+    return this.state.transact(async (unit) => {
+      // The same lock serializes activation, so a designation cannot appear or move concurrently.
+      await this.query(unit, `SELECT pg_advisory_xact_lock(1868785005, hashtext($1))`, [
+        this.installationId,
+      ]);
+      const [designation] = await this.query(
+        unit,
+        `SELECT user_id, principal_id, method_id FROM occ.human_authentication_recovery WHERE installation_id = $1`,
+        [this.installationId],
+      );
+      if (designation === undefined) {
+        throw new ScopeViolationError("The recovery designation is unavailable.");
+      }
+      if (designation.user_id !== expectedCurrentUserId) {
+        throw new ResourceConflictError(
+          "The recovery designation changed. Read its current state before a new action.",
+        );
+      }
+      await this.guardActor(unit, actor, [userId, designation.user_id as string]);
+      const account = await this.guardAccounts(unit, userId, actor, expectedVersion);
+      if (account.principal_id !== principalId || account.disabled !== false) {
+        throw new ScopeViolationError("The recovery account is unavailable.");
+      }
+      // The database has no composite key tying method_id to user_id, so the method is only
+      // ever derived here from the target's own credential rows, never taken from input.
+      const methods = await this.query(
+        unit,
+        `SELECT id FROM occ.account WHERE user_id = $1 AND provider_id = 'credential'
+         AND password IS NOT NULL AND password <> '' FOR SHARE`,
+        [userId],
+      );
+      const method = methods[0];
+      if (methods.length !== 1 || method === undefined) {
+        throw new ScopeViolationError("The recovery account requires exactly one password.");
+      }
+      // The holder's email keys the reserved password lane; guardActor locked this row, so the
+      // email is read in the same transaction that commits the designation.
+      const email = (await this.lockUser(unit, userId)).email as string;
+      if (designation.user_id === userId) {
+        if (designation.principal_id !== principalId || designation.method_id !== method.id) {
+          throw new ScopeViolationError("The recovery designation is inconsistent.");
+        }
+        return { userId, principalId, methodId: method.id as string, changed: false, email };
+      }
+      const [updated] = await this.query(
+        unit,
+        `UPDATE occ.human_authentication_recovery SET user_id = $2, principal_id = $3, method_id = $4
+         WHERE installation_id = $1 AND user_id = $5 RETURNING user_id`,
+        [this.installationId, userId, principalId, method.id, designation.user_id],
+      );
+      if (updated === undefined) {
+        throw new ResourceConflictError(
+          "The recovery designation changed. Read its current state before a new action.",
+        );
+      }
+      await this.audit(unit, "authentication.recovery.replace", actor.principalId, {
+        userId,
+        principalId,
+        previousUserId: designation.user_id,
+        previousPrincipalId: designation.principal_id,
+      });
+      return { userId, principalId, methodId: method.id as string, changed: true, email };
+    });
+  }
+
+  /**
+   * Enrols one existing account that activation could not qualify, once an administrator has
+   * provisioned its Principal and single password. Enrolment never grants access by itself.
+   */
+  async enrolAccount(
+    userId: string,
+    actor: HumanAuthenticationActor,
+  ): Promise<{ principalId: string; version: number; created: boolean }> {
+    return this.state.transact(async (unit) => {
+      await this.guardActor(unit, actor, [userId]);
+      const principalId = await this.principal(unit, userId);
+      const methods = await this.query(
+        unit,
+        `SELECT id FROM occ.account WHERE user_id = $1 AND provider_id = 'credential'
+         AND password IS NOT NULL AND password <> '' FOR SHARE`,
+        [userId],
+      );
+      if (methods.length !== 1) {
+        throw new ResourceConflictError("The account requires exactly one password method.");
+      }
+      const [inserted] = await this.query(
+        unit,
+        `INSERT INTO occ.human_authentication_accounts (user_id, installation_id, principal_id)
+         VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING RETURNING user_id`,
+        [userId, this.installationId, principalId],
+      );
+      const account = await this.enrolled(unit, userId);
+      if (inserted !== undefined) {
+        await this.audit(unit, "authentication.account.enrol", actor.principalId, {
+          userId,
+          principalId,
+        });
+      }
+      return {
+        principalId,
+        version: account.version as number,
+        created: inserted !== undefined,
+      };
     });
   }
 

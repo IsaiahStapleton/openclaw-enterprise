@@ -9,8 +9,7 @@ The selected IAM Driver resolves the authenticated account or service identity
 to an explicitly provisioned Principal or ServicePrincipal and owns
 [authorization](authorization.md).
 
-This page defines the currently supported authentication behavior. For a
-working sign-in procedure, see
+For a working sign-in procedure, see
 [human administrator sign-in](authentication/service-api-keys.md#sign-in-as-a-human-administrator).
 For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
 The [platform console](console.md) provides login at `/console/` and uses these
@@ -79,11 +78,9 @@ Bootstrap makes one attempt. Any error emits `installation.bootstrap-failed`
 with available non-secret IDs and paths, then exits unsuccessfully. Created
 accounts, keys, and files remain, including partial output from a failed write.
 Bootstrap does not automatically revoke, delete, retry, repair, or reset them.
-The Helm initialization Job uses `backoffLimit: 0` and does not retry a failed
-attempt. Better Auth persistence and the Installation/IAM commit are separate;
-an error does not establish whether the transaction committed. Operators must
-resolve that outcome before manual repair, or explicitly reset an identified
-disposable Installation. See [incomplete bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
+The Helm initialization Job uses `backoffLimit: 0`. Better Auth persistence and the Installation/IAM commit are separate,
+so an error leaves the commit outcome unknown; resolve it before manual repair
+or reset an identified disposable Installation. See [incomplete bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 File existence alone is not proof of successful initialization.
 
 ## Browser request origin
@@ -121,9 +118,8 @@ For example, the sign-in body is:
 }
 ```
 
-The successful sign-in response contains `data: { "authenticated": true }` and
-request metadata. The session credential is delivered through `Set-Cookie`, not
-the JSON body. Protected OCC API calls use that cookie.
+A successful sign-in returns `data: { "authenticated": true }` and delivers the
+session only through `Set-Cookie`, which protected OCC API calls use.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
@@ -159,7 +155,7 @@ Set all three API-process variables; partial configuration fails startup:
 | ---------------------------------- | ----------------------------------------------------------------------- |
 | `OCC_AUTH_GITHUB_CLIENT_ID`        | GitHub App client ID, not App ID; determines the provider-instance key. |
 | `OCC_AUTH_GITHUB_CLIENT_SECRET`    | GitHub App client secret in protected server configuration.             |
-| `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | Existing local password administrator retained for recovery.            |
+| `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | Local password administrator seeding the first recovery designation.    |
 
 Helm renders them from `auth.github` and `auth.recoveryUserId`; see
 [production settings](settings/production.md#github-sign-in-and-trusted-proxies).
@@ -214,16 +210,20 @@ rejected; users sign in again. Activation is one-way: removing GitHub
 configuration fails startup, and the database refuses sessions from older
 binaries. There is no rollback; keep the `OCC_AUTH_GITHUB_*` environment set.
 
-The recovery user must already have a usable local password, the exact
-Installation Principal, and native IAM Installation `administer` authority.
-The designation is fixed, and account disablement refuses this user. Keep its
-password in protected custody; out-of-band database or policy changes
-can still remove recovery. Password login does not depend on GitHub availability.
+The recovery user needs one local password, its Installation Principal, and
+native IAM Installation `administer`; disablement refuses it. Keep its password
+in protected custody; out-of-band database or policy changes can still remove
+recovery. Password login never depends on GitHub.
+
+`POST /api/auth/recovery` (`userId`, `expectedCurrentUserId`, target
+`expectedVersion`) moves the designation (`GET` reads it) to another qualifying
+user. The variable then only seeds first activation; a differing value logs a
+warning, and each start re-checks the holder.
 
 Account reads and mutations require a human session, exact `Origin`, and
 Installation `administer`; service keys are refused. State locks actor and target
-accounts, rechecks the actor session, and requires the target's `expectedVersion`. A concurrent logout or revocation can invalidate
-the actor; a stale target version returns `409 RESOURCE_CONFLICT`.
+accounts and rechecks the actor session; a concurrent logout or revocation can
+invalidate the actor, and a stale target `expectedVersion` returns `409 RESOURCE_CONFLICT`.
 
 Send the version just read, such as `{"expectedVersion":1}`:
 
@@ -234,12 +234,14 @@ Send the version just read, such as `{"expectedVersion":1}`:
 | `POST /api/auth/accounts/:userId/revoke`                   | Invalidates all account sessions and pending proofs; fresh sign-in still works.            |
 | `POST /api/auth/accounts/:userId/methods/:methodId/detach` | Removes one attached external identity and its sessions; password methods return `409`.    |
 
-These operations serialize with session issuance and leave IAM grants unchanged.
+`POST /api/auth/accounts/:userId/enrol` (no body) enrolls a skipped account holding
+its Principal and one password. These operations serialize with session issuance
+and leave IAM grants unchanged.
 An unknown administrative COMMIT returns `503 DEPENDENCY_UNAVAILABLE` with an
 unknown-outcome message, never success, automatic replay, or compensation. An
 account read shows present state, **not a receipt**: the original transaction may
 still be running. Resolve uncertainty before choosing a new action and version.
-Password reset, deletion, and recovery replacement remain deferred.
+Password reset and deletion remain deferred.
 
 Password sign-in allows 10 requests/minute, two active, per client address and
 per email; GitHub start/callback, including invalid callbacks, allows 30 and four
@@ -284,8 +286,8 @@ activity does not renew the console session.
 
 `POST /api/auth/accounts` requires a human session and `administer` on the
 singleton Installation, and stays available with GitHub sign-in enabled. One
-transaction writes the account, its Principal and grant, and its enrollment;
-attach GitHub afterwards with the attach operation.
+transaction writes the account, Principal, grant, enrollment and an optional
+`"github":{"subject":"<numeric id>"}` identity (`409` if GitHub is off or taken).
 
 The request must supply the `roleId` of an existing Role; the endpoint cannot
 create a Role or infer a grant from the account's email or session.
@@ -303,8 +305,8 @@ A representative provisioning body is:
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
 The backend provisions the account without a public email-verification or
-signup flow. Duplicate accounts are rejected. General account management and
-password reset endpoints are not exposed by the controller API.
+signup flow. Duplicate accounts are rejected. The controller API exposes no
+password reset.
 
 ## Authorization and failures
 

@@ -509,7 +509,7 @@
   "paths": {
     "/api/auth/accounts": {
       "post": {
-        "description": "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role; public signup remains disabled.",
+        "description": "Requires administer permission on the Installation. Creates a Better Auth account, an explicit IAM Principal, and a binding to the requested existing IAM Role in one transaction; public signup remains disabled. An optional github.subject attaches that GitHub identity in the same transaction; it conflicts when GitHub sign-in is not configured or the identity is already assigned.",
         "operationId": "createAuthAccount",
         "requestBody": {
           "content": {
@@ -518,6 +518,14 @@
                 "additionalProperties": false,
                 "properties": {
                   "email": { "maxLength": 320, "minLength": 3, "type": "string" },
+                  "github": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "subject": { "pattern": "^[1-9][0-9]{0,19}$", "type": "string" }
+                    },
+                    "required": ["subject"],
+                    "type": "object"
+                  },
                   "name": { "maxLength": 200, "minLength": 1, "type": "string" },
                   "password": { "maxLength": 128, "minLength": 12, "type": "string" },
                   "roleId": { "maxLength": 200, "minLength": 1, "type": "string" }
@@ -1240,6 +1248,210 @@
         },
         "security": [{ "sessionCookie": [] }],
         "summary": "Re-enable a disabled human account",
+        "tags": ["Authentication"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
+        ]
+      }
+    },
+    "/api/auth/accounts/{userId}/enrol": {
+      "post": {
+        "description": "Requires a current human Native IAM Installation administrator and trusted Origin. The account must already have its IAM Principal and exactly one password. Idempotent; enrolment grants no access beyond the account's existing IAM bindings.",
+        "operationId": "enrolAuthAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": { "maxLength": 200, "minLength": 1, "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "OK",
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "created": { "type": "boolean" },
+                        "principalId": { "type": "string" },
+                        "userId": { "type": "string" },
+                        "version": { "minimum": 1, "type": "integer" }
+                      },
+                      "required": ["userId", "principalId", "version", "created"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Unauthorized",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Forbidden",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Not Found",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Conflict",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Service Unavailable",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [{ "sessionCookie": [] }],
+        "summary": "Enrol an existing account that activation skipped",
         "tags": ["Authentication"],
         "x-openclaw-permissions": [
           { "action": "administer", "resourceKind": "installation", "scope": "requested" }
@@ -2008,6 +2220,382 @@
         "security": [],
         "summary": "Start GitHub sign-in for an enrolled account",
         "tags": ["Authentication"]
+      }
+    },
+    "/api/auth/recovery": {
+      "get": {
+        "description": "Requires a current human Native IAM Installation administrator and trusted Origin. Returns the present designation, whose password the database protects; not a receipt for any prior operation.",
+        "operationId": "getAuthRecovery",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "OK",
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "methodId": { "type": "string" },
+                        "principalId": { "type": "string" },
+                        "userId": { "type": "string" }
+                      },
+                      "required": ["userId", "principalId", "methodId"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Unauthorized",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Forbidden",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Not Found",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Service Unavailable",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [{ "sessionCookie": [] }],
+        "summary": "Inspect the recovery account designation",
+        "tags": ["Authentication"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
+        ]
+      },
+      "post": {
+        "description": "Requires a current human Native IAM Installation administrator and trusted Origin. The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.",
+        "operationId": "replaceAuthRecovery",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedCurrentUserId": { "maxLength": 200, "minLength": 1, "type": "string" },
+                  "expectedVersion": { "maximum": 2147483647, "minimum": 1, "type": "integer" },
+                  "userId": { "maxLength": 200, "minLength": 1, "type": "string" }
+                },
+                "required": ["userId", "expectedCurrentUserId", "expectedVersion"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "OK",
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "changed": { "type": "boolean" },
+                        "methodId": { "type": "string" },
+                        "principalId": { "type": "string" },
+                        "userId": { "type": "string" }
+                      },
+                      "required": ["userId", "principalId", "methodId", "changed"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Unauthorized",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Forbidden",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Not Found",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Conflict",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Service Unavailable",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [{ "sessionCookie": [] }],
+        "summary": "Move the recovery designation to another administrator",
+        "tags": ["Authentication"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
+        ]
       }
     },
     "/api/auth/service-keys": {

@@ -225,6 +225,7 @@ export type {
   PreparedPasswordAccount,
   HumanAuthenticationActor,
   HumanAuthenticationAccount,
+  HumanAuthenticationRecovery,
   HumanAuthenticationUser,
   HumanAuthenticationProof,
   HumanAuthenticationSnapshot,
