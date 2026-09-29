@@ -1,3 +1,4 @@
+import { SlackChannelDriver } from "../../apps/controller/src/drivers/channel/slack.ts";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
@@ -1130,3 +1131,80 @@ for (const grantStatus of [403, 429]) {
     }
   });
 }
+
+test("deployment shows wrong Slack token role beside the selected Secret and permits correction", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Slack validation", { ready: true });
+  const appSecret = await fixture.createSecret(
+    namespace.id,
+    "App credential",
+    "xapp-private-browser-fixture",
+  );
+  const botSecret = await fixture.createSecret(
+    namespace.id,
+    "Bot credential",
+    "xoxb-private-browser-fixture",
+  );
+  let providerCalls = 0;
+  const driver = new SlackChannelDriver(async () => {
+    providerCalls++;
+    return Response.json({ ok: true, bot_id: "B123", team_id: "T123" });
+  });
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("channel", driver.id);
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Slack role validation",
+    nativeValues("slack-validation", {
+      harnessId: "codex",
+      channels: {
+        slack: {
+          enabled: true,
+          mode: "socket",
+          dmPolicy: "disabled",
+          appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+          botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+          channels: { C123: { requireMention: true } },
+        },
+      },
+    }),
+    {
+      executionMode: "dedicated",
+      secretBindings: {
+        SLACK_APP_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
+        SLACK_BOT_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
+      },
+    },
+  );
+  const { page, artifacts } = await newPage(t, fixture);
+  await login(
+    page,
+    fixture,
+    detailUrl(fixture, namespace.id, agent.id, "draft", "configuration").pathname +
+      detailUrl(fixture, namespace.id, agent.id, "draft", "configuration").search,
+  );
+  const rejectedRequest = page.waitForResponse((response) =>
+    response.url().endsWith(`/agents/${agent.id}/deploy`),
+  );
+  await page.getByRole("button", { name: "Deploy new version", exact: true }).click();
+  const rejection = await (await rejectedRequest).json();
+  assert.equal(rejection.error.code, "CHANNEL_CREDENTIAL_ROLE_MISMATCH");
+  const appPicker = page.getByLabel("Slack app token", { exact: true });
+  await appPicker.waitFor();
+  const error = page.locator("#runtime-slack-app-token-credential-error");
+  await error.waitFor();
+  assert.equal(await appPicker.getAttribute("aria-invalid"), "true");
+  assert.equal(providerCalls, 0);
+  await expectNoText(page, "xapp-private-browser-fixture");
+  await expectNoText(page, "xoxb-private-browser-fixture");
+  await page.screenshot({
+    path: join(artifacts, "slack-credential-role-error.png"),
+    fullPage: true,
+  });
+  await selectSecret(page, "Slack app token", appSecret);
+  assert.equal(await appPicker.getAttribute("aria-invalid"), null);
+  await page.getByRole("button", { name: "Save channel Secrets", exact: true }).click();
+  await page.getByRole("button", { name: "Deploy new version", exact: true }).click();
+  await waitForCondition(async () => providerCalls > 0, "corrected bot credential is validated");
+});

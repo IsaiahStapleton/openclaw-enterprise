@@ -1,7 +1,7 @@
 ---
 created: "2026-09-23"
-updated: "2026-09-29"
-last_updated_session: "01a0eaf9-6dcf-76b1-a376-d2a2fbfd6c60"
+updated: "2026-09-28"
+last_updated_session: "authoring-run/bb89c55f-8771-46c9-801d-e5bc028d7e5c"
 ---
 
 # Agent provisioning flow
@@ -24,13 +24,17 @@ This flow ends at deployment submission. The [controller worker](controller-work
 graph TD
   Console["<b>Console</b><br/>Save entered Secrets"] --> Secrets["<b>Existing Secrets API</b><br/>Return ordinary references"]
   Secrets --> API["<b>Provision API</b><br/>Inline config and references"]
-  API --> Queue["<b>Existing work queue</b><br/>Return job handle"]
+  API --> Validate["<b>Channel Driver</b><br/>Validate authorized Secrets"]
+  Validate -->|Valid and versions unchanged| Queue["<b>Existing work queue</b><br/>Return job handle"]
   Queue --> Claim["<b>Worker</b><br/>Claim and authorize"]
   Claim --> Config["<b>Create Configuration</b><br/>Record completed identity"]
   Config --> Agent["<b>Create Agent</b><br/>Grant exact Secret access"]
-  Agent --> Transport["<b>Compute Driver</b><br/>Trusted-proxy credentials"]
+  Agent --> Revalidate["<b>Channel Driver</b><br/>Revalidate current Secrets"]
+  Revalidate -->|Valid| Transport["<b>Compute Driver</b><br/>Trusted-proxy credentials"]
   Transport --> Deploy["<b>Ordinary deploy</b><br/>Record first revision"]
   Deploy --> UI["<b>Agent deployment view</b><br/>Follow activation"]
+  Validate -->|Rejected| Error["<b>Console</b><br/>Show field error"]
+  Revalidate -->|Rejected| Failed
   Claim -->|Failure| Failed["<b>Retain outputs</b><br/>Retry known failures"]
   Failed -->|Uncertain write| Recovery["<b>Recovery required</b><br/>Do not repeat blindly"]
 
@@ -58,7 +62,7 @@ On ordinary draft creation paths, Console creates the Configuration and Agent, t
 
 `packages/occ/src/index.ts:OpenClawController.provisionAgent`
 
-OCC validates the accepted Configuration, references, workspace inputs, supported execution mode and current authority. The repository Driver validates current Namespace selections before job admission and again when the worker creates the Agent; deployment checks the exact Harness topology through the Compute Driver. It stores the accepted request and its deduplication fingerprint in `agent_provisioning_work`, then enqueues `controller_work` with `work_kind = 'provisioning'`. Agent and Configuration creation happen later. Identical actor/Namespace/request IDs return the same work; changed input conflicts.
+OCC validates the accepted Configuration, references, workspace inputs, supported execution mode and current authority. `OpenClawController.validateChannelCredentials` asks the selected Channel Driver to validate exact authorized Secret bindings before opening the admission transaction. The Slack Driver checks token roles and calls bounded `auth.test` for the bot; it creates no channel consumer. `recheckChannelCredentials` compares Configuration and live Secret versions inside admission. Changed sources reject the request, and HTTP audit appends remain atomic with admission. Exact request replays recover the existing job without another provider call. The repository Driver validates current Namespace selections before job admission and again when the worker creates the Agent; deployment checks the exact Harness topology through the Compute Driver. It stores the accepted request and its deduplication fingerprint in `agent_provisioning_work`, then enqueues `controller_work` with `work_kind = 'provisioning'`. Agent and Configuration creation happen later. Identical actor/Namespace/request IDs return the same work; changed input conflicts.
 
 The `202` response contains `data.provisioning`, with the work ID and status URL. Public progress exposes result IDs and safe errors without input values or backend credentials.
 
@@ -68,11 +72,13 @@ The `202` response contains `data.provisioning`, with the work ID and status URL
 
 The existing worker dispatches the job under its queue claim. Before effects and result commits, OCC verifies current ownership, Namespace readiness and exact authority. Completed outputs are reused on retry. Configuration creation uses the accepted inline values and existing bindings. Once that Configuration exists, OCC creates a stopped Agent, persists its auth/provider/plugin/repository/workspace selections and grants its service principal exact Secret permissions.
 
+Before runtime credential setup, `prepareDeploymentChannels` validates the current Configuration and Secrets outside the worker's transaction. Provider unavailability remains retryable; credential rejection stops provisioning. Deployment rechecks the same Configuration and Secret versions under the admission lock, then creates the revision. Secrets remain mutable after this admission boundary.
+
 The Compute Driver prepares runtime credentials through the existing credential path, without a loopback HTTP call. The Kubernetes Driver owns trusted-proxy configuration and generated credential protection; provisioning carries no gateway token or trust override.
 
 ### 4. Deployment becomes the lifecycle owner
 
-`packages/occ/src/index.ts:OpenClawController.deployAgent`
+`packages/occ/src/index.ts:OpenClawController.admitAgentDeployment`
 
 The job admits one first revision and records its ID. Provisioning reports success at this handoff. `apps/controller/src/console/agents/create.mjs:waitForProvisioning` returns those IDs immediately; the submit handler opens Agent details for that revision without waiting for activation. The detail page's Deployment activity panel reads the recorded startup result and exposes Refresh deployment. Ordinary revision reconciliation owns startup, activation and runtime failure. Later deployments use the regular Deploy API.
 
@@ -105,6 +111,8 @@ While initialization owns an Agent, conflicting edits and manual deployment are 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 21:10: Add version-bound channel credential validation before admission and worker handoff. (authoring-run/bb89c55f-8771-46c9-801d-e5bc028d7e5c - 8352c093)
 
 - 2026-09-29 02:33: Open Agent details after provisioning hands off the first deployment, and show pending or failed deployment status there. (Codex/01a0eaf9-6dcf-76b1-a376-d2a2fbfd6c60 - a14435c8)
 

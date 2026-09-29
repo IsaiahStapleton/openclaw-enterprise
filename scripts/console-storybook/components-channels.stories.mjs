@@ -61,3 +61,5 @@ export const RevisionSecretsDenied = story("revisionSecretsDenied");
 export const RevisionSecretsMissing = story("revisionSecretsMissing");
 export const RevisionSecretsLoading = story("revisionSecretsLoading");
 export const RevisionSecretsAbsent = story("revisionSecretsAbsent");
+
+export const SlackCredentialRoleError = story("slackCredentialRoleError");

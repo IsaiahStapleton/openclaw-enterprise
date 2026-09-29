@@ -2,12 +2,12 @@
 
 ## Overview
 
-`ChannelDriver` looks up provider identities for an authorized Namespace edit.
+`ChannelDriver` validates channel credentials for admission and looks up provider identities for an authorized Namespace edit.
 OpenClaw Control Plane (OCC) owns caller authorization, Secret access, and the
 saved Agent or Configuration. The Driver owns the provider request and returns
 bounded display candidates with stable provider IDs. It does not send messages
 or grant channel access. The current controller selects the bundled Slack
-implementation for directory lookup; see [Driver selection](selection.md).
+implementation for admission and directory lookup; see [Driver selection](selection.md).
 
 ## Interface
 
@@ -17,6 +17,14 @@ selects users or channels. `ids` resolves saved IDs directly and cannot be
 combined with a search query or cursor. The method returns workspace identity, candidates,
 an optional next cursor, and `complete`. A returned name is a display hint;
 callers save IDs. A missing selected Driver makes lookup unavailable.
+
+The optional `validateCredentials(values, withSecret)` hook interprets native
+channel fields. It requests each binding and field path through OCC's callback,
+then validates the value inside the Secret Driver's transient callback. OCC owns
+exact-source authorization and version checks; the adapter owns provider rules.
+The bundled API and worker both select this implementation. Admission calls run
+outside database transactions, with Configuration and Secret rechecks inside
+the final admission transaction.
 
 ## IAM
 
@@ -38,7 +46,7 @@ change the provider workspace. The interface has no cleanup hook.
 
 ## Limits
 
-The current interface supports directory reads only. Provider pagination can
+The interface does not deliver messages or open channel consumers. Provider pagination can
 leave a search incomplete; callers must use `nextCursor` before concluding a
 name is missing or unique. Exact-ID lookup can leave inaccessible IDs without
 a label. `complete` describes provider pagination, not the credential's

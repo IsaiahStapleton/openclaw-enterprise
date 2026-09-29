@@ -112,6 +112,11 @@ Add a native default Slack account with environment SecretRefs:
 }
 ```
 
+Deployment validates the selected app/bot token roles and bot authentication
+before provisioning. A mismatch is shown beside the selector; change the binding
+and retry. The app token receives a role check only. See
+[Slack credential admission](../drivers/slack-channel.md#credential-admission).
+
 The console's new Slack setup and bundled Slack Presets set
 `channels.slack.replyToModeByChatType.channel: "all"`, which threads channel
 replies without changing DM or group-DM reply behavior. Existing Slack blocks

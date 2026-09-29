@@ -28,6 +28,14 @@ test(
     ]) {
       assert.ok(process.env[key], `${key} is required for explicitly requested live Slack proof.`);
     }
+    assert.ok(
+      process.env.SLACK_APP_TOKEN.startsWith("xapp-"),
+      "live app credential must have the app-token role",
+    );
+    assert.ok(
+      process.env.SLACK_BOT_TOKEN.startsWith("xoxb-"),
+      "live bot credential must have the bot-token role",
+    );
     const proxy = new URL(process.env.OCC_TEST_SLACK_PROXY_URL);
     const address = proxy.hostname.replace(/^\[|\]$/g, "");
     const family = isIP(address);

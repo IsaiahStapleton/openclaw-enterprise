@@ -1525,14 +1525,20 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     workspaceGateway === undefined
       ? await loadInstallationConfiguration({
           mode: "production",
-          environment: { OCC_CONFIG_PATH: startupPath },
+          environment: {
+            OCC_CONFIG_PATH: startupPath,
+            ...(slack === undefined ? {} : { OCC_CHANNEL_DIRECTORY_PROXY_URL: slack.proxyUrl }),
+          },
         })
       : undefined;
   const workerDrivers =
     workspaceGateway === undefined
       ? await loadInstallationConfiguration({
           mode: "production",
-          environment: { OCC_CONFIG_PATH: workerStartupPath },
+          environment: {
+            OCC_CONFIG_PATH: workerStartupPath,
+            ...(slack === undefined ? {} : { OCC_CHANNEL_DIRECTORY_PROXY_URL: slack.proxyUrl }),
+          },
         })
       : undefined;
   const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });

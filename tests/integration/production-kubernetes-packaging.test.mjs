@@ -1575,7 +1575,7 @@ test(
   },
 );
 
-test("Slack directory proxy grants only API egress to its exact endpoint", tooling, async () => {
+test("Slack proxy grants API and worker egress only to its exact endpoint", tooling, async () => {
   const name = "openclaw-enterprise-api-channel-directory-egress";
   const defaults = await resources((await render()).stdout);
   assert.ok(!defaults.some(({ metadata }) => metadata.name === name));
@@ -1616,7 +1616,21 @@ test("Slack directory proxy grants only API egress to its exact endpoint", tooli
     name: "OCC_CHANNEL_DIRECTORY_PROXY_URL",
     value: "http://198.51.100.25:3128",
   });
-  assert.equal(proxyEnvironment(objects, "worker"), undefined);
+  assert.deepEqual(proxyEnvironment(objects, "worker"), proxyEnvironment(objects, "api"));
+  const workerPolicy = objects.find(
+    ({ kind, metadata }) =>
+      kind === "NetworkPolicy" &&
+      metadata.name === "openclaw-enterprise-worker-channel-directory-egress",
+  );
+  assert.deepEqual(workerPolicy.spec, {
+    ...policy.spec,
+    podSelector: {
+      matchLabels: {
+        ...policy.spec.podSelector.matchLabels,
+        "app.kubernetes.io/component": "worker",
+      },
+    },
+  });
   assert.equal(proxyEnvironment(defaults, "api"), undefined);
   for (const url of [
     "http://slack.com:3128",

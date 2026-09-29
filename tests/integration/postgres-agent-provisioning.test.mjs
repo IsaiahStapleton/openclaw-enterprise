@@ -1,3 +1,4 @@
+import { SlackChannelDriver } from "../../apps/controller/src/drivers/channel/slack.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
@@ -63,7 +64,12 @@ async function createNamespaceSecret(
 
 async function createProvisioningSecrets(fixture, namespaceId) {
   const modelKey = await createNamespaceSecret(fixture, namespaceId, "model-api-key");
-  const slackBotToken = await createNamespaceSecret(fixture, namespaceId, "slack-bot-token");
+  const slackBotToken = await createNamespaceSecret(
+    fixture,
+    namespaceId,
+    "slack-bot-token",
+    "xoxb-provisioning-fixture",
+  );
   const slackSigningSecret = await createNamespaceSecret(
     fixture,
     namespaceId,
@@ -89,8 +95,9 @@ function provisioningBody(namespaceId, secrets, overrides = {}) {
         channels: {
           slack: {
             enabled: true,
-            botTokenEnv: "SLACK_BOT_TOKEN",
-            signingSecretEnv: "SLACK_SIGNING_SECRET",
+            mode: "http",
+            botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+            signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
           },
         },
       },
@@ -200,7 +207,13 @@ async function ensureProvisioningBootstrap(context, state) {
   await bootstrapPromise;
 }
 
-function installationDrivers({ computeDriver, configurationDriver, secretDriver, repoDriver }) {
+function installationDrivers({
+  computeDriver,
+  configurationDriver,
+  secretDriver,
+  repoDriver,
+  channelDriver,
+}) {
   return {
     installation: {
       occ: { cluster: "postgres-agent-provisioning" },
@@ -238,6 +251,11 @@ function installationDrivers({ computeDriver, configurationDriver, secretDriver,
     computeDriver,
     configurationDriver,
     secretDriver,
+    channelDriver:
+      channelDriver ??
+      new SlackChannelDriver(async () =>
+        Response.json({ ok: true, bot_id: "B123", team_id: "T123" }),
+      ),
     ...(repoDriver === undefined ? {} : { repoDriver }),
     createIAMDriver: (state) =>
       new NativeIAMDriver(state, { id: "native-iam", implementation: "native" }),
@@ -265,6 +283,7 @@ async function createFixture(context, options = {}) {
     configurationDriver,
     secretDriver,
     repoDriver: options.repoDriver,
+    channelDriver: options.channelDriver,
   });
   const app = await composePostgresDevelopment(
     {
@@ -853,9 +872,11 @@ test(
     });
     assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
     assert.deepEqual(
-      secretDriver.calls.map(({ operation }) => operation),
+      secretDriver.calls
+        .filter(({ operation }) => operation !== "withValue")
+        .map(({ operation }) => operation),
       ["create", "create", "create", "create"],
-      "only the explicit Secret API calls should touch the Secret backend before provisioning runs",
+      "only the explicit Secret API calls should mutate the Secret backend before provisioning runs",
     );
     const resources = await fixture.pool.query(
       `SELECT
@@ -927,7 +948,9 @@ test(
       },
     ]);
     assert.deepEqual(
-      secretDriver.calls.map(({ operation }) => operation),
+      secretDriver.calls
+        .filter(({ operation }) => operation !== "withValue")
+        .map(({ operation }) => operation),
       ["create", "create", "create", "create"],
       "revoked initiating authority must not create additional Secret backend values",
     );
@@ -1274,5 +1297,52 @@ test(
       [namespace.id, failed.agentId],
     );
     assert.equal(revisions.rowCount, 1);
+  },
+);
+
+test(
+  "queued provisioning revalidates changed Slack credentials before creating runtime credentials",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    let probes = 0;
+    const channelDriver = new SlackChannelDriver(async () => {
+      probes++;
+      return Response.json({ ok: true, bot_id: "B123", team_id: "T123" });
+    });
+    const fixture = await createFixture(context, { channelDriver });
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const body = provisioningBody(namespace.id, secrets);
+    const url = `/namespaces/${namespace.id}/agents/provision`;
+    const accepted = await fixture.request("POST", url, { body });
+    assert.equal(accepted.status, 202, JSON.stringify(accepted.body));
+    assert.equal(probes, 1);
+    const update = await fixture.request(
+      "PATCH",
+      `/namespaces/${namespace.id}/secrets/${secrets.slackBotToken.id}`,
+      { body: { value: "xapp-wrong-role-after-admission" } },
+    );
+    assert.equal(update.status, 200, JSON.stringify(update.body));
+    const replay = await fixture.request("POST", url, { body });
+    assert.equal(replay.status, 202, JSON.stringify(replay.body));
+    assert.equal(
+      probes,
+      1,
+      "an exact replay recovers its existing job without probing credentials",
+    );
+    await fixture.startWorker();
+    await waitFor("changed Slack credential rejection", async () => {
+      const row = await provisioningRow(fixture.pool, namespace.id, body.requestId);
+      return row?.status === "failed" ? row : undefined;
+    });
+    const row = await provisioningRow(fixture.pool, namespace.id, body.requestId);
+    assert.equal(row.revision_id, null);
+    assert.equal(row.completed_phase, "configuration");
+    assert.equal(probes, 1, "the worker rejects the wrong role without querying Slack");
+    const revisions = await fixture.pool.query(
+      "SELECT count(*)::integer AS count FROM occ.agent_revisions WHERE namespace_id = $1",
+      [namespace.id],
+    );
+    assert.equal(revisions.rows[0].count, 0);
   },
 );

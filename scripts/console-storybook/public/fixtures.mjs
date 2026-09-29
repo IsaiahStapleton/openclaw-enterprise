@@ -803,6 +803,19 @@ export function installFixture(scenario, evidence) {
           }
         }
         if (suffix === "/deploy" && method === "POST") {
+          if (scenario.slackCredentialError) {
+            return new Response(
+              JSON.stringify({
+                error: {
+                  code: "CHANNEL_CREDENTIAL_ROLE_MISMATCH",
+                  message: "Wrong token role.",
+                  details: [{ path: "/channels/slack/appToken", code: "INVALID_VALUE" }],
+                },
+                meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+              }),
+              { status: 400, headers: { "content-type": "application/json" } },
+            );
+          }
           const lastRevision = Math.max(
             0,
             ...[...revisions.values()]

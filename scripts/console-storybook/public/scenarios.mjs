@@ -2432,6 +2432,17 @@ export const scenarios = {
     ],
     gap: "Simulated UI proof, not Slack delivery or Secret propagation.",
   },
+  slackCredentialRoleError: {
+    group: "Components/Channels",
+    name: "Wrong Slack credential role",
+    path: `${draft}&tab=configuration`,
+    slack: true,
+    slackCredentialError: true,
+    actions: [click("Deploy new version")],
+    description:
+      "A rejected app token opens Credentials and shows the role error beside the unchanged selector. Choose another Secret and save before retrying.",
+    gap: "Simulated validation response; no Slack API call occurs.",
+  },
   slackDrawer: {
     group: "Components/Channels",
     name: "Slack editor",

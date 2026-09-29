@@ -50,7 +50,7 @@ export function createTestSecretDriver(options = {}) {
         throw new Error("Secret already exists.");
       }
       const backendRef = backendRefFor(identity);
-      entries.set(key, { identity: clone(identity), backendRef, value });
+      entries.set(key, { identity: clone(identity), backendRef, value, version: 1 });
       return clone(backendRef);
     },
     async update(secret, value) {
@@ -66,7 +66,7 @@ export function createTestSecretDriver(options = {}) {
       if (!isDeepStrictEqual(entry.backendRef, secret.backendRef)) {
         throw new Error("Secret backend identity changed.");
       }
-      entries.set(key, { ...entry, value });
+      entries.set(key, { ...entry, value, version: entry.version + 1 });
     },
     async delete(secret) {
       calls.push({ operation: "delete", secret: clone(secret) });
@@ -89,7 +89,7 @@ export function createTestSecretDriver(options = {}) {
       if (entry === undefined || !isDeepStrictEqual(entry.backendRef, secret.backendRef)) {
         throw new Error("Secret backend is unavailable.");
       }
-      return use(entry.value);
+      return use(entry.value, String(entry.version));
     },
     async resolve(secret) {
       calls.push({ operation: "resolve", secret: clone(secret) });

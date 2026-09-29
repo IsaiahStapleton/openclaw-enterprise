@@ -1,3 +1,4 @@
+import { channelCredentialMessage } from "./channel-credential-errors.mjs";
 import { element, button } from "../dom.mjs";
 
 export const displayDate = (value) => new Date(value).toLocaleString();
@@ -17,6 +18,9 @@ export function link(label, target, context) {
 }
 
 export function message(error, mutation = false) {
+  if (channelCredentialMessage(error)) {
+    return channelCredentialMessage(error);
+  }
   if (error.status === 403) {
     return "Access denied. You do not have permission for this operation.";
   }

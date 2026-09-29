@@ -275,7 +275,10 @@ export class KubernetesSecretDriver implements SecretDriver {
     return reference;
   }
 
-  async withValue<T>(secret: Secret, use: (value: string) => Promise<T>): Promise<T> {
+  async withValue<T>(
+    secret: Secret,
+    use: (value: string, version?: string) => Promise<T>,
+  ): Promise<T> {
     if (secret.driverId !== this.id) {
       throw new SecretOwnershipError("Secret Driver identity changed.");
     }
@@ -299,7 +302,7 @@ export class KubernetesSecretDriver implements SecretDriver {
     } catch {
       throw new SecretBackendUnavailableError("The Kubernetes Secret value is invalid.");
     }
-    return use(value);
+    return use(value, observed.metadata?.resourceVersion);
   }
 
   private async readOwnedSecret(

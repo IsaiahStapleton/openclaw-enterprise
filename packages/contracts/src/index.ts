@@ -987,8 +987,9 @@ export interface SecretDriver extends Driver {
   delete(secret: Secret): Promise<void>;
   /** Verify live exact ownership and return only safe projection identity. */
   resolve(secret: Secret): Promise<SecretBackendRef>;
-  /** Verify live ownership and use the current value only within a transient server-side operation. */
-  withValue?<T>(secret: Secret, use: (value: string) => Promise<T>): Promise<T>;
+  /** Verify live ownership and use the value transiently. Version changes on every backend revision;
+   * omitting it disables version-bound credential admission for this Driver. */
+  withValue?<T>(secret: Secret, use: (value: string, version?: string) => Promise<T>): Promise<T>;
 }
 
 export interface CredentialGatewayContext {
@@ -1122,8 +1123,19 @@ export interface ChannelDirectoryResult {
   readonly complete: boolean;
 }
 
+/** Values stay inside the Secret Driver callback; adapters own native field semantics. */
+export type ChannelCredentialReader = (
+  binding: string,
+  path: string,
+  validate: (value: string) => Promise<void>,
+) => Promise<void>;
+
 export interface ChannelDriver extends Driver {
   readonly capability: "channel";
+  validateCredentials?(
+    values: Readonly<Record<string, unknown>>,
+    withSecret: ChannelCredentialReader,
+  ): Promise<void>;
   lookupDirectory(
     input: ChannelDirectoryLookupInput,
     signal?: AbortSignal,

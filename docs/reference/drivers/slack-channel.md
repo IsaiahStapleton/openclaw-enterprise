@@ -1,6 +1,7 @@
 # Bundled Slack Channel Driver
 
-The bundled `SlackChannelDriver` reads people and channels for the Console's
+The bundled `SlackChannelDriver` validates enabled Slack credentials before
+provisioning or deployment and reads people and channels for the Console's
 name picker. It uses the Agent's selected same-Namespace `SLACK_BOT_TOKEN`
 Secret; the controller does not configure or store another token.
 
@@ -30,22 +31,44 @@ Slack service produces a safe error without returning the token or upstream
 payload. Retry after fixing the token or scopes. Exact IDs can be entered when
 directory browsing is unavailable.
 
+## Credential admission
+
+When Slack is enabled, OCC resolves its native environment SecretRefs through
+exact same-Namespace `operate` grants. The Driver requires an `xapp-` app token
+for Socket Mode and an `xoxb-` bot token, then calls `auth.test` to require a bot
+and workspace identity. These [prefixes identify token roles](https://docs.slack.dev/authentication/tokens/);
+the app-token check does not verify validity, scopes, or that both tokens belong
+to the same app. Validation never opens a Socket Mode connection or sends a
+message. HTTP mode validates the bot token; disabled accounts are skipped.
+
+Provider calls run outside database transactions. OCC rechecks the exact
+Configuration and each validated Secret's backend identity and resource version
+before accepting work or creating a revision. Changed sources require a retry.
+Queued provisioning validates again before runtime credential setup. This is
+admission evidence, not a promise that mutable Secrets or provider permissions
+cannot change after admission; runtime connectivity remains a separate check.
+
+Role mismatch, provider rejection, temporary unavailability, missing binding,
+and changed Secret errors return sanitized `CHANNEL_CREDENTIAL_*` codes with
+the native field path. The Console keeps the selections and shows the error
+beside the relevant selector. An unavailable provider is retryable and is not
+reported as an invalid token. App credentials remain server-side throughout.
+
 ## Enable lookup in production
 
-The production API leaves directory lookup unavailable unless the operator sets
-Helm `api.channelDirectoryProxyUrl` to an approved HTTP or HTTPS proxy endpoint,
+With production default-deny egress, set Helm `api.channelDirectoryProxyUrl` to an approved HTTP or HTTPS proxy endpoint,
 for example `http://198.51.100.25:3128` after replacing the example IP and port.
 The value must contain one literal IPv4 address and an explicit port, without
-credentials or a path. The chart passes it to the API as
-`OCC_CHANNEL_DIRECTORY_PROXY_URL` and allows API Pod egress only to that IP and
-port. It does not grant the worker or Agent Pods this egress.
+credentials or a path. The chart passes it to the API and worker as
+`OCC_CHANNEL_DIRECTORY_PROXY_URL` and allows their Pod egress only to that IP and
+port. Agent Pod egress remains separately configured.
 
 The proxy must permit HTTP `CONNECT` to `slack.com:443`. The Driver sends its
 Slack API requests through that tunnel and verifies Slack's TLS certificate.
 Restrict the proxy to that destination. Keep the selected bot token in the
 same-Namespace Secret; the proxy endpoint needs no token or other credential in
-the Helm value. When the value is empty, authorized lookups return an unavailable
-response and the Console offers exact-ID entry. See the
+the Helm value. Without a reachable provider route, directory lookup and enabled-Slack
+admission return unavailable; exact-ID entry cannot bypass credential admission. See the
 [production controller settings](../settings/production.md) for the environment
 contract.
 

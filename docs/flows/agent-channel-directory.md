@@ -1,7 +1,7 @@
 ---
 created: 2026-09-27
 updated: 2026-09-28
-last_updated_session: 01a0e579-79b9-7a22-b707-d5bc1e024e31
+last_updated_session: authoring-run/bb89c55f-8771-46c9-801d-e5bc028d7e5c
 ---
 
 # Agent Channel Directory Lookup Flow
@@ -57,12 +57,12 @@ platform state. A missing or foreign target is rejected before provider I/O.
 
 `packages/occ/src/index.ts:OpenClawController.lookupChannelDirectory`
 
-Production composition selects the bundled Slack ChannelDriver only when the
-API has an approved `OCC_CHANNEL_DIRECTORY_PROXY_URL`. Without it, an authorized
-lookup returns `501` before the Secret value is read. Development selects the
-Driver directly. In production the Driver tunnels requests to `slack.com:443`
-through the configured proxy; the chart grants the API Pod egress only to that
-proxy IP and port.
+API and worker composition select the bundled Slack ChannelDriver for
+credential admission; the API also uses it for directory lookup. With
+`OCC_CHANNEL_DIRECTORY_PROXY_URL`, the Driver tunnels requests to `slack.com:443`
+through the approved proxy. The chart grants API and worker Pods egress only to
+that proxy IP and port. Without provider connectivity, requests return an
+unavailable error. An installation with no selected ChannelDriver returns `501`.
 The selected SecretDriver invokes `withValue` and verifies backend ownership.
 OCC rechecks grants and Secret backend identity after the read. It passes the
 token only in process to the ChannelDriver. The bundled Slack implementation
@@ -112,8 +112,7 @@ view.
 - A denied lookup requires checking the exact edit permission and Secret
   `operate` grant. A token, scope, rate limit, or provider error returns a
   safe code without the token or upstream payload.
-- A `501` lookup in production means the API has no directory proxy configured.
-  Set the approved proxy IP and port in Helm `api.channelDirectoryProxyUrl`, and
+- An unavailable lookup can mean the API has no provider route. Set the approved proxy IP and port in Helm `api.channelDirectoryProxyUrl`, and
   verify that the proxy permits CONNECT to `slack.com:443`.
 - Directory conformance tests cover provider pagination and safe errors. The
   OCC API integration test covers both authorization checks and response
@@ -135,6 +134,8 @@ view.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 21:12: Describe shared admission Driver selection and API/worker proxy egress. (authoring-run/bb89c55f-8771-46c9-801d-e5bc028d7e5c - 8352c093)
 
 - 2026-09-28 01:19: Document raw Slack user ID entry for plugin approver fields. (01a0e579-79b9-7a22-b707-d5bc1e024e31 - f90ca58bf4085a6075faa1c46e75ee96d2fbdafb)
 

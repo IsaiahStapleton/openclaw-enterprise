@@ -1,3 +1,4 @@
+import { SlackChannelDriver } from "./drivers/channel/slack.ts";
 import { isPositiveSafeInteger } from "@openclaw-enterprise/utils";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -9,6 +10,7 @@ import type {
   AuthorizationDecision,
   AuthorizationRequest,
   ComputeDriver,
+  ChannelDriver,
   PluginDeploymentWarning,
   PluginDriver,
   ComputeReadiness,
@@ -382,6 +384,7 @@ export class ControllerWorker {
   private readonly maintenanceIntervalMs: number | undefined;
   private readonly repoDriver: RepoDriver | undefined;
   private readonly repositoryCleanupRetryMs: number;
+  private readonly channelDriver: ChannelDriver;
   private readonly pluginDriver: PluginDriver | undefined;
   private readonly repositoryCredentials: RepositoryCredentialLifecycle;
   private readonly mode: "development" | "production";
@@ -503,6 +506,7 @@ export class ControllerWorker {
       "Repository cleanup retry interval",
     );
     this.pluginDriver = drivers?.pluginDriver;
+    this.channelDriver = drivers?.channelDriver ?? new SlackChannelDriver();
     if (this.repoDriver !== undefined) {
       const driver = this.repoDriver;
       if (
@@ -553,6 +557,7 @@ export class ControllerWorker {
       this.secretDriver,
       this.repoDriver,
       this.pluginDriver,
+      this.channelDriver,
       this.compute,
     ] as const) {
       if (driver !== undefined) {
