@@ -3,8 +3,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 // CI sets this only for lanes whose browser tests use disposable fixtures. When
-// it is unset, nothing is traced or tracked.
+// it is unset, nothing is tracked.
 export const browserFailureDirectoryVariable = "OPENCLAW_CI_BROWSER_FAILURE_DIR";
+// Opt-in Playwright tracing for local investigation. CI leaves it off: tracing
+// slows the page enough to make timing-sensitive console tests fail far more
+// often (known Namespace revocation: 6/12 local runs with a full trace, 2/12
+// without snapshots, 0/12 with event tracking only).
+export const browserFailureTraceVariable = "OPENCLAW_CI_BROWSER_FAILURE_TRACE";
 
 const eventLimit = 500;
 const screenshotTimeoutMs = 5_000;
@@ -155,11 +160,11 @@ function slug(value) {
 }
 
 /**
- * Records a Playwright trace plus console, network and navigation events for
- * one test's browser context. Call capture() from cleanup before the context
- * closes: it writes the trace, a screenshot per open page and failure.json into
- * $OPENCLAW_CI_BROWSER_FAILURE_DIR only when the test failed. Passing tests
- * write nothing; the trace is discarded when the context closes.
+ * Records console, network and navigation events (and, when opted in, a
+ * Playwright trace) for one test's browser context. Call capture() from
+ * cleanup before the context closes: only when the test failed, it writes a
+ * screenshot per open page, failure.json and any trace into
+ * $OPENCLAW_CI_BROWSER_FAILURE_DIR. Passing tests write nothing.
  */
 export async function watchBrowserContext(t, context) {
   const root = failureDirectory();
@@ -176,8 +181,10 @@ export async function watchBrowserContext(t, context) {
   context.on("page", attach);
   let tracing = false;
   try {
-    await context.tracing.start({ screenshots: true, snapshots: true, title: t.name });
-    tracing = true;
+    if (process.env[browserFailureTraceVariable] === "1") {
+      await context.tracing.start({ screenshots: true, snapshots: true, title: t.name });
+      tracing = true;
+    }
   } catch {
     // Diagnostics must never fail the test; failure.json still records events.
   }

@@ -114,8 +114,9 @@ runs:
       shell: bash
       env:
         CI_RUNNER_TEST_TIMEOUT_MS: ${{ inputs.lane == 'checks-baseline' && '300000' || inputs.lane == 'k3d-model' && '5400000' || '' }}
-        # Browser tests write a trace, screenshots and failure.json here only
-        # when a test fails. Limited to the fixture-only browser lane.
+        # Browser tests write screenshots and failure.json (console, network
+        # and navigation log) here only when a test fails. Limited to the
+        # fixture-only browser lane.
         OPENCLAW_CI_BROWSER_FAILURE_DIR: ${{ inputs.lane == 'checks-baseline' && format('{0}/browser-failures/{1}', runner.temp, inputs.lane) || '' }}
       run: node scripts/ci/run-tests.mjs run "${{ inputs.lane }}" --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json" --results "$RUNNER_TEMP/results/${{ inputs.lane }}.json"
     - name: Cleanup lane
@@ -157,8 +158,8 @@ runs:
         retention-days: 7
     - name: Upload browser failure diagnostics
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      # Playwright traces, screenshots and console/network logs for failed
-      # browser tests; passing runs write nothing.
+      # Screenshots and console/network logs for failed browser tests;
+      # passing runs write nothing.
       if: failure() && inputs.lane == 'checks-baseline'
       with:
         name: browser-failures-${{ inputs.artifact-prefix }}-${{ inputs.lane }}

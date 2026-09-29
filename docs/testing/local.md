@@ -190,8 +190,9 @@ Do not change managed browser policies to make the suite run. A managed Chrome
 debugging policy can currently block the browser suite on locked-down hosts; use
 an approved browser environment instead. Set `OCC_TEST_CONSOLE_ARTIFACT_DIR` to
 retain screenshots at a chosen path; otherwise the suite uses a temporary
-directory. Set `OPENCLAW_CI_BROWSER_FAILURE_DIR` to keep a Playwright trace,
-screenshots and a console/network log for each failed test, as CI does. The existing
+directory. Set `OPENCLAW_CI_BROWSER_FAILURE_DIR` to keep screenshots and
+a console/network log for each failed test, as CI does, and add
+`OPENCLAW_CI_BROWSER_FAILURE_TRACE=1` for a Playwright trace. The existing
 [image smoke test](images.md#images-and-helm) also loads console assets from the built
 controller image; it does not claim a live production deployment.
 

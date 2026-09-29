@@ -156,12 +156,13 @@ See the [execution flow](../flows/github-actions-testing.md) for entrypoints, re
 
 When a browser test fails in the checks-baseline lane, the lane also uploads a
 `browser-failures-*` artifact, kept for three days. Each failed test gets a
-directory with a Playwright trace (`trace.zip`, open it with
-`pnpm exec playwright show-trace`), a screenshot of every open page, and
-`failure.json`. That file holds the error, page URLs, requests still pending at
-failure time, and recent navigation, console and network events. Set
-`OPENCLAW_CI_BROWSER_FAILURE_DIR` to collect the same files locally. Tests that
-pass write nothing.
+directory with a screenshot of every open page and `failure.json`. That file
+holds the error, page URLs, requests still pending at failure time, and recent
+navigation, console and network events. Set `OPENCLAW_CI_BROWSER_FAILURE_DIR` to
+collect the same files locally. Tests that pass write nothing. Locally, also set
+`OPENCLAW_CI_BROWSER_FAILURE_TRACE=1` to add a Playwright trace (`trace.zip`,
+open it with `pnpm exec playwright show-trace`). CI does not trace: tracing
+slows the page enough to make timing-sensitive console tests fail more often.
 
 A lane retry replaces that lane's result artifact within the workflow run so the
 aggregate reads its latest result. Other lanes keep their existing artifacts.
