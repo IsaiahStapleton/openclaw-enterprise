@@ -83,9 +83,10 @@ and deployment through the Console. Read-only API, Kubernetes, and provider
 inspection may verify outcomes. A required SQL write, direct API mutation, pod
 patch, or manual runtime-file repair fails the Console-only criterion.
 
-1. Create `ted-backup` using **Community Agent** (the actual preset name), with
-   the selected service-account authentication and dedicated Codex runtime.
-   If that name already exists, do not overwrite it; resolve an isolated target.
+1. Start creating `ted-backup` using **Community Agent** (the actual preset
+   name), with the selected service-account authentication and dedicated Codex
+   runtime. If that name already exists, do not overwrite it; resolve an
+   isolated target.
 2. Configure the test channel, default `oce-feedback-test`, using its exact ID.
    The preset's existing allowlist does not include this channel. Set no-mention
    handling and reply-in-thread behavior explicitly through supported controls.
@@ -94,19 +95,23 @@ patch, or manual runtime-file repair fails the Console-only criterion.
    explicitly; do not infer them from the App's installation repository list or
    Console defaults. Current Console repository selection uses one profile for
    every selected repository; per-repository mixed profiles are future scope.
-4. Resolve the preset's read-only role before the write-denial probe. The
-   Community Agent instructions forbid editing repositories and state that
-   messages cannot expand its authority, so a conforming Agent would refuse the
-   push. Through the Console, add a narrow Agent-specific instruction that
-   authorizes only the designated sender's disposable-branch push attempt in the
-   two selected repositories, for the write-denial probe only. Preserve the
-   preset globally and all its other restrictions. Do not add an instruction
-   that tells the model to refuse repository writes or otherwise substitutes
-   prompt behavior for credential enforcement. Denial evidence must come from
-   the broker or Git error of a real attempted push against each selected
-   repository, not from model behavior. If no supported Console path exists,
-   report the conflict as a blocker; a model refusal cannot prove broker
-   enforcement.
+4. Resolve the preset's read-only role before creating the Agent. The Community
+   Agent instructions forbid editing repositories and state that only verified
+   instructions from Kevin or Peter may change its scope. Obtain one of their
+   verified instructions for this acceptance run. It must name the run ID,
+   `openclaw/openclaw-enterprise`, `openclaw/openclaw`, and the unique disposable
+   branch for each repository. It may authorize only a harmless local commit and
+   one non-force push attempt of each named branch for the write-denial probe; it
+   does not authorize a pull request, merge, protected-ref change, or any other
+   write. In **Advanced settings** -> **Workspace files**, append that exact
+   instruction to the initial `AGENTS.md` without replacing the preset's other
+   instructions. After deployment, reload `AGENTS.md` and verify the exact text.
+   If the file cannot be saved or read back, block the probe. This run-specific
+   instruction does not change the preset or grant broader repository authority.
+   Do not add an instruction that tells the model to refuse repository writes or
+   otherwise substitutes prompt behavior for credential enforcement. Denial
+   evidence must come from the broker or Git error of a real attempted push
+   against each selected repository, not from model behavior.
 5. Enable Linear from the curated catalog only after confirming the selected
    Codex account already has Linear connected for the chosen workspace. Preserve
    the Community role's instruction to read, not change, Linear items; that
@@ -124,16 +129,16 @@ selected and configured a bot sender. Existing
 [Slack fixture settings](../../../../docs/testing/slack.md) require mentions and
 override reply mode; that fixture is not proof of this scenario.
 
-| Check                         | Required evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unmentioned channel message   | Send a relevant top-level question without mentioning the bot. Receive an answer from the selected Agent in that message's thread, with matching `thread_ts` and no stray top-level response.                                                                                                                                                                                                                                                                         |
-| Thread follow-up              | Send an unmentioned follow-up in the same thread. Verify a contextual reply in the same thread from the same Agent.                                                                                                                                                                                                                                                                                                                                                   |
-| Linear                        | Ask for the known permitted issue. Verify a real successful Linear tool call and accurate issue identity, title/status, and link. The preset's graceful fallback is useful behavior but is not a passed Linear test. `PLUGIN_AUTH_REQUIRED`, an unconnected account, or missing workspace consent is a blocked Linear test, not a Console step to complete during provisioning.                                                                                       |
-| Repository reads              | From Slack, request sandboxed clone/fetch and harmless read-only inspection of both `openclaw/openclaw-enterprise` and `openclaw/openclaw`. Verify native tool execution and independently read back the exact remote commit or file identity for each repository. No host-run Git command may substitute for the Agent operation.                                                                                                                                    |
-| Repository write denial       | For each selected repository, request a push of a unique disposable branch created inside the sandbox (step 4). Require a broker or Git authorization denial, not a model refusal, missing credential, timeout, DNS failure, or broken Git command. Independently confirm each remote ref stayed absent or unchanged. If any push unexpectedly succeeds, record the product failure and remove only that owned ref after verifying ownership.                         |
-| Broker and sandbox boundaries | Confirm valid TLS to the rendered host, wrong-host/untrusted-CA rejection, an explicit Codex domain deny with a positive reachability control, and denied out-of-workspace writes with a writable positive control. Distinguish client-side refusal from server-side authorization. When needed, use a separately identified trusted observer probe with valid scoped credentials to establish broker denial; do not expose those credentials to the model or report. |
-| Native Control UI             | Launch from the selected Agent's Console action. Require authenticated content, a live connection, a harmless read, and successful reload. Verify an unauthenticated browser cannot reach Agent content. Opening an empty tab is not a pass.                                                                                                                                                                                                                          |
-| Persistence                   | Redeploy once through Console. Verify saved repository permissions, plugin and channel settings, then repeat a Slack/model response and Control UI launch. Verify working state survives the expected lifecycle.                                                                                                                                                                                                                                                      |
+| Check                         | Required evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unmentioned channel message   | Send a relevant top-level question without mentioning the bot. Receive an answer from the selected Agent in that message's thread, with matching `thread_ts` and no stray top-level response.                                                                                                                                                                                                                                                                                                       |
+| Thread follow-up              | Send an unmentioned follow-up in the same thread. Verify a contextual reply in the same thread from the same Agent.                                                                                                                                                                                                                                                                                                                                                                                 |
+| Linear                        | Ask for the known permitted issue. Verify a real successful Linear tool call and accurate issue identity, title/status, and link. The preset's graceful fallback is useful behavior but is not a passed Linear test. `PLUGIN_AUTH_REQUIRED`, an unconnected account, or missing workspace consent is a blocked Linear test, not a Console step to complete during provisioning.                                                                                                                     |
+| Repository reads              | From Slack, request sandboxed clone/fetch and harmless read-only inspection of both `openclaw/openclaw-enterprise` and `openclaw/openclaw`. Verify native tool execution and independently read back the exact remote commit or file identity for each repository. No host-run Git command may substitute for the Agent operation.                                                                                                                                                                  |
+| Repository write denial       | Using the exact run-specific instruction and branch names from step 4, request the harmless local commit and one non-force push attempt for each selected repository. Require a broker or Git authorization denial, not a model refusal, missing credential, timeout, DNS failure, or broken Git command. Independently confirm each remote ref stayed absent or unchanged. If any push unexpectedly succeeds, record the product failure and remove only that owned ref after verifying ownership. |
+| Broker and sandbox boundaries | Confirm valid TLS to the rendered host, wrong-host/untrusted-CA rejection, an explicit Codex domain deny with a positive reachability control, and denied out-of-workspace writes with a writable positive control. Distinguish client-side refusal from server-side authorization. When needed, use a separately identified trusted observer probe with valid scoped credentials to establish broker denial; do not expose those credentials to the model or report.                               |
+| Native Control UI             | Launch from the selected Agent's Console action. Require authenticated content, a live connection, a harmless read, and successful reload. Verify an unauthenticated browser cannot reach Agent content. Opening an empty tab is not a pass.                                                                                                                                                                                                                                                        |
+| Persistence                   | Redeploy once through Console. Verify saved repository permissions, plugin and channel settings, then repeat a Slack/model response and Control UI launch. Verify working state survives the expected lifecycle.                                                                                                                                                                                                                                                                                    |
 
 Keep each assertion tied to its actual installation, Agent revision, Slack
 thread, and Git ref. If two targets are selected, state exactly which assertions
