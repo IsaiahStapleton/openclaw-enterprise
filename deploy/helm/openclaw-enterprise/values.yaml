@@ -71,9 +71,9 @@ auth:
     # Google Workspace hosted domains (the ID token's hd claim). Empty accepts any
     # Google account; set, it also requires a verified email address.
     allowedDomains: []
-    # API Pod HTTPS egress for accounts.google.com, oauth2.googleapis.com and
-    # www.googleapis.com. Empty allows TCP 443 to 0.0.0.0/0; Google publishes no small
-    # stable range, so narrow it with an egress proxy.
+    # API Pod HTTPS egress for oauth2.googleapis.com and www.googleapis.com; browsers,
+    # not the API, reach accounts.google.com. Empty allows TCP 443 to 0.0.0.0/0; Google
+    # publishes no small stable range, so narrow it with an egress proxy.
     egressCidrs: []
 
 agentNativeAdmin:

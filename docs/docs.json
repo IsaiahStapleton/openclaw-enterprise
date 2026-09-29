@@ -433,6 +433,10 @@
                     "label": "Sign-in Maintenance"
                   },
                   {
+                    "page": "guides/deploy/google-sign-in",
+                    "label": "Google Sign-in"
+                  },
+                  {
                     "page": "guides/deploy/local-k3d-image-upgrade",
                     "label": "Local k3d Upgrades"
                   },

@@ -5,7 +5,7 @@ Prepare [Kubernetes](kubernetes.md) or [EKS](eks.md), the
 [workspace routing](workspace-routing.md#requirements), including a GatewayClass.
 Keep private routing enabled. Start with the password profile and
 [native Agent administration](native-admin.md#requirements); optional
-[GitHub sign-in](#enable-github-browser-sign-in) requires disabling native administration.
+[GitHub](#enable-github-browser-sign-in) or [Google](google-sign-in.md) sign-in requires disabling native administration.
 
 Configure with an [installation profile](#recommended-generate-profile-configuration)
 or, for advanced customization, [manual YAML](#advanced-copy-manual-yaml-examples).
@@ -503,8 +503,8 @@ Activation is one-way: the database refuses older images' sessions and
      --from-file=client-secret=/secure/occ/github-client-secret
    ```
 
-3. Close ingress. Disable automatic restarts and policy/provisioning writers,
-   and drain admitted requests.
+3. Close ingress. Disable automatic restarts and policy/provisioning writers;
+   drain admitted requests.
 4. Run `helm upgrade` with the compatible image. The api Deployment uses
    `Recreate`, so the old Pod stops first; startup enrolls qualifying accounts, logs any it skips,
    and invalidates unbound sessions before serving. After a failure, keep ingress closed.
@@ -512,8 +512,8 @@ Activation is one-way: the database refuses older images' sessions and
    the expected Namespaces and existing Agent detail, and rejected stale sessions.
    Reopen ingress only after these checks, retaining one serving controller.
 
-For enrollment, obtain the numeric subject with `gh api user --jq .id` authenticated
-as the intended GitHub user; verify ownership through your identity process, not
+For enrollment, obtain the numeric subject with `gh api user --jq .id` as the
+intended GitHub user; verify ownership through your identity process, not
 email or usernames. Follow the reference's attachment and unknown-outcome handling.
 Loopback tests do not qualify production stop/drain, cookies, logging, or GitHub registration.
 
