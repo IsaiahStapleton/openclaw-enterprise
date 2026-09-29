@@ -24,6 +24,7 @@ import {
   jsonb,
   pgSchema,
   primaryKey,
+  smallint,
   text,
   timestamp,
   unique,
@@ -638,6 +639,7 @@ export const repositorySessionAttempts = occSchema.table(
     deadlineWallMs: bigint("deadline_wall_ms", { mode: "number" }).notNull(),
     phase: text("phase").notNull(),
     sessionId: text("session_id"),
+    brokerProtocol: smallint("broker_protocol").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
@@ -651,8 +653,7 @@ export const repositorySessionAttempts = occSchema.table(
       .onDelete("restrict"),
     check(
       "repository_session_attempts_live_revision_valid",
-      sql`(${table.liveRevisionId} IS NOT NULL AND ${table.liveRevisionId} = ${table.revisionId})
-        OR (${table.liveRevisionId} IS NULL AND ${table.phase} = 'disposed')`,
+      sql`${table.liveRevisionId} IS NULL OR ${table.liveRevisionId} = ${table.revisionId}`,
     ),
     check(
       "repository_session_attempts_cleanup_context_valid",
@@ -696,6 +697,10 @@ export const repositorySessionAttempts = occSchema.table(
       sql`${table.deadlineWallMs} BETWEEN 1 AND 9007199254740991`,
     ),
     check(
+      "repository_session_attempts_broker_protocol_valid",
+      sql`${table.brokerProtocol} IN (0, 1)`,
+    ),
+    check(
       "repository_session_attempts_phase_valid",
       sql`${table.phase} IN ('opening', 'open', 'closing', 'disposed', 'invalidated')`,
     ),
@@ -708,6 +713,36 @@ export const repositorySessionAttempts = occSchema.table(
     check(
       "repository_session_attempts_timestamps_valid",
       sql`isfinite(${table.createdAt}) AND isfinite(${table.updatedAt}) AND ${table.updatedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const repositoryBrokerReceipts = occSchema.table(
+  "repository_broker_receipts",
+  {
+    admissionId: text("admission_id")
+      .primaryKey()
+      .references(() => repositorySessionAttempts.admissionId, { onDelete: "restrict" }),
+    state: text("state").notNull(),
+    generation: uuid("generation"),
+    sessionId: text("session_id").unique(),
+    deadlineWallMs: bigint("deadline_wall_ms", { mode: "number" }),
+    revoked: bigint("revoked", { mode: "number" }),
+    expired: bigint("expired", { mode: "number" }),
+  },
+  (table): PgTableExtraConfigValue[] => [
+    check(
+      "repository_broker_receipts_session_valid",
+      sql`${table.sessionId} IS NULL OR ${table.sessionId} ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'`,
+    ),
+    check(
+      "repository_broker_receipts_state_valid",
+      sql`
+      (${table.state} = 'fenced' AND ${table.generation} IS NULL AND ${table.sessionId} IS NULL AND ${table.deadlineWallMs} IS NULL AND ${table.revoked} IS NULL AND ${table.expired} IS NULL)
+      OR (${table.state} = 'reserved' AND ${table.generation} IS NOT NULL AND ${table.sessionId} IS NULL AND ${table.deadlineWallMs} IS NULL AND ${table.revoked} IS NULL AND ${table.expired} IS NULL)
+      OR (${table.state} = 'active' AND ${table.generation} IS NOT NULL AND ${table.sessionId} IS NOT NULL AND ${table.deadlineWallMs} IS NOT NULL AND ${table.deadlineWallMs} BETWEEN 1 AND 9007199254740991 AND ${table.revoked} IS NULL AND ${table.expired} IS NULL)
+      OR (${table.state} = 'disposed' AND ${table.generation} IS NOT NULL AND ${table.sessionId} IS NOT NULL AND ${table.deadlineWallMs} IS NOT NULL AND ${table.deadlineWallMs} BETWEEN 1 AND 9007199254740991 AND ${table.revoked} IS NOT NULL AND ${table.revoked} BETWEEN 0 AND 9007199254740991 AND ${table.expired} IS NOT NULL AND ${table.expired} BETWEEN 0 AND 9007199254740991)
+    `,
     ),
   ],
 );
@@ -895,6 +930,11 @@ export const auditEvents = occSchema.table(
     details: jsonb("details").$type<Record<string, unknown>>(),
   },
   (table) => [
+    index("audit_events_work_attempt_idx")
+      .on(sql`(${table.details}->>'workId')`, table.occurredAt.desc(), table.id.desc())
+      .where(
+        sql`${table.kind} = 'mutation' AND ${table.action} = 'reconcile' AND ${table.resourceKind} = 'agent_revision'`,
+      ),
     check("audit_events_id_format", sql`${table.id} ~ ${identifierPatterns.audit}`),
     check("audit_events_outcome_valid", sql`${table.outcome} IN ('success', 'denied', 'failure')`),
     check(
@@ -975,6 +1015,10 @@ export const controllerWork = occSchema.table(
         OR (${table.workKind} = 'provisioning' AND ${table.agentId} IS NULL
           AND ${table.revisionId} IS NULL AND ${table.namespaceTarget} IS NULL
           AND ${table.agentTarget} IS NULL)
+        OR (${table.workKind} = 'lifecycle' AND ${table.agentId} IS NULL
+          AND ${table.revisionId} IS NULL AND ${table.namespaceTarget} IS NULL
+          AND ${table.agentTarget} IS NULL
+          AND ${table.idempotencyKey} ~ '^agent_revision:rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:repository_cleanup:(retire:)?[0-9a-f]{64}$')
       )`,
     ),
     check(

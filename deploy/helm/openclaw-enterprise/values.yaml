@@ -114,6 +114,15 @@ gatewayRouting:
   remoteNodeCidrs: []
   tenantGatewayPort: 8080
   envoyHttpsTargetPort: 10443
+  sandbox:
+    enabled: false
+    # A dedicated wildcard domain outside the OCE session cookie domain.
+    domain: ""
+    # Existing wildcard HTTPS certificate in the release namespace.
+    tlsSecretName: ""
+    # Separate listener: public ingress must not admit the private admin port.
+    listenerPort: 8443
+    ingressPeers: []
   issuerRef:
     # Empty bootstraps a namespaced SelfSigned root and CA Issuer for the leaf.
     name: ""
@@ -142,6 +151,20 @@ api:
   # Optional model-list discovery: API Pod HTTPS egress to provider IPv4 /32 hosts.
   # Operators maintain these addresses; Console model selection does not require it.
   modelDiscoveryCidrs: []
+
+slackProxy:
+  # Optional chart-managed HTTP CONNECT proxy for Slack channel traffic. It is
+  # inert until enabled. HTTPS egress excludes private and reserved IPv4 ranges.
+  enabled: false
+  serviceName: openclaw-enterprise-slack-proxy
+  port: 3128
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
 
 cluster:
   cidrs: []

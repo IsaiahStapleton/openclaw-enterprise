@@ -85,7 +85,7 @@ source commit. BuildKit rewrites image and filesystem timestamps to that epoch,
 so wall-clock time does not change the image manifests on a cold-cache rebuild.
 
 `deploy/runtime/Dockerfile:openclaw-source` verifies the pinned source archive,
-applies the Codex 0.156.0 dependency/lockfile patch, and applies the temporary
+uses its stock Codex 0.158.0 dependency/lockfile selection, and applies the temporary
 OpenClaw read-only-paths compatibility patch. The build verifies the latter's
 hash and records it in runtime provenance. The OpenClaw bridge forwards the bound
 Agent's stock network settings without modifying the Codex binary. Both installs use
@@ -203,6 +203,8 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-28 14:51: Use upstream Codex 0.158.0 dependencies and remove the old version override. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 6c56149f)
 
 - 2026-09-28 03:13: Disable npm background update checks in the runtime image. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 587b3096b2b5de9c5575a13b36133be99a93ebe2)
 
