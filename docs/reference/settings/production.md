@@ -133,8 +133,10 @@ for `github.com` and `api.github.com`. Empty `auth.github.egressCidrs` allows
 `https://api.github.com/meta`, and update them when GitHub changes them.
 
 `api.trustedProxy` is off by default: the API rejects `Forwarded`,
-`X-Forwarded-*`, and `X-Real-IP` with `403` and keys sign-in limits on the socket
-peer. Presets:
+`X-Forwarded-*`, and `X-Real-IP` with `403`. Sign-in limits then key on the
+socket peer with GitHub or Google, and on email alone in the password-only
+profile, which logs `authentication.sign-in-limit-warning` at startup; set
+`api.trustedProxy` to add its per-client-address limit. Presets:
 
 - `ingress-nginx`: `cidrs` is the ingress controller Pod CIDR; the header
   is `x-forwarded-for`. Keep ingress-nginx `use-forwarded-headers` off.
