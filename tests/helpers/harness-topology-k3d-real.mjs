@@ -334,7 +334,7 @@ async function createScopedController(context, identifier, platformNamespace, ku
       {
         op: "add",
         path: "/rules/-",
-        value: { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "watch"] },
+        value: { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "watch", "patch"] },
       },
       {
         op: "add",
