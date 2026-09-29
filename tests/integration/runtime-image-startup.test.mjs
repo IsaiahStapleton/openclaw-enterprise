@@ -1467,6 +1467,91 @@ test(
 );
 
 test(
+  "runtime image Gateway hot-loads its workspace node binding without restarting OpenClaw",
+  imageTestOptions,
+  async (t) => {
+    // The Gateway starts before its node pairs, as on a first dedicated deploy:
+    // the binding volume is empty and file-transfer is not allowed yet.
+    const gatewayWorkspace = "/home/node/gateway-workspace";
+    const admitted = createAdmittedRuntimeImageConfiguration("codex");
+    const configuration = {
+      ...admitted,
+      agents: {
+        ...admitted.agents,
+        defaults: { ...admitted.agents?.defaults, workspace: gatewayWorkspace },
+      },
+    };
+    const directory = await mkdtemp(join(tmpdir(), "oce-runtime-image-config-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const configurationPath = join(directory, "openclaw.json");
+    await writeFile(configurationPath, JSON.stringify(configuration));
+    const { containerName } = await runGatewaySmoke(t, "codex", {
+      configurationPath: "/etc/openclaw/openclaw.json",
+      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+      volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
+      extraEnvironment: [
+        "OPENCLAW_WORKSPACE_NODE_PATH=/home/node/workspace-node-binding/workspace-node.json",
+        "OPENCLAW_AGENT_REVISION_ID=revision-workspace-node",
+        "OPENCLAW_RUNTIME_STATUS_PORT=18791",
+        "OPENCLAW_RUNTIME_STATUS_CONTAINER=gateway",
+        "OPENCLAW_POD_UID=pod-workspace-node",
+      ],
+    });
+    const source = await readFile(
+      new URL("../fixtures/runtime-workspace-node-hot-apply.mjs", import.meta.url),
+      "utf8",
+    );
+    const { stdout } = await runDocker(
+      [
+        "exec",
+        "-e",
+        `OCC_TEST_GATEWAY_WORKSPACE=${gatewayWorkspace}`,
+        containerName,
+        "node",
+        "--input-type=module",
+        "-e",
+        source,
+      ],
+      { timeout: 300_000 * imageSmokeTimeoutMultiplier },
+    );
+    const result = JSON.parse(stdout.trim().split("\n").at(-1));
+    assert.equal(result.sameProcesses, true);
+    assert.equal(result.fileTransferAfter.state, "active");
+    assert.equal(result.readBefore, "served by the Gateway host");
+    assert.equal(result.readAfter, "served by the workspace node");
+    const inspect = await runDocker([
+      "inspect",
+      containerName,
+      "--format",
+      "{{.State.Running}} {{.RestartCount}}",
+    ]);
+    assert.equal(inspect.stdout.trim(), "true 0");
+    const logs = await runDocker(["logs", containerName]);
+    const entries = jsonLogEntries(`${logs.stdout}\n${logs.stderr}`);
+    assertGatewayLogEntry(
+      entries,
+      (entry) =>
+        entry.event === "runtime.startup_phase" &&
+        entry.phase === "workspace-node" &&
+        entry.outcome === "ok",
+      "the wrapper's workspace-node ack",
+    );
+    // OpenClaw applied the plugins.* change in place (and replaced the Codex
+    // plugin runtime with it); nothing restarted the Gateway.
+    assertGatewayLogEntry(
+      entries,
+      (entry) =>
+        entry.subsystem === "gateway/reload" &&
+        /^config hot reload applied \(.*plugins\.entries\.file-transfer/.test(entry.message),
+      "OpenClaw's hot reload of file-transfer",
+    );
+    const output = `${logs.stdout}\n${logs.stderr}`;
+    assert.doesNotMatch(output, /config reload failed|config restart|workspace-node-changed/);
+    t.diagnostic(`workspace node ack after ${result.ackMs} ms: ${JSON.stringify(result)}`);
+  },
+);
+
+test(
   "runtime image routes sandboxed Git through stock Codex and the repository broker",
   imageTestOptions,
   async (t) => {
