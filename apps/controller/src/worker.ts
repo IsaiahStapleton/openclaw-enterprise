@@ -48,6 +48,7 @@ import {
   provisioningEffectReceipt as provisioningEffectReceiptForRecord,
   provisioningPendingEffect,
   type ClaimedWork,
+  type ProvisioningEffectReceipt,
   type PlatformUnitOfWork,
   type PostgresPool,
   type PostgresQueryClient,
@@ -119,6 +120,11 @@ interface AgentDeletionDispatchResult extends DispatchResult {
   readonly namespace?: Readonly<Namespace>;
   readonly agent?: Readonly<Agent>;
   readonly revisions?: readonly Readonly<AgentRevision>[];
+  readonly delayMs?: number;
+  readonly abandonedProvisioningEffect?: {
+    readonly workId: string;
+    readonly receipt: ProvisioningEffectReceipt;
+  };
 }
 
 function positiveInteger(value: number, name: string): number {
@@ -1499,6 +1505,7 @@ export class ControllerWorker {
         pendingProvisioningEffect === undefined
           ? undefined
           : provisioningEffectReceiptForRecord(provisioning!);
+      let abandonedProvisioningEffect: AgentDeletionDispatchResult["abandonedProvisioningEffect"];
       if (
         provisioning?.progress.pendingEffect !== undefined &&
         (pendingProvisioningEffect === undefined ||
@@ -1508,14 +1515,35 @@ export class ControllerWorker {
           settledProvisioningEffect.owner !== pendingProvisioningEffect.owner ||
           settledProvisioningEffect.targetId !== pendingProvisioningEffect.targetId)
       ) {
-        await this.finalizeAgentDeletion(claim, {
-          outcome: "pending",
-          code: "PROVISIONING_EFFECT_PENDING",
-          namespace,
-          agent,
-          revisions,
-        });
-        return;
+        // A cancelled provisioning never runs again, so nothing else will settle
+        // its effect. After a former claim's lease has run out, this teardown
+        // removes what the effect could have written and settles it itself.
+        // Malformed or conflicting evidence stays fail-closed.
+        const abandonAfterMs = provisioning.updatedAt.getTime() + this.leaseDurationMs - Date.now();
+        if (
+          provisioning.status !== "cancelled" ||
+          pendingProvisioningEffect?.ownerPresent !== true ||
+          settledProvisioningEffect !== undefined ||
+          abandonAfterMs > 0
+        ) {
+          await this.finalizeAgentDeletion(claim, {
+            outcome: "pending",
+            code: "PROVISIONING_EFFECT_PENDING",
+            namespace,
+            agent,
+            revisions,
+            ...(abandonAfterMs > 0 ? { delayMs: Math.ceil(abandonAfterMs) } : {}),
+          });
+          return;
+        }
+        abandonedProvisioningEffect = {
+          workId: provisioning.workId,
+          receipt: {
+            kind: pendingProvisioningEffect.kind,
+            owner: pendingProvisioningEffect.owner!,
+            targetId: pendingProvisioningEffect.targetId,
+          },
+        };
       }
       if (revisions.length > 0 && this.compute.bindAgent !== undefined) {
         await this.withClaimHeartbeat(claim, async () => {
@@ -1537,6 +1565,7 @@ export class ControllerWorker {
         namespace,
         agent,
         revisions,
+        ...(abandonedProvisioningEffect === undefined ? {} : { abandonedProvisioningEffect }),
       };
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
@@ -1582,7 +1611,12 @@ export class ControllerWorker {
       if (claim.agentId === undefined) {
         throw new Error("The worker Agent deletion context is unavailable.");
       }
-      const completed = await this.state.transactWithQueue(async (_unit, queue) => {
+      const abandoned = result.abandonedProvisioningEffect;
+      const completed = await this.state.transactWithQueue(async (unit, queue) => {
+        if (abandoned !== undefined) {
+          // Committed only with the finalizer's claim check in this transaction.
+          await unit.provisioning.settleEffect(abandoned.workId, abandoned.receipt);
+        }
         const completed = await queue.completeAgentDeletion(
           claim,
           claim.namespaceId,
@@ -1620,6 +1654,13 @@ export class ControllerWorker {
         }
         if (terminalFailure) {
           await queue.fail(claim, { code: result.code });
+        } else if (result.outcome === "pending") {
+          // Convergence waits do not consume the bounded failure budget.
+          await queue.defer(
+            claim,
+            { code: result.code },
+            result.delayMs === undefined ? {} : { delayMs: result.delayMs },
+          );
         } else {
           await queue.retry(claim, { code: result.code });
         }

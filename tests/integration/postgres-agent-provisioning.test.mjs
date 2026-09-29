@@ -1197,15 +1197,32 @@ test(
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
     const computeDriver = failingTransportDriver();
-    const fixture = await createFixture(context, { computeDriver, leaseDurationMs: 1_000 });
+    const fixture = await createFixture(context, { computeDriver, leaseDurationMs: 3_000 });
     const target = await createFailedPreHandoffAgent(fixture);
     const agentPath = `/namespaces/${target.namespace.id}/agents/${target.failed.agentId}`;
     const deleting = await fixture.request("DELETE", agentPath);
     assert.equal(deleting.status, 202, JSON.stringify(deleting.body));
 
-    // Nothing settles a cancelled effect, so deletion itself must resolve it.
+    // Nothing settles a cancelled effect, so deletion itself must resolve it,
+    // but only after a lease has passed since the cancellation.
     await fixture.startWorker();
     try {
+      await waitFor("the Agent deletion to wait out the provisioning lease", async () => {
+        const deferred = await fixture.pool.query(
+          `SELECT 1 FROM occ.audit_events
+           WHERE action = 'reconcile' AND resource_kind = 'agent' AND resource_id = $1
+             AND details->>'reasonCode' = 'PROVISIONING_EFFECT_PENDING'`,
+          [target.failed.agentId],
+        );
+        return deferred.rowCount > 0 ? true : undefined;
+      });
+      assert.equal(
+        computeDriver.calls.some(
+          ({ operation, agentId }) =>
+            operation === "deleteAgentRuntimeCredentials" && agentId === target.failed.agentId,
+        ),
+        false,
+      );
       await waitFor(
         "the Agent deletion to finish",
         async () => {
@@ -1227,19 +1244,23 @@ test(
     } finally {
       await fixture.stopWorker();
     }
-    assert.deepEqual(
-      computeDriver.calls
-        .filter(({ operation }) => operation === "deleteAgentRuntimeCredentials")
-        .map(({ agentId }) => agentId),
-      [target.failed.agentId],
+    // The shared database may hold other tests' deleting Agents; count only this one.
+    assert.equal(
+      computeDriver.calls.filter(
+        ({ operation, agentId }) =>
+          operation === "deleteAgentRuntimeCredentials" && agentId === target.failed.agentId,
+      ).length,
+      1,
     );
     const provisioning = await fixture.pool.query(
       "SELECT 1 FROM occ.agent_provisioning_work WHERE work_id = $1",
       [target.admitted.data.provisioning.workId],
     );
     assert.equal(provisioning.rowCount, 0);
-    const namespaceDeletion = await fixture.request("DELETE", `/namespaces/${target.namespace.id}`);
-    assert.equal(namespaceDeletion.status, 202, JSON.stringify(namespaceDeletion.body));
+    const agents = await fixture.pool.query("SELECT 1 FROM occ.agents WHERE namespace_id = $1", [
+      target.namespace.id,
+    ]);
+    assert.equal(agents.rowCount, 0, "no Agent may keep the Namespace non-empty");
   },
 );
 
