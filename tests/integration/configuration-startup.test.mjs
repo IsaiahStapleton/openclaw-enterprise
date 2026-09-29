@@ -54,15 +54,24 @@ test("Installation startup validates the optional external observability URL", a
   });
   assert.equal(loaded.installation.observability.url, configuration.observability.url);
 
-  for (const invalid of ["javascript:alert(1)", "https://user:pass@example.test", "relative"]) {
-    configuration.observability.url = invalid;
+  const url = configuration.observability.url;
+  for (const [observability, message] of [
+    ...[
+      "javascript:alert(1)",
+      "https://user:pass@example.test",
+      "relative",
+      "https://x.example/#f",
+    ].map((invalid) => [{ url: invalid }, /observability\.url/]),
+    [{ url, extra: 1 }, /observability contains unsupported option extra/],
+  ]) {
+    configuration.observability = observability;
     await writeFile(path, JSON.stringify(configuration), "utf8");
     await assert.rejects(
       loadInstallationConfiguration({
         mode: "development",
         environment: { OCC_CONFIG_PATH: path },
       }),
-      /observability\.url/,
+      message,
     );
   }
 });
