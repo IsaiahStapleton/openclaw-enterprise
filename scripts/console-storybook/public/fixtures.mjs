@@ -12,6 +12,13 @@ const candidateRevisionId = "rev_00000000-0000-4000-8000-000000000007";
 const secretRef = (id) => ({ kind: "secret", namespaceId, id });
 const auth = { method: "api_key", source: secretRef("sec_demo_model") };
 
+function initialDeploymentProgress(status) {
+  if (status !== "queued" && status !== "running") {
+    return null;
+  }
+  return { lastAttempt: null, nextAttemptAt: status === "queued" ? createdAt : null };
+}
+
 function slackChannels(scenario) {
   if (scenario.slackChannels !== undefined) {
     return structuredClone(scenario.slackChannels);
@@ -250,6 +257,7 @@ export function installFixture(scenario, evidence) {
       namespaceId,
       agentId: agent.id,
       status: "succeeded",
+      progress: null,
       error: null,
       warnings: [],
     });
@@ -262,6 +270,13 @@ export function installFixture(scenario, evidence) {
         namespaceId,
         agentId: agent.id,
         status: scenario.candidateDeploymentStatus,
+        progress: ["queued", "running"].includes(scenario.candidateDeploymentStatus)
+          ? {
+              lastAttempt: scenario.deploymentLastAttempt ?? null,
+              nextAttemptAt:
+                scenario.candidateDeploymentStatus === "queued" ? "2026-09-26T22:53:01.000Z" : null,
+            }
+          : null,
         error:
           scenario.candidateDeploymentStatus === "failed"
             ? scenario.candidateSelected
@@ -651,6 +666,7 @@ export function installFixture(scenario, evidence) {
           namespaceId,
           agentId: saved.id,
           status: scenario.provisionedDeploymentStatus ?? "queued",
+          progress: initialDeploymentProgress(scenario.provisionedDeploymentStatus ?? "queued"),
           reads: scenario.provisionedDeploymentStatus === undefined ? 0 : undefined,
           error:
             scenario.provisionedDeploymentStatus === "failed"
@@ -822,6 +838,7 @@ export function installFixture(scenario, evidence) {
             namespaceId,
             agentId: id,
             status: "queued",
+            progress: initialDeploymentProgress("queued"),
             reads: 0,
             error: null,
             warnings: [],
@@ -901,10 +918,12 @@ export function installFixture(scenario, evidence) {
           }
           if (deployment.reads !== undefined && ++deployment.reads > 1) {
             deployment.status = "succeeded";
+            deployment.progress = null;
             saved.desiredRuntimeState = "running";
             saved.activeRevisionId = deployment.deploymentId;
           }
-          return response(deployment);
+          const { reads: _reads, ...status } = deployment;
+          return response(status);
         }
         if (suffix.startsWith("/workspace/files/")) {
           const filename = decodeURIComponent(suffix.split("/").at(-1));

@@ -3297,6 +3297,7 @@ test("Agent detail separates the current version, viewed version, and latest dep
   const requests = apiRequests(page, fixture.origin);
   // The in-memory API fixture has no worker records. Supply contract-shaped status
   // reads to prove the UI keeps each version's outcome tied to its exact ID.
+  let pendingProgress = { lastAttempt: null, nextAttemptAt: "2026-09-27T12:00:00.000Z" };
   for (const [revisionId, status] of [
     [current.revision.id, "succeeded"],
     [pending.id, "queued"],
@@ -3315,6 +3316,7 @@ test("Agent detail separates the current version, viewed version, and latest dep
               status,
               error: null,
               warnings: [],
+              progress: status === "queued" ? pendingProgress : null,
             },
             meta: { requestId: "req_test_deployment_activity" },
           }),
@@ -3360,6 +3362,22 @@ test("Agent detail separates the current version, viewed version, and latest dep
   await activity.getByText("Most recent visible deployment · v2").waitFor();
   await activity.getByText("Recorded status: queued").waitFor();
   await activity.getByText("Waiting for a worker claim.").waitFor();
+  await activity.getByText("No reconciliation result is available yet.").waitFor();
+  // Simulate a subsequent status read. Persistence and attribution are proved
+  // separately by the PostgreSQL queue/worker test, not by this browser fixture.
+  pendingProgress = {
+    lastAttempt: {
+      at: "2026-09-27T12:01:00.000Z",
+      code: "REVISION_INCOMPLETE",
+      message: "Waiting for the runtime to become ready.",
+    },
+    nextAttemptAt: "2026-09-27T12:01:01.000Z",
+  };
+  await activity.getByRole("button", { name: "Refresh deployment" }).click();
+  await activity.getByText("Waiting to continue deployment.").waitFor();
+  await activity.getByText("Waiting for the runtime to become ready.").waitFor();
+  await activity.getByText("Last checked", { exact: true }).waitFor();
+  assert.equal(await activity.getByText("Waiting for a worker claim.").count(), 0);
   await activity.getByText("Successful completion is not recorded yet.").waitFor();
   const versionRecord = page.locator(".version-deployment-record");
   await versionRecord.getByRole("heading", { name: "This version’s deployment record" }).waitFor();

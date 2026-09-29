@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
 updated: 2026-09-28
-last_updated_session: authoring-run/b7089bf7-3566-4ce4-a761-d0e9fc197f6f
+last_updated_session: 01a0eb85-73a8-7572-92a9-a6a06fbdf0a5
 ---
 
 # Controller Worker Flow
@@ -294,23 +294,25 @@ Other failure reasons still reject data.
 `PostgresWorkQueue.complete` and `PostgresWorkQueue.fail` publish only under the
 live claim; deployment status derives `error` and `warnings` from that result.
 Completion needs no runtime receipt acknowledgment or post-commit cleanup.
-Maintenance cannot rewrite the completed deployment's historical startup warnings.
+Maintenance cannot rewrite deployment warnings.
 
-Deployment GET requires exact revision `read` and uses durable state that survives
-Pod deletion and controller restart. Queued, running, and successful deployments
-have no failure error. See [deployment status](../reference/agents.md#deployment-status).
+See [deployment status](../reference/agents.md#deployment-status) for authorization
+and persisted result semantics.
+
+Indexed `workId` scopes progress to work; maintenance and unbound history cannot
+supply it. `getDeploymentStatus` reads
+`findWorkAttempt` with the work row in one State snapshot and projects fixed
+public explanations. Memory State has no attempt.
 
 Legacy terminal rows derive `reason_code` from matching activation or terminal
 reconcile audit evidence, otherwise `LEGACY_OUTCOME_UNKNOWN`. Their
 `result_data` remains `NULL`; pending rows have no terminal outcome.
 
-If Compute declares a maintenance interval, activation schedules another
-exact-revision observation. An incomplete observation or Compute binding closes
-the bounded item and schedules another, so a provider outage does not abandon
-reconciliation of an authorized active runtime.
-Each new claim reauthorizes its original actor. The next maintenance key uses a
-strictly later time bucket than the current claim, preventing clock skew from
-colliding with completed work and silently dropping its successor.
+If Compute declares maintenance, activation schedules exact-revision observations.
+Incomplete observations or Compute bindings close the bounded item and schedule
+another, preserving authorized-runtime reconciliation through outages. Each claim
+reauthorizes its original actor. Successor keys use strictly later time buckets
+to prevent clock-skew collisions with completed work.
 
 `worker.completed` reports the target, outcome, and code; polling then continues.
 Lease loss is reported as `worker.error` with `CLAIM_LOST` rather than publishing
@@ -362,6 +364,8 @@ final-attempt crashes from stranding provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 22:10: Expose exact-work pending reconciliation results through deployment status and the Console. (01a0eb85-73a8-7572-92a9-a6a06fbdf0a5 - 0aedecfd)
 
 - 2026-09-28 21:25: Apply the Driver interval to every incomplete repository cleanup pass. (authoring-run/b7089bf7-3566-4ce4-a761-d0e9fc197f6f - 8352c093)
 

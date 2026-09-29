@@ -56,7 +56,7 @@ import {
   ResourceConflictError,
   ScopeViolationError,
 } from "../errors.ts";
-import type { ControllerWork } from "./controller-work.ts";
+import type { ControllerWork, ControllerWorkAttempt } from "./controller-work.ts";
 import type {
   AgentProvisioningReadRepository,
   AgentProvisioningRepository,
@@ -590,6 +590,7 @@ export type PlatformOperation =
 export interface PlatformOperationReadRepository {
   list(): Promise<readonly Readonly<PlatformOperation>[]>;
   findWork(idempotencyKey: string): Promise<Readonly<ControllerWork> | undefined>;
+  findWorkAttempt(idempotencyKey: string): Promise<Readonly<ControllerWorkAttempt> | undefined>;
 }
 
 export interface PlatformOperationRepository extends PlatformOperationReadRepository {
@@ -2233,6 +2234,7 @@ function repositories(snapshot: PlatformSnapshot): PlatformUnitOfWork {
         Object.freeze(snapshot.operations.map((operation) => immutableCopy(operation))),
       // The in-memory operation log has no executing or terminal work records.
       retryFailedAgentDeletion: async () => false,
+      findWorkAttempt: async () => undefined,
       findWork: async (idempotencyKey) => {
         const operation = snapshot.operations.find(
           (candidate) => operationIdempotencyKey(candidate) === idempotencyKey,
