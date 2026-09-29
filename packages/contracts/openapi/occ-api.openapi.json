@@ -3246,7 +3246,7 @@
         ]
       },
       "post": {
-        "description": "Requires a current human Native IAM Installation administrator and trusted Origin. The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.",
+        "description": "Requires a current human Native IAM Installation administrator and trusted Origin who holds every IAM grant of the current holder's Principal (else 403). The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.",
         "operationId": "replaceAuthRecovery",
         "requestBody": {
           "content": {

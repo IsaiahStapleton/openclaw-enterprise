@@ -125,5 +125,38 @@ test(
     assert.equal(signedIn.callback.headers.location, "/console/", signedIn.callback.body);
     const cookie = cookieHeaderFromSetCookie(signedIn.callback.headers["set-cookie"]);
     assert.equal((await currentSession(app, cookie)).user.id, limited.id);
+
+    // Taking the recovery designation acts against its holder: disabling a holder returns 409,
+    // so a narrower administrator must not move it onto itself and lock the broader one out.
+    const recoveryHolder = async () =>
+      (await app.inject({ url: "/api/auth/recovery", headers: adminHeaders })).json().data.userId;
+    const moveRecovery = async (headers, userId, expectedCurrentUserId) =>
+      post(headers, "/api/auth/recovery", {
+        userId,
+        expectedCurrentUserId,
+        expectedVersion: (await readAccount(app, adminHeaders, userId)).version,
+      });
+    // Attaching GitHub revoked the earlier password session.
+    let limitedAgain = await signedInHeaders(app, origin, limited, address());
+    const taken = await moveRecovery(limitedAgain, limited.id, admin.id);
+    assert.equal(taken.statusCode, 403, taken.body);
+    assert.equal(taken.json().error.code, "FORBIDDEN");
+    assert.equal(await recoveryHolder(), admin.id);
+    const disabled = await post(adminHeaders, `/api/auth/accounts/${limited.id}/disable`, {
+      expectedVersion: (await readAccount(app, adminHeaders, limited.id)).version,
+    });
+    assert.equal(disabled.statusCode, 200, disabled.body);
+    const enabled = await post(adminHeaders, `/api/auth/accounts/${limited.id}/enable`, {
+      expectedVersion: (await readAccount(app, adminHeaders, limited.id)).version,
+    });
+    assert.equal(enabled.statusCode, 200, enabled.body);
+
+    // Among accounts it covers, the narrower administrator still moves the designation.
+    const given = await moveRecovery(adminHeaders, limited.id, admin.id);
+    assert.equal(given.statusCode, 200, given.body);
+    limitedAgain = await signedInHeaders(app, origin, limited, address());
+    const returned = await moveRecovery(limitedAgain, admin.id, limited.id);
+    assert.equal(returned.statusCode, 200, returned.body);
+    assert.equal(await recoveryHolder(), admin.id);
   },
 );

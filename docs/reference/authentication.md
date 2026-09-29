@@ -171,7 +171,7 @@ repository grants, and gives no provider credentials to repository consumers or 
 
 A new client ID requires reattachment under a new provider instance; then detach
 old methods by `methodId`. Secret rotation preserves enrollment and invalidates
-pending attempts. Emails and login names are not identity keys.
+pending attempts.
 
 A human Installation administrator reads `GET /api/auth/accounts/:userId`
 ([requirements](#session-and-recovery-controls)). Its no-store response
@@ -217,7 +217,8 @@ it. Password login never depends on GitHub.
 
 `POST /api/auth/recovery` (`userId`, `expectedCurrentUserId`, target
 `expectedVersion`) moves the designation (`GET` reads it) to another qualifying
-user. The variable, like `auth:maintain activate --recovery-user`, then only
+user. The caller needs every IAM grant of the current holder's Principal (else
+`403`). The variable, like `auth:maintain activate --recovery-user`, then only
 seeds first activation; a differing value warns, and each start re-checks the holder.
 
 Account reads and mutations require a human session, exact `Origin`, and
