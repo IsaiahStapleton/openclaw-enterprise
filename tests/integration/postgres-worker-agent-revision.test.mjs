@@ -50,7 +50,7 @@ async function setup(
   ]);
   const observerPool = new Pool({ connectionString: databaseUrl, max: 8 });
   const createWorkerPool = () => new Pool({ connectionString: databaseUrl, max: 1 });
-  const workerPool = createWorkerPool();
+  let workerPool = createWorkerPool();
   const state = new PostgresPlatformState(observerPool);
   const installation = await ensureInstallation(state, "revision-worker");
   const actor = authorizedPrincipal(await state.loadNativeIAMState(), [
@@ -311,6 +311,8 @@ async function setup(
   async function stop() {
     if (worker !== undefined) {
       await worker.stop();
+      worker = undefined;
+      workerPool = createWorkerPool();
     }
   }
 
@@ -904,7 +906,7 @@ test(
     });
 
     // A provider retirement response can be lost after the remote effect. Only
-    // the service's eventual DISPOSED observation permits physical deletion.
+    // the service's eventual DISPOSED observation settles retained cleanup.
     const pendingOwner = await fixture.agent("repository-pending-deletion");
     const pendingRevision = await fixture.revision(
       pendingOwner,
@@ -941,50 +943,42 @@ test(
     const provider = credentials.repositories[0].github;
     assert.equal(provider.issuesOfTokens.length, 1);
     provider.disconnectAfterMutation("DELETE", "/installation/token");
-    const deletion = await fixture.requestDeletion(pendingOwner);
-    await waitFor("pending cleanup to defer deletion after Compute retirement", async () =>
-      retired.includes(pendingRevision.id) &&
-      events.some(
-        (event) =>
-          event.workId === deletion.idempotencyKey && event.code === "REPOSITORY_CLEANUP_PENDING",
-      )
-        ? true
-        : undefined,
+    await fixture.requestDeletion(pendingOwner);
+    await waitFor(
+      "Agent deletion to complete while repository cleanup remains pending",
+      async () =>
+        retired.includes(pendingRevision.id) &&
+        (await fixture.state.read((view) =>
+          view.agents.findAgent(fixture.namespace.id, pendingOwner.id),
+        )) === undefined
+          ? true
+          : undefined,
     );
-    assert.equal(
-      (await driver.status(pendingMaterial.sessionId, new AbortController().signal)).state,
-      "CLOSED",
-    );
+    await waitFor("independent cleanup to close the deleted Agent's broker session", async () => {
+      const status = await driver.status(pendingMaterial.sessionId, new AbortController().signal);
+      return status?.state === "CLOSED" ? true : undefined;
+    });
     const [pendingAttempt] = await repositoryAttempts(fixture, pendingRevision);
     assert.equal(pendingAttempt.phase, "closing");
-    assert.equal(pendingAttempt.liveRevisionId, pendingRevision.id);
-    assert.equal(
-      (
-        await fixture.state.read((view) =>
-          view.agents.findAgent(fixture.namespace.id, pendingOwner.id),
-        )
-      ).status,
-      "deleting",
-    );
+    assert.equal(pendingAttempt.liveRevisionId, null);
     assert.equal(
       (
         await fixture.observerPool.query(
-          "SELECT count(*)::integer AS count FROM occ.controller_work WHERE revision_id = $1 AND idempotency_key LIKE $2",
-          [pendingRevision.id, `agent_revision:${pendingRevision.id}:repository_cleanup:%`],
+          "SELECT count(*)::integer AS count FROM occ.controller_work WHERE idempotency_key LIKE $1",
+          [`agent_revision:${pendingRevision.id}:repository_cleanup:%`],
         )
       ).rows[0].count,
       1,
     );
     await clock.advance(3_600_001);
-    await waitFor("settled provider cleanup to release physical deletion", async () =>
-      (await fixture.state.read((view) =>
-        view.agents.findAgent(fixture.namespace.id, pendingOwner.id),
-      )) === undefined
-        ? true
-        : undefined,
-    );
-    const settled = await fixture.state.read((view) =>
-      view.repositorySessions.findAttempt(pendingAttempt.admissionId),
+    const settled = await waitFor(
+      "settled provider cleanup to dispose retained evidence",
+      async () => {
+        const attempt = await fixture.state.read((view) =>
+          view.repositorySessions.findAttempt(pendingAttempt.admissionId),
+        );
+        return attempt?.phase === "disposed" ? attempt : undefined;
+      },
     );
     assert.equal(settled.phase, "disposed");
     assert.equal(settled.liveRevisionId, null);
@@ -2778,6 +2772,180 @@ test(
         reason_code: "AGENT_DELETED",
       },
     ]);
+  },
+);
+
+test(
+  "Agent deletion completes with unresolved repository sessions retained as evidence",
+  requiresPostgres,
+  async (context) => {
+    const repository = repositoryBoundary({ count: 2 });
+    // Release blocked broker calls before setup's worker shutdown hook, including on failure.
+    const cleanupBarrier = Promise.withResolvers();
+    context.after(() => cleanupBarrier.resolve());
+    const fixture = await setup(context, { repoDriver: repository.driver });
+    const pendingOwner = await fixture.agent("delete-repository-unresolved");
+    const missingOwner = await fixture.agent("delete-repository-missing");
+    const pendingRevision = await fixture.revision(pendingOwner, 1, undefined, repository.snapshot);
+    const missingRevision = await fixture.revision(missingOwner, 1);
+    const close = repository.driver.close.bind(repository.driver);
+    repository.driver.close = async (...args) => {
+      await cleanupBarrier.promise;
+      return close(...args);
+    };
+    await fixture.start(fixture.compute);
+    await Promise.all([
+      fixture.work(pendingRevision, "succeeded"),
+      fixture.work(missingRevision, "succeeded"),
+    ]);
+    const opened = await repositoryAttempts(fixture, pendingRevision);
+    assert.deepEqual(
+      opened.map(({ phase, liveRevisionId }) => ({ phase, liveRevisionId })),
+      [
+        { phase: "open", liveRevisionId: pendingRevision.id },
+        { phase: "open", liveRevisionId: pendingRevision.id },
+      ],
+    );
+    await fixture.observerPool.query(
+      `UPDATE occ.repository_session_attempts
+       SET phase = 'invalidated', updated_at = clock_timestamp()
+       WHERE admission_id = $1`,
+      [opened[0].admissionId],
+    );
+    const missingAdmissionId = `missing-${randomUUID()}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.repository_session_attempts
+         (namespace_id, agent_id, revision_id, repository_ref, admission_id,
+          duration_seconds, deadline_wall_ms, phase, session_id, created_at, updated_at,
+          broker_protocol)
+       VALUES ($1, $2, $3, $4, $5, 60, $6, 'opening', NULL, clock_timestamp(),
+          clock_timestamp(), 0)`,
+      [
+        fixture.namespace.id,
+        pendingOwner.id,
+        pendingRevision.id,
+        repository.snapshot.bindings[0].repositoryRef,
+        missingAdmissionId,
+        repository.snapshot.deadlineWallMs,
+      ],
+    );
+    await fixture.stop();
+    await fixture.requestDeletion(pendingOwner);
+    await fixture.requestDeletion(missingOwner);
+    const retireCleanupKey = `agent_revision:${pendingRevision.id}:repository_cleanup:retire:${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.controller_work
+         (idempotency_key, namespace_id, agent_id, revision_id, actor_id,
+          namespace_target, agent_target, state, available_at, attempt_count, created_at,
+          updated_at)
+       VALUES ($1, $2, $3, $4, $5, NULL, NULL, 'queued',
+          clock_timestamp(), 0, clock_timestamp(), clock_timestamp())`,
+      [
+        retireCleanupKey,
+        fixture.namespace.id,
+        pendingOwner.id,
+        pendingRevision.id,
+        fixture.actor.id,
+      ],
+    );
+    await fixture.start(fixture.compute);
+    await waitFor("Agent deletion to finish despite unresolved repository sessions", async () =>
+      (await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, pendingOwner.id),
+      )) === undefined &&
+      (await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, missingOwner.id),
+      )) === undefined
+        ? true
+        : undefined,
+    );
+    await Promise.all([
+      fixture.requestDeletion(pendingOwner).then(
+        () => assert.fail("repeated DELETE after completion should not recreate the Agent"),
+        (error) => assert.match(error.message, /exact Namespace/),
+      ),
+      fixture.requestDeletion(missingOwner).then(
+        () => assert.fail("repeated DELETE after completion should not recreate the Agent"),
+        (error) => assert.match(error.message, /exact Namespace/),
+      ),
+    ]);
+
+    const retained = await repositoryAttempts(fixture, pendingRevision);
+    assert.deepEqual(
+      retained.map(({ phase, liveRevisionId, cleanupContext }) => ({
+        phase,
+        liveRevisionId,
+        repositoryRef: cleanupContext.binding.repositoryRef,
+      })),
+      [
+        {
+          phase: "invalidated",
+          liveRevisionId: null,
+          repositoryRef: repository.snapshot.bindings[0].repositoryRef,
+        },
+        {
+          phase: "closing",
+          liveRevisionId: null,
+          repositoryRef: repository.snapshot.bindings[1].repositoryRef,
+        },
+        {
+          phase: "closing",
+          liveRevisionId: null,
+          repositoryRef: repository.snapshot.bindings[0].repositoryRef,
+        },
+      ],
+    );
+    await waitFor("retained runtime cleanup to claim without live owner", async () => {
+      const { rows } = await fixture.observerPool.query(
+        `SELECT agent_id, revision_id, state
+         FROM occ.controller_work
+         WHERE idempotency_key = $1`,
+        [retireCleanupKey],
+      );
+      return rows[0]?.agent_id === null &&
+        rows[0]?.revision_id === null &&
+        rows[0]?.state === "claimed"
+        ? true
+        : undefined;
+    });
+    assert.equal(
+      retained.some(({ phase }) => phase === "disposed"),
+      false,
+      "deletion must not fabricate disposal for unresolved repository sessions",
+    );
+    const retainedCounts = await fixture.observerPool.query(
+      `SELECT
+         (SELECT count(*)::integer FROM occ.repository_session_attempts
+          WHERE agent_id = $1) AS attempts,
+         (SELECT count(*)::integer FROM occ.agent_revisions
+          WHERE agent_id IN ($1, $2)) AS revisions,
+         (SELECT count(*)::integer FROM occ.controller_work
+          WHERE agent_id IN ($1, $2) OR idempotency_key LIKE $3) AS work`,
+      [
+        pendingOwner.id,
+        missingOwner.id,
+        `agent_revision:${pendingRevision.id}:repository_cleanup:%`,
+      ],
+    );
+    assert.deepEqual(retainedCounts.rows, [{ attempts: 3, revisions: 0, work: 2 }]);
+    cleanupBarrier.resolve();
+    await waitFor("retained repository cleanup to run after Agent deletion", async () => {
+      const afterCleanup = await repositoryAttempts(fixture, pendingRevision);
+      return afterCleanup.some(
+        ({ phase, repositoryRef, liveRevisionId }) =>
+          repositoryRef === repository.snapshot.bindings[1].repositoryRef &&
+          phase === "disposed" &&
+          liveRevisionId === null,
+      )
+        ? true
+        : undefined;
+    });
+    const missing = await fixture.state.read((view) =>
+      view.repositorySessions.findAttempt(missingAdmissionId),
+    );
+    assert.equal(missing.phase, "invalidated");
+    assert.equal(missing.liveRevisionId, null);
+    assert.equal(missing.sessionId, undefined);
   },
 );
 

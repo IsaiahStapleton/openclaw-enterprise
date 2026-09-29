@@ -1686,10 +1686,8 @@ for (const transition of ["fail", "retry", "expired claim", "exhausted queued"])
         );
         await assert.rejects(queue.enqueueRepositoryCleanup(claim, sibling));
         await assert.rejects(queue.enqueueRepositoryCleanup(claim, later));
-        assert.equal(
-          await queue.completeAgentDeletion(claim, namespaceId, agents[0]),
-          "cleanup-pending",
-        );
+        // Teardown fails before finalization; unresolved sessions no longer
+        // prevent successful finalization from deleting this Agent.
         if (transition === "expired claim") {
           await pool.query(
             "UPDATE occ.controller_work SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE idempotency_key = $1",
@@ -1729,6 +1727,80 @@ for (const transition of ["fail", "retry", "expired claim", "exhausted queued"])
     },
   );
 }
+
+test(
+  "deleted Agent repository cleanup audit retains the exact revision target",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue } = await dependencies(context);
+    const { namespaceId, agents } = await createResources(pool);
+    const owner = await createRepositoryRevision(pool, namespaceId, agents[0], ["closing"]);
+    const sourceKey = `agent-delete-cleanup-audit:${randomUUID()}`;
+    const actorId = `principal-deletion-audit-${randomUUID()}`;
+    await queue.enqueue({
+      namespaceId,
+      agentId: agents[0],
+      agentTarget: "deleted",
+      idempotencyKey: sourceKey,
+      actorId,
+      availableAt: new Date(0),
+    });
+    await pool.query(
+      "UPDATE occ.agents SET desired_runtime_state = 'stopped', status = 'deleting' WHERE id = $1",
+      [agents[0]],
+    );
+    const deletion = await claimExpected(queue, sourceKey);
+    const registered = await queue.enqueueRepositoryCleanup(deletion, owner);
+    assert.ok(registered);
+    assert.equal(registered.agentId, agents[0]);
+    assert.equal(registered.revisionId, owner.revisionId);
+
+    assert.equal(await queue.completeAgentDeletion(deletion, namespaceId, agents[0]), "completed");
+    const removedOwner = await pool.query(
+      `SELECT
+         EXISTS (SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2) AS agent_exists,
+         EXISTS (SELECT 1 FROM occ.agent_revisions WHERE namespace_id = $1 AND id = $3) AS revision_exists`,
+      [namespaceId, agents[0], owner.revisionId],
+    );
+    assert.deepEqual(removedOwner.rows[0], { agent_exists: false, revision_exists: false });
+
+    const detached = await pool.query(
+      `SELECT agent_id, revision_id
+       FROM occ.controller_work
+       WHERE idempotency_key = $1`,
+      [registered.idempotencyKey],
+    );
+    assert.deepEqual(detached.rows, [{ agent_id: null, revision_id: null }]);
+
+    const cleanup = await claimExpected(queue, registered.idempotencyKey);
+    assert.equal(cleanup.agentId, undefined);
+    assert.equal(cleanup.revisionId, undefined);
+    await queue.defer(cleanup, { code: "REPOSITORY_CLEANUP_PENDING" });
+    const evidence = await pool.query(
+      `SELECT namespace_id, resource_kind, resource_id, actor_id, outcome,
+              details->>'reasonCode' AS reason
+       FROM occ.audit_events
+       WHERE actor_id = $1
+         AND action = 'reconcile'
+         AND details->>'reasonCode' = 'REPOSITORY_CLEANUP_PENDING'`,
+      [actorId],
+    );
+    assert.deepEqual(evidence.rows, [
+      {
+        namespace_id: namespaceId,
+        resource_kind: "agent_revision",
+        resource_id: owner.revisionId,
+        actor_id: actorId,
+        outcome: "success",
+        reason: "REPOSITORY_CLEANUP_PENDING",
+      },
+    ]);
+    await pool.query(
+      "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",
+      [registered.idempotencyKey],
+    );
+  },
+);
 
 for (const desiredState of ["stopped", "running"]) {
   test(

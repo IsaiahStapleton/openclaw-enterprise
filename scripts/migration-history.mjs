@@ -122,6 +122,9 @@ function classifyReceipts(receipts, manifest) {
         return "preBrokerReceipts";
       }
       if (receipts.length === 35) {
+        return "preAgentDeletion";
+      }
+      if (receipts.length === 36) {
         return "preOAuth";
       }
       return "providerCompleted";
@@ -169,6 +172,9 @@ function classifyReceipts(receipts, manifest) {
     return "preBrokerReceipts";
   }
   if (receipts.length === 35) {
+    return "preAgentDeletion";
+  }
+  if (receipts.length === 36) {
     return "preOAuth";
   }
   refuse("an incomplete or unsupported development history is installed");

@@ -48,7 +48,11 @@ graph TD
   G -->|embedded API key| H["Create or replace shared gateway with projected key"]
   G -->|dedicated key or account| I["Only Codex receives model credential"]
   I --> J{"Login and primary model turn succeed?"}
-  J -->|no| K["Candidate remains unready"]
+  J -->|first model subprocess timeout| P["Wait one second within startup budget"]
+  P --> Q{"Second model probe succeeds?"}
+  Q -->|yes| L
+  Q -->|no| K["Candidate remains unready"]
+  J -->|login or nonretryable failure| K
   J -->|yes| L["Runtime readiness and guarded activation"]
   H --> M{"Native primary model probe succeeds?"}
   M -->|no| N["Gateway stays unready; replacement may interrupt service"]
@@ -181,6 +185,14 @@ and configuration, disables execution and external tools, and applies read-only
 filesystem policy without approval grants. Tool events fail the probe. Login
 state remains in the bounded ephemeral home.
 
+`startAuthenticatedCodex` gives `probeCodexAuthentication` a maximum of two
+attempts within one monotonic 61-second budget. Only the subprocess's
+`ETIMEDOUT` result schedules the second attempt after a one-second timer; an
+unexplained `SIGKILL` is a nonretryable failure. The next process timeout is the
+smaller of 30 seconds and the remaining budget. No termination handler is
+installed during the delay, so stopping the launcher prevents the second call.
+Only successful validation starts the app-server and publishes readiness.
+
 Embedded OpenClaw consumes the selected provider's native API key and runs one bounded native
 primary-model probe in the actual gateway startup, with tools and fallback
 disabled. Its 16-token output limit meets the provider's minimum request size.
@@ -191,9 +203,11 @@ credentials or provider failure hold the replacement unready, leaving the Agent
 unavailable until repair and restart or a new deployment. No automatic rollback
 restores the predecessor.
 
-Both runtimes capture native output and hold failed probes unready with a fixed
-message. Readiness polling does not repeat provider calls; restart or deployment
-starts another attempt. These requests may incur usage charges and check only the
+Both runtimes capture native output and hold final failures unready with a fixed
+message. Codex additionally logs allowlisted per-attempt timing, exit classification,
+and outcome, without raw output. It publishes the existing runtime failure only
+after retry exhaustion or a nonretryable result. Readiness polling does not repeat
+provider calls; restart or deployment starts a new bounded startup check. These requests may incur usage charges and check only the
 primary model. See [probe limitations](../reference/harness-execution.md#harness-authentication).
 
 The [existing activation and recovery flow](harness-execution-topology.md#3-publish-safely-and-complete-activation-once)
@@ -233,6 +247,11 @@ The source seal prevents ordinary Secret updates from resetting custody.
 
 ## Debugging and Verification
 
+- [Container launcher tests](../testing/docker.md#verify-codex-startup-probe-recovery)
+  execute the generated launcher with a fixture CLI, real process timeouts,
+  termination, and status reads. They prove recovery control flow, not provider
+  acceptance. Inspect `codex.model_probe` logs for attempt and final-code evidence.
+
 - `node --test tests/integration/harness-topology-k3d-real.test.mjs` with
   `OCC_TEST_HARNESS_K3D_REAL=1` exercises the regular API binding/deploy path with
   disposable Kubernetes/PostgreSQL, genuine images, and an authorized API key.
@@ -262,7 +281,11 @@ The source seal prevents ordinary Secret updates from resetting custody.
 
 ## Changelog
 
+- 2026-09-29 03:12: Preserve persistent OAuth startup alongside bounded model-probe timeout recovery in the merge integration. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 64610f19dfec8996acab483c7bb4916be36a31a1)
+
 - 2026-09-29 03:01: Keep OAuth source custody on control and bootstrap storage on execution when integrating explicit Kubernetes namespace addresses. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 7f02154e282919a033f7600daaf9f86972d21ac2)
+
+- 2026-09-28 18:45: Document bounded Codex model-probe recovery and sanitized attempt evidence in the accompanying change. (authoring-run/3b7cc615-9e7b-416a-aec7-fe13c38cace1 - a14435c81e0d4020dd24568babddf95aba533da7)
 
 - 2026-09-28 04:28: Add device acquisition, catalog use, and one-time persistent OAuth handoff in the accompanying change. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - ae31581574744bea2745066f189eea6e826fe823)
 

@@ -320,9 +320,10 @@ Compute, retires all revisions, and removes runtime credentials. It then
 atomically deletes the Agent, revisions, service principal, its API keys, and
 exact IAM bindings and restrictions. Kubernetes retirement waits for owned Pods
 and removes owned artifacts, including workspace data. Namespace Configurations
-and Secrets survive. Successful deletion releases the Agent's name.
+and Secrets survive. Deletion releases its name;
+[repository cleanup](repository-credentials.md#repo-driver-contract) continues independently.
 
-Cleanup retries are bounded. After permanent failure or exhaustion, the Agent
+Teardown retries are bounded. After permanent failure or exhaustion, the Agent
 stays `deleting`. Once the cause is corrected, the initiating caller can repeat
 DELETE to replenish the attempt budget. OCC and the worker recheck permission;
 another actor cannot take over. Work identity and prior failure audits remain,

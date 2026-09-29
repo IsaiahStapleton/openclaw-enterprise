@@ -235,6 +235,7 @@ export {
   PostgresWorkQueue,
   WorkClaimLostError,
   isRepositoryCleanupWork,
+  repositoryCleanupRevisionId,
   isRepositoryRuntimeRetirementWork,
   type ClaimedWork,
   type ClaimRequest,
