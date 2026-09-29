@@ -653,8 +653,7 @@ export const repositorySessionAttempts = occSchema.table(
       .onDelete("restrict"),
     check(
       "repository_session_attempts_live_revision_valid",
-      sql`(${table.liveRevisionId} IS NOT NULL AND ${table.liveRevisionId} = ${table.revisionId})
-        OR (${table.liveRevisionId} IS NULL AND ${table.phase} = 'disposed')`,
+      sql`${table.liveRevisionId} IS NULL OR ${table.liveRevisionId} = ${table.revisionId}`,
     ),
     check(
       "repository_session_attempts_cleanup_context_valid",
@@ -1011,6 +1010,10 @@ export const controllerWork = occSchema.table(
         OR (${table.workKind} = 'provisioning' AND ${table.agentId} IS NULL
           AND ${table.revisionId} IS NULL AND ${table.namespaceTarget} IS NULL
           AND ${table.agentTarget} IS NULL)
+        OR (${table.workKind} = 'lifecycle' AND ${table.agentId} IS NULL
+          AND ${table.revisionId} IS NULL AND ${table.namespaceTarget} IS NULL
+          AND ${table.agentTarget} IS NULL
+          AND ${table.idempotencyKey} ~ '^agent_revision:rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:repository_cleanup:(retire:)?[0-9a-f]{64}$')
       )`,
     ),
     check(
