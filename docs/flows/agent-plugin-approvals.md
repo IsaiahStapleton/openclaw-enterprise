@@ -1,7 +1,7 @@
 ---
 created: 2026-09-27
 updated: 2026-09-29
-last_updated_session: 01a0d4f7-8085-70e0-9d0c-69a465a81fe3
+last_updated_session: authoring-run/b28f3746-f8be-4f03-9f5e-33cf08d9a535
 ---
 
 # Agent Plugin Approvals Flow
@@ -50,7 +50,9 @@ graph TD
 Agent `pluginApprovers` supplies the default. A plugin's `approvers` replaces
 the default; a tool's `approvers` replaces the plugin list. Omission inherits
 and `[]` denies Slack approvers at that scope. The selected PluginDriver
-validates supported identities before OCC saves the Agent. Deploying the Agent
+validates supported identities before OCC saves the Agent. The Codex
+PluginDriver rejects plugin and tool approvers because Codex approval requests
+carry no plugin or tool identity; it accepts only the Agent default. Deploying the Agent
 records the current default and selection map in an immutable AgentRevision.
 Later edits do not change the admitted revision.
 An Agent update sends `pluginApprovers: null` to remove a previously saved
@@ -117,6 +119,8 @@ owns each subsequent request-time approval decision.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 09:30: Reject Codex plugin and tool approvers at admission. (authoring-run/b28f3746-f8be-4f03-9f5e-33cf08d9a535 - d040b86dd780e7a9ac3bbbacf1646203881e2990)
 
 - 2026-09-29 00:11: Check gateway approval compatibility and omit inactive Slack policy. (01a0d4f7-8085-70e0-9d0c-69a465a81fe3 - 33a2528163d5bbff311bb685345e60aadb24a70a)
 

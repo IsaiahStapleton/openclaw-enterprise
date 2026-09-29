@@ -51,6 +51,10 @@ const fixtureLanes = new Set([
   "k3d-fixture-plugins",
 ]);
 const nativeIAMBarrierFile = "tests/integration/postgres-native-iam-policy-barrier.test.mjs";
+const productionUpgradeImages = {
+  OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE: "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+  OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE: "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+};
 
 function laneDefinition(name) {
   return laneDefinitions[name] ?? {};
@@ -248,6 +252,22 @@ async function readState(path) {
 }
 
 const stateWrites = new Map();
+
+// The Codex version the runtime image pins; seccomp preparation verifies the
+// image's `codex --version` against it, so it must not drift from the Dockerfile.
+async function kubernetesCodexVersion(env) {
+  const override =
+    env.OCC_TEST_KUBERNETES_CODEX_VERSION ?? process.env.OCC_TEST_KUBERNETES_CODEX_VERSION;
+  if (override) {
+    return override;
+  }
+  const dockerfile = await readFile(runtimeDockerfile, "utf8");
+  const match = /^ENV OPENAI_CODEX_VERSION=(\S+)$/m.exec(dockerfile);
+  if (!match) {
+    throw new Error(`${runtimeDockerfile} does not pin OPENAI_CODEX_VERSION.`);
+  }
+  return match[1];
+}
 
 async function writeState(path, state) {
   // Concurrent preparation must never publish an older cleanup inventory after
@@ -606,7 +626,37 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
       prepare.mode0600Description ?? prepare.mode0600Env,
     );
   }
+  if (name === "production-tui") {
+    const candidates = Object.keys(productionUpgradeImages);
+    if (candidates.some((variable) => effectiveEnv[variable])) {
+      const baselines = Object.values(productionUpgradeImages);
+      assertImmutableEnvImages([...baselines, ...candidates], effectiveEnv);
+      for (let index = 0; index < baselines.length; index++) {
+        if (
+          effectiveEnv[baselines[index]].split(/@sha256:/i)[1].toLowerCase() ===
+          effectiveEnv[candidates[index]].split(/@sha256:/i)[1].toLowerCase()
+        ) {
+          throw new Error(
+            `${candidates[index]} must select a different digest from ${baselines[index]}.`,
+          );
+        }
+      }
+    } else {
+      assertNodeBaseImage(effectiveEnv.NODE_BASE_IMAGE);
+    }
+  }
   if (name === "repository-credentials-installed") {
+    const imageMode = effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE || "source";
+    if (imageMode === "release") {
+      assertImmutableEnvImages(
+        ["OCC_TEST_PRODUCTION_CONTROLLER_IMAGE", "OCC_TEST_KUBERNETES_RUNTIME_IMAGE"],
+        effectiveEnv,
+      );
+    } else if (imageMode === "source") {
+      assertNodeBaseImage(effectiveEnv.NODE_BASE_IMAGE);
+    } else {
+      throw new Error("OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE must be source or release.");
+    }
     if (effectiveEnv.OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED !== "1") {
       throw new Error(
         "Installed repository qualification requires explicit write and cleanup authorization.",
@@ -1541,10 +1591,7 @@ async function prepareK3dRuntimeImages(
       image: env.OCC_TEST_KUBERNETES_AGENT_IMAGE,
       execFile,
       kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
-      codexVersion:
-        env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.158.0",
+      codexVersion: await kubernetesCodexVersion(env),
     });
     env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
     cluster.codexSeccompProfile = seccomp.profileName;
@@ -1570,16 +1617,14 @@ async function prepareImagesPackagingCodexSeccompProfile(statePath, state, env) 
     state.lane,
     "Deriving the reviewed Codex seccomp profile for native runtime image smoke tests.",
   );
+  const codexVersion = await kubernetesCodexVersion(env);
   const seccomp = await timedPreparation(state.lane, "codex-seccomp-profile", () =>
     prepareCodexSeccompProfile({
       cluster,
       image: runtimeImage.reference,
       execFile,
       kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
-      codexVersion:
-        env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.158.0",
+      codexVersion,
     }),
   );
   if (!seccomp.dockerProfilePath || !isAbsolute(seccomp.dockerProfilePath)) {
@@ -1625,15 +1670,19 @@ async function prepareProductionImages(
   state,
   cluster,
   env,
-  { localStore = false } = {},
+  { localStore = false, sourceImages } = {},
 ) {
-  const built = await buildRuntimeImages(statePath, state, {
-    controller: true,
-    runtime: true,
-    nodeBaseImage: effectiveLaneEnv(state.lane, env).NODE_BASE_IMAGE,
-    localStore,
-  });
-  Object.assign(env, built.env);
+  if (sourceImages) {
+    Object.assign(env, sourceImages);
+  } else {
+    const built = await buildRuntimeImages(statePath, state, {
+      controller: true,
+      runtime: true,
+      nodeBaseImage: effectiveLaneEnv(state.lane, env).NODE_BASE_IMAGE,
+      localStore,
+    });
+    Object.assign(env, built.env);
+  }
   env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = (
     await registerImageInK3d(
       statePath,
@@ -1961,7 +2010,18 @@ async function prepareLane({ lane, statePath }) {
       Object.assign(env, routing.env);
       env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
-      await prepareProductionImages(resolvedStatePath, state, cluster, env, { localStore: true });
+      const inputs = effectiveLaneEnv(name, env);
+      const sourceImages =
+        inputs.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE === "release"
+          ? {
+              OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: inputs.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE,
+              OCC_TEST_KUBERNETES_RUNTIME_IMAGE: inputs.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
+            }
+          : undefined;
+      await prepareProductionImages(resolvedStatePath, state, cluster, env, {
+        localStore: true,
+        sourceImages,
+      });
       env.OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE = (
         await registerImageInK3d(
           resolvedStatePath,
@@ -1971,6 +2031,18 @@ async function prepareLane({ lane, statePath }) {
           "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
         )
       ).reference;
+      progress(name, "Deriving and installing the dedicated Codex seccomp profile.");
+      const seccomp = await prepareCodexSeccompProfile({
+        cluster,
+        image: env.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
+        execFile,
+        kubectl: cluster.kubectl ?? process.env.OCC_KUBECTL_BIN ?? "kubectl",
+        codexVersion: await kubernetesCodexVersion(env),
+      });
+      env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
+      cluster.codexSeccompProfile = seccomp.profileName;
+      cluster.codexSeccompProfiles = seccomp.nodes;
+      await writeState(resolvedStatePath, state);
       if (process.env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY) {
         env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY =
           process.env.OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY;
@@ -2007,7 +2079,35 @@ async function prepareLane({ lane, statePath }) {
       const cluster = await ensureK3dCluster(resolvedStatePath, state);
       env.OCC_TEST_KUBERNETES_KUBECONFIG = cluster.kubeconfig;
       env.OCC_TEST_KUBERNETES_CONTEXT = cluster.context;
-      await prepareProductionImages(resolvedStatePath, state, cluster, env);
+      const inputs = effectiveLaneEnv(name, env);
+      const upgradeSelected = Object.keys(productionUpgradeImages).some(
+        (variable) => inputs[variable],
+      );
+      const sourceImages = upgradeSelected
+        ? {
+            OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: inputs.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE,
+            OCC_TEST_KUBERNETES_RUNTIME_IMAGE: inputs.OCC_TEST_KUBERNETES_RUNTIME_IMAGE,
+          }
+        : undefined;
+      await prepareProductionImages(resolvedStatePath, state, cluster, env, { sourceImages });
+      if (upgradeSelected) {
+        for (const [variable, baseline] of Object.entries(productionUpgradeImages)) {
+          const imported = await registerImageInK3d(
+            resolvedStatePath,
+            state,
+            cluster,
+            inputs[variable],
+            variable,
+          );
+          const baselineImage = state.resources.find(
+            (resource) => resource.kind === "k3d-image" && resource.reference === env[baseline],
+          );
+          if (!baselineImage || imported.hostImageId === baselineImage.hostImageId) {
+            throw new Error(`${variable} must contain a different image from ${baseline}.`);
+          }
+          env[variable] = imported.reference;
+        }
+      }
       await prepareLaneLogging(resolvedStatePath, state, env, cluster);
       break;
     }
@@ -2084,6 +2184,31 @@ async function prepareFile({ lane, file, statePath }) {
   const env = baseEnv(resolvedStatePath, effectiveState);
   const resourceIds = [];
 
+  if (name === "production-tui" && state) {
+    const inputs = effectiveLaneEnv(name);
+    const variables = Object.keys(productionUpgradeImages);
+    const selected = variables.some((variable) => inputs[variable]);
+    const prepared = variables.some((variable) => state.env?.[variable]);
+    if (state.lane !== name || selected !== prepared) {
+      throw new Error("Production upgrade inputs must match the prepared lane state.");
+    }
+    if (selected) {
+      for (const variable of [...Object.values(productionUpgradeImages), ...variables]) {
+        if (
+          !state.resources.some(
+            (resource) =>
+              resource.kind === "k3d-image" &&
+              resource.sourceImage === inputs[variable] &&
+              resource.reference === state.env[variable] &&
+              resource.status === "ready",
+          )
+        ) {
+          throw new Error(`${variable} must match the prepared lane state.`);
+        }
+      }
+    }
+  }
+
   if (name === "repository-credentials-container") {
     if (state?.lane !== name) {
       throw new Error("Repository credential images require their own lane state.");
@@ -2112,6 +2237,9 @@ async function prepareFile({ lane, file, statePath }) {
     }
     if (relativeFile.endsWith("occ-metrics.test.mjs")) {
       env.OCC_METRICS_TEST_MIGRATION_DATABASE_URL = database.migrationUrl;
+    }
+    if (relativeFile.endsWith("auth-maintain.test.mjs")) {
+      env.OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL = database.migrationUrl;
     }
   }
 

@@ -37,7 +37,7 @@ const presetSecretsPath = "/namespaces/ns_00000000-0000-4000-8000-000000000001/s
 const repositoryForm = [...readyForm, { selector: "#agent-name", value: "Repository assistant" }];
 const pluginCapabilities = {
   driver: { id: "codex-plugin", implementation: "occ/codex-plugin" },
-  approvers: { agent: true, plugin: true, tools: true },
+  approvers: { agent: true, plugin: false, tools: false },
   toolDefaults: {
     enabled: true,
     approval: ["provider_default", "all_actions", "write_actions", "none"],
@@ -235,6 +235,14 @@ const pluginSelections = JSON.stringify(
   null,
   2,
 );
+// Codex offers only Agent-wide approvers. These stories reuse its catalog to show the plugin and
+// tool fields that a Driver advertising them (OpenClaw) renders.
+const overrideApproverCapabilities = {
+  ...pluginCapabilities,
+  approvers: { agent: true, plugin: true, tools: true },
+};
+const overrideApproverGap =
+  "This is simulated UI and does not prove runtime approval authorization. The Codex Plugin Driver does not offer plugin or tool approvers; these fixtures enable them on its catalog to preview the fields.";
 const pluginApproverOverrides = JSON.parse(pluginSelections);
 pluginApproverOverrides["codex-plugin:calendar@openai-curated-remote"].approvers = [];
 pluginApproverOverrides["codex-plugin:calendar@openai-curated-remote"].tools[
@@ -443,6 +451,16 @@ export const scenarios = {
     githubEnabled: true,
     description:
       "A rejected callback shows the generic sign-in error and keeps password recovery available.",
+  },
+  githubResultRejected: {
+    group: "Pages/Sign in",
+    name: "GitHub result not confirmed",
+    path: "/console/",
+    pendingGithubAttempt: true,
+    githubEnabled: true,
+    rules: [{ path: "/api/auth/providers/github/result", method: "POST", status: 401 }],
+    description:
+      "The tab that started GitHub sign-in could not confirm that the current session is the one its attempt created, so it shows the sign-in error instead of adopting that session.",
   },
   providerDiscoveryUnavailable: {
     group: "Pages/Sign in",
@@ -2068,7 +2086,7 @@ export const scenarios = {
     auth: "codex_pat",
     agentPlugins: JSON.parse(pluginSelections),
     agentPluginApprovers: [{ channel: "slack", id: "team:TDEMO123:user:UDEMO123" }],
-    pluginCapabilities,
+    pluginCapabilities: overrideApproverCapabilities,
     pluginDiscovery,
     actions: [
       click("Plugins"),
@@ -2081,7 +2099,7 @@ export const scenarios = {
     ],
     description:
       "The Agent default has one workspace-qualified Slack user. Calendar inherits that list, and Create event inherits Calendar. Clearing a plugin or tool override restores inheritance.",
-    gap: "This is simulated UI and does not prove runtime approval authorization.",
+    gap: overrideApproverGap,
   },
   pluginApproversOverrides: {
     group: "Pages/Agent detail",
@@ -2091,7 +2109,7 @@ export const scenarios = {
     auth: "codex_pat",
     agentPlugins: pluginApproverOverrides,
     agentPluginApprovers: [{ channel: "slack", id: "team:TDEMO123:user:UDEMO123" }],
-    pluginCapabilities,
+    pluginCapabilities: overrideApproverCapabilities,
     pluginDiscovery,
     actions: [
       click("Plugins"),
@@ -2108,7 +2126,7 @@ export const scenarios = {
       "Change Calendar to Inherit Agent default approvers and inspect Plugin selections JSON.",
       "Search Create event tool approvers people to choose between duplicate Alex Chen names by exact ID.",
     ],
-    gap: "This is simulated UI and does not prove runtime approval authorization.",
+    gap: overrideApproverGap,
   },
   pluginApproversLookup: {
     group: "Pages/Agent detail",

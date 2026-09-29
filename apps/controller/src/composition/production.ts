@@ -27,7 +27,7 @@ import {
   initializeInstallationPresets,
   backendSummariesFromDefinitions,
 } from "./installation-config.ts";
-import { emitOccLogEvent, type OccLogger } from "../logging.ts";
+import { emitOccLogEvent, skippedUserLogFields, type OccLogger } from "../logging.ts";
 import { resolveApprovedProductionHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import type { NativeAdminAccessConfig } from "../gateway/native-admin.ts";
@@ -112,13 +112,16 @@ export async function composeProduction(config: ProductionConfig) {
       state,
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.logger === undefined
+        ? {}
+        : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
       ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
     });
     if (auth.activationSkipped !== undefined && config.logger !== undefined) {
       emitOccLogEvent(config.logger, {
         event: "authentication.activation-warning",
         reason: "Accounts without a Principal or exactly one password were not enrolled.",
-        skippedUserIds: auth.activationSkipped,
+        ...skippedUserLogFields(auth.activationSkipped),
       });
     }
     const humanAuthentication = new PostgresHumanAuthentication(
@@ -130,11 +133,12 @@ export async function composeProduction(config: ProductionConfig) {
       seed: AuthPrincipalSeed,
       auditEvent: AuditEvent,
       prepared: PreparedAuthAccount,
+      external?: { readonly providerId: string; readonly subject: string },
     ) => {
       const current = await state.loadNativeIAMState(persistedInstallation.id);
       validateAuthAccountPrincipalSeed(seed, current, persistedInstallation.id);
       // The account, its Principal and bindings, and its enrolment commit together.
-      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent);
+      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent, external);
     };
 
     const principal = iamState.identities.find((identity) => identity.kind === "principal");

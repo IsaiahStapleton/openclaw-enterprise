@@ -5,6 +5,7 @@ import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { APIError, betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { splitSetCookieHeader } from "better-auth/cookies";
+import { hashPassword } from "better-auth/crypto";
 import { memoryAdapter, type MemoryDB } from "better-auth/adapters/memory";
 import { apiKey } from "@better-auth/api-key";
 import type { ApiKey } from "@better-auth/api-key/types";
@@ -17,7 +18,11 @@ import {
 } from "@openclaw-enterprise/iam";
 import {
   PostgresHumanAuthentication,
+  ScopeViolationError,
+  type HumanAuthenticationActivation,
+  type HumanAuthenticationActivationHooks,
   type HumanAuthenticationActor,
+  type HumanAuthenticationRecovery,
   type HumanAuthenticationAccount,
   type PostgresPool,
   type PostgresPlatformState,
@@ -25,6 +30,7 @@ import {
 } from "@openclaw-enterprise/occ";
 import type { IAMDriver } from "@openclaw-enterprise/contracts";
 import { createHumanLogin, type GitHubLoginConfiguration } from "./github.ts";
+import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
 import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
@@ -44,6 +50,8 @@ import { AdmissionFailure } from "../admission/admission-verifier.ts";
 
 export const OCC_BETTER_AUTH_ISSUER_PREFIX = "occ:installation:";
 export const OCC_AUTH_COOKIE_PREFIX = "openclaw_occ";
+const LOCAL_PASSWORD_MIN_LENGTH = 12;
+const LOCAL_PASSWORD_MAX_LENGTH = 128;
 export const OCC_SHARED_AUTH_COOKIE_PREFIX = "openclaw_occ_shared";
 export const OCC_SERVICE_KEY_HEADER = "x-api-key";
 const SERVICE_KEY_CONFIG = "occ-service";
@@ -84,6 +92,8 @@ export interface PostgresControllerAuthOptions extends Omit<
   readonly state?: PostgresPlatformState;
   readonly iamDriver?: IAMDriver;
   readonly github?: GitHubLoginConfiguration;
+  /** Receives nonfatal startup conditions as structured log events. */
+  readonly onWarning?: (event: { readonly event: string; readonly message: string }) => void;
 }
 
 export interface AuthenticatedAccount {
@@ -116,10 +126,13 @@ export interface ControllerAuth {
   readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
   readonly githubEnabled: boolean;
+  /** Provider-instance key for GitHub identities; set only while GitHub sign-in is configured. */
+  readonly githubProviderId?: string;
   /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
   readonly activationSkipped?: readonly string[];
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   readAccount?(
     userId: string,
     actor: HumanAuthenticationActor,
@@ -136,6 +149,18 @@ export interface ControllerAuth {
     actor: HumanAuthenticationActor,
     expectedVersion: number,
   ): Promise<void>;
+  readRecovery?(actor: HumanAuthenticationActor): Promise<HumanAuthenticationRecovery>;
+  replaceRecovery?(
+    userId: string,
+    principalId: string,
+    expectedCurrentUserId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<HumanAuthenticationRecovery & { changed: boolean }>;
+  enrolAccount?(
+    userId: string,
+    actor: HumanAuthenticationActor,
+  ): Promise<{ principalId: string; version: number; created: boolean }>;
   detachMethod?(
     userId: string,
     methodId: string,
@@ -355,6 +380,33 @@ function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: st
   }
 }
 
+/**
+ * Applies the optional x-occ-session-key header to a resolved cookie session.
+ * Absent keeps the cookie-only contract; a malformed, duplicated or foreign key
+ * rejects instead of acting on whichever session the shared cookie now carries.
+ */
+function requireSessionKey(headers: Headers, secret: string, sessionId: string | undefined): void {
+  const key = sessionKeyHeader(headers);
+  if (key === undefined) {
+    return;
+  }
+  if (key === null || (sessionId !== undefined && !sessionKeyMatches(secret, sessionId, key))) {
+    throw new AdmissionFailure(401, "UNAUTHENTICATED", "The session key does not match.");
+  }
+}
+
+function responseSessionId(response: unknown): string | undefined {
+  const session =
+    typeof response === "object" && response !== null
+      ? (response as { readonly session?: unknown }).session
+      : undefined;
+  const id =
+    typeof session === "object" && session !== null
+      ? (session as Record<string, unknown>).id
+      : undefined;
+  return isNonEmptyString(id) ? id : undefined;
+}
+
 function requireSessionMutationOrigin(headers: Headers, expectedOrigin: string): void {
   const fetchSite = headers.get("sec-fetch-site");
   if (
@@ -377,7 +429,10 @@ function accountName(input: ProvisionAuthAccountInput): string {
   return input.name?.trim() || input.email.trim();
 }
 
-function safeSessionResponse(response: unknown): {
+function safeSessionResponse(
+  response: unknown,
+  secret: string,
+): {
   readonly authenticated: true;
   readonly sessionKey: string;
   readonly user: { readonly id: string; readonly email: string; readonly name: string };
@@ -406,7 +461,7 @@ function safeSessionResponse(response: unknown): {
   }
   return {
     authenticated: true,
-    sessionKey,
+    sessionKey: sessionBindingKey(secret, sessionKey),
     user: { id, email, name },
   };
 }
@@ -506,15 +561,18 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
   readonly #installationId: string;
   readonly #issuer: string;
   readonly #sessionCookieName: string;
+  readonly #secret: string;
   readonly #browserOrigin: string;
 
   constructor(
     auth: ControllerBetterAuth,
     installationId: string,
     cookieName: string,
+    secret: string,
     browserOrigin: string,
   ) {
     this.#auth = auth;
+    this.#secret = secret;
     this.#sessionCookieName = cookieName;
     this.#browserOrigin = browserOrigin;
     this.#installationId = installationId;
@@ -584,6 +642,7 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
     if (authenticatedSession === undefined) {
       throw new AdmissionFailure(401, "UNAUTHENTICATED", "A valid controller session is required.");
     }
+    requireSessionKey(headers, this.#secret, authenticatedSession.id);
 
     return {
       externalIdentity: { issuer: this.#issuer, subject: authenticatedSession.userId },
@@ -721,8 +780,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       enabled: true,
       disableSignUp: true,
       requireEmailVerification: false,
-      minPasswordLength: 12,
-      maxPasswordLength: 128,
+      minPasswordLength: LOCAL_PASSWORD_MIN_LENGTH,
+      maxPasswordLength: LOCAL_PASSWORD_MAX_LENGTH,
     },
     trustedOrigins: [options.baseURL],
     rateLimit: { enabled: humanLogin === undefined },
@@ -950,6 +1009,27 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     }
   }
 
+  async function githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    reply.header("cache-control", "no-store");
+    await sendAuthEndpoint(
+      request,
+      reply,
+      () => {
+        if (!humanLogin) {
+          throw new AdmissionFailure(403, "FORBIDDEN", "GitHub sign-in is unavailable.");
+        }
+        // Reads the session cookie, so it takes the same exact-Origin guard as sign-out.
+        requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
+        return runPrivateEndpoint(request, "/oce/providers/github/result", authBody(request));
+      },
+      (value) => {
+        const sessionKey = (value as { readonly sessionKey?: unknown } | null)?.sessionKey;
+        return { sessionKey: isNonEmptyString(sessionKey) ? sessionKey : null };
+      },
+      "GitHub sign-in could not be confirmed.",
+    );
+  }
+
   async function signInEmail(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     await sendAuthEndpoint(
       request,
@@ -969,7 +1049,12 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           returnStatus: true,
         });
       },
-      () => ({ authenticated: true }),
+      (response) => {
+        const sessionKey = (response as { readonly sessionKey?: unknown } | null)?.sessionKey;
+        return isNonEmptyString(sessionKey)
+          ? { authenticated: true, sessionKey }
+          : { authenticated: true };
+      },
       "The caller did not provide valid authentication credentials.",
       hostOnlySessionCookieCleanup,
     );
@@ -979,10 +1064,27 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await sendAuthEndpoint(
       request,
       reply,
-      () => {
+      async () => {
         // Better Auth server API calls skip origin middleware without a Request context.
         requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
         const headers = sessionHeaders(request.headers, sessionCookieName);
+        if (sessionKeyHeader(headers) !== undefined) {
+          // A pinned tab ends only its own session; a cookie replaced by another
+          // sign-in is neither revoked nor cleared.
+          const current = responseSessionId(
+            await api.getSession({
+              headers,
+              query: { disableCookieCache: true, disableRefresh: true },
+              asResponse: false,
+              returnHeaders: false,
+              returnStatus: false,
+            }),
+          );
+          if (current === undefined) {
+            throw new AdmissionFailure(401, "UNAUTHENTICATED", "The session key does not match.");
+          }
+          requireSessionKey(headers, options.secret, current);
+        }
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/sign-out");
         }
@@ -1003,15 +1105,20 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await sendAuthEndpoint(
       request,
       reply,
-      () =>
-        api.getSession({
-          headers: sessionHeaders(request.headers, sessionCookieName),
+      async () => {
+        const headers = sessionHeaders(request.headers, sessionCookieName);
+        requireSessionKey(headers, options.secret, undefined);
+        const result = await api.getSession({
+          headers,
           query: { disableCookieCache: true, disableRefresh: true },
           asResponse: false,
           returnHeaders: true,
           returnStatus: true,
-        }),
-      safeSessionResponse,
+        });
+        requireSessionKey(headers, options.secret, responseSessionId(result?.response));
+        return result;
+      },
+      (response) => safeSessionResponse(response, options.secret),
       "The controller session could not be resolved.",
     );
   }
@@ -1019,14 +1126,21 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   async function resolveSession(
     request: FastifyRequest,
   ): Promise<AuthenticatedSession | undefined> {
-    const result = await api.getSession({
-      headers: sessionHeaders(request.headers, sessionCookieName),
-      query: { disableCookieCache: true, disableRefresh: true },
-      asResponse: false,
-      returnHeaders: false,
-      returnStatus: false,
-    });
-    return safeAuthenticatedSession(result);
+    const headers = sessionHeaders(request.headers, sessionCookieName);
+    requireSessionKey(headers, options.secret, undefined);
+    const session = safeAuthenticatedSession(
+      await api.getSession({
+        headers,
+        query: { disableCookieCache: true, disableRefresh: true },
+        asResponse: false,
+        returnHeaders: false,
+        returnStatus: false,
+      }),
+    );
+    if (session !== undefined) {
+      requireSessionKey(headers, options.secret, session.id);
+    }
+    return session;
   }
 
   return {
@@ -1038,6 +1152,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       auth,
       options.installationId,
       sessionCookieName,
+      options.secret,
       expectedBrowserOrigin,
     ),
     prepareAccount,
@@ -1058,6 +1173,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     humanProfile: humanLogin === undefined ? "password" : "guarded",
     githubStart,
     githubCallback,
+    githubResult,
     signInEmail,
     signOut,
     session,
@@ -1104,10 +1220,58 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   };
 }
 
+/**
+ * Startup and stopped maintenance share this one-way activation path. GitHub sign-in
+ * requires the native IAM Driver, so both authorize through it. The configured recovery
+ * user id only seeds the first activation: once a designation exists (possibly moved by an
+ * online replacement) it is kept, and `seedIgnored` reports a differing seed. Every call
+ * re-checks the actual holder. Refused preconditions throw ScopeViolationError.
+ */
+export async function activateRecoveryAccount(
+  persistence: PostgresHumanAuthentication,
+  iamDriver: NativeIAMDriver,
+  installationId: string,
+  seedRecoveryUserId: string,
+  hooks?: HumanAuthenticationActivationHooks,
+): Promise<HumanAuthenticationActivation & { recoveryUserId: string; seedIgnored: boolean }> {
+  const existing = await persistence.recoveryDesignation();
+  const seedIgnored = existing !== undefined && existing.userId !== seedRecoveryUserId;
+  const recoveryUserId = seedIgnored ? existing.userId : seedRecoveryUserId;
+  // Its Principal must still administer the Installation; activateRecovery re-checks
+  // enrolment, enabled state and the password.
+  const principal = await iamDriver.lookupIdentity({
+    issuer: betterAuthIssuer(installationId),
+    subject: recoveryUserId,
+  });
+  if (!principal || principal.kind !== "principal") {
+    throw new ScopeViolationError("Recovery Principal is unavailable.");
+  }
+  const decision = await iamDriver.authorize({
+    principalId: principal.id,
+    action: "administer",
+    resource: { kind: "installation", id: installationId },
+  });
+  if (!decision.allowed || decision.driverId !== iamDriver.id) {
+    throw new ScopeViolationError("Recovery account must administer the Installation.");
+  }
+  const activation = await persistence.activateRecovery(recoveryUserId, principal.id, hooks);
+  return { ...activation, recoveryUserId, seedIgnored };
+}
+
+/** Hash a local password exactly as the controller's password sign-in verifies it. */
+export async function hashLocalPassword(password: string): Promise<string> {
+  if (password.length < LOCAL_PASSWORD_MIN_LENGTH || password.length > LOCAL_PASSWORD_MAX_LENGTH) {
+    throw new Error(
+      `Passwords must contain ${LOCAL_PASSWORD_MIN_LENGTH} to ${LOCAL_PASSWORD_MAX_LENGTH} characters.`,
+    );
+  }
+  return hashPassword(password);
+}
+
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, state, iamDriver, github, ...controllerOptions } = options;
+  const { pool, state, iamDriver, github, onWarning, ...controllerOptions } = options;
   const persistence =
     state === undefined
       ? undefined
@@ -1145,28 +1309,27 @@ export async function createPostgresControllerAuth(
   await auth.auth.$context;
   let activationSkipped: readonly string[] = [];
   if (github !== undefined) {
-    const principal = await iamDriver!.lookupIdentity({
-      issuer: betterAuthIssuer(options.installationId),
-      subject: github.recoveryUserId,
-    });
-    if (!principal || principal.kind !== "principal") {
-      throw new Error("Recovery Principal is unavailable.");
+    const activation = await activateRecoveryAccount(
+      persistence!,
+      // Checked above: GitHub sign-in requires the native IAM Driver.
+      iamDriver as NativeIAMDriver,
+      options.installationId,
+      github.recoveryUserId,
+    );
+    if (activation.seedIgnored) {
+      onWarning?.({
+        event: "authentication.recovery-seed-warning",
+        message:
+          "OCC_AUTH_GITHUB_RECOVERY_USER_ID differs from the recorded recovery designation, which is kept.",
+      });
     }
-    const decision = await iamDriver!.authorize({
-      principalId: principal.id,
-      action: "administer",
-      resource: { kind: "installation", id: options.installationId },
-    });
-    if (!decision.allowed || decision.driverId !== iamDriver!.id) {
-      throw new Error("Recovery account must administer the Installation.");
-    }
-    activationSkipped = (await persistence!.activateRecovery(github.recoveryUserId, principal.id))
-      .skipped;
+    activationSkipped = activation.skipped;
     const designation = await persistence!.recoveryDesignation();
     if (!designation) {
       throw new Error("Recovery designation is unavailable.");
     }
-    // The recovery account's password lane stays admitted under sign-in floods.
+    // The recovery account's password lane stays admitted under sign-in floods. It follows the
+    // stored designation, never the environment seed, which may name a replaced holder.
     humanLogin!.designateRecovery(designation.email);
   }
   return {
@@ -1175,6 +1338,7 @@ export async function createPostgresControllerAuth(
     ...(humanLogin === undefined
       ? {}
       : {
+          githubProviderId: humanLogin.providerId,
           readAccount: (userId: string, actor: HumanAuthenticationActor) =>
             persistence!.readAccount(userId, actor),
           attachGitHub: (
@@ -1196,6 +1360,29 @@ export async function createPostgresControllerAuth(
             actor: HumanAuthenticationActor,
             expectedVersion: number,
           ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
+          readRecovery: (actor: HumanAuthenticationActor) => persistence!.readRecovery(actor),
+          replaceRecovery: async (
+            userId: string,
+            principalId: string,
+            expectedCurrentUserId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => {
+            const { email, ...replaced } = await persistence!.replaceRecovery(
+              userId,
+              principalId,
+              expectedCurrentUserId,
+              actor,
+              expectedVersion,
+            );
+            // Move the reserved password lane to the committed holder's email. The email comes
+            // from the replacing transaction, so no later read can fail and leave the old holder
+            // on the lane.
+            humanLogin.designateRecovery(email);
+            return replaced;
+          },
+          enrolAccount: (userId: string, actor: HumanAuthenticationActor) =>
+            persistence!.enrolAccount(userId, actor),
           detachMethod: (
             userId: string,
             methodId: string,

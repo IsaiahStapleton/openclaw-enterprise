@@ -34,7 +34,12 @@ import {
   initializeInstallationPresets,
   backendSummariesFromDefinitions,
 } from "./installation-config.ts";
-import { emitOccLogEvent, type LoggingConfiguration, type OccLogger } from "../logging.ts";
+import {
+  emitOccLogEvent,
+  skippedUserLogFields,
+  type LoggingConfiguration,
+  type OccLogger,
+} from "../logging.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import type { NativeAdminAccessConfig } from "../gateway/native-admin.ts";
@@ -133,6 +138,9 @@ export async function composePostgresDevelopment(
       state,
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.logger === undefined
+        ? {}
+        : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
       secureCookies: config.nativeAdmin?.enabled === true,
       ...(config.nativeAdmin?.enabled === true
         ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
@@ -156,7 +164,7 @@ export async function composePostgresDevelopment(
       emitOccLogEvent(config.logger, {
         event: "authentication.activation-warning",
         reason: "Accounts without a Principal or exactly one password were not enrolled.",
-        skippedUserIds: auth.activationSkipped,
+        ...skippedUserLogFields(auth.activationSkipped),
       });
     }
     const humanAuthentication = new PostgresHumanAuthentication(
@@ -168,11 +176,12 @@ export async function composePostgresDevelopment(
       seed: AuthPrincipalSeed,
       auditEvent: AuditEvent,
       prepared: PreparedAuthAccount,
+      external?: { readonly providerId: string; readonly subject: string },
     ) => {
       const current = await state.loadNativeIAMState(installationId);
       validateAuthAccountPrincipalSeed(seed, current, installationId);
       // The account, its Principal and bindings, and its enrolment commit together.
-      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent);
+      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent, external);
     };
 
     const loggingLevel = config.logging?.level ?? drivers?.installation.logging.level;

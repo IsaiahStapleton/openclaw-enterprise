@@ -481,14 +481,16 @@ Follow the [single-controller profile](../../reference/authentication.md#github-
 during stopped maintenance. Install without GitHub as above, then enable it with
 `helm upgrade`.
 
-Activation is one-way. The database refuses sessions from older images, the
-`auth.github` values must stay set, and `helm rollback` past activation is
-unsupported; see [rollback](production-upgrade.md#roll-back-across-human-sign-in).
+Activation is one-way: the database refuses older images' sessions and
+`auth.github` must stay set. Never `helm rollback` past activation
+([rollback](production-upgrade.md#roll-back-across-human-sign-in));
+[stopped maintenance](auth-maintenance.md) deactivates it.
 
-1. Verify password recovery. Register
+1. Verify password recovery ([replaceable](../../reference/authentication.md#session-and-recovery-controls)
+   later). Register
    the GitHub App callback and protect its **client ID** (not App ID) and secret
    as the [reference](../../reference/authentication.md#github-sign-in-for-existing-accounts) describes.
-   Signed in as the recovery administrator, read `data.user.id` from
+   As the recovery administrator, read `data.user.id` from
    `GET /api/auth/session`.
 2. Create the Secret, then set `auth.github.enabled: true`, that ID as
    `auth.recoveryUserId`, and `agentNativeAdmin.enabled: false` in protected

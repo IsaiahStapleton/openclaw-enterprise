@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,6 +17,7 @@ import { createTestConfigurationDriver } from "../helpers/configuration-driver.m
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
+import { createOccLogger } from "../../apps/controller/src/logging.ts";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const email = "github-recovery@example.test";
@@ -109,6 +110,23 @@ test(
       candidate.permissions.some(
         (permission) => permission.action === "read" && permission.resourceKind === "installation",
       ),
+    );
+    assert.equal(
+      (
+        await unconfigured.inject({
+          method: "POST",
+          url: "/api/auth/accounts",
+          headers: legacyHeaders,
+          payload: {
+            email: "github-off@example.test",
+            password,
+            roleId: role.id,
+            github: { subject: "55555555" },
+          },
+        })
+      ).statusCode,
+      409,
+      "a GitHub subject needs GitHub sign-in",
     );
     const created = await unconfigured.inject({
       method: "POST",
@@ -415,9 +433,12 @@ test(
         url.searchParams.get("redirect_uri"),
         `${origin}/api/auth/providers/github/callback`,
       );
+      const { attemptId } = response.json().data;
+      assert.match(attemptId, /^[A-Za-z0-9_-]{43}$/);
       return {
         cookie: cookieHeaderFromSetCookie(response.headers["set-cookie"]),
         state: url.searchParams.get("state"),
+        attemptId,
       };
     }
     const attempt = await start();
@@ -497,6 +518,101 @@ test(
     });
     assert.equal(consumed.headers.location, "/console/?authError=github");
     assert.equal(exchangeCount, 1, "a consumed callback cannot exchange again");
+
+    // The redirect stays exactly /console/; only the HttpOnly receipt cookie tells
+    // the starting tab which session its attempt created.
+    const receipt = [callback.headers["set-cookie"]]
+      .flat()
+      .find((value) => value.startsWith("occ_login_receipt="));
+    assert.ok(receipt);
+    assert.match(receipt, /HttpOnly/i);
+    assert.match(receipt, /SameSite=Strict/i);
+    assert.match(receipt, /Max-Age=120/);
+    const receiptCookie = receipt.split(";", 1)[0];
+    const githubSessionCookie = githubCookie
+      .split("; ")
+      .filter((cookie) => !cookie.startsWith("occ_login_receipt="))
+      .join("; ");
+    async function result(attemptId, cookie, requestHeaders = { origin }) {
+      return app.inject({
+        method: "POST",
+        url: "/api/auth/providers/github/result",
+        headers: { ...requestHeaders, cookie },
+        payload: { attemptId },
+      });
+    }
+    async function sessionRows() {
+      return (await pool.query("SELECT id, expires_at FROM occ.session ORDER BY id")).rows;
+    }
+    const sessionsBeforeResult = await sessionRows();
+    // A cross-origin or Origin-less request cannot read the key, even with valid cookies.
+    const withoutOrigin = await result(attempt.attemptId, githubCookie, {});
+    assert.equal(withoutOrigin.statusCode, 403, withoutOrigin.body);
+    // Like sign-out, a supplied Sec-Fetch-Site must be same-origin.
+    const sameSite = await result(attempt.attemptId, githubCookie, {
+      origin,
+      "sec-fetch-site": "same-site",
+    });
+    assert.equal(sameSite.statusCode, 403, sameSite.body);
+    // A different live attempt, such as another tab's, cannot claim this session.
+    const otherTab = await start();
+    const wrongAttempt = await result(otherTab.attemptId, githubCookie);
+    assert.equal(wrongAttempt.statusCode, 401, wrongAttempt.body);
+    // A later sign-in replaced the cookie: the receipt must not bind the new session.
+    const replacedCookie = `${(await passwordLogin()).cookie}; ${receiptCookie}`;
+    const replacedSession = await result(attempt.attemptId, replacedCookie);
+    assert.equal(replacedSession.statusCode, 401, replacedSession.body);
+    // An expired receipt is refused even while its browser cookie is still sent.
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 121_000 });
+    let expired;
+    try {
+      expired = await result(attempt.attemptId, githubCookie);
+    } finally {
+      t.mock.timers.reset();
+    }
+    assert.equal(expired.statusCode, 401, expired.body);
+    const confirmed = await result(attempt.attemptId, githubCookie);
+    assert.equal(confirmed.statusCode, 200, confirmed.body);
+    assert.equal(confirmed.headers["cache-control"], "no-store");
+    const { sessionKey } = confirmed.json().data;
+    assert.equal(
+      (await app.inject({ url: "/api/auth/session", headers: { cookie: githubCookie } })).json()
+        .data.sessionKey,
+      sessionKey,
+      "the result key names the session the callback issued",
+    );
+    const confirmedCookies = [confirmed.headers["set-cookie"]].flat().join("\n");
+    assert.doesNotMatch(confirmedCookies, /session_token/, "the exchange issues no session");
+    assert.match(confirmedCookies, /occ_login_receipt=;.*Max-Age=0/);
+    // The password login above added a row; the exchange itself added or extended none.
+    const sessionsAfterResult = await sessionRows();
+    for (const row of sessionsBeforeResult) {
+      assert.deepEqual(
+        sessionsAfterResult.find((candidate) => candidate.id === row.id),
+        row,
+      );
+    }
+    assert.equal(sessionsAfterResult.length, sessionsBeforeResult.length + 1);
+    // Replaying a copied receipt after the browser cleared it is refused.
+    const replay = await result(attempt.attemptId, githubCookie);
+    assert.equal(replay.statusCode, 401, replay.body);
+    // The key narrows protected API admission: absent keeps the cookie contract,
+    // a matching key admits, and a foreign, malformed or duplicated key rejects.
+    // A key without the cookie never selects a session.
+    const foreignKey = (
+      await app.inject({ url: "/api/auth/session", headers: { cookie: headers.cookie } })
+    ).json().data.sessionKey;
+    for (const [requestHeaders, status] of [
+      [{ cookie: githubSessionCookie }, 200],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": sessionKey }, 200],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": foreignKey }, 401],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": "malformed" }, 401],
+      [{ cookie: githubSessionCookie, "x-occ-session-key": [sessionKey, sessionKey] }, 401],
+      [{ "x-occ-session-key": sessionKey }, 401],
+    ]) {
+      const narrowed = await app.inject({ url: "/namespaces", headers: requestHeaders });
+      assert.equal(narrowed.statusCode, status, narrowed.body);
+    }
 
     // Unknown provider identities cannot create accounts, even when local account data exists.
     providerSubject = 87654321;
@@ -593,12 +709,29 @@ test(
       });
     });
     await page.goto(`${origin}/console/`);
+    // The Console confirms that the callback's session is the one this tab's attempt
+    // created, then pins its key on every later request.
+    const resultRequest = page.waitForRequest(
+      (candidate) => new URL(candidate.url()).pathname === "/api/auth/providers/github/result",
+    );
+    const pinnedRead = page.waitForRequest(
+      (candidate) => new URL(candidate.url()).pathname === "/namespaces",
+    );
     await page.getByRole("button", { name: "Continue with GitHub" }).click();
     await page.waitForURL(/\/console\/(agents|providers|namespaces|settings)/);
+    const confirmedResult = await (await resultRequest).response();
+    assert.equal(confirmedResult.status(), 200);
     const browserSession = await page.evaluate(
       async () => (await (await fetch("/api/auth/session")).json()).data,
     );
     assert.equal(browserSession.user.id, recovery);
+    assert.equal((await confirmedResult.json()).data.sessionKey, browserSession.sessionKey);
+    assert.equal((await pinnedRead).headers()["x-occ-session-key"], browserSession.sessionKey);
+    assert.deepEqual(
+      await page.evaluate(() => ({ ...sessionStorage })),
+      {},
+      "the one-use attemptId leaves tab storage after the exchange",
+    );
     const browserNamespaces = await page.evaluate(
       async () => (await (await fetch("/namespaces")).json()).data,
     );
@@ -720,6 +853,63 @@ test(
         (method) => method.subject === "33333333",
       ),
     );
+    // Creation can attach a GitHub identity in the same transaction; a taken
+    // identity rolls the whole account back.
+    const userCount = async () =>
+      (await pool.query('SELECT count(*)::int AS count FROM occ."user"')).rows[0].count;
+    const usersBefore = await userCount();
+    const takenSubject = await app.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: adminHeaders,
+      payload: {
+        email: "created-taken@example.test",
+        password,
+        roleId: role.id,
+        github: { subject: "33333333" },
+      },
+    });
+    assert.equal(takenSubject.statusCode, 409, takenSubject.body);
+    assert.equal(await userCount(), usersBefore);
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/auth/accounts",
+          headers: adminHeaders,
+          payload: {
+            email: "created-invalid@example.test",
+            password,
+            roleId: role.id,
+            github: { subject: "not-numeric" },
+          },
+        })
+      ).statusCode,
+      400,
+    );
+    const createdGitHub = await app.inject({
+      method: "POST",
+      url: "/api/auth/accounts",
+      headers: adminHeaders,
+      payload: {
+        email: "created-github@example.test",
+        password,
+        roleId: role.id,
+        github: { subject: "44444444" },
+      },
+    });
+    assert.equal(createdGitHub.statusCode, 201, createdGitHub.body);
+    const createdGitHubAccount = await readAccount(createdGitHub.json().data.id, adminHeaders);
+    assert.equal(createdGitHubAccount.version, 1);
+    assert.equal(createdGitHubAccount.methods.length, 2);
+    assert.ok(createdGitHubAccount.methods.some((method) => method.providerId === "credential"));
+    assert.ok(createdGitHubAccount.methods.some((method) => method.subject === "44444444"));
+    const attachAudits = (await state.transact((unit) => unit.audit.list())).filter(
+      (event) =>
+        event.action === "authentication.method.attach" &&
+        event.details?.userId === createdGitHub.json().data.id,
+    );
+    assert.equal(attachAudits.length, 1);
     assert.equal(
       (
         await app.inject({
@@ -803,6 +993,300 @@ test(
         })
       ).statusCode,
       403,
+    );
+    // Recovery replacement: read, guarded move, seed-only startup, and move back.
+    async function readRecovery(requestHeaders) {
+      const result = await app.inject({ url: "/api/auth/recovery", headers: requestHeaders });
+      assert.equal(result.statusCode, 200, result.body);
+      assert.equal(result.headers["cache-control"], "no-store");
+      return result.json().data;
+    }
+    async function replaceRecovery(body, requestHeaders = adminHeaders) {
+      return app.inject({
+        method: "POST",
+        url: "/api/auth/recovery",
+        headers: requestHeaders,
+        payload: body,
+      });
+    }
+    // Proves which account holds the reserved password lane on one controller: four held
+    // password checks fill the shared lane, a fresh account and the former holder are refused,
+    // and the current holder is still admitted and signs in once the checks are released.
+    async function waitForLockWaiters(count) {
+      const deadline = performance.now() + 10_000;
+      for (;;) {
+        const { rows } = await pool.query(
+          `SELECT count(*)::int AS waiting FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+        );
+        if (rows[0].waiting >= count) {
+          return;
+        }
+        assert.ok(performance.now() < deadline, `expected ${count} password checks to be held`);
+        await delay(20);
+      }
+    }
+    async function assertRecoveryLane(target, holderEmail, formerEmail, label) {
+      const fillers = (
+        await pool.query(
+          `INSERT INTO occ."user" (id, name, email, email_verified, created_at, updated_at)
+           SELECT 'lane-' || $1 || '-' || n, 'Lane filler', 'lane-' || $1 || '-' || n || '@example.test',
+                  true, now(), now()
+           FROM generate_series(1, 2) AS n RETURNING id, email`,
+          [label],
+        )
+      ).rows;
+      const holderId = (
+        await pool.query('SELECT id FROM occ."user" WHERE email = $1', [holderEmail])
+      ).rows[0].id;
+      const signIn = (address, signInEmail) =>
+        target.inject({
+          method: "POST",
+          url: "/api/auth/sign-in/email",
+          remoteAddress: address,
+          headers: { origin },
+          payload: { email: signInEmail, password },
+        });
+      const blocker = await pool.connect();
+      let open = false;
+      try {
+        await blocker.query("BEGIN");
+        open = true;
+        // Password checks lock their user row, so these locks hold admitted checks in flight.
+        await blocker.query('SELECT id FROM occ."user" WHERE id = ANY($1) FOR UPDATE', [
+          [...fillers.map((filler) => filler.id), holderId],
+        ]);
+        // Two per filler email and one per address stay inside every per-key budget.
+        const held = fillers.flatMap((filler, index) => [
+          signIn(`10.77.${index}.1`, filler.email),
+          signIn(`10.77.${index}.2`, filler.email),
+        ]);
+        await waitForLockWaiters(4);
+        assert.equal(
+          (await signIn("10.77.9.1", `lane-${label}-fresh@example.test`)).statusCode,
+          429,
+          "the shared password lane is full",
+        );
+        assert.equal(
+          (await signIn("10.77.9.2", formerEmail)).statusCode,
+          429,
+          "the former recovery holder no longer has the reserved lane",
+        );
+        const holder = signIn("10.77.9.3", holderEmail);
+        await waitForLockWaiters(5);
+        await blocker.query("COMMIT");
+        open = false;
+        for (const response of await Promise.all(held)) {
+          assert.equal(response.statusCode, 401, response.body);
+        }
+        const admitted = await holder;
+        assert.equal(admitted.statusCode, 200, "the current holder used the reserved lane");
+      } finally {
+        if (open) {
+          await blocker.query("ROLLBACK");
+        }
+        blocker.release();
+        await pool.query('DELETE FROM occ."user" WHERE id = ANY($1)', [
+          fillers.map((filler) => filler.id),
+        ]);
+      }
+    }
+    assert.equal((await readRecovery(adminHeaders)).userId, recovery);
+    assert.equal(
+      (await app.inject({ url: "/api/auth/recovery", headers: { cookie: browserCookies } }))
+        .statusCode,
+      403,
+      "a trusted Origin is required",
+    );
+    // Recovery and enrolment routes honour x-occ-session-key like other account routes:
+    // a foreign or malformed key is refused before any read or change, and the
+    // matching key admits.
+    const sessionKeyOf = async (cookie) =>
+      (await app.inject({ url: "/api/auth/session", headers: { cookie } })).json().data.sessionKey;
+    const adminKey = await sessionKeyOf(browserCookies);
+    const limitedKey = await sessionKeyOf(limitedCookie);
+    assert.notEqual(adminKey, limitedKey);
+    const recoveryVersion = (
+      await pool.query("SELECT xmin::text AS version FROM occ.human_authentication_recovery")
+    ).rows;
+    for (const key of [limitedKey, "malformed"]) {
+      const narrowedHeaders = { ...adminHeaders, "x-occ-session-key": key };
+      const read = await app.inject({ url: "/api/auth/recovery", headers: narrowedHeaders });
+      assert.equal(read.statusCode, 401, read.body);
+      const move = await replaceRecovery(
+        { userId: limited.id, expectedCurrentUserId: recovery, expectedVersion: 1 },
+        narrowedHeaders,
+      );
+      assert.equal(move.statusCode, 401, move.body);
+      const enrol = await app.inject({
+        method: "POST",
+        url: `/api/auth/accounts/${limited.id}/enrol`,
+        headers: narrowedHeaders,
+      });
+      assert.equal(enrol.statusCode, 401, enrol.body);
+    }
+    assert.deepEqual(
+      (await pool.query("SELECT xmin::text AS version FROM occ.human_authentication_recovery"))
+        .rows,
+      recoveryVersion,
+      "a refused narrowed request leaves the designation untouched",
+    );
+    assert.equal(
+      (await readRecovery({ ...adminHeaders, "x-occ-session-key": adminKey })).userId,
+      recovery,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          url: "/api/auth/recovery",
+          headers: { "x-api-key": serviceKey, origin },
+        })
+      ).statusCode,
+      403,
+    );
+    const enrolled = await app.inject({
+      method: "POST",
+      url: `/api/auth/accounts/${limited.id}/enrol`,
+      headers: adminHeaders,
+    });
+    assert.equal(enrolled.statusCode, 200, enrolled.body);
+    assert.equal(enrolled.json().data.created, false);
+    const unprovisioned = (
+      await pool.query(
+        `INSERT INTO occ."user" (id, name, email, email_verified, created_at, updated_at)
+         VALUES ('unprovisioned-recovery-target', 'Unprovisioned', 'unprovisioned@example.test', true, now(), now())
+         RETURNING id`,
+      )
+    ).rows[0].id;
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/auth/accounts/${unprovisioned}/enrol`,
+          headers: adminHeaders,
+        })
+      ).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await replaceRecovery({
+          userId: unprovisioned,
+          expectedCurrentUserId: recovery,
+          expectedVersion: 1,
+        })
+      ).statusCode,
+      404,
+    );
+    await pool.query('DELETE FROM occ."user" WHERE id = $1', [unprovisioned]);
+    const limitedVersion = (await readAccount(limited.id, adminHeaders)).version;
+    assert.equal(
+      (
+        await replaceRecovery({
+          userId: limited.id,
+          expectedCurrentUserId: limited.id,
+          expectedVersion: limitedVersion,
+        })
+      ).statusCode,
+      409,
+    );
+    assert.equal(
+      (
+        await replaceRecovery({
+          userId: limited.id,
+          expectedCurrentUserId: recovery,
+          expectedVersion: limitedVersion + 1,
+        })
+      ).statusCode,
+      409,
+    );
+    assert.equal(
+      (
+        await replaceRecovery(
+          { userId: limited.id, expectedCurrentUserId: recovery, expectedVersion: limitedVersion },
+          { cookie: browserCookies },
+        )
+      ).statusCode,
+      403,
+    );
+    const replaced = await replaceRecovery({
+      userId: limited.id,
+      expectedCurrentUserId: recovery,
+      expectedVersion: limitedVersion,
+    });
+    assert.equal(replaced.statusCode, 200, replaced.body);
+    assert.equal(replaced.json().data.userId, limited.id);
+    assert.equal(replaced.json().data.changed, true);
+    assert.equal(replaced.json().data.email, undefined, "the holder email stays internal");
+    assert.equal((await readRecovery(adminHeaders)).userId, limited.id);
+    // The running controller moves the reserved lane without a restart.
+    await assertRecoveryLane(app, "github-limited@example.test", email, "replaced");
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/auth/accounts/${limited.id}/disable`,
+          headers: adminHeaders,
+          payload: { expectedVersion: limitedVersion },
+        })
+      ).statusCode,
+      404,
+      "the new recovery account cannot be disabled",
+    );
+    // A stale environment id does not skip the startup checks: they run against the
+    // current holder, so losing its Installation authority still fails startup.
+    const holderBindings = (
+      await pool.query(
+        `DELETE FROM occ.iam_access_bindings
+         WHERE identity_subject_id = $1 AND namespace_id IS NULL RETURNING *`,
+        [limited.principalId],
+      )
+    ).rows;
+    assert.ok(holderBindings.length > 0);
+    await assert.rejects(
+      composePostgresDevelopment(config, drivers()),
+      /Recovery account must administer the Installation/,
+    );
+    for (const binding of holderBindings) {
+      const columns = Object.keys(binding);
+      await pool.query(
+        `INSERT INTO occ.iam_access_bindings (${columns.join(", ")})
+         VALUES (${columns.map((_, index) => `$${index + 1}`).join(", ")})`,
+        columns.map((column) => binding[column]),
+      );
+    }
+    // The environment recovery id now only seeds first activation: a controller
+    // started with the previous id keeps the recorded designation and warns.
+    const logLines = [];
+    const seeded = await composePostgresDevelopment(
+      {
+        ...config,
+        logger: createOccLogger({
+          component: "controller",
+          destination: { write: (line) => logLines.push(line) },
+        }),
+      },
+      drivers(),
+    );
+    try {
+      assert.ok(logLines.some((line) => line.includes("authentication.recovery-seed-warning")));
+      // Startup designates the lane from the stored holder, not the mismatched seed.
+      await assertRecoveryLane(seeded, "github-limited@example.test", email, "restarted");
+    } finally {
+      await seeded.close();
+    }
+    assert.equal((await readRecovery(adminHeaders)).userId, limited.id);
+    const restored = await replaceRecovery({
+      userId: recovery,
+      expectedCurrentUserId: limited.id,
+      expectedVersion: (await readAccount(recovery, adminHeaders)).version,
+    });
+    assert.equal(restored.statusCode, 200, restored.body);
+    assert.equal((await readRecovery(adminHeaders)).userId, recovery);
+    const audits = await state.transact((unit) => unit.audit.list());
+    assert.equal(
+      audits.filter((event) => event.action === "authentication.recovery.replace").length,
+      2,
     );
     assert.equal(
       (

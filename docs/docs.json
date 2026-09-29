@@ -429,6 +429,10 @@
                     "label": "Image Upgrades"
                   },
                   {
+                    "page": "guides/deploy/auth-maintenance",
+                    "label": "Sign-in Maintenance"
+                  },
+                  {
                     "page": "guides/deploy/local-k3d-image-upgrade",
                     "label": "Local k3d Upgrades"
                   },

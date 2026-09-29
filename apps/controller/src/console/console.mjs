@@ -20,6 +20,34 @@ let navigateAgentTab = null;
 let discardCreationOnExit = null;
 const drafts = createDraftStore();
 let draftUserId = null;
+// The session this tab signed in to or first observed; see api-client.mjs.
+let pinnedSessionKey = null;
+let githubSessionBinding = false;
+const githubAttemptStorageKey = "occ.console.githubAttempt";
+const bindingValue = /^[A-Za-z0-9_-]{43}$/;
+
+function pinSessionKey(value) {
+  pinnedSessionKey = typeof value === "string" && value.length > 0 ? value : null;
+}
+
+// The attemptId is per tab: another tab's GitHub callback cannot complete this tab's sign-in.
+function rememberGithubAttempt(attemptId) {
+  try {
+    sessionStorage.setItem(githubAttemptStorageKey, attemptId);
+  } catch {
+    // Without tab storage the callback still signs in; this tab adopts the session it sees.
+  }
+}
+
+function takeGithubAttempt() {
+  try {
+    const attemptId = sessionStorage.getItem(githubAttemptStorageKey);
+    sessionStorage.removeItem(githubAttemptStorageKey);
+    return attemptId !== null && bindingValue.test(attemptId) ? attemptId : null;
+  } catch {
+    return null;
+  }
+}
 const navigation = createNavigation({
   getNamespaceId: () => namespaceId,
   isLoggingOut: () => loggingOut,
@@ -32,6 +60,7 @@ const request = createApiClient({
   lifetime,
   hasSession: () => session !== null,
   onExpired: () => showLogin("Your session has expired.", location.pathname + location.search),
+  sessionKey: () => pinnedSessionKey,
 });
 const retainedViews = new Map();
 let mountedRouteKey = null;
@@ -223,6 +252,10 @@ function showLogin(message = "", returnPath = null) {
   clearDrafts();
   const loginView = resetReads();
   clearPrivate();
+  pinSessionKey(null);
+  // A pending exchange runs before any login view; an abandoned attempt must not
+  // turn a later password sign-in into a GitHub failure.
+  takeGithubAttempt();
   const url = new URL("/console/login", location.origin);
   const destination = safeReturn(returnPath);
   if (destination) {
@@ -273,9 +306,13 @@ function showLogin(message = "", returnPath = null) {
       const authorization = new URL(result.url);
       if (
         authorization.origin !== "https://github.com" ||
-        authorization.pathname !== "/login/oauth/authorize"
+        authorization.pathname !== "/login/oauth/authorize" ||
+        (githubSessionBinding && !bindingValue.test(result.attemptId ?? ""))
       ) {
         throw new Error("Invalid authorization URL");
+      }
+      if (githubSessionBinding) {
+        rememberGithubAttempt(result.attemptId);
       }
       location.assign(authorization.href);
     } catch (error) {
@@ -302,15 +339,17 @@ function showLogin(message = "", returnPath = null) {
     submit.disabled = true;
     github.disabled = true;
     feedback.textContent = "";
+    takeGithubAttempt();
     const active = lifetime.capture();
     try {
-      await request("/api/auth/sign-in/email", {
+      const signedIn = await request("/api/auth/sign-in/email", {
         method: "POST",
         body: { email: username.value, password: password.value },
       });
       if (!lifetime.isCurrent(active)) {
         return;
       }
+      pinSessionKey(signedIn?.sessionKey);
       password.value = "";
       history.replaceState(null, "", destination ?? "/console/agents");
       await loadPage();
@@ -351,6 +390,7 @@ function showLogin(message = "", returnPath = null) {
   void request("/api/auth/providers")
     .then((available) => {
       if (lifetime.isCurrent(loginView) && available?.github === true) {
+        githubSessionBinding = available.sessionBinding === true;
         providers.append(github);
       }
     })
@@ -405,10 +445,39 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
   }
   let sessionResolved = false;
   let accessResolved = false;
+  const githubAttempt = takeGithubAttempt();
+  if (githubAttempt !== null && current.url.searchParams.get("authError") !== "github") {
+    // Adopt only the session this tab's own GitHub attempt created.
+    try {
+      const confirmed = await request("/api/auth/providers/github/result", {
+        method: "POST",
+        body: { attemptId: githubAttempt },
+      });
+      if (!lifetime.isCurrent(active)) {
+        return;
+      }
+      pinSessionKey(confirmed?.sessionKey);
+    } catch {
+      if (lifetime.isCurrent(active)) {
+        showLogin(
+          "Could not sign in with GitHub. Try again or use your password.",
+          "/console/agents",
+        );
+      }
+      return;
+    }
+  }
   try {
     const previousOwner = sessionOwnerKey(session);
     const resolvedSession = await request("/api/auth/session");
     if (!lifetime.isCurrent(active)) {
+      return;
+    }
+    if (resolvedSession !== null && pinnedSessionKey === null) {
+      pinSessionKey(resolvedSession.sessionKey);
+    } else if (resolvedSession !== null && resolvedSession.sessionKey !== pinnedSessionKey) {
+      // The controller rejects a mismatched key; never act on another session regardless.
+      showLogin("Your session has expired.", pageUrl(current.target, current.namespace));
       return;
     }
     session = resolvedSession;
