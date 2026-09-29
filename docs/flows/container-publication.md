@@ -204,6 +204,8 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 
 ## Changelog
 
+- 2026-09-29 10:00: Update the runtime source to OpenClaw `01d7131999ca4805242ed8b0d8037f4544a9d7b0` (release/2026.9.7 head) with its verified archive checksum; the read-only-paths bridge patch applies unchanged. (chore/openclaw-pin-01d7131999)
+
 - 2026-09-28 14:51: Use upstream Codex 0.158.0 dependencies and remove the old version override. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 6c56149f)
 
 - 2026-09-28 03:13: Disable npm background update checks in the runtime image. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 587b3096b2b5de9c5575a13b36133be99a93ebe2)
