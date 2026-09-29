@@ -346,6 +346,55 @@ test(
     await create;
 
     assert.equal(binding.resourceId, secret.id);
+    // Existence is not enough for asynchronous Agent teardown: status changes
+    // do not modify a key, so the grant must also conflict with ordinary UPDATE.
+    const agentRole = await createState.transact((unit) =>
+      iam.createNamespaceRole(
+        { policy: unit.iamPolicy },
+        {
+          id: identifier("role"),
+          namespaceId: namespace.id,
+          permissions: [{ action: "read", resourceKind: "agent" }],
+        },
+      ),
+    );
+    const agentBinding = {
+      id: identifier("binding"),
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: agent.servicePrincipalId,
+      roleId: agentRole.id,
+      resourceKind: "agent",
+      resourceId: agent.id,
+    };
+    await createState.transact(async (unit) => {
+      await iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, agentBinding);
+      await assert.rejects(
+        deleteState.transact(async (other) => {
+          await deleteState.queryInTransaction(other, "SET LOCAL lock_timeout = '50ms'");
+          await other.agents.transitionAgentStatus(namespace.id, agent.id, "active", "deleting");
+        }),
+        isLockTimeout,
+      );
+    });
+    assert.equal(
+      (
+        await deleteState.transact((unit) =>
+          unit.agents.transitionAgentStatus(namespace.id, agent.id, "active", "deleting"),
+        )
+      ).status,
+      "deleting",
+    );
+    await assert.rejects(
+      createState.transact((unit) =>
+        iam.createNamespaceAccessBinding(
+          { policy: unit.iamPolicy },
+          { ...agentBinding, id: identifier("binding") },
+        ),
+      ),
+      /target does not belong to the exact Namespace/,
+    );
+
     assert.equal(
       await deleteState.transact((unit) => unit.secrets.deleteSecret(namespace.id, secret.id)),
       true,
