@@ -2150,6 +2150,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/namespace": embedded.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": embedded.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(reconciled[runtimePolicyIndex].spec.egress[0].ports, [
     { protocol: "TCP", port: 443 },
@@ -2306,6 +2307,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/namespace": dedicated.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": dedicated.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].spec.egress[0].ports, [
     { protocol: "TCP", port: 18790 },
@@ -2320,6 +2322,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/workload-role": "agent",
     "openclaw.dev/agent": dedicated.agentId,
     "openclaw.dev/revision": dedicated.id,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(dedicatedReconciled[runtimeAgentPolicyIndex].spec.ingress[0].ports, [
     { protocol: "TCP", port: 18790 },

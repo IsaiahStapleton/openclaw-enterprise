@@ -81,6 +81,23 @@ For an already installed, persistent Helm release on k3d, follow
 [local k3d image upgrades](local-k3d-image-upgrade.md) to preserve its state.
 The disposable cluster cleanup above is not an upgrade procedure.
 
+For missing DNS, denied connections, or unready Kubernetes Agents after a
+checkout update, inspect the [ordinary network profile](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
+on the affected Pod and its workload template, plus all matching NetworkPolicies.
+The upgrade restarts nothing: running Pods keep their templates and grants until
+Compute next prepares a revision of their Agent. To move an Agent onto the
+profile, rebuild the controller and deploy a new revision. Preparing it
+re-renders that Agent's grants with the profile, and its new templates carry the
+label. A Gateway from an earlier template, embedded or dedicated, keeps serving
+until activation replaces it. Re-preparing an active revision, for
+example during repository-credential maintenance, rolls its Pods once onto
+profiled templates. Namespace-wide `allow-dns`,
+`allow-gateway-ingress` and `allow-node-gateway` are narrowed only in namespaces
+provisioned after the upgrade; an earlier namespace keeps its previous policies
+until it is recreated. OpenShell Sandboxes need a redeployed revision.
+Restarting a Pod from an old template retains the missing label; assigning the
+profile to arbitrary Pods grants access and is not a repair.
+
 ## Stop development safely
 
 Run the exact command under `Cleanup` in the `dev-up` output. For Podman, it
