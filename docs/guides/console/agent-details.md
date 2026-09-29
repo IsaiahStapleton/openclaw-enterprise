@@ -78,7 +78,7 @@ There is no rollback or redeploy-old-revision button. See
 [Agent Revisions](../topics/agent-revisions.md) for the lifecycle.
 
 Select **Create new version** to open the current saved settings. Edit and save
-Configuration, plugin selections, channel settings, or credentials as needed.
+Configuration, plugin selections, channel settings, or credentials.
 **Deploy new version** submits those saved settings for a new revision; it does
 not redeploy a version you were viewing. It
 checks freshness and required model and channel credentials; missing prerequisites
@@ -296,16 +296,16 @@ the active gateway in a new tab, even while you view a draft or older revision.
 The native UI can change the gateway outside OCE's revision tracking. Use OCE for
 durable configuration. See [native admin access](../../reference/agent-native-admin.md)
 for permissions and stopped, unavailable, or unsupported states. Installation
-administrators can [share an Agent](agent-sharing.md) with an existing person.
+administrators can [share an Agent](agent-sharing.md) with existing people.
 
 ## Stop and resume
 
 **Stop Agent** opens a confirmation explaining that shutdown interrupts running
 work but preserves revision history, credentials, gateway state, and workspace
 files. **Cancel** closes it without a write. Confirming requires `operate`
-permission on this Agent, regardless of the revision or tab you are viewing.
+permission on this Agent, regardless of the viewed revision or tab.
 
-An accepted stop requests shutdown; it does not prove that the runtime has
+An accepted stop requests shutdown; it does not prove the runtime
 finished. **Refresh stop status** reads the desired state and selected revision.
 An uncertain result blocks another stop until a successful refresh. To resume,
 open **Create new version** and select **Deploy new version**, which creates a new

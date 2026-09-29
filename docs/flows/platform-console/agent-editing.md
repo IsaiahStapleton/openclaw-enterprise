@@ -92,9 +92,8 @@ It rereads Agent and Configuration, rejecting changed ID or generation.
 Writes can race after these reads; the API owns authorization and generation.
 
 **Enable Gateway password access** stages `gateway.auth.password` referencing
-`OPENCLAW_GATEWAY_PASSWORD` through this editor. Other settings and Secret bindings
-remain unchanged; Cancel discards the edit. Saving leaves admitted versions
-unchanged. On deployment, Kubernetes `gatewayConfiguration` detects the reference;
+`OPENCLAW_GATEWAY_PASSWORD` through this editor. Other settings, Secret bindings, and
+admitted versions remain unchanged; Cancel discards the edit. On deployment, Kubernetes `gatewayConfiguration` detects the reference;
 `deployment` delivers the generated password environment variable.
 
 Saving reloads the draft without changing admitted snapshots. Invalid input,
@@ -179,11 +178,11 @@ new Secret grant.
 After PATCH, `apps/controller/src/console/agents/secret-access.mjs:ensureSecretOperateBinding`
 grants the Agent service principal access to selected Secrets through Namespace
 IAM. A failed grant leaves Configuration saved. The detail view rereads bindings
-and asks a Namespace administrator to grant access; it does not repeat the
+and asks a Namespace administrator to grant access without repeating the
 channel save. New Secrets remain Namespace-owned after cancellation or failure.
 Preflight reads cannot prevent a later race. An uncertain PATCH blocks another
-channel write until Refresh. Disabling a draft channel changes Configuration;
-it does not stop a running Agent. The
+channel write until Refresh. Disabling a draft channel changes Configuration
+but does not stop a running Agent. The
 [console reference](../../reference/console.md#inspect-detail-revisions-and-channel-drafts)
 describes the supported edits and their deployment boundaries.
 
@@ -236,7 +235,7 @@ deployment in the current view. Subsequent saves retry still-referenced pending
 grants. Picker edits and rejected PATCHes preserve that warning; only a confirmed
 grant or confirmed removal of its reference clears the pending Secret. Explicit
 refresh resets local outcome tracking; the API always enforces Secret access.
-Pickers switch references; shared Secret value rotation remains a separate operation.
+Pickers switch references; rotating shared Secret values is separate.
 
 ### 6. Read and replace live workspace files
 
@@ -300,8 +299,8 @@ returns to the Agents list in the selected Namespace. An uncertain deletion
 blocks another write until a successful read establishes the current state; the browser never automatically retries it.
 
 `packages/occ/src/index.ts:deleteAgent` owns deletion admission. The
-[Agent deletion reference](../../reference/agents.md#deletion) covers the
-subsequent worker cleanup and the Namespace-owned resources it preserves.
+[Agent deletion reference](../../reference/agents.md#deletion) covers
+worker cleanup and the Namespace-owned resources it preserves.
 
 ## Debugging and Verification
 
@@ -310,12 +309,12 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
   Secrets, Configuration update, and Namespace IAM authority to grant Agent use.
 - After a partial save, inspect Configuration, Secret metadata, and Agent IAM
   bindings before retrying. Storage and binding do not prove runtime delivery;
-  explicitly deploy and verify the consuming Agent.
+  deploy and verify the consuming Agent.
 - Compare saved `Agent.plugins` with the viewed revision's plugin snapshot after
   a plugin edit. A successful Agent update does not install or activate plugins;
   deploy and inspect startup status separately.
 - Stop requires exact-Agent `operate`. An accepted stop or an empty selected
-  revision does not independently prove that Compute shutdown has finished.
+  revision does not prove Compute shutdown finished.
 - On `403`, check `delete` permission on the exact Agent; Agent `read` and
   `operate` do not authorize deletion. Use the displayed request ID when present.
 - An accepted deletion remains in progress until the exact Agent read reports
