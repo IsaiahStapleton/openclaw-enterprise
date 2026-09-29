@@ -169,7 +169,9 @@ process.exit(child.status ?? 1);
       {},
       JSON.stringify(files),
     );
-    assert.match(stdout, /pass 1/);
+    // Both supervisor proofs: environment and file-delivered node setup.
+    assert.match(stdout, /\bpass 2\b/);
+    assert.match(stdout, /\bfail 0\b/);
     assert.match(stdout, /skipped 0/);
   },
 );
