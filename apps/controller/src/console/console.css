@@ -432,6 +432,9 @@ p {
   color: var(--muted);
   max-width: 560px;
 }
+.namespace-recovery {
+  margin-bottom: 20px;
+}
 .state-panel .request-id {
   font-family: ui-monospace, monospace;
   font-size: 12px;

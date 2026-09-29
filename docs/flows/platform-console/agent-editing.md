@@ -24,7 +24,9 @@ from exact Agent selection through API response or confirmed deletion. See the
 ```mermaid
 graph TD
   subgraph Browser["Browser"]
-    A["Read exact Agent"] --> B["Open detail action"]
+    A["Read Agent or revision"] -->|readable settings| B["Open detail action"]
+    A -->|unreadable settings| AE["Show metadata and warning"]
+    AE -->|refresh or browse versions| A
     B --> C["Edit draft or save credential bindings"]
     B --> P["Edit Agent plugin selections"]
     B --> Q["Deploy saved draft"]
@@ -66,6 +68,13 @@ graph TD
 
 The page reads Agent, readable revisions, and current Configuration
 (`revision=draft`) or immutable AgentRevision (`revision=<id>`).
+`packages/occ/src/index.ts` uses `listAgents`, `listRevisions`,
+`getAgentForBrowsing`, and `getRevisionForBrowsing` for browsing.
+`packages/occ/src/state/postgres-state.ts:browseSavedConfiguration` turns
+payload-decode failures into metadata plus `configurationReadError`; queries
+and operational reads remain strict. Drafts and revisions decode independently.
+The UI retains navigation, blocks editing/deployment of unreadable drafts, and
+never substitutes defaults. Exact-resource permissions still apply.
 **Current version** uses `activeRevisionId`; **View version vN** opens read-only
 details without activating it. **Deployment activity** shows the newest readable
 version's persisted `queued`, `running`, `succeeded`, or `failed` status, not live
@@ -220,11 +229,6 @@ status again. Lost deployment replies require revision-history readback. Missing
 credentials after a historical revision require operator investigation. Model
 and channel Secrets remain separate.
 
-Slack fields separately derive bound state from Configuration `secretBindings`.
-The shared Secret picker lists readable Namespace Secrets, shows the current
-reference by name when metadata is readable or by ID when unavailable, and can
-create a Namespace Secret without reading existing values.
-
 On explicit submission, the browser PATCHes selected Secret references while
 preserving other bindings, then calls `ensureSecretOperateBinding` for changed
 and pending Secrets. A post-PATCH grant failure leaves bindings saved and blocks
@@ -251,13 +255,12 @@ route. It neither patches Configuration nor admits a revision. The existing
 Results are per file. Unknown write outcomes require a successful reload before
 another save; the editor never retries a write automatically.
 
-Creation uses the same channel editor to stage initial Configuration values and
-Secret bindings, and `apps/controller/src/console/agents/create.mjs` submits the
-four workspace textareas as `initialWorkspaceFiles`; see the
-[creation trace](../platform-console.md#3-authorize-the-selected-page-resource).
-OCC stages them privately until Compute initializes the workspace, without a
-deployed gateway. The [workspace setup flow](../workspace-files.md) owns
-initialization, retry, and cleanup; the live editor becomes available after deployment.
+The [creation trace](../platform-console.md#3-authorize-the-selected-page-resource)
+covers initial channel settings and Secret bindings.
+`apps/controller/src/console/agents/create.mjs` submits `initialWorkspaceFiles`
+and `workspaceDefaultsId`. OCC stages these privately for Compute's initialization
+before execution; no gateway is needed. The [workspace setup flow](../workspace-files.md)
+owns initialization, retries, and cleanup. Live editing requires deployment.
 
 <span id="stop-agent"></span>
 
@@ -335,6 +338,7 @@ subsequent worker cleanup and the Namespace-owned resources it preserves.
 ## Changelog
 
 - 2026-09-29 02:55: Trace Gateway password access staging through the existing Configuration editor and save path. (01a0eb0e-dbc1-78d1-91b0-ea91ee87c00f - fdccee5cab532bc7ef2085c5ec6f8f922663f5ce)
+- 2026-09-28 21:31: Trace metadata-preserving browsing and unreadable saved settings in the accompanying change. (01a0e9c2-e0cd-7ed2-a1b9-a70247c43db2 - 176a52892f72aefc45505f89ae6d33e7526fe4da)
 
 - 2026-09-28 01:39: Move the sharing trace to its own flow. (authoring-run/462d5207-c3a1-4203-af4a-8db2551ccb9a - 4f32ebbca5d699296a142dfbd34c8ec46844fce7)
 

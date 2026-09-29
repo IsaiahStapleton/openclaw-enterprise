@@ -141,9 +141,9 @@ selection or choosing the first ready/readable Namespace. Unreadable IDs stay
 unavailable; selection never becomes an API query selector.
 
 `shell.mjs:namespaceSelector` lists readable choices in headers except Namespaces,
-disabled while loading or empty. Changes call `navigation.mjs:navigate` with the
-current feature and chosen ID: Agent detail/creation return to the Agents list;
-global pages stay open.
+disabled while loading or empty; Namespaces embeds it only for
+unavailable-selection recovery. Selection calls `navigation.mjs:navigate`: Agent
+detail/creation return to Agents; global pages stay open.
 
 ### 3. Authorize the selected page resource
 
@@ -336,6 +336,8 @@ refresh and inspection.
 - 2026-09-25 00:00: Retain repository draft bindings through failed rediscovery. (01a0d557-f6e3-7da2-af52-993d05735554 - 2e0604a2)
 
 - 2026-09-24 22:03: Link shared editor draft capture before tab teardown. (01a0d557-f6e3-7da2-af52-993d05735554 - a91cbfdd37b64c88b7ee48647096ff6bfd993e02)
+
+- 2026-09-24 20:03: Recover unavailable Namespace selection inline. (authoring-run/bb42c16a-c6e1-4900-adf5-9ba37629e491 - 09a392cbda669a99e69d5f6a905921b9f10b43d9)
 
 - 2026-09-24 17:13: Trace the header Namespace selector and preserved navigation scope. (authoring-run/fdba83e7-9f34-4b8b-8af2-625214851f27 - 1a458b227585c572ec0ac70fd10efc3834165075)
 

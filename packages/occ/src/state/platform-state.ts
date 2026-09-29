@@ -15,6 +15,8 @@ import {
 import type {
   AccessBinding,
   Agent,
+  AgentRead,
+  AgentRevisionRead,
   WorkspaceSetup,
   AgentDesiredRuntimeState,
   AgentStatus,
@@ -119,6 +121,11 @@ export interface WorkspaceSetupRepository extends WorkspaceSetupReadRepository {
 }
 
 export interface AgentReadRepository {
+  findAgentForBrowsing(
+    namespaceId: string,
+    agentId: string,
+  ): Promise<Readonly<AgentRead> | undefined>;
+  listAgentsForBrowsing(namespaceId: string): Promise<readonly Readonly<AgentRead>[]>;
   findAgent(namespaceId: string, agentId: string): Promise<Readonly<Agent> | undefined>;
   listAgents(namespaceId: string): Promise<readonly Readonly<Agent>[]>;
 }
@@ -171,6 +178,15 @@ export interface AgentRepository extends AgentReadRepository {
 }
 
 export interface AgentRevisionReadRepository {
+  findRevisionForBrowsing(
+    namespaceId: string,
+    agentId: string,
+    revisionId: string,
+  ): Promise<Readonly<AgentRevisionRead> | undefined>;
+  listRevisionsForBrowsing(
+    namespaceId: string,
+    agentId: string,
+  ): Promise<readonly Readonly<AgentRevisionRead>[]>;
   findRevision(
     namespaceId: string,
     agentId: string,
@@ -1696,6 +1712,8 @@ function repositories(
   };
 
   const agents: AgentRepository = {
+    findAgentForBrowsing: async (namespaceId, agentId) => agents.findAgent(namespaceId, agentId),
+    listAgentsForBrowsing: async (namespaceId) => agents.listAgents(namespaceId),
     findAgent: async (namespaceId, agentId) => {
       const namespace = snapshot.namespaces.get(namespaceId);
       if (namespace?.deletedAt !== undefined) {
@@ -1917,6 +1935,10 @@ function repositories(
   };
 
   const revisions: AgentRevisionRepository = {
+    findRevisionForBrowsing: async (namespaceId, agentId, revisionId) =>
+      revisions.findRevision(namespaceId, agentId, revisionId),
+    listRevisionsForBrowsing: async (namespaceId, agentId) =>
+      revisions.listRevisions(namespaceId, agentId),
     findRevision: async (namespaceId, agentId, revisionId) => {
       if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) {
         return undefined;
