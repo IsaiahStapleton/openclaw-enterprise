@@ -701,7 +701,8 @@ test("Dedicated credential refresh preserves its enrolled workspace node", async
   // Gateway readiness permits enrollment. The setup reaches the running Harness
   // through its volume without replacing it, and this fixture pairs at once.
   assert.equal((await f.driver.prepareRevision(f.revision, f.context([original]))).ready, true);
-  // Activation binds the recorded node ID into the Gateway and waits for it.
+  // Without a status proxy the controller cannot read the Gateway's ack, so
+  // activation binds the recorded node ID into the Gateway's pod spec and waits.
   await assert.rejects(
     f.driver.activateRevision(f.revision, f.context([original])),
     /gateway is not ready/,

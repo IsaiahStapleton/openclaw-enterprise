@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -383,6 +384,36 @@ function sanitizeError(error) {
   };
 }
 
+// Preparation errors may contain command arguments, credentials and child output.
+// Only this closed diagnostic contract is safe to include in CI artifacts.
+function sanitizePreparationError(error) {
+  const result = { name: "Error" };
+  const { code, stage, failure, exitCode, signal, timedOut } = error ?? {};
+  if (
+    code !== "CI_PREPARATION_COMMAND_FAILED" ||
+    !["database-create", "database-schema", "database-migrate"].includes(stage) ||
+    !["spawn", "exit", "signal", "timeout"].includes(failure)
+  ) {
+    return result;
+  }
+  result.code = code;
+  result.stage = stage;
+  result.failure = failure;
+  if (exitCode === null || (Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255)) {
+    result.exitCode = exitCode;
+  }
+  if (
+    signal === null ||
+    (typeof signal === "string" && Object.hasOwn(osConstants.signals, signal))
+  ) {
+    result.signal = signal;
+  }
+  if (typeof timedOut === "boolean") {
+    result.timedOut = timedOut;
+  }
+  return result;
+}
+
 function validatePreparedEnv(value) {
   if (value === undefined) {
     return {};
@@ -504,7 +535,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       issues.push(
         issue("prepare-failed", `prepareFile failed for ${relativePath}`, {
           file: relativePath,
-          error: sanitizeError(error),
+          error: sanitizePreparationError(error),
         }),
       );
       return emptyFileResult(relativePath, issues);

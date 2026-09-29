@@ -8,7 +8,7 @@ with Google or with the account password. Google sign-in creates no account, per
 no signup, and never matches accounts by email address.
 
 Google uses the same guarded
-[single-controller profile](../../reference/authentication.md#github-sign-in-for-existing-accounts)
+[single-controller profile](../../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
 as GitHub: the exact `Origin` checks, PKCE (`S256`), one-use state, the host-only
 `__Host-` browser-binding cookie, the keyed admission limiter, the eight-hour session
 rules, and the `attemptId`, login receipt, and one-use result exchange. Password
@@ -17,7 +17,7 @@ enable Google alone or together with GitHub.
 
 ## Requirements
 
-- Everything the [GitHub profile](../../reference/authentication.md#github-sign-in-for-existing-accounts)
+- Everything the [GitHub profile](../../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
   requires: one serving controller, PostgreSQL State, native IAM, one canonical HTTPS
   Console origin, and `agentNativeAdmin.enabled: false`.
 - A controller image that includes Google sign-in; the published image does not.

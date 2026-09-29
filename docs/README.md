@@ -1,6 +1,8 @@
 # OpenClaw Enterprise
 
-OpenClaw Enterprise (OCE) uses the OpenClaw Control Plane (OCC) to deploy and manage Agents. Set up the platform locally or on an existing Kubernetes cluster, then deploy an Agent and verify its model response.
+OpenClaw Enterprise (OCE) is the open source, vendor neutral platform for managing agents. Think of it as Kubernetes for agents.
+
+The OpenClaw Control Plane (OCC) adds multi-tenancy, governance, and hard security boundaries to OpenClaw agent deployments.
 
 <a id="user-guide"></a>
 <a id="start-and-deploy"></a>
@@ -33,4 +35,5 @@ If you are still learning the product, start with [Concepts](guides/concepts.md)
 <a id="implementation-history"></a>
 
 Contributors can start with [Contribute](contributing/README.md), which links
-the current architecture, target design, runtime flows, and historical specifications.
+the [platform architecture](design.md), remaining design work, runtime flows, and
+historical specifications.

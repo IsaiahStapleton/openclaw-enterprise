@@ -1705,3 +1705,172 @@ test("run records only allowlisted measurements from test diagnostics", async (t
   ]);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}\n${artifact}`, /secretauthvalue/);
 });
+
+for (const scenario of [
+  {
+    name: "exit",
+    input: {
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-create",
+      failure: "exit",
+      exitCode: 42,
+      signal: null,
+      timedOut: false,
+    },
+    expected: {
+      name: "Error",
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-create",
+      failure: "exit",
+      exitCode: 42,
+      signal: null,
+      timedOut: false,
+    },
+  },
+  {
+    name: "spawn",
+    input: { code: "CI_PREPARATION_COMMAND_FAILED", stage: "database-schema", failure: "spawn" },
+    expected: {
+      name: "Error",
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-schema",
+      failure: "spawn",
+    },
+  },
+  {
+    name: "signal",
+    input: {
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-migrate",
+      failure: "signal",
+      exitCode: null,
+      signal: "SIGTERM",
+      timedOut: false,
+    },
+    expected: {
+      name: "Error",
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-migrate",
+      failure: "signal",
+      exitCode: null,
+      signal: "SIGTERM",
+      timedOut: false,
+    },
+  },
+  {
+    name: "timeout",
+    input: {
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-migrate",
+      failure: "timeout",
+      exitCode: null,
+      signal: "SIGKILL",
+      timedOut: true,
+    },
+    expected: {
+      name: "Error",
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-migrate",
+      failure: "timeout",
+      exitCode: null,
+      signal: "SIGKILL",
+      timedOut: true,
+    },
+  },
+  {
+    name: "unknown error",
+    input: {
+      code: "secret-canary-code",
+      stage: "secret-canary-stage",
+      failure: "secret-canary-failure",
+    },
+    expected: { name: "Error" },
+  },
+  {
+    name: "unknown stage",
+    input: { code: "CI_PREPARATION_COMMAND_FAILED", stage: "secret-canary-stage", failure: "exit" },
+    expected: { name: "Error" },
+  },
+  {
+    name: "unknown failure",
+    input: {
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-create",
+      failure: "secret-canary-failure",
+    },
+    expected: { name: "Error" },
+  },
+  {
+    name: "invalid details",
+    input: {
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-schema",
+      failure: "exit",
+      exitCode: 256,
+      signal: "secret-canary-signal",
+      timedOut: "secret-canary-timeout",
+    },
+    expected: {
+      name: "Error",
+      code: "CI_PREPARATION_COMMAND_FAILED",
+      stage: "database-schema",
+      failure: "exit",
+    },
+  },
+]) {
+  test(`run retains safe preparation ${scenario.name} diagnostics without starting tests`, async (t) => {
+    const root = await fixture(t);
+    await writeJson(join(root, "manifest.json"), {
+      version: 1,
+      lanes: { preparation: { files: [{ path: "tests/integration/unstarted.test.mjs" }] } },
+      groups: { ci: ["preparation"] },
+    });
+    await writeFile(
+      join(root, "tests/integration/unstarted.test.mjs"),
+      'import { writeFileSync } from "node:fs"; writeFileSync(new URL("../../started", import.meta.url), "started");\n',
+    );
+    const payload = {
+      name: "secret-canary-name",
+      message: "secret-canary-message",
+      command: "secret-canary-command",
+      args: ["secret-canary-argv"],
+      url: "https://secret-canary-url.invalid",
+      env: { KEY: "secret-canary-env" },
+      stdout: "secret-canary-stdout",
+      stderr: "secret-canary-stderr",
+      stack: "secret-canary-stack",
+      ...scenario.input,
+    };
+    await writeFile(
+      join(root, "scripts/ci/prepare.mjs"),
+      `export async function prepareFile() { throw Object.assign(new Error(), ${JSON.stringify(payload)}); }\n`,
+    );
+    const result = run(root, [
+      "run",
+      "preparation",
+      "--manifest",
+      "manifest.json",
+      "--root",
+      root,
+      "--state",
+      "state/lane.json",
+      "--results",
+      "results/preparation.json",
+    ]);
+    assert.equal(result.status, 1, result.stderr);
+    const artifact = await readFile(join(root, "results/preparation.json"), "utf8");
+    const summary = JSON.parse(artifact);
+    assert.deepEqual(
+      summary.files[0].issues.find(({ code }) => code === "prepare-failed").error,
+      scenario.expected,
+    );
+    assert.equal(summary.files[0].status, "failed");
+    assert.equal(summary.files[0].nodeExitCode, null);
+    assert.deepEqual(summary.files[0].tests, []);
+    assert.equal(summary.counts.passed, 0);
+    assert.equal(summary.counts.skipped, 0);
+    assert.equal(summary.files[0].cleanup, null);
+    await assert.rejects(readFile(join(root, "started")), { code: "ENOENT" });
+    assert.doesNotMatch(artifact + result.stdout + result.stderr, /secret-canary/);
+  });
+}

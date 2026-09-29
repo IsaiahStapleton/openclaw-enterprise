@@ -151,6 +151,10 @@
                         "label": "Service Accounts"
                       },
                       {
+                        "page": "reference/authentication/external-sign-in",
+                        "label": "External Sign-In"
+                      },
+                      {
                         "page": "reference/authentication/service-api-keys",
                         "label": "Service API Keys"
                       }
@@ -647,12 +651,8 @@
                     "label": "Readable Code"
                   },
                   {
-                    "page": "ARCHITECTURE",
-                    "label": "Current Architecture"
-                  },
-                  {
                     "page": "design",
-                    "label": "Target Architecture"
+                    "label": "Architecture"
                   },
                   {
                     "page": "reference/controller",
@@ -885,6 +885,7 @@
               "testing/openshell",
               "testing/openshell-pre5-local-experiment",
               "driver-docs-inventory",
+              "documentation-inventory/quality-audit-2026-09-29",
               "documentation-inventory/gaps",
               "documentation-inventory/getting-started",
               "documentation-inventory/topics",
