@@ -126,7 +126,7 @@ function provisioningStatusText(status) {
     case "running":
       return "Provisioning Agent…";
     case "succeeded":
-      return "Provisioning finished. Waiting for deployment activation…";
+      return "Provisioning finished. Opening Agent details…";
     case "failed":
       return "Provisioning failed.";
     case "cancelled":
@@ -140,16 +140,7 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function deploymentStatusPath(namespaceId, provisioning) {
-  return typeof provisioning?.agentId === "string" &&
-    provisioning.agentId.length > 0 &&
-    typeof provisioning?.revisionId === "string" &&
-    provisioning.revisionId.length > 0
-    ? `${namespacePath(namespaceId)}/agents/${encodeURIComponent(provisioning.agentId)}/deployments/${encodeURIComponent(provisioning.revisionId)}`
-    : null;
-}
-
-async function waitForProvisioning({ request, status, namespaceId, first }) {
+async function waitForProvisioning({ request, status, first }) {
   let current = first.provisioning ?? first;
   const jobUrl = current?.url;
   while (current?.status === "queued" || current?.status === "running") {
@@ -169,28 +160,13 @@ async function waitForProvisioning({ request, status, namespaceId, first }) {
     error.provisioningUrl = current?.url ?? jobUrl;
     throw error;
   }
-  const deploymentPath = deploymentStatusPath(namespaceId, current);
   if (typeof current.agentId !== "string" || !current.agentId) {
     throw new Error("Provisioning status did not include an Agent.");
   }
   if (typeof current.revisionId !== "string" || !current.revisionId) {
     throw new Error("Provisioning status did not include an AgentRevision.");
   }
-  if (!deploymentPath) {
-    return { agentId: current.agentId, revisionId: current.revisionId };
-  }
-  let deployment = current.deployment;
-  while (deployment?.status !== "succeeded") {
-    if (deployment?.status === "failed" || deployment?.status === "cancelled") {
-      const error = new Error(deployment.error?.message ?? "Deployment did not activate.");
-      error.provisioningTerminal = true;
-      throw error;
-    }
-    status.textContent = "Waiting for deployment activation…";
-    await wait(1_000);
-    deployment = await request(deploymentPath);
-  }
-  return { agentId: current.agentId, revisionId: deployment.revisionId ?? current.revisionId };
+  return { agentId: current.agentId, revisionId: current.revisionId };
 }
 
 async function finishProvisioningAttempt({ request, status, namespaceId, attempt }) {
@@ -213,7 +189,6 @@ async function finishProvisioningAttempt({ request, status, namespaceId, attempt
   return waitForProvisioning({
     request,
     status,
-    namespaceId,
     first: provisioned,
   });
 }
@@ -1415,7 +1390,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         return;
       }
       provisioningAttempt = null;
-      context.navigate(`agents/${agentId}?revision=${revisionId}&tab=workspace`);
+      context.navigate(`agents/${agentId}?revision=${revisionId}&tab=configuration`);
     } catch (error) {
       if (!context.isCurrent()) {
         return;
