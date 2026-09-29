@@ -366,6 +366,7 @@ production OCC API mounts only a public trust bundle.
 
 - [Choose another test suite](README.md).
 - [Results, cleanup, and troubleshooting](README.md#results-cleanup-and-troubleshooting).
+- [Network access](production-network-access.md).
 
 ## Dedicated Gateway placement
 

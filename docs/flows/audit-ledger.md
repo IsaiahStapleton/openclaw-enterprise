@@ -1,7 +1,7 @@
 ---
 created: "2026-09-26"
-updated: "2026-09-26"
-last_updated_session: "authoring-run/48c2199e-221b-4f32-9f69-2d21e68712ba"
+updated: "2026-09-28"
+last_updated_session: "authoring-run/48243369-59ed-41da-bc9e-21f627f7e6a2"
 ---
 
 # Audit ledger flow
@@ -112,14 +112,25 @@ queue's `reasonCode` and `attemptCount` are ordinary details, not reserved metad
 
 After the callback returns, State closes admission to repository operations and
 waits for already admitted operations to settle before committing. On failure it
-attempts rollback if the transaction remains marked started, closes the lifetime,
-and releases or discards the client.
+attempts rollback if the transaction remains marked started, COMMIT is not
+uncertain, and no client error has been observed. It closes the lifetime and
+releases or discards the client.
 An acknowledged COMMIT persists the transaction, but the unit returns only
 after client cleanup. A lost or ambiguous COMMIT response can leave the outcome
 unknown: the transaction may have committed or rolled back. A cleanup failure
 after acknowledged COMMIT is also reported as unknown, not proof of rollback.
 Neither case authorizes an automatic replay. An append or list result within a
 unit does not by itself prove that the transaction committed.
+
+When the checked-out client reports a transport error before callback admission,
+State refuses to start the callback. It refuses further repository queries and
+their results after an observed error, and requests client discard when that
+error is known before release. A transaction that fails on an observed client
+error reports the persistence dependency as unavailable, whatever code the error
+carries. If an error is observed during cleanup after an
+acknowledged COMMIT, State reports an unknown outcome. A caller that catches a
+repository error can still perform its own external effects; this guard does not
+control those effects or establish the outcome of an unobserved transport failure.
 
 ### 4. Internal list decodes the ledger
 
@@ -164,5 +175,6 @@ copies and array are immutable.
 
 ## Changelog
 
+- 2026-09-28 11:15: Document observed client errors in the transaction owner alongside the accompanying source correction. (authoring-run/48243369-59ed-41da-bc9e-21f627f7e6a2 - eb25ab1e4105defd4b6bbb19ef28570863d8df63)
 - 2026-09-26 02:55: Clarify that the initial flow inspection included the uncommitted audit decoder fix from 7966519007124bdf77be78324b3c705cf6980199. (authoring-run/48c2199e-221b-4f32-9f69-2d21e68712ba - a501f64abbd1a5821b6c8f0da7f9466195f7dc6d)
 - 2026-09-26 02:38: Prepare the public audit ledger flow from the reviewed source and local draft. (authoring-run/b9f3fb59-fdac-4727-9071-61a19b7d940a - 3b58323f762f5742e8b44be3e269af0696ed7cde)

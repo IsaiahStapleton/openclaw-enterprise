@@ -14,6 +14,11 @@ import {
 import type {
   AccessBinding,
   Agent,
+  AgentMetadata,
+  AgentRead,
+  AgentRevisionMetadata,
+  AgentRevisionRead,
+  ConfigurationReadError,
   WorkspaceSetup,
   AgentRevision,
   AuditEvent,
@@ -203,8 +208,50 @@ function jsonObject(value: unknown): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+class SavedConfigurationReadError extends DependencyUnavailableError {
+  readonly field: ConfigurationReadError["field"];
+
+  constructor(field: ConfigurationReadError["field"], message: string) {
+    super(message);
+    this.field = field;
+  }
+}
+
+function configurationRead<T>(field: ConfigurationReadError["field"], read: () => T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof DependencyUnavailableError || error instanceof SyntaxError) {
+      throw new SavedConfigurationReadError(field, "Persisted saved configuration is invalid.");
+    }
+    throw error;
+  }
+}
+
 function invalidPersistedPluginState(message: string): never {
   throw new DependencyUnavailableError(message);
+}
+
+function browseSavedConfiguration<T extends object, M extends object>(
+  metadata: M,
+  read: () => T,
+): T | (M & { readonly configurationReadError: ConfigurationReadError }) {
+  try {
+    return read();
+  } catch (error) {
+    if (!(error instanceof SavedConfigurationReadError)) {
+      throw error;
+    }
+    // Only payload decoding is recoverable here. Queries and identity/lifecycle
+    // reads stay outside this boundary; invalid settings never become defaults.
+    return immutableCopy({
+      ...metadata,
+      configurationReadError: {
+        code: "SAVED_CONFIGURATION_UNREADABLE" as const,
+        field: error.field,
+      },
+    });
+  }
 }
 
 function invalidPluginState(message: string): never {
@@ -288,17 +335,8 @@ function presetFromRow(row: PostgresRow): Readonly<Preset> {
   });
 }
 
-function agentFromRow(row: PostgresRow): Readonly<Agent> {
+function agentMetadataFromRow(row: PostgresRow): Readonly<AgentMetadata> {
   const activeRevisionId = optionalText(row, "active_revision_id");
-  const repositoryBindings = repositoryBindingsFromJson(row.repository_bindings);
-  const pluginApprovers = pluginApproversFromJson(row.plugin_approvers);
-  let harnessAuth: Agent["harnessAuth"];
-  try {
-    harnessAuth = normalizeHarnessAuthBinding(row.harness_auth);
-  } catch {
-    throw new DependencyUnavailableError("Persisted Agent harness authentication is invalid.");
-  }
-  const backendId = row.backend_id === null ? null : text(row, "backend_id");
   const desiredRuntimeState = text(row, "desired_runtime_state");
   if (desiredRuntimeState !== "running" && desiredRuntimeState !== "stopped") {
     throw new DependencyUnavailableError("Persisted Agent desired runtime state is invalid.");
@@ -308,20 +346,45 @@ function agentFromRow(row: PostgresRow): Readonly<Agent> {
     namespaceId: text(row, "namespace_id"),
     name: text(row, "name"),
     configurationId: text(row, "configuration_id"),
-    backendId,
+    backendId: row.backend_id === null ? null : text(row, "backend_id"),
     executionMode: text(row, "execution_mode") as Agent["executionMode"],
-    ...(row.plugins === null || row.plugins === undefined
-      ? {}
-      : { plugins: pluginStateFromJson(row.plugins)! }),
-    ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
-    ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
     servicePrincipalId: text(row, "service_principal_id"),
-    harnessAuth,
     ...(activeRevisionId === undefined ? {} : { activeRevisionId }),
     desiredRuntimeState,
     status: text(row, "status") as Agent["status"],
     createdAt: timestamp(row, "created_at"),
   });
+}
+
+function agentFromRow(row: PostgresRow, metadata = agentMetadataFromRow(row)): Readonly<Agent> {
+  const repositoryBindings = configurationRead("repositoryBindings", () =>
+    repositoryBindingsFromJson(row.repository_bindings),
+  );
+  const pluginApprovers = configurationRead("pluginApprovers", () =>
+    pluginApproversFromJson(row.plugin_approvers),
+  );
+  let harnessAuth: Agent["harnessAuth"];
+  try {
+    harnessAuth = normalizeHarnessAuthBinding(row.harness_auth);
+  } catch {
+    throw new SavedConfigurationReadError(
+      "harnessAuth",
+      "Persisted Agent harness authentication is invalid.",
+    );
+  }
+  const plugins = configurationRead("plugins", () => pluginStateFromJson(row.plugins));
+  return immutableCopy({
+    ...metadata,
+    ...(plugins === undefined ? {} : { plugins }),
+    ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
+    ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+    harnessAuth,
+  });
+}
+
+function agentForBrowsingFromRow(row: PostgresRow): Readonly<AgentRead> {
+  const metadata = agentMetadataFromRow(row);
+  return browseSavedConfiguration(metadata, () => agentFromRow(row, metadata));
 }
 
 function serviceAccountFromRow(row: PostgresRow): Readonly<ServiceAccount> {
@@ -405,13 +468,27 @@ function credentialSourceFromRow(row: PostgresRow): Readonly<CredentialSource> {
   });
 }
 
-function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
+function revisionMetadataFromRow(row: PostgresRow): Readonly<AgentRevisionMetadata> {
   const rawNumber = row.revision_number;
   const revision = typeof rawNumber === "string" ? Number(rawNumber) : rawNumber;
   if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision <= 0) {
     throw new DependencyUnavailableError("Persisted AgentRevision numbering is invalid.");
   }
-  const admitted = jsonObject(row.admitted_spec) as {
+  return immutableCopy({
+    id: text(row, "id"),
+    namespaceId: text(row, "namespace_id"),
+    agentId: text(row, "agent_id"),
+    revision,
+    backendId: row.backend_id === null ? null : text(row, "backend_id"),
+    createdAt: timestamp(row, "admitted_at"),
+  });
+}
+
+function revisionFromRow(
+  row: PostgresRow,
+  metadata = revisionMetadataFromRow(row),
+): Readonly<AgentRevision> {
+  const admitted = configurationRead("configuration", () => jsonObject(row.admitted_spec)) as {
     configuration_id: AgentRevision["configurationId"];
     configuration_kind: AgentRevision["configurationKind"];
     configuration_generation: AgentRevision["configurationGeneration"];
@@ -430,34 +507,40 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
     Object.hasOwn(admitted, "service_account") ||
     !validHarnessAuthSnapshot(admitted.harness_auth, text(row, "namespace_id"))
   ) {
-    throw new DependencyUnavailableError(
+    throw new SavedConfigurationReadError(
+      "harnessAuth",
       "Persisted AgentRevision harness authentication is invalid or legacy.",
     );
   }
   const secretBindings =
     admitted.secret_bindings === undefined
       ? undefined
-      : secretBindingsFromJson(admitted.secret_bindings, text(row, "namespace_id"));
+      : configurationRead("secretBindings", () =>
+          secretBindingsFromJson(admitted.secret_bindings, metadata.namespaceId),
+        );
   if (!validPluginRevisionState(admitted.plugins)) {
-    throw new DependencyUnavailableError("Persisted AgentRevision plugin state is invalid.");
+    throw new SavedConfigurationReadError(
+      "plugins",
+      "Persisted AgentRevision plugin state is invalid.",
+    );
   }
   if (!validPluginApprovers(admitted.plugin_approvers)) {
-    throw new DependencyUnavailableError("Persisted AgentRevision plugin approvers are invalid.");
+    throw new SavedConfigurationReadError(
+      "pluginApprovers",
+      "Persisted AgentRevision plugin approvers are invalid.",
+    );
   }
   if (
     admitted.repository_credentials !== undefined &&
     !validRepositoryRevisionState(admitted.repository_credentials)
   ) {
-    throw new DependencyUnavailableError(
+    throw new SavedConfigurationReadError(
+      "repositoryCredentials",
       "Persisted AgentRevision repository credentials are invalid.",
     );
   }
   return immutableCopy({
-    id: text(row, "id"),
-    namespaceId: text(row, "namespace_id"),
-    agentId: text(row, "agent_id"),
-    revision,
-    backendId: row.backend_id === null ? null : text(row, "backend_id"),
+    ...metadata,
     configurationId: admitted.configuration_id,
     configurationKind: admitted.configuration_kind,
     configurationGeneration: admitted.configuration_generation,
@@ -480,8 +563,12 @@ function revisionFromRow(row: PostgresRow): Readonly<AgentRevision> {
       : { repositoryCredentials: admitted.repository_credentials }),
     harnessAuth: admitted.harness_auth,
     servicePrincipalId: text(row, "service_principal_id"),
-    createdAt: timestamp(row, "admitted_at"),
   });
+}
+
+function revisionForBrowsingFromRow(row: PostgresRow): Readonly<AgentRevisionRead> {
+  const metadata = revisionMetadataFromRow(row);
+  return browseSavedConfiguration(metadata, () => revisionFromRow(row, metadata));
 }
 
 function secretBindingsFromJson(value: unknown, namespaceId: string): SecretBindings | undefined {
@@ -1293,9 +1380,8 @@ export class PostgresPlatformState implements PlatformStateStore {
     // still receive the original query failure or the exact unknown-COMMIT outcome.
     let transportError: Error | undefined;
     const onTransportError = (error: Error) => {
-      transportError = error;
+      transportError ??= error;
     };
-    client.on?.("error", onTransportError);
     const lifetime = new RepositoryTransactionLifetime();
     let started = false;
     let committing = false;
@@ -1304,6 +1390,15 @@ export class PostgresPlatformState implements PlatformStateStore {
     let discard = false;
     let unit: PlatformUnitOfWork | undefined;
     try {
+      try {
+        client.on?.("error", onTransportError);
+      } catch (error) {
+        discard = true;
+        throw error;
+      }
+      if (transportError !== undefined) {
+        throw transportError;
+      }
       await client.query(
         readOnly
           ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
@@ -1312,13 +1407,22 @@ export class PostgresPlatformState implements PlatformStateStore {
             : "BEGIN",
       );
       started = true;
+      if (transportError !== undefined) {
+        throw transportError;
+      }
       const context: TransactionContext = {
         lifetime,
         client: {
           query: async (statement, parameters) => {
             lifetime.assertActive();
+            if (transportError !== undefined) {
+              throw transportError;
+            }
             const result = await client.query(statement, parameters);
             lifetime.assertActive();
+            if (transportError !== undefined) {
+              throw transportError;
+            }
             return result;
           },
           release: () => {
@@ -1347,6 +1451,9 @@ export class PostgresPlatformState implements PlatformStateStore {
         committing = false;
         throw error;
       }
+      if (transportError !== undefined) {
+        throw new PostgresCommitOutcomeUnknownError();
+      }
       // Inspect acknowledgment separately: a throwing projection is not a server
       // rejection, even if its exception happens to contain a SQLSTATE.
       const command = (completion as { command?: unknown } | null)?.command;
@@ -1364,7 +1471,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       return result;
     } catch (error) {
       failed = true;
-      discard = committing || transportError !== undefined;
+      discard ||= committing || transportError !== undefined;
       await lifetime.finish();
       // An uncertain COMMIT or broken transport must not be queried again.
       if (started && !committing && transportError === undefined) {
@@ -1379,6 +1486,11 @@ export class PostgresPlatformState implements PlatformStateStore {
           throw error;
         }
         throw new PostgresCommitOutcomeUnknownError();
+      }
+      // An observed client error means the connection is broken, whatever code it
+      // carries; classify it as unavailable rather than as a server verdict.
+      if (transportError !== undefined && error === transportError) {
+        throw new DependencyUnavailableError("The platform persistence repository is unavailable.");
       }
       throw databaseError(error);
     } finally {
@@ -1399,7 +1511,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       }
       // Preserve the original failure. A failure after acknowledged COMMIT can
       // never be reported as definite rollback or authorize an automatic replay.
-      if (!failed && cleanupFailed && acknowledged) {
+      if (!failed && (cleanupFailed || transportError !== undefined) && acknowledged) {
         throw new PostgresCommitOutcomeUnknownError();
       }
     }
@@ -2328,11 +2440,11 @@ export class PostgresPlatformState implements PlatformStateStore {
       },
     };
 
-    const findAgent = async (
+    const findAgentRow = async (
       namespaceId: string,
       agentId: string,
       lock = false,
-    ): Promise<Readonly<Agent> | undefined> => {
+    ): Promise<PostgresRow | undefined> => {
       const found = rows(
         (
           await client.query(
@@ -2346,7 +2458,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           )
         ).rows,
       )[0];
-      return found === undefined ? undefined : agentFromRow(found);
+      return found;
     };
 
     const setupFromRow = (row: PostgresRow): Readonly<WorkspaceSetup> =>
@@ -2412,24 +2524,39 @@ export class PostgresPlatformState implements PlatformStateStore {
         ).length > 0,
     };
 
-    const agents: AgentRepository = {
-      findAgent,
-      lockAgent: async (namespaceId, agentId) => findAgent(namespaceId, agentId, true),
-      listAgents: async (namespaceId) => {
-        const found = rows(
-          (
-            await client.query(
-              `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
+    const listAgentRows = async (namespaceId: string): Promise<PostgresRow[]> => {
+      const found = rows(
+        (
+          await client.query(
+            `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
                       a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
                       a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
                WHERE a.namespace_id = $1 ORDER BY a.created_at, a.id`,
-              [namespaceId],
-            )
-          ).rows,
-        );
-        return Object.freeze(found.map((row) => agentFromRow(row)));
+            [namespaceId],
+          )
+        ).rows,
+      );
+      return found;
+    };
+
+    const agents: AgentRepository = {
+      findAgent: async (namespaceId, agentId) => {
+        const row = await findAgentRow(namespaceId, agentId);
+        return row === undefined ? undefined : agentFromRow(row);
+      },
+      findAgentForBrowsing: async (namespaceId, agentId) => {
+        const row = await findAgentRow(namespaceId, agentId);
+        return row === undefined ? undefined : agentForBrowsingFromRow(row);
+      },
+      listAgents: async (namespaceId) =>
+        Object.freeze((await listAgentRows(namespaceId)).map((row) => agentFromRow(row))),
+      listAgentsForBrowsing: async (namespaceId) =>
+        Object.freeze((await listAgentRows(namespaceId)).map(agentForBrowsingFromRow)),
+      lockAgent: async (namespaceId, agentId) => {
+        const row = await findAgentRow(namespaceId, agentId, true);
+        return row === undefined ? undefined : agentFromRow(row);
       },
       createAgent: async (agent) => {
         await this.requireInitialized(context);
@@ -2650,41 +2777,66 @@ export class PostgresPlatformState implements PlatformStateStore {
       },
     };
 
-    const revisions: AgentRevisionRepository = {
-      findRevision: async (namespaceId, agentId, revisionId) => {
-        const found = rows(
-          (
-            await client.query(
-              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.backend_id,
+    const findRevisionRow = async (
+      namespaceId: string,
+      agentId: string,
+      revisionId: string,
+    ): Promise<PostgresRow | undefined> => {
+      const found = rows(
+        (
+          await client.query(
+            `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.backend_id,
                       r.admitted_spec,
                       r.admitted_at, a.service_principal_id
                FROM occ.agent_revisions AS r
                JOIN occ.agents AS a ON a.namespace_id = r.namespace_id AND a.id = r.agent_id
                JOIN occ.namespaces AS n ON n.id = r.namespace_id AND n.deleted_at IS NULL
                WHERE r.namespace_id = $1 AND r.agent_id = $2 AND r.id = $3`,
-              [namespaceId, agentId, revisionId],
-            )
-          ).rows,
-        )[0];
-        return found === undefined ? undefined : revisionFromRow(found);
-      },
-      listRevisions: async (namespaceId, agentId) => {
-        const found = rows(
-          (
-            await client.query(
-              `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.backend_id,
+            [namespaceId, agentId, revisionId],
+          )
+        ).rows,
+      )[0];
+      return found;
+    };
+
+    const listRevisionRows = async (
+      namespaceId: string,
+      agentId: string,
+    ): Promise<PostgresRow[]> => {
+      const found = rows(
+        (
+          await client.query(
+            `SELECT r.id, r.namespace_id, r.agent_id, r.revision_number, r.backend_id,
                       r.admitted_spec,
                       r.admitted_at, a.service_principal_id
                FROM occ.agent_revisions AS r
                JOIN occ.agents AS a ON a.namespace_id = r.namespace_id AND a.id = r.agent_id
                JOIN occ.namespaces AS n ON n.id = r.namespace_id AND n.deleted_at IS NULL
                WHERE r.namespace_id = $1 AND r.agent_id = $2 ORDER BY r.revision_number`,
-              [namespaceId, agentId],
-            )
-          ).rows,
-        );
-        return Object.freeze(found.map((row) => revisionFromRow(row)));
+            [namespaceId, agentId],
+          )
+        ).rows,
+      );
+      return found;
+    };
+
+    const revisions: AgentRevisionRepository = {
+      findRevision: async (namespaceId, agentId, revisionId) => {
+        const row = await findRevisionRow(namespaceId, agentId, revisionId);
+        return row === undefined ? undefined : revisionFromRow(row);
       },
+      findRevisionForBrowsing: async (namespaceId, agentId, revisionId) => {
+        const row = await findRevisionRow(namespaceId, agentId, revisionId);
+        return row === undefined ? undefined : revisionForBrowsingFromRow(row);
+      },
+      listRevisions: async (namespaceId, agentId) =>
+        Object.freeze(
+          (await listRevisionRows(namespaceId, agentId)).map((row) => revisionFromRow(row)),
+        ),
+      listRevisionsForBrowsing: async (namespaceId, agentId) =>
+        Object.freeze(
+          (await listRevisionRows(namespaceId, agentId)).map(revisionForBrowsingFromRow),
+        ),
       createRevision: async (revision) => {
         await this.requireInitialized(context);
         if (

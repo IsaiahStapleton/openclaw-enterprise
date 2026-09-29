@@ -330,6 +330,28 @@ function failureDiagnostic(error) {
       ? { kind: "runtime-image-stock-broker", stage }
       : undefined;
   }
+  if (diagnostic.kind === "metrics-monitoring") {
+    const stages = ["prometheus-up", "occ-request", "grafana-health", "grafana-datasource"];
+    const reasons = ["timeout", "container-exited", "query-error"];
+    if (!stages.includes(diagnostic.stage) || !reasons.includes(diagnostic.reason)) {
+      return undefined;
+    }
+    return {
+      kind: "metrics-monitoring",
+      stage: diagnostic.stage,
+      reason: diagnostic.reason,
+      container: ["server", "agent", "grafana"].includes(diagnostic.container)
+        ? diagnostic.container
+        : undefined,
+      exitCode:
+        Number.isInteger(diagnostic.exitCode) &&
+        diagnostic.exitCode >= 0 &&
+        diagnostic.exitCode <= 255
+          ? diagnostic.exitCode
+          : undefined,
+      lastHttpStatus: safeStatus(diagnostic.lastHttpStatus),
+    };
+  }
   if (diagnostic.kind !== "controller-http") {
     return undefined;
   }
