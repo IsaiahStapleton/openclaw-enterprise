@@ -336,7 +336,7 @@ stays `deleting`. Once the cause is corrected, the initiating caller can repeat
 DELETE to replenish the attempt budget. OCC and the worker recheck permission.
 Another permitted actor takes over only once the initiator lost permission.
 Prior failure audits remain; the retry adds an audit event. Namespace deletion
-has similar [recovery](namespaces.md#failure-semantics-and-limitations), without takeover.
+has the same [recovery](namespaces.md#failure-semantics-and-limitations), including takeover.
 
 ## Editable configuration
 

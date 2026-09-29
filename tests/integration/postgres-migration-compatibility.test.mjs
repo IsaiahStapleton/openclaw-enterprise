@@ -1038,6 +1038,7 @@ async function assertCompletedHistory(db, previous = []) {
     [
       ["occ.finalize_agent_deletion(text,text,text,uuid)", true],
       ["occ.retry_failed_agent_deletion(text,text,text,text)", true],
+      ["occ.retry_failed_namespace_deletion(text,text,text)", true],
       ["occ.validate_access_binding_scope()", false],
       ["occ.validate_group_membership()", false],
       ["occ.validate_restriction_scope()", false],
@@ -1468,6 +1469,7 @@ test(
       [36, "preDeploymentProgress"],
       [37, "preHumanAuthentication"],
       [38, "preAgentDeletionTakeover"],
+      [39, "preNamespaceDeletionTakeover"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1714,6 +1716,7 @@ test(
       [36, "preDeploymentProgress"],
       [37, "preHumanAuthentication"],
       [38, "preAgentDeletionTakeover"],
+      [39, "preNamespaceDeletionTakeover"],
     ]) {
       await context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1781,6 +1784,7 @@ test(
       [36, "preDeploymentProgress"],
       [37, "preHumanAuthentication"],
       [38, "preAgentDeletionTakeover"],
+      [39, "preNamespaceDeletionTakeover"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });

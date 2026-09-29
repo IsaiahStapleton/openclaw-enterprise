@@ -183,6 +183,14 @@ duration, and time since the wrapper started. A Gateway also logs
 `peer-status-changed` before it exits to restart for a replaced Harness. These
 logs carry no provider, model, credential, or path values.
 
+On a first dedicated Codex deploy the controller creates the Gateway alongside
+its Harness, and the Agent Service selects that revision's Harness from the
+start. The Service lists the Harness only once it is ready, so the Gateway
+waits for the Harness plugin status without a deadline. It stays unready while
+it waits and logs `Waiting for Harness plugin runtime status` at most every 30
+seconds. The deployment's convergence deadline governs a Harness that never
+reports. A redeploy keeps the Service on the serving revision until activation.
+
 These startup checks make provider requests and may incur model usage charges.
 They do not verify access to every other configured model or guarantee continued validity
 after upstream revocation. Embedded probe transport configuration must use
@@ -282,6 +290,10 @@ its admitted configuration. The upstream gateway must still
 support the app-server token Secret reference and projected workload identity
 required by the admitted workload. Stock OpenShell incompatibilities
 fail explicitly; test bridges do not establish turnkey production support.
+The pinned OpenClaw runtime image cannot run dedicated native OpenClaw yet. It
+rejects the required worker placement and native worker inference settings, so
+the Gateway and Harness refuse to start rather than run sessions on the Gateway.
+See the [runtime image recipe](../../deploy/runtime/README.md).
 There is no current command-level `exec` facet or per-tool sandbox admission.
 See [SandboxDriver](drivers/sandbox.md) and [OpenShell](drivers/openshell-sandbox.md)
 for the complete capability and upstream compatibility boundaries.

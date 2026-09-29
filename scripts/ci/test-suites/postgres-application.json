@@ -324,6 +324,12 @@
       "expectedTests": [
         "sign-in admission keys on the client behind a trusted ingress and ignores other peers' headers"
       ]
+    },
+    {
+      "path": "tests/integration/postgres-password-sign-in-limit.test.mjs",
+      "expectedTests": [
+        "password-only sign-in limits failures per client and email with a reserved administrator lane"
+      ]
     }
   ]
 }

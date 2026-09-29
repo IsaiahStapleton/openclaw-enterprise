@@ -107,8 +107,8 @@ permission, another permitted caller takes over as the work's actor, audited as
 `takeover`. After checking delete permission, `operations.retryFailedAgentDeletion`
 resets only the stopped, deleting Agent's terminal work, keeping prior audits.
 The worker reauthorizes normally.
-`deleteNamespace` recovers Namespace teardown via
-`retryFailedNamespaceDeletion`.
+`deleteNamespace` recovers Namespace teardown the same way via
+`retryFailedNamespaceDeletion`, including takeover.
 
 ### 3. Recover expired claims and claim one eligible operation
 

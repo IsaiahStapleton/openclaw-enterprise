@@ -770,7 +770,7 @@ Move the recovery designation to another administrator
 
 **Operation ID:** `replaceAuthRecovery`
 
-**Permissions:** Requires a current human Native IAM Installation administrator and trusted Origin. The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.
+**Permissions:** Requires a current human Native IAM Installation administrator and trusted Origin who holds every IAM grant of the current holder's Principal (else 403). The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -939,7 +939,7 @@ Sign in with email and password
 
 **Operation ID:** `signInEmail`
 
-**Permissions:** Authenticates a local account and issues a user session cookie.
+**Permissions:** Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are delayed and return 429 with Retry-After.
 
 ##### Request body
 
@@ -958,6 +958,7 @@ Sign in with email and password
 | --- | --- |
 | `200` | OK |
 | `401` | Unauthorized |
+| `429` | Too Many Requests |
 | `503` | Service Unavailable |
 
 **`200` response body:** `application/json`

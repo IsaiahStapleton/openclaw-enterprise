@@ -106,6 +106,12 @@ test("run resolves lane documents relative to the manifest and preserves ordered
   // Lane documents follow the manifest, but test paths still follow --root.
   await mkdir(join(root, "manifests/lanes"), { recursive: true });
   await writeJson(join(root, "manifests/lanes/baseline.json"), {
+    requiredEnv: [
+      "OCC_PROBE_CONTROLLER_IMAGE",
+      "OCC_PROBE_BROKER_IMAGE",
+      "OCC_PROBE_OLD_CONTROLLER_IMAGE",
+      "OCC_PROBE_OLD_BROKER_IMAGE",
+    ],
     files: [
       {
         path: "tests/integration/first.test.mjs",
@@ -123,18 +129,27 @@ test("run resolves lane documents relative to the manifest and preserves ordered
     groups: { ci: ["baseline"] },
   });
 
-  const result = run(root, [
-    "run",
-    "baseline",
-    "--manifest",
-    "manifests/suites.json",
-    "--root",
+  const result = run(
     root,
-    "--state",
-    statePath,
-    "--results",
-    resultsPath,
-  ]);
+    [
+      "run",
+      "baseline",
+      "--manifest",
+      "manifests/suites.json",
+      "--root",
+      root,
+      "--state",
+      statePath,
+      "--results",
+      resultsPath,
+    ],
+    {
+      OCC_PROBE_CONTROLLER_IMAGE: `private.example/current-controller@sha256:${"b".repeat(64)}`,
+      OCC_PROBE_BROKER_IMAGE: `private.example/current-broker@sha256:${"c".repeat(64)}`,
+      OCC_PROBE_OLD_CONTROLLER_IMAGE: `private.example/old-controller@sha256:${"d".repeat(64)}`,
+      OCC_PROBE_OLD_BROKER_IMAGE: `private.example/old-broker@sha256:${"e".repeat(64)}`,
+    },
+  );
 
   assert.equal(result.status, 0, result.stderr);
   const summary = JSON.parse(await readFile(resultsPath, "utf8"));
@@ -154,14 +169,21 @@ test("run resolves lane documents relative to the manifest and preserves ordered
   );
   // Evidence must retain immutable identity without exporting private registry names
   // or arbitrary prepared environment values alongside the public CI artifact.
+  const pairDigests = {
+    pairController: `sha256:${"b".repeat(64)}`,
+    pairBroker: `sha256:${"c".repeat(64)}`,
+    pairOldController: `sha256:${"d".repeat(64)}`,
+    pairOldBroker: `sha256:${"e".repeat(64)}`,
+  };
   assert.deepEqual(summary.files[0].imageDigests, {
     controller: `sha256:${"a".repeat(64)}`,
     runtime: `sha256:${"b".repeat(64)}`,
     controllerUpgrade: `sha256:${"d".repeat(64)}`,
     runtimeUpgrade: `sha256:${"e".repeat(64)}`,
     repositoryCredentials: `sha256:${"c".repeat(64)}`,
+    ...pairDigests,
   });
-  assert.deepEqual(summary.files[1].imageDigests, {});
+  assert.deepEqual(summary.files[1].imageDigests, pairDigests);
   assert.doesNotMatch(JSON.stringify(summary), /private\.example|untrusted-image-value/);
   assert.match(await readFile(statePath, "utf8"), /first\.test\.mjs/);
 });
@@ -415,6 +437,8 @@ test("run clears inherited selectors and keep flags while preserving explicit la
       '  assert.equal(process.env.OCC_TEST_REQUIRED_SELECTOR, "required");',
       '  assert.equal(process.env.OCC_TEST_LANE_SELECTOR, "lane");',
       "  assert.equal(process.env.OCC_TEST_LEAKED_SELECTOR, undefined);",
+      '  assert.equal(process.env.OCC_PROBE_REQUIRED_SELECTOR, "required");',
+      "  assert.equal(process.env.OCC_PROBE_LEAKED_SELECTOR, undefined);",
       "  assert.equal(process.env.KEEP, undefined);",
       "  assert.equal(process.env.OCC_RUNTIME_KEEP, undefined);",
       "});",
@@ -428,7 +452,7 @@ test("run clears inherited selectors and keep flags while preserving explicit la
         env: {
           OCC_TEST_LANE_SELECTOR: "lane",
         },
-        requiredEnv: ["OCC_TEST_REQUIRED_SELECTOR"],
+        requiredEnv: ["OCC_TEST_REQUIRED_SELECTOR", "OCC_PROBE_REQUIRED_SELECTOR"],
         files: [{ path: "tests/integration/env-isolation.test.mjs" }],
       },
     },
@@ -456,6 +480,8 @@ test("run clears inherited selectors and keep flags while preserving explicit la
       OCC_RUNTIME_KEEP: "1",
       OCC_TEST_LEAKED_SELECTOR: "1",
       OCC_TEST_REQUIRED_SELECTOR: "required",
+      OCC_PROBE_LEAKED_SELECTOR: "1",
+      OCC_PROBE_REQUIRED_SELECTOR: "required",
     },
   );
 

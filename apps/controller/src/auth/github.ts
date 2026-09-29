@@ -31,6 +31,7 @@ import {
   rejected,
   type ProviderExchange,
 } from "./provider-transport.ts";
+import { admissionKey, keyedAdmission } from "./admission.ts";
 
 export interface GitHubLoginConfiguration {
   readonly clientId: string;
@@ -160,129 +161,6 @@ function cookieLifetime(createdAt: Date, expiresAt: Date, startedAt: number): nu
     throw rejected();
   }
   return remaining;
-}
-
-interface AdmissionBudget {
-  readonly perMinute: number;
-  readonly concurrent: number;
-}
-
-interface AdmissionEntry {
-  windowStart: number;
-  admitted: number;
-  active: number;
-}
-
-const admissionTableCapacity = 4096;
-const admissionWindow = 60_000;
-
-function tooManyRequests(): APIError {
-  return APIError.fromStatus("TOO_MANY_REQUESTS", { message: "Try again later." });
-}
-
-function admissionEntry(now: number): AdmissionEntry {
-  return { windowStart: now, admitted: 0, active: 0 };
-}
-
-function rollWindow(entry: AdmissionEntry, now: number): void {
-  if (now - entry.windowStart >= admissionWindow) {
-    entry.windowStart = now;
-    entry.admitted = 0;
-  }
-}
-
-// Caller keys are hashed; the address header value is capped before hashing.
-function admissionKey(kind: "ip" | "email", value: string | null | undefined): string {
-  const trimmed = (value ?? "").trim();
-  const raw = kind === "ip" ? trimmed.slice(0, 64) : trimmed;
-  return `${kind}:${digest(raw.length === 0 ? "unknown" : raw)}`;
-}
-
-function keyedAdmission(
-  perKey: AdmissionBudget,
-  global: { readonly concurrent: number; readonly reserved: number },
-  recovery?: AdmissionBudget,
-) {
-  // Map order is recency order: touching an entry deletes and re-inserts it.
-  const table = new Map<string, AdmissionEntry>();
-  // The recovery entry lives outside the table, so key churn can never evict it.
-  const recoveryEntry = admissionEntry(performance.now());
-  let active = 0;
-
-  function evict(pinned: readonly AdmissionEntry[]): boolean {
-    for (const [key, entry] of table) {
-      if (entry.active === 0 && !pinned.includes(entry)) {
-        table.delete(key);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  function touch(key: string, now: number, pinned: readonly AdmissionEntry[]): AdmissionEntry {
-    let entry = table.get(key);
-    if (entry === undefined) {
-      if (table.size >= admissionTableCapacity && !evict(pinned)) {
-        throw tooManyRequests();
-      }
-      entry = admissionEntry(now);
-    } else {
-      table.delete(key);
-      rollWindow(entry, now);
-    }
-    table.set(key, entry);
-    return entry;
-  }
-
-  async function run<T>(entries: readonly AdmissionEntry[], work: () => Promise<T>): Promise<T> {
-    for (const entry of entries) {
-      entry.admitted += 1;
-      entry.active += 1;
-    }
-    active += 1;
-    try {
-      return await work();
-    } finally {
-      active -= 1;
-      for (const entry of entries) {
-        entry.active -= 1;
-      }
-    }
-  }
-
-  return {
-    async admit<T>(keys: readonly string[], work: () => Promise<T>): Promise<T> {
-      const now = performance.now();
-      const entries: AdmissionEntry[] = [];
-      for (const key of keys) {
-        entries.push(touch(key, now, entries));
-      }
-      // Check every limit before counting anything, so one exhausted key spends no other budget.
-      if (
-        active >= global.concurrent ||
-        entries.some(
-          (entry) => entry.admitted >= perKey.perMinute || entry.active >= perKey.concurrent,
-        )
-      ) {
-        throw tooManyRequests();
-      }
-      return run(entries, work);
-    },
-    async admitRecovery<T>(work: () => Promise<T>): Promise<T> {
-      if (recovery === undefined) {
-        throw tooManyRequests();
-      }
-      rollWindow(recoveryEntry, performance.now());
-      if (
-        active >= global.concurrent + global.reserved ||
-        recoveryEntry.admitted >= recovery.perMinute ||
-        recoveryEntry.active >= recovery.concurrent
-      ) {
-        throw tooManyRequests();
-      }
-      return run([recoveryEntry], work);
-    },
-  };
 }
 
 function githubSubject(value: unknown): string | undefined {

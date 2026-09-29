@@ -3186,12 +3186,25 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (embedded) {
         launchPrepared = true;
       }
+      // A first dedicated deploy of a Deployment-backed Codex Harness creates its
+      // Gateway alongside the Harness. The Gateway reads Harness plugin status
+      // through the agent Service, which selects this revision from the first
+      // pass; its endpoints list only ready pods, so the Gateway waits (without
+      // a deadline) until the Harness reports. A redeploy keeps the Service on
+      // the serving revision until activation.
+      const initialDedicatedCodexGateway =
+        !embedded &&
+        this.options.runtime !== undefined &&
+        existingGateway === undefined &&
+        nativeRuntime === undefined &&
+        sandboxDriver?.provisionHarness === undefined;
       const deferInitialDedicatedGatewayForPluginStatus =
         !embedded &&
         this.options.runtime !== undefined &&
         pluginStatusContainer === "agent" &&
         existingGateway === undefined &&
-        workspaceSetup === undefined;
+        workspaceSetup === undefined &&
+        !initialDedicatedCodexGateway;
       const reconcileGatewayDeployment = async (environment: Record<string, string>) => {
         await this.reconcileChannelNetworkPolicy(revision, channels, gatewayNamespace);
         await this.deliverWorkspaceNodeBinding(
@@ -3227,7 +3240,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
         );
       };
       if (
-        (existingGateway === undefined && !deferInitialDedicatedGatewayForPluginStatus) ||
+        (existingGateway === undefined &&
+          !deferInitialDedicatedGatewayForPluginStatus &&
+          !initialDedicatedCodexGateway) ||
         this.options.runtime === undefined ||
         existingGateway?.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id
       ) {
@@ -3298,7 +3313,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
         namespace,
       );
       const existingService = await this.getOwned("Service", agentName, namespace, agentOwnership);
-      if (existingService === undefined) {
+      if (initialDedicatedCodexGateway) {
+        // No Gateway serves another revision yet, so the Service can select this
+        // revision's Harness before it is ready.
+        await this.reconcile(
+          this.service(
+            agentName,
+            agentOwnership,
+            namespace,
+            this.agentServiceSelector(revision, revisionName),
+          ),
+          agentOwnership,
+          namespace,
+        );
+      } else if (existingService === undefined) {
         await this.reconcile(
           this.service(agentName, agentOwnership, namespace, {
             "app.kubernetes.io/name": `${agentName}-inactive`,
@@ -3320,6 +3348,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
       }
       await this.reconcileHarnessRoute(revision, namespace);
+      if (initialDedicatedCodexGateway) {
+        // The Service, the Harness route and the Agent policies the Gateway's
+        // peer read needs exist before the Gateway does.
+        await reconcileGatewayDeployment(gatewayEnvironment);
+      }
       const launch = await this.lifecycle.beforeWorkloadStart(revision);
       launchPrepared = true;
       // A Deployment-backed Codex Harness renders its node wiring from its first

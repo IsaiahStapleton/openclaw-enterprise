@@ -876,19 +876,28 @@ async function readPeerPluginRuntimeStatus() {
   };
 }
 
+// The Gateway may start before its Harness is ready: on a first dedicated
+// deploy both are created together, and the agent Service lists the Harness
+// only once it is ready. This wait has no deadline and never rejects, so a slow
+// Harness cannot crash-loop the Gateway; the controller's convergence deadline
+// governs a Harness that never reports. The Gateway stays unready meanwhile.
 async function waitForPeerPluginRuntimeStatus() {
-  const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
-  let lastError;
-  while (Date.now() < deadline) {
+  let lastReportedAt;
+  for (;;) {
+    let reason;
     try {
       const status = await readPeerPluginRuntimeStatus();
       if (status !== undefined) return status;
+      reason = "Peer plugin runtime status endpoint is not configured.";
     } catch (error) {
-      lastError = error;
-      await pluginRuntimeDelay(250);
+      reason = pluginRuntimeErrorMessage(error);
     }
+    if (lastReportedAt === undefined || Date.now() - lastReportedAt >= 30_000) {
+      lastReportedAt = Date.now();
+      console.error("Waiting for Harness plugin runtime status: " + reason);
+    }
+    await pluginRuntimeDelay(250);
   }
-  throw new Error("Peer plugin runtime status did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
 }
 
 function samePluginFailures(left, right) {

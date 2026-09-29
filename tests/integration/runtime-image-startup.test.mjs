@@ -15,6 +15,7 @@ import {
   AGENT_RUNTIME_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT as KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
   GATEWAY_STOP_TIMEOUT_MS,
+  NATIVE_WORKER_ENTRYPOINT,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import {
   REPOSITORY_MATERIAL_INIT_ENTRYPOINT,
@@ -1463,6 +1464,150 @@ test(
     assert.equal(result.sameIdentityAfterExpiredReplay, true);
     assert.equal(result.singleBootstrapCompletion, true);
     assert.equal(result.unpairedExpiredRejected, true);
+  },
+);
+
+// The pinned OpenClaw lacks required worker placement and native worker
+// inference (upstream openclaw/openclaw#154390). Its strict schema rejects the
+// keys dedicated native OpenClaw writes, so both workloads refuse to start rather
+// than run sessions on the Gateway. Empty these lists, and update the dedicated
+// native OpenClaw notes in docs/reference/harness-execution.md and
+// deploy/runtime/README.md, when the pin accepts them.
+const pinnedNativeOpenClawSchemaGaps = {
+  gateway: [{ path: "cloudWorkers", message: 'Unrecognized key: "requiredProfile"' }],
+  harness: [{ path: "nodeHost.workerRuns", message: 'Unrecognized key: "nativeInferenceConfig"' }],
+};
+
+test(
+  "runtime image validates the configuration dedicated native OpenClaw renders",
+  imageTestOptions,
+  async (t) => {
+    const configurationPath = await temporaryGatewayConfiguration(t, "openclaw");
+    const containerName = `oce-runtime-image-native-schema-${randomBytes(6).toString("hex")}`;
+    t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
+    // Run both production entrypoints, then validate the configuration each one
+    // wrote with the image's own OpenClaw. Only the Harness model probe is
+    // replaced: the container has no network or model credential.
+    const launch = String.raw`
+const fs = require("node:fs");
+const cp = require("node:child_process");
+const { gateway, harness, workspaceNodeId } = JSON.parse(fs.readFileSync(0, "utf8"));
+const model = "openai/runtime-image-schema";
+function validate(path) {
+  const home = fs.mkdtempSync("/tmp/oce-config-validate-");
+  const result = cp.spawnSync("node", ["/app/openclaw.mjs", "config", "validate", "--json"], {
+    env: { PATH: process.env.PATH, HOME: home, OPENCLAW_CONFIG_PATH: path },
+    encoding: "utf8", timeout: 60000, maxBuffer: 1024 * 1024,
+  });
+  const report = JSON.parse(result.stdout);
+  return { status: result.status, valid: report.valid, issues: report.issues ?? [] };
+}
+function run(args, env) {
+  const child = cp.spawn("node", args, { env: { PATH: process.env.PATH, HOME: "/home/node", ...env }, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (value) => { output += value; });
+  child.stderr.on("data", (value) => { output += value; });
+  return new Promise((resolve) => {
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 90000);
+    child.once("exit", (code, signal) => {
+      clearTimeout(deadline);
+      resolve({ code, signal, output });
+    });
+  });
+}
+(async () => {
+  fs.mkdirSync("/tmp/gateway", { recursive: true });
+  fs.copyFileSync("/etc/openclaw/openclaw.json", "/tmp/gateway/base.json");
+  const gatewayRun = await run(["-e", gateway], {
+    OPENCLAW_CONFIG_PATH: "/tmp/gateway/base.json",
+    OPENCLAW_STATE_DIR: "/home/node/.openclaw",
+    OPENCLAW_GATEWAY_PORT: "18789",
+    OPENCLAW_GATEWAY_PASSWORD: "openclaw-runtime-image-schema-password",
+    OPENCLAW_WORKSPACE_NODE_ID: workspaceNodeId,
+    OPENCLAW_NATIVE_WORKER_PROFILE: "dedicated-native",
+  });
+  const gatewayConfig = "/home/node/.openclaw/openclaw.json";
+  const probe = JSON.stringify({ auth: { probes: { results: [{ provider: "openai", model, source: "env", status: "ok" }] } } });
+  fs.writeFileSync("/tmp/probe.cjs", [
+    'const cp = require("node:child_process");',
+    "const spawnSync = cp.spawnSync;",
+    "cp.spawnSync = (command, args, options) => Array.isArray(args) && args.includes('--probe')",
+    "  ? { status: 0, stdout: " + JSON.stringify(probe) + " } : spawnSync(command, args, options);",
+  ].join("\n"));
+  const harnessRun = await run(["-r", "/tmp/probe.cjs", "-e", harness], {
+    TMPDIR: "/tmp/openclaw-native-worker",
+    OPENCLAW_NATIVE_WORKER_CAPACITY: "8",
+    OPENCLAW_NODE_STATE_DIR: "/home/node/.openclaw-node",
+    OPENCLAW_NODE_SETUP_CODE: "runtime-image-schema-setup-code",
+    OPENCLAW_NATIVE_INFERENCE_CONFIG: "{}",
+    OPENCLAW_NATIVE_INFERENCE_CONFIG_PATH: "/tmp/openclaw-native-inference.json",
+    OPENCLAW_HARNESS_MODEL: model,
+    OPENCLAW_HARNESS_PROVIDER: "openai",
+    OPENCLAW_HARNESS_CREDENTIAL_ENV: "OPENAI_API_KEY",
+    OPENAI_API_KEY: "sk-openclaw-runtime-image-schema-synthetic",
+    OPENCLAW_HARNESS_PROBE_CONFIG: JSON.stringify({ agents: { defaults: { model } } }),
+  });
+  const harnessConfig = "/home/node/.openclaw-node/openclaw.json";
+  process.stdout.write(JSON.stringify({
+    gateway: { ...gatewayRun, config: JSON.parse(fs.readFileSync(gatewayConfig, "utf8")), validation: validate(gatewayConfig) },
+    harness: { ...harnessRun, config: JSON.parse(fs.readFileSync(harnessConfig, "utf8")), validation: validate(harnessConfig) },
+  }));
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+`;
+    const { stdout } = await runDocker(
+      [
+        "run",
+        "-i",
+        "--rm",
+        "--name",
+        containerName,
+        "--user",
+        "1000:1000",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/home/node:size=1024m,uid=1000,gid=1000,mode=700",
+        "--tmpfs",
+        "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
+        "--network",
+        "none",
+        "--volume",
+        `${configurationPath}:/etc/openclaw/openclaw.json:ro`,
+        "--entrypoint",
+        "node",
+        image,
+        "-e",
+        launch,
+      ],
+      { timeout: 300_000 * imageSmokeTimeoutMultiplier },
+      JSON.stringify({
+        gateway: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+        harness: NATIVE_WORKER_ENTRYPOINT,
+        workspaceNodeId: randomBytes(32).toString("hex"),
+      }),
+    );
+    const { gateway, harness } = JSON.parse(stdout);
+    // Prove that validation covered the placement and inference keys OCE writes.
+    assert.equal(gateway.config.cloudWorkers?.requiredProfile, "dedicated-native");
+    assert.equal(gateway.config.cloudWorkers?.profiles?.["dedicated-native"]?.provider, "device");
+    assert.equal(
+      harness.config.nodeHost?.workerRuns?.nativeInferenceConfig,
+      "/tmp/openclaw-native-inference.json",
+    );
+    assert.deepEqual(gateway.validation.issues, pinnedNativeOpenClawSchemaGaps.gateway);
+    assert.deepEqual(harness.validation.issues, pinnedNativeOpenClawSchemaGaps.harness);
+    // Fail closed: neither workload runs with the placement key dropped.
+    for (const [name, { code, signal, output, validation }] of Object.entries({
+      gateway,
+      harness,
+    })) {
+      assert.equal(validation.valid, false, name);
+      assert.ok(code !== 0 && signal === null, `${name} must refuse to start:\n${output}`);
+      assert.match(output, /Unrecognized key/, name);
+    }
   },
 );
 
