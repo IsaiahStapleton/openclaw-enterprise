@@ -112,6 +112,9 @@ from the default StorageClass, mounted only by its Harness:
 | `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
+Container restarts replay the node Secret's setup code, which expires ten minutes
+after preparation mints it. A node with a saved device token for the same Gateway
+reconnects with that token; one without saved credentials rejects the expired code.
 Installations that enrolled one node per revision enroll a new Agent device once,
 at the first replacement; retiring each earlier revision deletes its node Secret.
 Sessions stay on the private Gateway claim. Selected generated-image bytes return

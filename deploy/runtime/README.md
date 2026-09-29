@@ -27,6 +27,13 @@ an equivalent implementation is available upstream, the build applies its
 `readOnlyPaths` compatibility change as
 `openclaw-codex-read-only-paths.patch`. This preserves the restricted Codex
 filesystem profile required by the repository broker and selected plugins.
+The build also applies `openclaw-connect-ephemeral-expired-setup.patch`. Upstream
+`connect --ephemeral` rejects an expired setup code before it checks saved node
+credentials, so a dedicated native worker that restarts more than ten minutes
+after enrollment cannot reconnect. The patch lets that path decode an expired
+code and hands the expiry to the node host. The node host then reconnects with
+the saved device token for the same Gateway, or still refuses the code, as
+upstream `node run --pair-if-needed` already does.
 The source archive and patch hashes identify the resulting custom build.
 
 | Input                                        | Selection                                                                                                    |
@@ -38,7 +45,7 @@ The source archive and patch hashes identify the resulting custom build.
 
 The source's package version is `2026.9.7`; it does not identify this custom
 build. `/opt/oce/runtime/provenance.json` records the source commit, verified archive
-hash, bridge patch hash, lockfile hash, pinned package manager, selected plugins, architecture, stock Codex
+hash, both bridge patch hashes, lockfile hash, pinned package manager, selected plugins, architecture, stock Codex
 package identity, and the SHA-256 of `contents.json`, which inventories
 packaged files, modes, hashes, and symlinks after final-stage permission
 normalization. The final stage copies the assembled
