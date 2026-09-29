@@ -190,8 +190,8 @@ ownership and UID, then remove that revision's endpoint before its policy. See t
 `gateway/node-enrollment-client.ts:createGatewayNodeEnrollment` after Gateway
 readiness. A revision-owned Secret retains the setup code and device ID.
 Reconciliation attaches the node through a `Recreate` Harness deployment.
-Replacing the Harness restarts its Gateway; `prepareRevision` waits for Gateway
-readiness before querying enrollment, keeping deployment pending.
+Replacing the Harness restarts its Gateway; `prepareRevision` keeps deployment
+pending until that Gateway is ready, then queries enrollment.
 
 - Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
   `dir.list`, `workspace.memory`, and `workspace.skills`. Gateway admits these
