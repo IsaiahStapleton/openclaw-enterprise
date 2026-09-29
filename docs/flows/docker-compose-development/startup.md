@@ -301,19 +301,20 @@ Compose starts PostgreSQL, migration, and bootstrap. The lifecycle waits for
 successful migration and bootstrap exits before creating the dedicated k3d
 cluster on the Compose network. With the default Sandbox profile,
 `OCC_DEVELOPMENT_K3S_IMAGE` selects the node image; its default `+v1.35`
-resolves the latest K3s patch in the 1.35 family. An explicit image avoids the
+resolves the latest K3s 1.35 patch. An explicit image avoids the
 channel lookup. OpenShell uses its pinned image in both control-plane modes.
 The cluster API binds host loopback; creation leaves the default kubeconfig and
 current context unchanged.
 
 The host kubeconfig remains owner-readable. The container kubeconfig uses the
 cluster's internal load-balancer hostname with TLS verification. The lifecycle
-imports the selected local runtime image, resolves its in-cluster digest, and
-writes Installation configuration selecting Kubernetes Compute, Configuration,
+imports the runtime image by its engine-recorded name, `localhost/`-qualified
+on Podman, resolves the in-cluster digest, and writes Installation
+configuration selecting Kubernetes Compute, Configuration,
 and Secret Drivers with native IAM. Its runtime section configures the transport
 Secret prefix and gateway storage class accepted by the current Compute Driver
 schema. Generated Gateway and Harness resource limits allow 2 GiB of memory per
-workload; the current runtime can exceed the former 1 GiB limit during startup.
+workload; the runtime can exceed the former 1 GiB limit during startup.
 The container configuration and kubeconfig are individually readable by
 non-root containers, behind the private host directory, and mounted read-only
 into the API and Kubernetes worker. Neither service receives the engine socket.

@@ -126,6 +126,37 @@ func (r *runner) waitForDevelopmentKubernetesNamespace(ctx context.Context, time
 
 var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
+// engineImageReference reports the name the container engine recorded for a
+// local image.
+//
+// Docker keeps an unqualified name as written. Podman qualifies it with the
+// `localhost` registry, so a build tagged `name:tag` is stored as
+// `localhost/name:tag`. Both `k3d image import` and containerd match the
+// recorded name exactly, so every step after the build must use it.
+func (r *runner) engineImageReference(ctx context.Context, image string) (string, error) {
+	data, err := r.output(ctx, r.engine, "image", "inspect", "--format", "{{json .RepoTags}}", image)
+	if err != nil {
+		return "", err
+	}
+	var tags []string
+	if err := json.Unmarshal(data, &tags); err != nil {
+		return "", fmt.Errorf("invalid tag inventory for image %s: %w", image, err)
+	}
+	// One image can carry several tags, so match the requested one rather than
+	// taking the first and importing an unrelated name.
+	for _, tag := range tags {
+		if tag == image {
+			return tag, nil
+		}
+	}
+	for _, tag := range tags {
+		if _, unqualified, found := strings.Cut(tag, "/"); found && unqualified == image {
+			return tag, nil
+		}
+	}
+	return "", fmt.Errorf("container engine records no tag matching image %s", image)
+}
+
 func (r *runner) importRuntime(ctx context.Context, s *developmentState) (string, error) {
 	image := r.setting("OCC_KUBERNETES_RUNTIME_IMAGE", "openclaw-enterprise-runtime:kubernetes-quickstart")
 	if r.env["OCC_KUBERNETES_RUNTIME_IMAGE"] != "" {
@@ -159,6 +190,15 @@ func (r *runner) importDevelopmentImage(ctx context.Context, s *developmentState
 			}
 		}()
 	}
+	// Use the name the engine actually recorded. Podman qualifies an
+	// unqualified local build as `localhost/<name>`, and both k3d and
+	// containerd match that recorded name exactly, so the requested name finds
+	// nothing to import or verify.
+	recorded, err := r.engineImageReference(ctx, selected)
+	if err != nil {
+		return "", err
+	}
+	selected = recorded
 	if staged {
 		platformData, err := r.output(ctx, r.engine, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", selected)
 		if err != nil {
