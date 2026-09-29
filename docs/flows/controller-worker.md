@@ -283,19 +283,19 @@ Driver interval, including closing sessions and failed runtime retirement,
 releasing the claim without consuming retries. Obligations survive; lease loss
 aborts the pass.
 
-Terminal rows store `reason_code` and optional `result_data`: `{ warnings: [...] }`
-for success; required `timeoutMs` and optional `runtimeFailure` for convergence
-deadline failure. Compute reads cached startup results from its private status
+Terminal rows store `reason_code` and optional `result_data`: success
+`{ warnings: [...] }`; convergence-deadline failure `timeoutMs` and optional
+`runtimeFailure`. Compute reads cached startup results from its private status
 path, including unready Harnesses without plugins, and verifies runtime incarnation
 without repeating the model probe. Missing or invalid evidence leaves cause unspecified.
 
 `packages/occ/src/state/controller-work.ts:validateFailureData` validates reads
-and writes; the PostgreSQL constraint enforces the matching persisted shape.
-Other failure reasons still reject data.
+and writes; the PostgreSQL constraint enforces the persisted shape.
+Other failure reasons reject data.
 `PostgresWorkQueue.complete` and `PostgresWorkQueue.fail` publish only under the
 live claim; deployment status derives `error` and `warnings` from that result.
-Completion needs no runtime receipt acknowledgment or post-commit cleanup.
-Maintenance cannot rewrite deployment warnings.
+Completion needs no acknowledgment or post-commit cleanup; maintenance
+cannot rewrite deployment warnings.
 
 See [deployment status](../reference/agents.md#deployment-status) for result semantics.
 
@@ -309,19 +309,18 @@ reconcile audit evidence, otherwise `LEGACY_OUTCOME_UNKNOWN`. Their
 `result_data` remains `NULL`; pending rows have no terminal outcome.
 
 If Compute declares maintenance, activation schedules exact-revision observations.
-Incomplete observations, Compute bindings, and exhausted dependency retries close
-the item and schedule another while the revision stays active and running within
-its credential deadline; outages never retire it. Each claim reauthorizes its
-actor. Successor keys use strictly later time buckets despite clock skew.
+Incomplete observations, Compute bindings, and dependency retries or expired claims
+exhausting attempts close the item and schedule another while the revision stays
+active and running within its credential deadline; outages never retire it. Each
+claim reauthorizes its actor. Successor keys use strictly later time buckets despite clock skew.
 
 `worker.completed` reports the target, outcome, and code; polling continues.
 Lease loss reports `worker.error` `CLAIM_LOST` instead of stale lifecycle state.
 On `SIGTERM` or `SIGINT`, shutdown removes readiness, aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
-`worker.stopped`. Later workers recover expired claims.
-Each `PostgresWorkQueue.recoverStale()` statement atomically publishes exhausted
+`worker.stopped`. Each `PostgresWorkQueue.recoverStale()` statement atomically publishes exhausted
 work, failure of a still-provisioning Namespace targeted for `ready`, and audit
-evidence. This covers expired claims and exhausted queued work, preventing
-final-attempt crashes from stranding provisioning.
+evidence for expired claims and exhausted queued work, so final-attempt crashes
+cannot strand provisioning.
 
 ## Debugging and Verification
 
@@ -363,6 +362,8 @@ final-attempt crashes from stranding provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 18:40: Continue maintenance past expired exhausted claims.
 
 - 2026-09-29 12:00: Continue maintenance after dependency exhaustion.
 
