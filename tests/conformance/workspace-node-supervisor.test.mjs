@@ -309,3 +309,110 @@ test(
     assert.deepEqual(await exited, [0, null], output);
   },
 );
+
+// After pairing the controller removes the setup code, so every later Harness
+// start depends on the saved-identity probe. A probe that fails once (a timeout
+// under Codex startup contention) must not park the node until a restart.
+test(
+  "a failed saved-identity probe is retried and the node starts without a code",
+  {
+    timeout: 20_000,
+    skip: process.platform !== "linux" && "Run the container entrypoint test on Linux.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "oce-node-identity-retry-"));
+    const eventsPath = join(directory, "events.jsonl");
+    const childPath = join(directory, "child.cjs");
+    await writeFile(
+      childPath,
+      [
+        'const { appendFileSync } = require("node:fs");',
+        "const [events, kind, args] = process.argv.slice(2);",
+        "appendFileSync(events, JSON.stringify({ kind, pid: process.pid, args: JSON.parse(args) }) + '\\n');",
+        "setInterval(() => {}, 1_000);",
+      ].join("\n"),
+    );
+    // The saved identity exists throughout; only the first probe fails.
+    const launch = [
+      'const cp = require("node:child_process"); const realSpawn = cp.spawn;',
+      'const { appendFileSync } = require("node:fs");',
+      "cp.spawnSync = () => ({ status: 0 });",
+      "let probes = 0;",
+      "cp.execFile = (file, args, options, callback) => {",
+      "  probes += 1;",
+      `  appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({ kind: "probe", attempt: probes }) + "\\n");`,
+      '  if (probes === 1) { setImmediate(() => callback(Object.assign(new Error("timed out"), { killed: true }), "")); return; }',
+      `  setImmediate(() => callback(null, JSON.stringify({ deviceId: ${JSON.stringify("b".repeat(64))} })));`,
+      "};",
+      "cp.spawn = (command, args, options) => realSpawn(command, [" +
+        JSON.stringify(childPath) +
+        ", " +
+        JSON.stringify(eventsPath) +
+        ', args[0] === "/app/openclaw.mjs" ? "node" : "codex", JSON.stringify(args)], options);',
+      AGENT_WITH_NODE_ENTRYPOINT.replace(
+        "\ninitializeRuntimeAssets();\npublishAgentPluginSkillPath();\n",
+        "\n",
+      ),
+    ].join("\n");
+    const supervisor = spawn(process.execPath, ["-e", ...nodeProgramArguments(launch)], {
+      env: {
+        PATH: process.env.PATH,
+        HOME: directory,
+        OPENCLAW_NODE_STATE_DIR: join(directory, "node-state"),
+        OPENCLAW_NODE_SETUP_PATH: join(directory, "setup", "setup-code"),
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let output = "";
+    supervisor.stderr.on("data", (chunk) => {
+      output += chunk;
+    });
+    const exited = once(supervisor, "exit");
+    const events = async () => {
+      const contents = await readFile(eventsPath, "utf8").catch((error) => {
+        if (error.code === "ENOENT") {
+          return "";
+        }
+        throw error;
+      });
+      return contents
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    };
+    t.after(async () => {
+      supervisor.kill("SIGTERM");
+      await exited;
+      for (const { pid } of await events()) {
+        if (pid === undefined) {
+          continue;
+        }
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (error) {
+          if (error.code !== "ESRCH") {
+            throw error;
+          }
+        }
+      }
+      await rm(directory, { recursive: true, force: true });
+    });
+    const deadline = Date.now() + 8_000;
+    let rows = [];
+    while (!rows.some(({ kind }) => kind === "node")) {
+      assert.ok(Date.now() < deadline, "node never started after a failed probe: " + output);
+      assert.equal(supervisor.exitCode, null, output);
+      await delay(50);
+      rows = await events();
+    }
+    const probes = rows.filter(({ kind }) => kind === "probe");
+    assert.equal(probes.length, 2, "one failed probe, one retry");
+    const node = rows.find(({ kind }) => kind === "node");
+    assert.deepEqual(node.args.slice(0, 3), ["/app/openclaw.mjs", "node", "run"]);
+    assert.equal(node.args.includes("--pair-if-needed"), false);
+    assert.equal(rows.filter(({ kind }) => kind === "codex").length, 1);
+
+    supervisor.kill("SIGTERM");
+    assert.deepEqual(await exited, [0, null], output);
+  },
+);

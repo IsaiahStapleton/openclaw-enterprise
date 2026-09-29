@@ -6554,9 +6554,17 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         { mutating: true },
       );
     };
+    // Nudge the running Harness Pods as on setup, so the kubelet removes the
+    // file now rather than on its ~1 min resync (#612).
+    const setupCodeRemoved = async () => {
+      if (dropSetupCode && secret.data?.setupCode !== undefined) {
+        await this.refreshWorkspaceNodeSetup(revision, namespace, `${read("setupId")}:removed`);
+      }
+    };
     if (deviceId) {
       if (dropSetupCode && secret.data?.setupCode !== undefined) {
         await replaceSecret(withoutSetupCode(secret.data));
+        await setupCodeRemoved();
       }
       return enrollment.isConnected(url, deviceId, this.operationSignal());
     }
@@ -6579,6 +6587,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         deviceId: Buffer.from(observation.deviceId, "utf8").toString("base64"),
       }),
     );
+    await setupCodeRemoved();
     return observation.connected;
   }
 

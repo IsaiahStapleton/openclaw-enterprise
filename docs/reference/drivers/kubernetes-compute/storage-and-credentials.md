@@ -123,16 +123,18 @@ Codex starts at once; the node starts when the file holds a complete code.
 After writing the Secret, preparation annotates the running Harness Pod. That
 Pod update makes the kubelet refresh the volume within about two seconds
 instead of on its periodic resync of about a minute, so enrollment restarts
-neither the Harness nor its Gateway. The worker therefore needs `patch` on Pods
-in tenant namespaces.
+neither the Harness nor its Gateway. The worker needs `patch` on Pods in tenant
+namespaces; without it the pass fails.
 
 The file mode is `0440`. Secret volume files are root-owned and the kubelet
 grants the Pod `fsGroup` read access, so `0400` would behave the same. Codex
 runs as the same user and group and can read the code, as it can already read
 the node's command line. Once readiness records the device ID, the controller
-removes `setupCode` from the Secret and the kubelet removes the file; the node
-then reconnects with its saved device token, and preparation does not mint a
-new code for it. Native workers and SandboxDriver Harnesses receive the code in
+removes `setupCode` from the Secret and annotates the Pod again, so the kubelet
+removes the file within seconds. The node then reconnects with its saved device
+token, and preparation does not mint a new code for it. If the Gateway loses that
+pairing, delete the Agent's node Secret: the next pass mints a code, which the
+node uses when it restarts. Native workers and SandboxDriver Harnesses receive the code in
 their environment, keep it for restarts, and are replaced to attach the node.
 Installations that enrolled one node per revision enroll a new Agent device once,
 at the first replacement; retiring each earlier revision deletes its node Secret.

@@ -2394,15 +2394,26 @@ function readSetupCode() {
   }
 }
 // "unknown" until checked; pairing can create the identity, so a start with a
-// code resets it. Only a missing code triggers the check.
+// code resets it. Only a missing code triggers the check. A failed or timed-out
+// probe (CPU contention while Codex starts) is not proof of absence, and a later
+// start may need the identity after the controller removed the code, so any
+// result other than "present" is re-checked with a bounded backoff.
 let savedIdentity = "unknown";
+let identityRetryAt = 0;
+let identityBackoff = 2_000;
 function checkSavedIdentity() {
   savedIdentity = "checking";
   execFile(process.execPath, ["/app/openclaw.mjs", "node", "identity", "--json"],
     { env: nodeEnv, timeout: 30_000 }, (error, stdout) => {
       let deviceId;
       try { deviceId = JSON.parse(stdout).deviceId; } catch {}
-      savedIdentity = !error && /^[a-f0-9]{64}$/u.test(deviceId ?? "") ? "present" : "absent";
+      if (!error && /^[a-f0-9]{64}$/u.test(deviceId ?? "")) {
+        savedIdentity = "present";
+        return;
+      }
+      savedIdentity = "unknown";
+      identityRetryAt = Date.now() + identityBackoff;
+      identityBackoff = Math.min(identityBackoff * 2, 30_000);
     });
 }
 let nodeSetupWait;
@@ -2410,10 +2421,12 @@ function nodeArguments() {
   const code = readSetupCode();
   if (code !== undefined) {
     savedIdentity = "unknown";
+    identityRetryAt = 0;
+    identityBackoff = 2_000;
     return ["/app/openclaw.mjs", "node", "run", "--pair-if-needed", code, ...nodeCommands];
   }
   if (savedIdentity === "present") return ["/app/openclaw.mjs", "node", "run", ...nodeCommands];
-  if (savedIdentity === "unknown") checkSavedIdentity();
+  if (savedIdentity === "unknown" && Date.now() >= identityRetryAt) checkSavedIdentity();
   return undefined;
 }
 const processes = [

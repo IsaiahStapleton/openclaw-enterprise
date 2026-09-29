@@ -1056,6 +1056,7 @@ function dedicatedFirstDeployFixture() {
     objects,
     templates,
     podPatches,
+    clients,
     key,
     save,
     read,
@@ -1202,6 +1203,14 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     "expiresAtMs",
     "setupId",
   ]);
+  // The removal nudges the running Harness Pod again, with a new value, so the
+  // kubelet removes the file now instead of on its periodic resync.
+  assert.equal(podPatches.length, 2);
+  const [minted, removed] = podPatches.map(
+    ({ body }) => body.metadata.annotations["openclaw.dev/workspace-node-setup"],
+  );
+  assert.notEqual(minted, removed);
+  assert.equal(podPatches[1].name, "agent-pod");
   // A paired file-delivered node reconnects with its saved device token, so an
   // expired setup is not re-minted and the code does not come back.
   const paired = objects.get(nodeSecretKey);
@@ -1213,7 +1222,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   assert.equal((await prepare()).ready, true);
   assert.equal(objects.get(nodeSecretKey).data.setupCode, undefined);
   assert.equal(state.setupCalls, 1, "a paired node needs no new setup");
-  assert.equal(podPatches.length, 1);
+  assert.equal(podPatches.length, 2);
   // The node supervisor embeds Codex; neither it nor an OpenShell Sandbox, which
   // carries the whole command in one environment variable, nears the exec limit.
   assertExecStringsWithinBudget(objects.values());
@@ -1226,6 +1235,84 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
 // Ratchet for deploy time: a first dedicated deploy starts its workloads
 // serially, and every start repeats login, the model probe and plugin install.
 // Lower these counts when a change removes a start; never raise them silently.
+// Every Agent enrolled before file delivery has a recorded deviceId and an
+// env-era setupCode in its Secret. The upgrade removes the leftover code without
+// a new setup, and a Harness Pod that is gone (404) does not fail the pass.
+test("an upgraded file-delivered node drops its leftover setup code and tolerates a missing Pod", async () => {
+  const {
+    state,
+    driver,
+    revision,
+    namespace,
+    objects,
+    podPatches,
+    clients,
+    key,
+    save,
+    prepare,
+    markReady,
+    agentName,
+    gatewayName,
+  } = dedicatedFirstDeployFixture();
+  const nodeName = driver.workspaceNodeName(revision);
+  const encode = (value) => Buffer.from(value, "utf8").toString("base64");
+  const manifest = driver.manifest(
+    "v1",
+    "Secret",
+    nodeName,
+    driver.workspaceNodeOwnership(revision),
+    {
+      name: namespace,
+      plane: "execution",
+    },
+  );
+  save({
+    ...manifest,
+    type: "Opaque",
+    metadata: { ...manifest.metadata, uid: "node-uid", resourceVersion: "1" },
+    data: {
+      deviceId: encode("node-1"),
+      setupCode: encode("env-era-code"),
+      setupId: encode("setup-0"),
+      expiresAtMs: encode(String(Date.now() - 1)),
+    },
+  });
+  const nodeSecretReplaces = [];
+  const replaceSecret = clients.core.replaceNamespacedSecret;
+  clients.core.replaceNamespacedSecret = async (request) => {
+    if (request.name === nodeName) {
+      nodeSecretReplaces.push(Object.keys(request.body.data).sort());
+    }
+    return replaceSecret(request);
+  };
+  clients.core.patchNamespacedPod = async ({ name }) => {
+    podPatches.push({ name });
+    throw Object.assign(new Error("pods not found"), { code: 404 });
+  };
+  state.connected = true;
+  let ready = false;
+  for (let pass = 0; pass < 6 && !ready; pass++) {
+    ready = (await prepare()).ready;
+    for (const name of [agentName, gatewayName]) {
+      // A workload that this pass has not started yet has nothing to mark.
+      try {
+        markReady(name);
+      } catch (error) {
+        assert.equal(error.statusCode, 404);
+      }
+    }
+  }
+  assert.equal(ready, true);
+  assert.equal(state.setupCalls, 0, "a recorded device needs no new setup");
+  assert.deepEqual(nodeSecretReplaces, [["deviceId", "expiresAtMs", "setupId"]]);
+  assert.equal(objects.get(key("Secret", nodeName)).data.setupCode, undefined);
+  assert.deepEqual(
+    podPatches.map(({ name }) => name),
+    ["agent-pod"],
+    "the removal nudge ran once and its 404 was ignored",
+  );
+});
+
 test("a first dedicated deploy pins its serial workload starts through activation", async () => {
   const { state, driver, revision, gatewayName, agentName, templates, prepare, markReady } =
     dedicatedFirstDeployFixture();
