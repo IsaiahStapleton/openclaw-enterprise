@@ -55,7 +55,10 @@ embedded OpenClaw Slack-capable; it only provides shared proxy infrastructure
 for API directory lookup and dedicated gateway channel traffic.
 
 Choose upstream CIDRs from Slack DNS answers as resolved by the proxy workload's
-network path. Do not assume an operator workstation resolves the same Slack
+network path. Include both Slack Web API hosts and the Socket Mode WSS hostnames
+returned by `apps.connections.open`; directory lookup success proves only the
+Web API path. Do not store signed WSS URLs or credentials in configuration or
+documentation. Do not assume an operator workstation resolves the same Slack
 addresses as the in-cluster proxy. Treat the CIDR list as time-bound
 NetworkPolicy input: refresh it through the operator's review process when
 Slack DNS rotates, and keep using explicit reviewed CIDRs for the current

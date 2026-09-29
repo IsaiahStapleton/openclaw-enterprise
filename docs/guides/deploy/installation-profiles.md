@@ -206,8 +206,9 @@ renderer:
   Slack Agents require dedicated Codex execution. Standard OpenClaw embedded
   Agents must leave channels disabled. The default profile input uses the
   chart-managed restricted proxy Service. Set `slackProxyUpstreamCidrs` to the
-  reviewed Slack DNS answers as resolved from the proxy workload network, not
-  from an operator workstation; refresh those CIDRs under the operator
+  reviewed Slack DNS answers for Web API hosts and the Socket Mode WSS hosts
+  returned by `apps.connections.open`, resolved from the proxy workload network,
+  not from an operator workstation; refresh those CIDRs under the operator
   NetworkPolicy process when Slack DNS rotates. If you use an external proxy
   instead, provide the literal IPv4 `runtimeProxyUrl` and `directoryProxyUrl`
   inputs and omit `slackProxyUpstreamCidrs`.
