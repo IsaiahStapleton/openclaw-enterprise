@@ -1508,6 +1508,20 @@ export const scenarios = {
     description:
       "OpenClaw remains available for OpenAI with an API key. It uses Embedded execution and disables unsupported channel editing.",
   },
+  createDedicatedOpenclawExperimental: {
+    group: "Pages/Create Agent",
+    name: "Experimental Dedicated OpenClaw",
+    path: create,
+    actions: [
+      ...form,
+      { selector: "#agent-harness", value: "openclaw" },
+      { selector: ".launch-runtime summary", click: true },
+      { selector: "#execution-mode", value: "dedicated" },
+    ],
+    description:
+      "Dedicated OpenClaw displays its experimental status and runtime-build compatibility requirement before deployment.",
+    gap: "This simulated form does not verify that a selected OpenClaw runtime image includes native worker-inference support.",
+  },
   createRepositoriesSelected: {
     group: "Pages/Create Agent",
     name: "Approved repositories and shared access",
