@@ -48,6 +48,25 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Repository credential recovery](39-repository-credential-recovery.md) — Implementing;
+explore cleanup evidence across broker loss without retaining provider tokens.
+
+[Installation profiles](2026-09-28-installation-profiles-design.md) — Implementing;
+shared packaging for openclaw and codex, with isolated fresh-cluster qualification.
+
+[Two-cluster Gateway execution](37-two-cluster-gateway-execution-plan.md) — Experimental implementation;
+complete local OCE setup across separate CP and DP clusters, with explicit
+cluster access and TLS transport. Broader runtime and failure-path qualification
+remain pending; see the [validation profile](../docs/testing/two-cluster-local.md).
+
+[Agent access](36-agent-access.md) — Proposed; existing-person sharing for trusted
+full native administration, followed by atomic enrollment and granular permissions.
+
+[Credential Gateway Driver](39-sandbox-credential-injection.md) — Implementing; first slice in #461;
+Namespace credential sources attached to Agent revisions, with OpenShell
+injecting credentials outside the workload; static first (only the `openai` type
+ships), with OAuth2 refresh after real-path verification.
+
 [Dedicated Harness RWO workspace](38-harness-rwo-workspace-plan.md) — Implementing;
 exclusive revision preparation, durable RWO workspaces, and retained existing claims.
 
@@ -70,6 +89,9 @@ create-only Console and API input, applied once before first runtime execution.
 
 [Agent presets](33-agent-presets.md) — Implementing; reusable, partial Agent launch
 templates with variables, CRUD APIs, and console selection.
+
+[Basic role-based access control](31-basic-rbac.md) — Direction; deferred past 0.x.
+Personal and team Agent access, exact grants, and withdrawal; see the current-source amendment.
 
 [Harness authentication bindings](30-harness-auth-binding.md) — Accepted for implementation;
 one Agent auth binding for supplied OpenAI keys and issued ChatGPT account credentials.

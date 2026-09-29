@@ -49,7 +49,10 @@ test(
         JSON.stringify(eventsPath) +
         ", " +
         'args[0] === "/app/openclaw.mjs" ? "node" : "codex"], options);',
-      AGENT_WITH_NODE_ENTRYPOINT.replace("\ninitializeRuntimeAssets();\n", "\n"),
+      AGENT_WITH_NODE_ENTRYPOINT.replace(
+        "\ninitializeRuntimeAssets();\npublishAgentPluginSkillPath();\n",
+        "\n",
+      ),
     ].join("\n");
     const supervisor = spawn(process.execPath, ["-e", launch], {
       env: {

@@ -8,7 +8,11 @@ export function createPlatformReadView(
   lifetime: RepositoryTransactionLifetime,
 ): PlatformReadView {
   return Object.freeze({
-    operations: bindRepository(repositories.operations, lifetime, ["list", "findWork"]),
+    operations: bindRepository(repositories.operations, lifetime, [
+      "list",
+      "findWork",
+      "findWorkAttempt",
+    ]),
     installations: bindRepository(repositories.installations, lifetime, [
       "findInstallation",
       "getInstallation",
@@ -20,6 +24,10 @@ export function createPlatformReadView(
     configurations: bindRepository(repositories.configurations, lifetime, ["findConfiguration"]),
     presets: bindRepository(repositories.presets, lifetime, ["findPreset", "listPresets"]),
     secrets: bindRepository(repositories.secrets, lifetime, ["findSecret", "listSecrets"]),
+    credentialSources: bindRepository(repositories.credentialSources, lifetime, [
+      "findCredentialSource",
+      "listCredentialSources",
+    ]),
     serviceAccounts: bindRepository(repositories.serviceAccounts, lifetime, [
       "findServiceAccount",
       "listServiceAccounts",
@@ -36,6 +44,8 @@ export function createPlatformReadView(
     ]),
     repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
       "findAttempt",
+      "findBrokerReceipt",
+      "findBrokerReceiptBySession",
       "listRevisionAttempts",
       "listNamespaceAttempts",
     ]),

@@ -124,7 +124,7 @@ async function repositoryInstallation(t) {
   configuration.drivers.repo = {
     id: "repository-credentials",
     configuration: {
-      controlSocket: join(directory, "absent-control", "control.sock"),
+      controlSocket: "/run/openclaw/repository-control/private/control.sock",
       sessionDurationSeconds: 600,
       publicCaPath,
     },
@@ -373,7 +373,7 @@ test("ChatGPT startup rejects retired integrations and unsafe backend configurat
         duplicate.id = "other-openai";
         value.backend.push(duplicate);
       },
-      /ServiceAccount Driver cannot belong to multiple Backends/,
+      /A Driver cannot belong to multiple Backends/,
     ],
     [
       (value) => (value.drivers.service_account.configuration.backendId = "openai"),
@@ -470,7 +470,7 @@ test("production embedded replacements preserve their active Service across fail
   const service = computeDriver.service(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     structuredClone(activeSelector),
   );
   assert.equal(service.spec.ports[0].name, "http");
@@ -563,7 +563,7 @@ test("production embedded replacements preserve their active Service across fail
   const newerGateway = computeDriver.deployment(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     "openclaw-enterprise/gateway-fixture:local",
     `agent-${shortHash(agentId, 12)}`,
     "gateway",
@@ -572,11 +572,10 @@ test("production embedded replacements preserve their active Service across fail
     computeDriver.gatewayConfiguration(candidate),
     true,
     servicePrincipalId,
-    computeDriver.harnessAuthForRevision(
-      candidate,
-      authContext,
-      kubernetesGatewayNamespaceName(namespaceId),
-    ),
+    computeDriver.harnessAuthForRevision(candidate, authContext, {
+      name: kubernetesGatewayNamespaceName(namespaceId),
+      plane: "control",
+    }),
   );
   const originalGet = computeDriver.get;
   computeDriver.get = async (kind, requestedName) => {
@@ -599,7 +598,7 @@ test("production embedded replacements preserve their active Service across fail
   service.spec.selector = computeDriver.service(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     inactiveSelector,
   ).spec.selector;
   const initial = await worker.observeRevision(claim, candidate, undefined, undefined);
@@ -846,8 +845,8 @@ test("Installation default Presets are opt-in and reject ambiguous YAML settings
     environment: { OCC_CONFIG_PATH: await fixture(t, enabled) },
   });
   assert.deepEqual(enabledRuntime.defaultPresets.map((preset) => preset.name).sort(), [
-    "standard-codex",
-    "standard-openclaw",
+    "Standard Codex",
+    "Standard OpenClaw",
   ]);
   for (const presets of [
     { includeDefaults: "true" },
@@ -931,7 +930,7 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
     ],
     [
       "duplicate.json",
-      JSON.stringify({ name: "standard-codex", template: {} }),
+      JSON.stringify({ name: "Standard Codex", template: {} }),
       /configured more than once/,
     ],
   ]) {

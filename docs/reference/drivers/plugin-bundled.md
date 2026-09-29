@@ -18,9 +18,31 @@ drivers:
     configuration: {}
 ```
 
-Dedicated Codex supports `configuration: {}` for startup and entered-PAT
-discovery. An optional controller-side `listCatalog` reader uses a separate native
-Codex profile:
+Dedicated Codex defaults to `catalogSource: hosted`, which discovers plugins
+using a PAT or a Secret containing one. Select the hardcoded OpenAI catalog in
+trusted Installation YAML to browse without a discovery credential or provider
+catalog requests:
+
+```yaml
+drivers:
+  plugin:
+    id: codex-plugin
+    configuration:
+      catalogSource: openai-curated
+```
+
+The curated catalog includes Linear, Slack, GitHub, Notion, Figma, Canva,
+Datadog, Sentry, Adobe, Coursera Learning, and Google Contacts. Their recorded
+identities and presentation metadata do not include tool inventory or
+account-specific availability. Notion, Figma, Canva, and Adobe include supported
+hosted apps with skills. Sentry remains unavailable because its recorded release
+has no concrete hosted app. Select a plugin and set its default policy; per-tool controls are
+unavailable until the catalog supplies tool details. Startup resolves native
+metadata independently and still requires the Agent's actual authentication and
+provider access. Catalog membership does not grant access or prove execution.
+
+An optional controller-side native `listCatalog` reader for hosted mode uses a
+separate Codex profile:
 
 ```yaml
 drivers:
@@ -37,11 +59,21 @@ backend authentication, separately from the operator's ordinary profile.
 `requestTimeoutMs` defaults to 10,000 milliseconds and accepts 1–60,000.
 This reader starts native app-server, calls `plugin/list`, and may update its cache.
 
-Create Agent discovery instead hydrates entered PAT identity and reads GLOBAL
-plugin-service pages of up to 20 entries, fetching tools on demand. Requests have
+In hosted mode, Create Agent discovery hydrates entered PAT identity and reads GLOBAL
+plugin-service pages of up to 20 entries, fetching tools on demand. A nonempty
+query uses hosted search; the curated catalog searches its bundled entries.
+The console preloads the first page after a PAT is entered or selected in Create
+Agent, and when opening an editable Agent's Plugins tab with a bound PAT Secret.
+Opening **Configure plugins** reuses that page or its pending request. Replacing
+the PAT clears discovery results and preloads a fresh first page; selections remain.
+Console waits 300 ms after the last keystroke before searching and resets pagination
+when the query changes. Loading feedback starts during that delay and continues
+until the response, including when no earlier entries exist. Tool lookups show
+loading feedback until details arrive. Enter, page navigation, and explicit loads
+run immediately. Configured-plugin and tool filters remain instant and local.
+Closing the picker or changing its credential cancels pending searches. Requests have
 a 15-second deadline and 4 MiB response limit. Discovery does not read Codex home,
-install plugins, or return download URLs. Saved Secret and managed ServiceAccount
-references are unsupported. Plugin details show available website, privacy-policy,
+install plugins, or return download URLs. A same-Namespace Secret reference can supply the PAT; managed ServiceAccount references are unsupported. Plugin details show available website, privacy-policy,
 and terms-of-service links; invalid or non-HTTPS URLs are omitted.
 Catalog discovery does not verify current app connections. Check service-account
 connections in administration before deployment; OCE does not gate deployment on
@@ -87,7 +119,8 @@ No PluginDriver is selected by default. Plugin-free deployments remain permitted
 Nonempty selections require valid supported policy and the same compatible Driver
 at startup. Saving does not perform authenticated discovery; saved entries remain
 readable without their original Driver. SSH Compute rejects nonempty plugin maps
-before host effects and supports plugin-free embedded OpenClaw revisions.
+and Agent default plugin approver policies before host effects; plugin-free
+embedded OpenClaw revisions remain supported without that policy.
 
 ## Native mappings and limits
 
@@ -96,17 +129,18 @@ checks native metadata, tool ownership, and effective configuration. Runtime
 versions and the OpenClaw-to-Codex projection constrain enforcement: emitting a
 native setting does not prove an Agent thread retains it.
 
-| Surface                                                       | Current translation                                                                                                                            |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Plugin `enabled`                                              | Gate the selected plugin; disabled plugins cannot be re-enabled by tool overrides.                                                             |
-| OpenClaw default/tool `enabled`                               | Resolve explicit tool enablement before the default using the pinned catalog's complete tool inventory. Emit native denies for disabled tools. |
-| OpenClaw `native` / `approve`                                 | Use existing native tool execution without an added plugin approval step. Existing denies and profiles remain effective.                       |
-| OpenClaw `prompt`, explicit reviewer, or Driver policy fields | Rejected before save; no generic per-call review, reviewer selection, or Driver-specific policy is implemented.                                |
-| Codex `toolDefaults`                                          | Write native `default_tools_enabled` when supplied and `default_tools_approval_mode`; `native` maps to `auto`.                                 |
-| Codex explicit tool overrides                                 | Write only supplied `enabled` and `approval_mode` fields under the owning app and exact native tool name.                                      |
-| Codex `toolDefaults.reviewer`                                 | Write app `approvals_reviewer`: `human` maps to `user`, `auto` maps to `auto_review`. Per-tool reviewers are rejected.                         |
-| Codex `driverPolicy`                                          | Write `destructive_enabled` when supplied. Reject destructive defaults combined with explicit default tool enablement.                         |
-| Empty Codex selection                                         | Disable user apps/plugins; no remote install RPC runs.                                                                                         |
+| Surface                                  | Current translation                                                                                                                             |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin `enabled`                         | Gate the selected plugin; disabled plugins cannot be re-enabled by tool overrides.                                                              |
+| OpenClaw default/tool `enabled`          | Resolve explicit tool enablement before the default using the pinned catalog's complete tool inventory. Emit native denies for disabled tools.  |
+| OpenClaw `provider_default` / `none`     | Use existing native tool execution without an added plugin approval step. Existing denies and profiles remain effective.                        |
+| OpenClaw `all_actions` / `write_actions` | Reject before save; no generic per-call review is implemented. Explicit reviewers and Driver policy fields are also unsupported.                |
+| Codex approval defaults                  | Write app `default_tools_approval_mode`: `provider_default` → `auto`, `all_actions` → `prompt`, `write_actions` → `writes`, `none` → `approve`. |
+| Codex explicit tool overrides            | Write only supplied `enabled` and `approval_mode` fields under the owning app and exact native tool name; use the same approval mapping.        |
+| Codex `toolDefaults.enabled`             | Write native `default_tools_enabled` when supplied.                                                                                             |
+| Codex `toolDefaults.reviewer`            | Write app `approvals_reviewer`: `human` maps to `user`, `auto` maps to `auto_review`. Per-tool reviewers are rejected.                          |
+| Codex `driverPolicy`                     | Write `destructive_enabled` when supplied. Reject destructive defaults combined with explicit default tool enablement.                          |
+| Empty Codex selection                    | Disable user apps/plugins; no remote install RPC runs.                                                                                          |
 
 OpenClaw extends a nonempty native `tools.allow`, otherwise `tools.alsoAllow`,
 with the selected plugin. It preserves other native restrictions. The pinned
@@ -114,33 +148,48 @@ catalog currently exposes the `diffs` tool owned by `diffs`; adding another entr
 requires verified package and tool identities. Ambiguous global tool names or
 partial denials that would also deny an allowed sibling are rejected.
 
-The Codex translator accepts `native`, `prompt`, and `approve` as both defaults
-and explicit tool settings. `toolDefaults.reviewer` selects the reviewer for the
-app as a whole; reviewer omission inherits the effective Harness reviewer.
-`prompt` requests review on every call; automatic review can deny. `approve` uses
-native approval settings, not unconditional bridge acceptance. The bridge keeps
-`allow_all_plugins:false` and an entry for each selected plugin. Its normal
+Codex accepts all four approval values as app defaults and explicit tool settings.
+The app default also applies to actions added later; it does not require a tool
+inventory. `write_actions` asks for review when the native action lacks
+`readOnlyHint: true`, including when the hint is missing. `toolDefaults.reviewer`
+selects the reviewer for the app as a whole; omission inherits the effective
+Harness reviewer.
+Automatic review can deny. `none` skips the added plugin approval step, not
+other native restrictions. The bridge keeps `allow_all_plugins:false` and an
+entry for each selected plugin. Its normal
 `allow_destructive_actions:"auto"` routes native review requests; an explicit
 `destructiveEnabled:false` uses `false` to preserve that native category default.
 
 Codex tool policy IDs are
-`encodeURIComponent(appId) + "/" + encodeURIComponent(nativeToolName)`. Treat
-these as opaque. At startup, `mcpServerStatus/list` supplies authenticated
-`codex_apps` tool names and connector ownership after installation. A requested
-ID absent from the selected plugin's concrete apps or that inventory fails
-startup. Classifications are not required, and defaults are not expanded into
+`encodeURIComponent(appId) + "/" + encodeURIComponent(toolName)`. Treat
+these as opaque. Hosted discovery uses the catalog action name; native inventory
+IDs use the runtime tool name. At startup, `mcpServerStatus/list` supplies
+authenticated `codex_apps` names and connector ownership. Its
+`_meta._codex_apps.resource_uri` binds a catalog action to the observed native name
+when the connector IDs match. Unknown, unowned, or ambiguous IDs fail startup,
+as do two selected IDs targeting the same native tool.
+Catalog classifications are not required, and app defaults are not expanded into
 per-tool rules. The optional controller catalog reader still returns `tools:null`.
 
-The scope remains concrete hosted apps. Marketplace visibility does not imply
-support for remote skills, hooks, arbitrary MCP servers, or template-only apps.
+Codex plugins must expose concrete hosted apps and may include skills. Native
+Codex installs the selected bundle and loads its skill instructions; OCE does not
+repackage or translate them. Skills grant no additional app tool permissions.
+Hooks, native MCP servers, and scheduled tasks remain unsupported, as do skill-only
+and template-only plugins without concrete apps.
+
+OCE selection constrains hosted app tools through native app policy and the
+OpenClaw bridge. It does not restrict skills from other plugins already enabled
+on the credential's account. Limiting those plugins requires separate native
+plugin default enablement support and OCE startup integration.
 The selected-only OpenClaw bridge is required for the dedicated Agent path.
 Effective nested policy requires the bridge changes in
 [OpenClaw #151260](https://github.com/openclaw/openclaw/pull/151260) and
 [#152085](https://github.com/openclaw/openclaw/pull/152085), a compatible packaged
 runtime, effective session settings that preserve review, and real Agent
 verification. Codex can bypass MCP review when session approval is `never` with
-a permissive profile unless strict review applies; writing app-level `prompt`
-alone is insufficient. Source and fixture checks do not establish that proof.
+a permissive profile unless strict review applies; writing an app-level
+`all_actions` or `write_actions` default alone is insufficient. Source and fixture
+checks do not establish that proof.
 
 For an explicit app reviewer, startup reads `configRequirements/read`, compares
 app/link reviewer values, and checks `allowedApprovalsReviewers`. Automatic review
@@ -149,15 +198,24 @@ if managed `requiredOnModels` includes the current model, or model selection
 cannot be verified against a nonempty requirement. Omitted reviewers do not
 trigger these explicit-choice checks.
 
-Before readiness, startup checks every effective nested tool's enablement and
-approval against its requested override or app default. Absent/null fields inherit;
-an explicit tool enablement is rejected if neither level requested it, because
-it can bypass category restrictions. Account/link approval defaults must match
-the requested app approval.
+Startup reads merged workspace configuration, explicitly disables unselected apps,
+and writes admitted approval values at inherited tool/account keys. Table replacement
+alone cannot remove lower-layer descendants. Tool enablement is replaced only when
+explicitly specified by an override or default; these writes leave native managed
+requirements unchanged.
 
-These checks verify startup configuration. Future turn routing, session/model
-changes, strict review, workspace configuration, managed requirements beyond
-reviewer checks, and real Agent enforcement remain draft acceptance gates; see
+Readback must match the selected policy before readiness. Unselected disabled apps,
+serialized nulls, and omitted reviewers preserve inheritance. Category values resolve
+requested app → requested global → native `true`; equivalent explicit values pass.
+Nested tool enablement/approval must match its override or app default, and account
+approval must match its app. Unexpected tool enablement, category defaults, exposure
+restrictions, and enabled unselected apps fail verification.
+
+This verifies loaded startup configuration, including trusted workspace layers.
+Codex 0.156 does not expose managed app/tool requirements through `config/read` or
+`configRequirements/read`; complete native effective-policy introspection remains
+required. Later workspace/session/model changes, strict review, and real Agent
+enforcement also remain acceptance gates. See
 [runtime proof notes](../../testing/plugins.md#current-proof-notes).
 
 Dedicated Codex starts without user plugins/apps, including when no PluginDriver
@@ -236,9 +294,9 @@ Agent behavior; contributor fixture setup and proof notes live in
 [Agent plugin testing](../../testing/plugins.md).
 
 Agent plugin approval is separate from platform IAM and workload containment.
-This Driver adds no sandbox, egress grant, filesystem grant, approval service,
-OAuth interface, or permission hook. Existing workload and managed policies
-remain mandatory. Package preparation preserves other Agents' state and does
+The runtime overlay grants read-only access to packaged Codex binaries even with
+no selected plugins; selected plugins also receive their skill-directory reads.
+Existing workload and managed policies remain mandatory. Package preparation preserves other Agents' state and does
 not write the shared native registry while the prior gateway is running.
 
 ## Source and verification
@@ -251,4 +309,7 @@ not write the shared native registry while the prior gateway is running.
 Source and contract tests do not establish compatibility with every runtime
 image. Native proof requires the testing guide's opt-in real-runtime lane.
 
-Disabling a selection does not uninstall it. Native remote installation can enable a plugin on the credential’s account; Agent-local app configuration and the OpenClaw bridge still block its execution. Agent enablement does not manage account-wide installation state.
+Disabling a selection does not uninstall it or guarantee its skills are unloaded.
+Native remote installation can enable a plugin on the credential's account;
+Agent-local app configuration and the OpenClaw bridge block its hosted app tools.
+Agent enablement does not manage account-wide installation state.

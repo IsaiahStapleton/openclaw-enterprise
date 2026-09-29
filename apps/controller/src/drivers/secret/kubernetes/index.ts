@@ -271,6 +271,40 @@ export class KubernetesSecretDriver implements SecretDriver {
   }
 
   async resolve(secret: Secret): Promise<SecretBackendRef> {
+    const { reference } = await this.readOwnedSecret(secret);
+    return reference;
+  }
+
+  async withValue<T>(secret: Secret, use: (value: string) => Promise<T>): Promise<T> {
+    if (secret.driverId !== this.id) {
+      throw new SecretOwnershipError("Secret Driver identity changed.");
+    }
+    const { observed } = await this.readOwnedSecret(secret);
+    const encoded = observed.data?.[SECRET_KEY];
+    let value: string;
+    try {
+      if (
+        typeof encoded !== "string" ||
+        encoded.length > 4 * Math.ceil(MAX_SECRET_VALUE_BYTES / 3) ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)
+      ) {
+        throw new Error("Invalid encoding.");
+      }
+      const bytes = Buffer.from(encoded, "base64");
+      if (bytes.toString("base64") !== encoded) {
+        throw new Error("Invalid encoding.");
+      }
+      value = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      validateValue(value);
+    } catch {
+      throw new SecretBackendUnavailableError("The Kubernetes Secret value is invalid.");
+    }
+    return use(value);
+  }
+
+  private async readOwnedSecret(
+    secret: Secret,
+  ): Promise<{ observed: V1Secret; reference: SecretBackendRef }> {
     validateIdentity(secret);
     validateBackendRef(secret.backendRef);
     const client = await this.core();
@@ -282,7 +316,8 @@ export class KubernetesSecretDriver implements SecretDriver {
       () => client.readNamespacedSecret({ namespace, name: secret.backendRef.name }),
       "read",
     );
-    return this.checkedBackendRef(observed, secret, namespace, secret.backendRef);
+    const reference = this.checkedBackendRef(observed, secret, namespace, secret.backendRef);
+    return { observed, reference };
   }
 
   private manifest(

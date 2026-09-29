@@ -1,20 +1,26 @@
 {
   "env": {
-    "OCC_TEST_PLUGIN_DRIVER_REAL": "1"
+    "OCC_TEST_PLUGIN_DRIVER_REAL": "1",
+    "OCC_TEST_CODEX_STARTUP_READS_REAL": "1"
   },
   "requiredEnv": [
     "OCC_TEST_KUBERNETES_KUBECONFIG",
     "OCC_TEST_KUBERNETES_CONTEXT",
     "OCC_TEST_PLUGIN_DRIVER_OPENCLAW_DATABASE_URL",
     "OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL",
+    "OCC_TEST_PLUGIN_DRIVER_CODEX_LINEAR_DATABASE_URL",
     "OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL",
     "CODEX_ACCESS_TOKEN",
     "OCC_TEST_CODEX_PLUGIN_CATALOG_CODEX_EXECUTABLE",
-    "OCC_TEST_CODEX_PLUGIN_CATALOG_CODEX_HOME"
+    "OCC_TEST_CODEX_PLUGIN_CATALOG_CODEX_HOME",
+    "OCC_TEST_KUBERNETES_AGENT_IMAGE"
   ],
   "files": [
     {
       "path": "tests/integration/plugin-driver-real.test.mjs"
+    },
+    {
+      "path": "tests/integration/codex-plugin-startup-reads-real.test.mjs"
     }
   ]
 }

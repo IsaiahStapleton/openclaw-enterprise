@@ -8,9 +8,16 @@ metadata:
     {{- include "openclaw.labels" (dict "root" $ "component" $component) | nindent 4 }}
 spec:
   replicas: 1
-  {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+  {{- if eq $component "worker" }}
   strategy:
+    {{- if $.Values.repositoryCredentials.enabled }}
     type: Recreate
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: "25%"
+      maxUnavailable: "25%"
+    {{- end }}
   {{- end }}
   selector:
     matchLabels:
@@ -40,6 +47,15 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        {{- if $.Values.executionCluster.enabled }}
+        - name: execution-kubeconfig
+          secret:
+            secretName: {{ ternary $.Values.executionCluster.apiKubeconfigSecretName $.Values.executionCluster.workerKubeconfigSecretName (eq $component "api") | quote }}
+            defaultMode: 288
+            items:
+              - key: {{ $.Values.executionCluster.kubeconfigKey | quote }}
+                path: kubeconfig
+        {{- end }}
         {{- if $.Values.repositoryCredentials.enabled }}
         - name: repository-registry
           configMap:
@@ -154,8 +170,16 @@ spec:
           emptyDir:
             sizeLimit: 1Mi
         {{- end }}
+      {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+      # The receipt server must remain available while the broker drains.
+      initContainers:
+      {{- else }}
       containers:
+      {{- end }}
         - name: {{ $component }}
+          {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+          restartPolicy: Always
+          {{- end }}
           image: {{ $.Values.images.controller | quote }}
           args:
             - apps/controller/src/{{ ternary "server" "worker" (eq $component "api") }}.mjs
@@ -197,6 +221,15 @@ spec:
             {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_SECRET" "secretName" $.Values.auth.secretName "key" $.Values.auth.secretKey) | nindent 12 }}
             - name: OCC_AUTH_BASE_URL
               value: {{ $.Values.auth.baseUrl | quote }}
+            {{- if $.Values.slackProxy.enabled }}
+            - name: OCC_CHANNEL_DIRECTORY_PROXY_URL
+              value: {{ include "openclaw.slackProxy.url" $ | quote }}
+            - name: OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST
+              value: {{ printf "%s.%s.svc" (include "openclaw.slackProxy.serviceName" $) $.Release.Namespace | quote }}
+            {{- else if $.Values.api.channelDirectoryProxyUrl }}
+            - name: OCC_CHANNEL_DIRECTORY_PROXY_URL
+              value: {{ $.Values.api.channelDirectoryProxyUrl | quote }}
+            {{- end }}
             - name: OCC_AGENT_NATIVE_ADMIN_ENABLED
               value: {{ ternary "true" "false" $.Values.agentNativeAdmin.enabled | quote }}
             {{- if $.Values.agentNativeAdmin.enabled }}
@@ -218,6 +251,11 @@ spec:
               value: {{ $.Values.worker.convergenceTimeoutMs | quote }}
             {{- end }}
           volumeMounts:
+            {{- if $.Values.executionCluster.enabled }}
+            - name: execution-kubeconfig
+              mountPath: /etc/openclaw/execution
+              readOnly: true
+            {{- end }}
             {{- if $.Values.repositoryCredentials.enabled }}
             - name: repository-registry
               mountPath: /etc/openclaw/repository-registry
@@ -290,12 +328,13 @@ spec:
               command: [node, scripts/production-healthcheck.mjs, worker]
           {{- end }}
         {{- if and (eq $component "worker") $.Values.repositoryCredentials.enabled }}
+      containers:
         - name: repository-credentials
           image: {{ $.Values.repositoryCredentials.image | quote }}
           command: [node, /app/dist/composition/repository-credentials/projected-inputs.js]
           args:
             - --public-origin
-            - {{ printf "https://openclaw-enterprise-repository-credentials.%s.svc" $.Release.Namespace | quote }}
+            - {{ include "openclaw.repositoryCredentials.origin" $ | quote }}
             - --backend-id
             - {{ $.Values.repositoryCredentials.backendId | quote }}
           securityContext:
