@@ -32,6 +32,13 @@ node and run node-local `ctr image import`; k3d `tools-node` can hide per-node
 failures while exiting successfully. Imports targeting one cluster stay
 serialized, then preparation verifies digest and CRI references on owned nodes.
 
+A test can publish a timing into its file's `measurements` array in the results
+artifact with `t.diagnostic("openclaw-ci-measurement <json>")`. The
+[reporter](../../scripts/ci/reporter.mjs) keeps only allowlisted shapes (today
+`kubelet-volume-refresh`, from the
+[volume refresh test](../../tests/integration/kubelet-volume-refresh-k3d.test.mjs))
+and drops every other diagnostic.
+
 The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible
 words are flagged for review and pages above 2,500 fail, except the approved
 [API reference](../reference/api.md) and `AGENTS.md` instruction files. The
