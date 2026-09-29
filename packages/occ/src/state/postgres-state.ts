@@ -663,6 +663,13 @@ function databaseError(error: unknown): Error {
     // A lock timeout is transient contention, retryable like a statement timeout (57014).
     return new DependencyUnavailableError("The platform persistence lock timeout expired.");
   }
+  if (code === "40001" || code === "40P01") {
+    // A serialization failure or deadlock aborts the whole transaction before
+    // COMMIT (see commitOutcomeUnknown), so the caller can safely retry it.
+    return new DependencyUnavailableError(
+      "The platform persistence transaction conflicted with a concurrent transaction.",
+    );
+  }
   if (
     code?.startsWith("08") ||
     code?.startsWith("53") ||
