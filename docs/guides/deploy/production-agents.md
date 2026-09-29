@@ -463,10 +463,10 @@ TUI](#attach-with-the-openclaw-tui), or [verify rejection of an unauthenticated
 request and a real model response](../operate/model-verification.md) over an
 operator's local Kubernetes connection.
 
-A Helm release, ready controller, or active revision does not show that the
-Agent can reach its model. A missing
+A ready controller or active revision does not prove model access: a Pod
+without the
 [network profile](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
-denies model access; relabeling grants it.
+has none.
 
 ## Attach with the OpenClaw TUI
 
