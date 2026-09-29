@@ -1782,7 +1782,7 @@ export const scenarios = {
     standardCodexPreset: true,
     actions: [{ selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" }],
     description:
-      "The shipped Preset asks for name, model, and a masked modelSecret password. No Namespace or Secret ID is needed.",
+      "The shipped Preset asks for Name, Model, and a masked Model Secret. No Namespace or Secret ID is needed.",
     steps: [
       "Enter a name, model ID, and a dummy model key.",
       "Use Preset and review the masked API key and restricted configuration.",
@@ -3398,7 +3398,7 @@ export const scenarios = {
     description:
       "Interactive walkthrough from Preset selection through first-time provisioning and deployment activation. Worker progress is simulated; it is not a live deployment.",
     steps: [
-      "Choose Research assistant, fill Variable: name, then Use Preset.",
+      "Choose Research assistant, fill Name, then Use Preset.",
       "Review the Configuration, masked pre-existing model Secret reference, and four seeded workspace files; click Create Agent.",
       "Wait for provisioning to finish; the Console opens Agent details with the queued deployment. Refresh deployment to finish simulated activation, then open Workspace files.",
       "Use Versions to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
