@@ -69,6 +69,7 @@ import {
   ResourceConflictError,
   type DeploymentStatusResult,
   type AgentProvisioningProgress,
+  type DeployAgentAuthorization,
   type ProvisionAgentInput,
   type HarnessResolver,
   type OpenClawController,
@@ -892,6 +893,7 @@ function clientDeploymentStatus(status: Readonly<DeploymentStatusResult>): Recor
     status: status.status,
     error: status.error,
     warnings: status.warnings,
+    progress: status.progress,
   };
 }
 
@@ -1142,7 +1144,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     evidence?: AuthorizationEvidence,
     result?: { readonly outcome: "success" | "denied" | "failure"; readonly reasonCode?: string },
     authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
+    validatedAuthorization?: Readonly<DeployAgentAuthorization>,
   ): AuditEvent {
+    const authorizationEvidence = validatedAuthorization?.decision.evidence ?? evidence;
+    const outcome =
+      result?.outcome ?? (kind === "bootstrap" || kind === "mutation" ? "success" : "denied");
     return factory.create({
       installationId,
       ...(resource.namespaceId === undefined ? {} : { namespaceId: resource.namespaceId }),
@@ -1158,8 +1164,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               subject: context.subject,
             },
             admissionDecisionId: context.admissionDecisionId,
-            iamDriverId: selectedIAMDriver().id,
-            authorization: {
+            iamDriverId: validatedAuthorization?.decision.driverId ?? selectedIAMDriver().id,
+            authorization: validatedAuthorization?.request ?? {
               principalId: context.actorId,
               action: authorization?.action ?? operation.iamAction,
               resource:
@@ -1170,29 +1176,28 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                   request.params as Record<string, unknown>,
                 ),
             },
-            ...(evidence === undefined
+            ...(authorizationEvidence === undefined
               ? {}
               : {
-                  ...(evidence.restrictionIds.length > 0
+                  ...(outcome === "denied" && authorizationEvidence.restrictionIds.length > 0
                     ? { decisionReason: "A matching Restriction denied the operation." }
                     : {}),
                   details: {
                     iamEvidence: {
-                      ...(evidence.identityId === undefined
+                      ...(authorizationEvidence.identityId === undefined
                         ? {}
-                        : { identityId: evidence.identityId }),
-                      groupIds: evidence.groupIds,
-                      bindingIds: evidence.bindingIds,
-                      roleIds: evidence.roleIds,
-                      restrictionIds: evidence.restrictionIds,
+                        : { identityId: authorizationEvidence.identityId }),
+                      groupIds: authorizationEvidence.groupIds,
+                      bindingIds: authorizationEvidence.bindingIds,
+                      roleIds: authorizationEvidence.roleIds,
+                      restrictionIds: authorizationEvidence.restrictionIds,
                     },
                   },
                 }),
           }),
       action: operation.action,
       resource,
-      outcome:
-        result?.outcome ?? (kind === "bootstrap" || kind === "mutation" ? "success" : "denied"),
+      outcome,
       ...(result?.reasonCode === undefined
         ? kind === "authorization_denial"
           ? { reasonCode: "AUTHORIZATION_DENIED" }
@@ -2216,8 +2221,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           "Workspace defaults changed. Reload the create form before submitting.",
         );
       }
-      const result = await controller.transact(async (unit) => {
-        const provisioned = await controller!.provisionAgent(context.actorId, {
+      const provisioned = await controller.provisionAgent(
+        context.actorId,
+        {
           requestId: provisionBody.requestId,
           namespaceId,
           name: provisionBody.name,
@@ -2253,8 +2259,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 repositoryBindings:
                   provisionBody.repositoryBindings as readonly RepositoryBindingRequest[],
               }),
-        });
-        await unit.audit.append(
+        },
+        (provisioned) =>
           event(
             operation,
             request,
@@ -2266,11 +2272,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             "mutation",
             context,
           ),
-        );
-        return {
-          provisioning: clientAgentProvisioning(provisioned.provisioning, namespaceId),
-        };
-      });
+      );
+      const result = {
+        provisioning: clientAgentProvisioning(provisioned.provisioning, namespaceId),
+      };
       reply.status(202).send({ data: result, meta: { requestId: request.id } });
       return;
     }
@@ -2532,23 +2537,24 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     if (operation.operationId === "deployAgent") {
       try {
-        const revision = await controller.transact(async (unit) => {
-          const admitted = await controller!.deployAgent(
-            context.actorId,
-            { namespaceId, agentId },
-            options.resolveHarness,
-          );
-          await unit.audit.append(
+        const admitted = await controller.deployAgentWithAuthorization(
+          context.actorId,
+          { namespaceId, agentId },
+          options.resolveHarness,
+          (admitted) =>
             event(
               operation,
               request,
-              { kind: "agent_revision", id: admitted.id, namespaceId },
+              { kind: "agent_revision", id: admitted.revision.id, namespaceId },
               "mutation",
               context,
+              undefined,
+              undefined,
+              undefined,
+              admitted.authorization,
             ),
-          );
-          return clientRevision(admitted);
-        });
+        );
+        const revision = clientRevision(admitted.revision);
         reply.status(202).send({ data: revision, meta: { requestId: request.id } });
         return;
       } catch (error) {

@@ -45,9 +45,11 @@ hosting does not select the Agent model provider.
 
 - Kubernetes 1.35 or later, an explicit context, enforcing NetworkPolicies,
   Helm, a version-compatible `kubectl`, Python 3, `yq` v4, and the installed
-  [OCC CLI](cli.md). Older servers produce a startup warning and remain outside
-  the supported boundary.
-- Controller and runtime image digests (build them in the first step).
+  [OCC CLI](cli.md). Profile generation also requires Node.js 24 or newer on the
+  operator host; manual YAML installs do not. Older Kubernetes servers produce a
+  startup warning and remain outside the supported boundary.
+- Controller and runtime image digests and a chart matched to their source; see
+  [private image delivery](deploy/private-registry-images.md).
 - External PostgreSQL with separate migrator and application roles.
 - A Kubernetes node pool labeled for OCC control-plane Pods. The production example
   selects nodes with `oce-role: control`; the chart default is `{}`. Set
@@ -66,9 +68,12 @@ hosting does not select the Agent model provider.
 Follow these pages in order in the same operator shell:
 
 1. [Build images and install the control plane](deploy/production-installation.md).
-   Configure protected Installation YAML and Helm values, create system
-   Secrets, prepare the fresh bootstrap PVC, install the chart, and authenticate
-   to the production API.
+   Generate the recommended profile configuration or choose the advanced manual
+   YAML branch, create system Secrets, prepare the fresh bootstrap PVC, install
+   the chart, and authenticate to the production API. The
+   [installation profiles](deploy/installation-profiles.md) page owns profile
+   choice, input schema, defaults, and rendering semantics; the production
+   runbook owns every Kubernetes mutation and bootstrap step.
 2. [Prepare Namespaces and deploy Agents](deploy/production-agents.md).
    Grant tenant RoleBindings, choose embedded OpenClaw or dedicated Codex,
    provision exact-Agent credentials, and deploy an immutable revision.
@@ -140,6 +145,7 @@ runtime paths. See
 - [Troubleshoot the platform](operate/troubleshooting.md)
 - [Service API keys, rotation, and bootstrap recovery](../reference/authentication/service-api-keys.md)
 - [Credential renewal and revocation](deploy/credential-lifecycle.md)
+- [Render installation profiles](deploy/installation-profiles.md)
 - [Local Kubernetes, development TUI, and cleanup](deploy/local-operations.md)
 - [Local Kubernetes development inner loop](deploy/local-kubernetes-development.md)
 - [Configuration and settings](../reference/settings.md)

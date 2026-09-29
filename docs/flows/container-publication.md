@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-27
-last_updated_session: codex/01a0e437-0dda-7ca2-9704-2c37c71f8d11
+updated: 2026-09-28
+last_updated_session: codex/01a0cf72-6985-7712-ba92-d8cc32470f24
 ---
 
 # Container publication flow
@@ -85,7 +85,7 @@ source commit. BuildKit rewrites image and filesystem timestamps to that epoch,
 so wall-clock time does not change the image manifests on a cold-cache rebuild.
 
 `deploy/runtime/Dockerfile:openclaw-source` verifies the pinned source archive,
-applies the Codex 0.156.0 dependency/lockfile patch, and applies the temporary
+uses its stock Codex 0.158.0 dependency/lockfile selection, and applies the temporary
 OpenClaw read-only-paths compatibility patch. The build verifies the latter's
 hash and records it in runtime provenance. The OpenClaw bridge forwards the bound
 Agent's stock network settings without modifying the Codex binary. Both installs use
@@ -93,6 +93,11 @@ frozen lockfiles and upstream's selected-plugin manifests, retaining required
 bundled plugins plus Codex and Slack. The standalone Codex command links to the
 plugin's installation. Build tools remain in full Bookworm stages; final images
 use a separately pinned Node 24 Bookworm slim base.
+
+`deploy/runtime/Dockerfile:runtime` disables npm's background update notifier in
+the final image environment. Harness child processes inherit that default, so
+local npm scripts do not trigger a separate version-check network request.
+See the [runtime defaults](../../deploy/runtime/README.md) for scope.
 
 `scripts/build-runtime-assets.mjs` removes development/QA source, extension tests,
 and documentation media, while retaining runtime templates, skills, and help.
@@ -198,6 +203,10 @@ not rebuild them. Old amd64-only seals cannot satisfy this platform contract.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-28 14:51: Use upstream Codex 0.158.0 dependencies and remove the old version override. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 6c56149f)
+
+- 2026-09-28 03:13: Disable npm background update checks in the runtime image. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 587b3096b2b5de9c5575a13b36133be99a93ebe2)
 
 - 2026-09-27 20:26: Build the selected upstream commit with a verified temporary read-only-paths compatibility patch and record its hash. (codex/01a0e437-0dda-7ca2-9704-2c37c71f8d11 - 5d906bf9ad82bca1ec4f05d5958250607e185c6d)
 

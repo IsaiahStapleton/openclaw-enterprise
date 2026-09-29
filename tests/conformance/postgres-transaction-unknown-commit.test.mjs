@@ -50,3 +50,57 @@ test("lost COMMIT response returns unknown without waiting for a hung rollback",
     clearTimeout(timer);
   }
 });
+
+for (const outcome of ["commit", "rollback", "unknown"]) {
+  test(`IAM work escaped from a ${outcome} transaction cannot acquire another client`, async () => {
+    const calls = [];
+    const releases = [];
+    let connects = 0;
+    let resume;
+    const later = new Promise((resolve) => {
+      resume = resolve;
+    });
+    const state = new PostgresPlatformState({
+      async connect() {
+        connects += 1;
+        return {
+          async query(statement) {
+            calls.push(statement);
+            if (statement === "COMMIT" && outcome === "unknown") {
+              throw Object.assign(new Error("lost response"), { code: "ETIMEDOUT" });
+            }
+            return { command: statement, rows: [], rowCount: 0 };
+          },
+          release(discard) {
+            releases.push(discard);
+          },
+        };
+      },
+      async end() {},
+    });
+    let escaped;
+    const operation = state.transact(async () => {
+      // A descendant keeps the original async context after its owner settles.
+      escaped = later.then(() => state.loadNativeIAMState());
+      if (outcome === "rollback") {
+        throw new Error("business rejection");
+      }
+    });
+    if (outcome === "commit") {
+      await operation;
+    } else {
+      await assert.rejects(
+        operation,
+        outcome === "unknown"
+          ? { name: "PostgresCommitOutcomeUnknownError" }
+          : /business rejection/,
+      );
+    }
+    const rejected = assert.rejects(escaped, /platform transaction is closed/);
+    resume();
+    await rejected;
+    assert.equal(connects, 1);
+    assert.deepEqual(calls, ["BEGIN", outcome === "rollback" ? "ROLLBACK" : "COMMIT"]);
+    assert.deepEqual(releases, [outcome === "unknown"]);
+  });
+}

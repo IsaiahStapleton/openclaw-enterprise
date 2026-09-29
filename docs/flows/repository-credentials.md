@@ -1,7 +1,7 @@
 ---
 created: "2026-09-17"
-updated: "2026-09-23"
-last_updated_session: "authoring-run/0dffba8f-d16f-4f90-8fe2-893368f6926a"
+updated: "2026-09-28"
+last_updated_session: authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352
 ---
 
 # Repository credential service flow
@@ -9,9 +9,8 @@ last_updated_session: "authoring-run/0dffba8f-d16f-4f90-8fe2-893368f6926a"
 ## Overview
 
 Operators or workers admit bounded sessions over private Unix control; clients
-send Git or selected API requests over HTTPS with a gateway bearer. This source
-trace covers forwarding, local closure and cleanup in the separate credential
-process. Container and live qualification need separate evidence. The
+send Git or selected API requests over HTTPS with a gateway bearer. This trace
+covers forwarding, closure and cleanup in the separate credential process. The
 [Agent flow](agent-repository-credentials.md) owns admission and material delivery.
 
 ## Entry Points
@@ -103,11 +102,10 @@ bounded correlation registry from
 `apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`.
 Admission IDs bind the complete request: platform Namespace, repository reference,
 normalized profile, expected grant and absolute deadline. Registry mode requires
-this binding and independently resolves its fingerprint. `recoverOnly` returns
-status or absence without creation, fencing fresh missing IDs against delayed
-admission until their window closes. Known nondelivery before response transmission closes the
-session. Ambiguous loss permits same-ID status reconciliation without bearer
-recovery, binding/deadline changes or provider replay.
+this binding and independently resolves its fingerprint. A worker-owned private
+journal reserves the exact attempt before bearer delivery; recovery durably fences
+a missing admission. Known nondelivery closes the session. Reconciliation cannot
+recover a bearer, change its binding or replay provider work.
 
 Factory failure or an invalid binding closes construction admission before
 `apps/controller/src/drivers/repo/credentials/custody.ts:disposeAllRenewal`.
@@ -144,6 +142,10 @@ clears its buffer after use, and leaves material unchanged for store/erase.
 handles only gh. It validates the supported API/explicit-head PR invocation,
 selects a binding from its explicit target, inherited pin or native Git remotes,
 and propagates the exact generation/reference/session pin to children.
+Before launching gh, the router and single-session launcher compare the private
+bearer and generated host configuration and check the deadline again after
+reading them. A mismatch or unsafe file refuses the launch. This preflight
+detects inconsistent material; it is not an atomic snapshot or authorization.
 `apps/controller/src/drivers/repo/github/credentials/client/environment.ts:createClientEnvironment`
 keeps gh token/config isolation while preserving normal HOME and system Git
 configuration. `apps/controller/src/drivers/repo/github/credentials/client/commands.ts:prepareGhCommand`
@@ -275,9 +277,13 @@ capacity wakes cleanup; queue rejection alone does not mark an action uncertain.
 
 `apps/controller/src/composition/repository-credentials/service.ts:runService`
 stops admission, closes sessions and bounds cleanup with an independent timer.
-Grace expiry reports unresolved obligations and exits without proving disposal
-or remote revocation. Restart loses provider cleanup inventory. The process
-closes the shared App key after shutdown disposition.
+Grace expiry reports unresolved obligations without proving disposal. The original
+broker writes `DISPOSED` to the worker's receipt journal before reporting it,
+and gives pending terminal writes a separate bounded window before graceful exit. The Helm worker is a
+restartable init container so its receipt listener outlives broker shutdown.
+Only a committed observation survives restart. Uncommitted or uncertain
+provider inventory remains unknown. The process closes the shared App key after
+shutdown disposition.
 
 Failed construction custody also participates in shutdown drainage. Its
 pending obligation contributes to `pendingAuxiliary` without inventing a
@@ -293,15 +299,13 @@ the controller's emitted tree into separate service/client artifacts.
 | `.build/repository-credentials/service` | `repository-credentials.js`, `composition/repository-credentials/check-config.js`          |
 | `.build/repository-credentials/client`  | `drivers/repo/github/credentials/client/{launch,operator,git-helper,native-git,router}.js` |
 
-The Dockerfiles under `deploy/runtime/repository-credentials/` consume those
-separate contexts. `deploy/examples/repository-credentials/compose.yaml` keeps
-service inputs/control and client session/workspace mounts separate. The
-[operator guide](../guides/repository-credentials.md#container-images) owns image
-builds and entrypoint inspection. The
+The Dockerfiles under `deploy/runtime/repository-credentials/` consume these
+contexts. `deploy/examples/repository-credentials/compose.yaml` separates service
+inputs/control from client session/workspace mounts. The
+[operator guide](../guides/repository-credentials.md#container-images) covers image
+builds and entrypoints. The
 [test guide](../testing/repository-credentials.md#record-each-evidence-boundary)
-distinguishes detached loading, combined test images, rendered mounts and
-observations of separate running containers; none alone establishes live-provider
-or platform integration.
+distinguishes packaging, container, live-provider and platform proof.
 
 ## Debugging and Verification
 
@@ -315,9 +319,10 @@ A helper failure reports a fixed category without credentials. Diagnose the
 configured HTTPS host/path and private file ownership first. API failures also
 require checking that the session uses `git-full`, then the pinned CLI, canonical
 host, gateway DNS/SAN and port 443.
-The [test guide](../testing/repository-credentials.md) owns controlled upstream,
-client and alternate-adapter checks. Detached service/client artifacts prove
-module closure. Separate-container isolation and live-provider behavior require their own selected qualification.
+For a local gh launch refusal, inspect the selected private session files and
+their ownership without exposing credential contents.
+The [test guide](../testing/repository-credentials.md) covers controlled upstream,
+client and alternate-adapter checks; live-provider behavior requires separate qualification.
 
 ## Related docs
 
@@ -331,6 +336,10 @@ module closure. Separate-container isolation and live-provider behavior require 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-28 08:12: Trace durable admission fencing and original-broker disposal acknowledgments. (authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352 - e06ff9625e72ff5ab3483a504a2f02a69a370cbb)
+
+- 2026-09-28 04:48: Receive the gh material consistency preflight and its limits. (authoring-run/6e1aa273-a96b-4b17-9514-d6d7064decea - ae31581574744bea2745066f189eea6e826fe823)
 
 - 2026-09-23 06:18: Trace accompanying profile-aligned REST permissions, token-bounded GraphQL and bounded raw replies. (authoring-run/0dffba8f-d16f-4f90-8fe2-893368f6926a - a2e94cf8ac2d94306f0701cee5457d1a9797e50a)
 
