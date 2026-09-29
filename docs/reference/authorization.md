@@ -308,7 +308,7 @@ For a working authenticated request, see the
 - [Service accounts](service-accounts.md)
 - [Kubernetes Compute Driver](drivers/kubernetes-compute.md)
 - [Controller configuration](settings.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)
 
 ## Manual Notes
 
