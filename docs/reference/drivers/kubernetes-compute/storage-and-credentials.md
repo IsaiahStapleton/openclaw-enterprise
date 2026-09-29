@@ -112,6 +112,8 @@ from the default StorageClass, mounted only by its Harness:
 | `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
+Installations that enrolled one node per revision enroll a new Agent device once,
+at the first replacement; retiring each earlier revision deletes its node Secret.
 Sessions stay on the private Gateway claim. Selected generated-image bytes return
 through the Codex remote-media reader; there is no shared image mount. Each image
 initializes its own bundled/plugin assets instead of mounting shared Skill trees.

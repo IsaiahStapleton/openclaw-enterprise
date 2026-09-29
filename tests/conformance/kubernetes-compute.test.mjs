@@ -421,6 +421,65 @@ test("workspace node identity is Agent-scoped and only Agent deletion removes it
   assert.deepEqual(deleted, []);
 });
 
+test("retiring an upgraded revision removes its legacy node Secret and keeps the Agent node", async () => {
+  const driver = new KubernetesComputeDriver(
+    routedOptions({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+    { nodeEnrollment: {} },
+  );
+  const revision = routedRevision(driver);
+  const namespace = { name: kubernetesNamespaceName(revision.namespaceId), plane: "execution" };
+  // Installations upgraded from revision-scoped enrollment still hold one
+  // Secret per revision; the first replacement enrolls a new Agent device.
+  const legacyName = `workspace-node-${digest(revision.agentId)}-${digest(revision.id)}`;
+  const secret = (name, ownership, uid) => {
+    const value = {
+      ...driver.manifest("v1", "Secret", name, ownership, namespace),
+      type: "Opaque",
+    };
+    value.metadata.uid = uid;
+    return value;
+  };
+  const secrets = new Map([
+    [legacyName, secret(legacyName, driver.pluginRuntimeOwnership(revision), "legacy-uid")],
+    [
+      driver.workspaceNodeName(revision),
+      secret(driver.workspaceNodeName(revision), driver.workspaceNodeOwnership(revision), "agent"),
+    ],
+  ]);
+  const deleted = [];
+  driver.apiClients = Promise.resolve({
+    core: {
+      async readNamespacedSecret({ name }) {
+        if (!secrets.has(name)) {
+          throw Object.assign(new Error("not found"), { statusCode: 404 });
+        }
+        return structuredClone(secrets.get(name));
+      },
+      async deleteNamespacedSecret(request) {
+        deleted.push([request.name, request.body.preconditions.uid]);
+        secrets.delete(request.name);
+      },
+    },
+  });
+  driver.resolveNamespace = async () => ({ name: namespace, external: false });
+  driver.getNamespace = async () => ({ metadata: {} });
+  driver.verifyNamespaceOwnership = () => {};
+  driver.verifyGatewayNamespace = () => {};
+  driver.shutdownRevisionRuntime = async () => {};
+  driver.removeRetiredGateway = async () => {};
+  await driver.retireRevision(revision);
+  assert.deepEqual(deleted, [[legacyName, "legacy-uid"]]);
+  assert.equal(secrets.has(driver.workspaceNodeName(revision)), true);
+  // A replayed retirement finds nothing left to delete.
+  await driver.retireRevision(revision);
+  assert.deepEqual(deleted, [[legacyName, "legacy-uid"]]);
+});
+
 test("preparation renews an expired workspace node setup and keeps the enrolled device", async () => {
   const setups = [];
   const driver = new KubernetesComputeDriver(

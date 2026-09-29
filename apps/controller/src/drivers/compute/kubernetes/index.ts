@@ -3946,6 +3946,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     await this.lifecycle.beforeWorkloadStop(revision);
     await this.shutdownRevisionRuntime(revision, namespace);
+    await this.retireLegacyWorkspaceNode(revision, namespace);
     await this.removeRetiredGateway(revision, namespace);
     if (revision.repositoryCredentials !== undefined) {
       await this.waitForRevisionPodsToTerminate(
@@ -6000,6 +6001,23 @@ export class KubernetesComputeDriver implements ComputeDriver {
     readonly harness: { readonly id: string };
   }): string {
     return `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(`harness:${revision.harness.id}`, 12)}`;
+  }
+
+  // Before Agent scoping, each revision enrolled its own node Secret. Remove
+  // one left by an upgraded installation when that revision retires.
+  private async retireLegacyWorkspaceNode(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
+    if (this.nodeEnrollment === undefined || this.options.runtime === undefined) {
+      return;
+    }
+    await this.deleteOwnedNamespacedResource(
+      "Secret",
+      `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(revision.id, 12)}`,
+      this.pluginRuntimeOwnership(revision),
+      namespace,
+    );
   }
 
   private workspaceNodeOwnership(revision: AgentRevision): Ownership {
