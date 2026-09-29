@@ -1,6 +1,6 @@
 import { createHmac, createPublicKey, verify } from "node:crypto";
 import { authorizationCodeRequest, createAuthorizationURL } from "better-auth/oauth2";
-import { providerJSON, rejected } from "./github.ts";
+import { providerJSON, rejected } from "./provider-transport.ts";
 
 // Google OpenID Connect, fixed endpoints (no runtime discovery):
 // https://accounts.google.com/.well-known/openid-configuration

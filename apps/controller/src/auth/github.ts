@@ -25,6 +25,7 @@ import {
   googleNonce,
   type GoogleLoginConfiguration,
 } from "./google.ts";
+import { providerJSON, rejected } from "./provider-transport.ts";
 
 export interface GitHubLoginConfiguration {
   readonly clientId: string;
@@ -86,62 +87,8 @@ export function digest(value: string): string {
 function secret(): string {
   return randomBytes(32).toString("base64url");
 }
-export function rejected(): APIError {
-  return APIError.fromStatus("UNAUTHORIZED", { message: "Authentication was not accepted." });
-}
-
 const tokenEndpoint = "https://github.com/login/oauth/access_token";
 const profileEndpoint = "https://api.github.com/user";
-const providerResponseLimit = 64 * 1024;
-
-// Every fixed provider endpoint the controller may call. Nothing else is fetchable.
-export type ProviderEndpoint =
-  | typeof tokenEndpoint
-  | typeof profileEndpoint
-  | "https://oauth2.googleapis.com/token"
-  | "https://www.googleapis.com/oauth2/v3/certs";
-
-// A provider's fixed requests share a deadline, including streaming body reads.
-export async function providerJSON(
-  endpoint: ProviderEndpoint,
-  init: RequestInit,
-  signal: AbortSignal,
-): Promise<Record<string, unknown>> {
-  const response = await fetch(endpoint, { ...init, signal, redirect: "error" });
-  if (!response.ok || !response.body) {
-    await response.body?.cancel();
-    throw rejected();
-  }
-  const reader = response.body.getReader();
-  try {
-    if (Number(response.headers.get("content-length")) > providerResponseLimit) {
-      await reader.cancel();
-      throw rejected();
-    }
-    const chunks: Uint8Array[] = [];
-    let length = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      signal.throwIfAborted();
-      if (done) {
-        break;
-      }
-      length += value.byteLength;
-      if (length > providerResponseLimit) {
-        await reader.cancel();
-        throw rejected();
-      }
-      chunks.push(value);
-    }
-    const data: unknown = JSON.parse(Buffer.concat(chunks, length).toString("utf8"));
-    if (typeof data !== "object" || data === null || Array.isArray(data)) {
-      throw rejected();
-    }
-    return data as Record<string, unknown>;
-  } finally {
-    reader.releaseLock();
-  }
-}
 
 async function exchangeGithubSubject(
   config: ProviderClient,
