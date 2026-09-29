@@ -10,9 +10,9 @@ Use this skill only when the user explicitly invokes `oceinteg <scenario>` or
 Follow $enterprise-testing for real-runtime prerequisites, evidence, and failure
 classification, then read only the selected scenario below.
 
-| Invocation      | Scenario                                                                                                                                                   |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `oceinteg main` | [Main acceptance test](./references/main.md): fresh Helm installation, Console provisioning, Slack, repository permissions, Linear, and native Control UI. |
+| Invocation      | Scenario                                                                                                                                                             |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oceinteg main` | [Main acceptance test](./references/main.md): fresh Helm installation, Console provisioning, Slack, read-only repository enforcement, Linear, and native Control UI. |
 
 If the scenario is missing or unknown, show the available names and ask which
 one to run. Do not substitute another scenario or start infrastructure work.
