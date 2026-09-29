@@ -1737,7 +1737,6 @@ async function prepareLane({ lane, statePath }) {
       );
       break;
     case "images-packaging":
-      env.OCC_TEST_CODEX_PROBE_IMAGE = effectiveLaneEnv(name, env).NODE_BASE_IMAGE;
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await commandAvailable(process.env.OCC_YQ_BIN ?? "yq", ["--version"]);
       Object.assign(
@@ -1751,6 +1750,12 @@ async function prepareLane({ lane, statePath }) {
             }),
           )
         ).env,
+      );
+      // BuildKit's base-image cache is not Docker's runnable image store.
+      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
+        state,
+        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
+        "NODE_BASE_IMAGE",
       );
       if (lanePrepare(name).codexSeccomp) {
         await prepareImagesPackagingCodexSeccompProfile(resolvedStatePath, state, env);

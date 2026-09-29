@@ -193,6 +193,8 @@ test(
   },
   async (t) => {
     assert.match(image, /^(?:sha256:[a-f0-9]{64}|.+@sha256:[a-f0-9]{64})$/);
+    // A missing local image is setup failure, not a model-probe timeout.
+    await execute("docker", ["image", "inspect", image], { timeout: 10000 });
     const scenarios = [
       { name: "timeout then success", input: "recover", attempts: 2, ready: true },
       { name: "two timeouts", input: "timeout", attempts: 2, code: "MODEL_PROBE_TIMEOUT" },
