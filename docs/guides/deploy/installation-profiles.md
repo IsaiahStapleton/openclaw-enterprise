@@ -139,7 +139,7 @@ If you opt in to repositories, add the broker inputs:
 
 ## Render files
 
-Run the renderer from the repository root:
+Run the renderer from the repository root with Node.js 24 or newer:
 
 ```sh
 node scripts/render-installation-profile.mjs \
@@ -164,32 +164,20 @@ files are preserved. If required input is missing or unsupported input is presen
 it writes `preflight.json` with `ok: false` and only the report path in `outputs`,
 leaves both YAML files absent, and exits nonzero. Unreadable or malformed input
 JSON also leaves no preflight report. Correct the input and rerun successfully
-before applying either artifact.
+before using either artifact.
 
-## Apply rendered output
+## Use rendered files
 
-Create or update the Installation startup Secret from the rendered file before
-running Helm. The rendered Helm values include a checksum of this exact
-`installation.yaml`; applying the Secret first ensures the control-plane rollout
-loads the same startup configuration that Helm uses for its pod-template
-checksum.
+This guide stops after rendering. The canonical production runbook owns the
+protected handoff directory, Kubernetes context, startup Secret, bootstrap PVC,
+Helm install, bootstrap key retrieval, and authenticated API check. Continue at
+[Configure the Installation](production-installation.md#configure-the-installation)
+and use the rendered `values.yaml` and `installation.yaml` there.
 
-```sh
-kubectl --namespace openclaw-system create secret generic occ-installation-startup \
-  --from-file=installation.yaml=.build/profile-renders/codex/installation.yaml \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-Then install or upgrade the chart with the rendered values:
-
-```sh
-helm upgrade --install oce deploy/helm/openclaw-enterprise \
-  --namespace openclaw-system \
-  --values .build/profile-renders/codex/values.yaml
-```
-
-After Helm finishes, retrieve the bootstrap service key from the protected
-bootstrap PersistentVolumeClaim and verify authenticated OCC access.
+If rendering fails or either YAML file is absent, stop and fix the input. Do not
+copy manual examples into the same output directory. Rerender successfully so
+`values.yaml`, `installation.yaml`, and `controlPlane.installationChecksum` stay
+paired.
 
 ## Required environment checks
 
