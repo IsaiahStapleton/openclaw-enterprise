@@ -4612,7 +4612,7 @@ export class OpenClawController {
   }
 
   /**
-   * Begin logical deletion of one exact, authorized, empty Namespace.
+   * Begin or retry logical deletion of one exact, authorized, empty Namespace.
    * Driver effects remain deferred to handleNamespaceLifecycle().
    */
   async deleteNamespace(principalId: string, namespaceId: string): Promise<Readonly<Namespace>> {
@@ -4631,7 +4631,36 @@ export class OpenClawController {
         id: namespace.id,
         namespaceId: namespace.id,
       });
+      // Keep in-flight teardown idempotent. The original caller can explicitly
+      // retry terminal work after repairing the dependency or permission failure.
       if (namespace.status === "deleting") {
+        const workId = `namespace:${namespace.id}:reconcile:deleted`;
+        const work = await state.operations.findWork(workId);
+        if (work?.state === "failed_permanent") {
+          if (work.actorId !== principalId) {
+            throw new AuthorizationDeniedError("Only the initiating actor can retry deletion.");
+          }
+          if (!(await state.operations.retryFailedNamespaceDeletion(namespace.id, principalId))) {
+            throw new ResourceConflictError("The Namespace deletion work changed during retry.");
+          }
+          await state.audit.append({
+            id: `aud_${crypto.randomUUID()}`,
+            installationId: this.installation.id,
+            namespaceId: namespace.id,
+            occurredAt: this.timestamp(),
+            kind: "mutation",
+            actorId: principalId,
+            source: "occ",
+            action: "openclaw.namespaces.delete.retry",
+            resource: { kind: "namespace", id: namespace.id, namespaceId: namespace.id },
+            outcome: "success",
+            details: {
+              workId,
+              previousAttemptCount: work.attemptCount,
+              previousReasonCode: work.reasonCode,
+            },
+          });
+        }
         return namespace;
       }
       if (await state.namespaces.hasAgents(namespace.id)) {

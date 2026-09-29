@@ -331,7 +331,7 @@ export const occApiRoutes = [
     iamAction: "delete",
     resourceKind: "namespace",
     authorizationTarget: "namespace",
-    summary: "Begin deletion of an empty Installation-owned Namespace",
+    summary: "Begin or retry deletion of an empty Installation-owned Namespace",
     tags: ["Namespaces"],
     schema: {
       querystring: EmptyQuery,

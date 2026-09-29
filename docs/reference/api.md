@@ -1269,7 +1269,7 @@ Get the configured external observability destination
 | --- | --- |
 | [`GET /namespaces`](#get-namespaces) | List authorized Namespaces |
 | [`POST /namespaces`](#post-namespaces) | Create an Installation-owned Namespace |
-| [`DELETE /namespaces/{namespaceId}`](#delete-namespacesnamespaceid) | Begin deletion of an empty Installation-owned Namespace |
+| [`DELETE /namespaces/{namespaceId}`](#delete-namespacesnamespaceid) | Begin or retry deletion of an empty Installation-owned Namespace |
 | [`GET /namespaces/{namespaceId}`](#get-namespacesnamespaceid) | Get an exact Installation-owned Namespace |
 
 #### `GET /namespaces`
@@ -1369,7 +1369,7 @@ Create an Installation-owned Namespace
 
 <span id="delete-namespacesnamespaceid"></span>
 
-Begin deletion of an empty Installation-owned Namespace
+Begin or retry deletion of an empty Installation-owned Namespace
 
 **Operation ID:** `deleteNamespace`
 

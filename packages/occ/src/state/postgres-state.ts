@@ -3975,6 +3975,29 @@ export class PostgresPlatformState implements PlatformStateStore {
           );
           return retried.rowCount === 1;
         },
+        retryFailedNamespaceDeletion: async (namespaceId, actorId) => {
+          await this.requireInitialized(context);
+          // created_at is immutable, so a retry keeps the original convergence
+          // deadline: the retried pass succeeds only once teardown has finished.
+          const retried = await client.query(
+            `UPDATE occ.controller_work AS work
+             SET state = 'queued', attempt_count = 0,
+                 available_at = clock_timestamp(), claim_token = NULL,
+                 lease_expires_at = NULL, completed_at = NULL,
+                 reason_code = NULL, result_data = NULL, updated_at = clock_timestamp()
+             FROM occ.namespaces AS namespace
+             WHERE work.idempotency_key = $1
+               AND work.work_kind = 'lifecycle'
+               AND work.namespace_id = $2 AND work.actor_id = $3
+               AND work.agent_id IS NULL AND work.revision_id IS NULL
+               AND work.namespace_target = 'deleted' AND work.state = 'failed_permanent'
+               AND namespace.id = work.namespace_id
+               AND namespace.status = 'deleting' AND namespace.deleted_at IS NULL
+             RETURNING work.idempotency_key`,
+            [`namespace:${namespaceId}:reconcile:deleted`, namespaceId, actorId],
+          );
+          return retried.rowCount === 1;
+        },
         findWork: async (idempotencyKey) => {
           await this.requireInitialized(context);
           return queue.findWork(idempotencyKey);
