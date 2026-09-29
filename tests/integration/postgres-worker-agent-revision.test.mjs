@@ -3829,6 +3829,16 @@ test(
     await fixture.work(revision, "succeeded");
     await fixture.stop();
 
+    // The shared queue can also deliver an independently authorized stop from
+    // another Namespace while this Namespace denies its own Agent's shutdown.
+    const neighbor = await setup(context);
+    const neighborOwner = await neighbor.agent("authorized-neighbor-stop");
+    const neighborRevision = await neighbor.revision(neighborOwner, 1);
+    await neighbor.start(neighbor.compute);
+    await neighbor.work(neighborRevision, "succeeded");
+    await neighbor.stop();
+    const neighborStop = await neighbor.requestStop(neighborOwner);
+
     const maintenance = {
       id: revision.id,
       idempotencyKey: `agent_revision:${revision.id}:maintenance:${randomUUID()}`,
@@ -3859,7 +3869,10 @@ test(
       {
         ...fixture.compute,
         async stopRevision(candidate) {
-          stoppedRevisions.push(candidate.id);
+          if (candidate.namespaceId === fixture.namespace.id) {
+            stoppedRevisions.push(candidate.id);
+          }
+          return fixture.compute.stopRevision(candidate);
         },
       },
       (event) => events.push(event),
@@ -3870,6 +3883,7 @@ test(
 
     await fixture.work(maintenance, "succeeded");
     await fixture.work(stop, "failed_permanent");
+    await neighbor.work(neighborStop, "succeeded");
     assert.deepEqual(stoppedRevisions, []);
     const current = await fixture.state.read((view) =>
       view.agents.findAgent(fixture.namespace.id, owner.id),
