@@ -15,6 +15,9 @@ const script = fileURLToPath(new URL("../../scripts/upgrade-node-platform.py", i
 const deployedScript = fileURLToPath(
   new URL("../../scripts/upgrade-deployment-identity.py", import.meta.url),
 );
+const imageIdentityScript = fileURLToPath(
+  new URL("../../scripts/upgrade-image-identity.py", import.meta.url),
+);
 
 async function qualify(t, nodes, selector = {}) {
   const root = await mkdtemp(join(tmpdir(), "occ-node-platform-"));
@@ -36,6 +39,24 @@ function node(name, architecture, labels = {}) {
     status: { nodeInfo: { operatingSystem: "linux", architecture } },
   };
 }
+
+test("image identity accepts omitted descriptor platform but rejects a contradiction", async () => {
+  const source = String.raw`
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("image_identity", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.validate_descriptor_platform({}, "linux/amd64")
+module.validate_descriptor_platform({"platform": {"os": "linux", "architecture": "amd64"}}, "linux/amd64")
+try:
+    module.validate_descriptor_platform({"platform": {"os": "linux", "architecture": "arm64"}}, "linux/amd64")
+except ValueError:
+    pass
+else:
+    raise AssertionError("contradictory descriptor platform was accepted")
+`;
+  await execute("python3", ["-c", source, imageIdentityScript]);
+});
 
 test("broker capability qualification requires the supported successful response", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "occ-capability-"));

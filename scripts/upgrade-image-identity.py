@@ -81,6 +81,16 @@ def read_platform(image, platform, selected):
     return config_digest
 
 
+def validate_descriptor_platform(descriptor, platform):
+    value = descriptor.get("platform")
+    if value is None:
+        return
+    expected_os, expected_architecture = platform.split("/")
+    if (not isinstance(value, dict) or value.get("os") != expected_os or
+            value.get("architecture") != expected_architecture):
+        raise ValueError("platform descriptor mismatch")
+
+
 def main():
     if len(sys.argv) != 3:
         raise ValueError("expected image and platform")
@@ -100,10 +110,7 @@ def main():
         raise ValueError("platform manifest digest is unavailable")
     if f'{selected.get("Os")}/{selected.get("Architecture")}' != platform:
         raise ValueError("staged image platform mismatch")
-    if (descriptor.get("platform") or {}).get("os") != platform.split("/")[0] or (
-        descriptor.get("platform") or {}
-    ).get("architecture") != platform.split("/")[1]:
-        raise ValueError("platform descriptor mismatch")
+    validate_descriptor_platform(descriptor, platform)
     config_digest = read_platform(image, platform, manifest_digest)
     print(json.dumps({"image": image, "platform": platform, "rootDigest": root_digest,
                       "manifestDigest": manifest_digest, "configDigest": config_digest}, sort_keys=True))
