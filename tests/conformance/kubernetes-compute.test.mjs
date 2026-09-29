@@ -26,6 +26,7 @@ import {
   currentComputeAbortSignal,
   withComputeAbortSignal,
 } from "../../apps/controller/src/drivers/compute/operation-context.ts";
+import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 const kubeconfigPath = "/tmp/openclaw-enterprise-conformance/kubeconfig";
 const contextName = "openclaw-enterprise-local";
@@ -318,6 +319,51 @@ function routedRevision(driver, overrides = {}) {
   };
 }
 
+test("gateway readiness waits for the updated replica to replace the old ready pod", async () => {
+  const driver = new KubernetesComputeDriver(options());
+  const namespace = { name: kubernetesNamespaceName(tenant.id), plane: "execution" };
+  const ownership = { namespaceId: tenant.id, agentId: "agent-rollout" };
+  const name = `gateway-${digest(ownership.agentId)}`;
+  const deployment = driver.deployment(
+    name,
+    ownership,
+    namespace,
+    options().images.gateway,
+    name,
+    "gateway",
+    {},
+    "info",
+  );
+  deployment.metadata.generation = 2;
+  deployment.status = {
+    observedGeneration: 2,
+    replicas: 2,
+    updatedReplicas: 1,
+    readyReplicas: 1,
+  };
+  const service = driver.service(name, ownership, namespace, {
+    "app.kubernetes.io/name": name,
+  });
+  driver.apiClients = Promise.resolve({
+    apps: { readNamespacedDeployment: async () => structuredClone(deployment) },
+    core: { readNamespacedService: async () => structuredClone(service) },
+    discovery: {
+      listNamespacedEndpointSlice: async () => ({
+        items: [
+          {
+            metadata: { labels: { "kubernetes.io/service-name": name } },
+            endpoints: [{ conditions: { ready: true } }],
+          },
+        ],
+      }),
+    },
+  });
+
+  assert.equal(await driver.gatewayReady(ownership, name, namespace), false);
+  deployment.status.replicas = 1;
+  assert.equal(await driver.gatewayReady(ownership, name, namespace), true);
+});
+
 test("Kubernetes namespace names are deterministic, DNS-safe, distinct, and OpenShell-routable", () => {
   for (const id of ["Namespace_With.UPPERCASE!punctuation", "x".repeat(250), "---"]) {
     const name = kubernetesNamespaceName(id);
@@ -333,7 +379,7 @@ test("Kubernetes namespace names are deterministic, DNS-safe, distinct, and Open
   assert.notEqual(kubernetesNamespaceName("Team A"), kubernetesNamespaceName("Team-A"));
 });
 
-test("retiring node enrollment deletes only its revision Secret and preserves Harness storage", async () => {
+test("workspace node identity is Agent-scoped and only Agent deletion removes it", async () => {
   const driver = new KubernetesComputeDriver(
     routedOptions({
       runtime: {
@@ -344,63 +390,294 @@ test("retiring node enrollment deletes only its revision Secret and preserves Ha
     { nodeEnrollment: {} },
   );
   const revision = routedRevision(driver);
+  const replacement = { ...revision, id: "revision-routed-2", revision: 2 };
+  // OpenClaw keeps each session on its recorded device, so a replacement
+  // AgentRevision must reconnect as the same node rather than enroll a new one.
+  assert.equal(driver.workspaceNodeName(replacement), driver.workspaceNodeName(revision));
+  assert.deepEqual(
+    driver.workspaceNodeOwnership(replacement),
+    driver.workspaceNodeOwnership(revision),
+  );
+  assert.equal(driver.workspaceNodeOwnership(revision).revisionId, undefined);
+  // A Harness change does not inherit another Harness kind's node.
+  assert.notEqual(
+    driver.workspaceNodeName({ ...revision, harness: { ...revision.harness, id: "codex" } }),
+    driver.workspaceNodeName({ ...revision, harness: { ...revision.harness, id: "openclaw" } }),
+  );
   const namespace = kubernetesNamespaceName(revision.namespaceId);
-  const secret = {
-    ...driver.manifest(
-      "v1",
-      "Secret",
-      driver.workspaceNodeName(revision),
-      driver.pluginRuntimeOwnership(revision),
-      { name: namespace, plane: "execution" },
-    ),
-    type: "Opaque",
-  };
-  secret.metadata.uid = "node-enrollment-uid";
-  let observedSecret = secret;
+  const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
+  const secrets = new Map(
+    ["codex", "openclaw"].map((id, index) => {
+      const name = driver.workspaceNodeName({ ...revision, harness: { id } });
+      const secret = {
+        ...driver.manifest("v1", "Secret", name, ownership, {
+          name: namespace,
+          plane: "execution",
+        }),
+        type: "Opaque",
+      };
+      secret.metadata.uid = `node-enrollment-uid-${index}`;
+      return [name, secret];
+    }),
+  );
   const deleted = [];
-  // The transport exposes only Secret operations: retiring a revision must
-  // leave the Harness claim (including other revisions' files) intact.
   driver.apiClients = Promise.resolve({
     core: {
-      async readNamespacedSecret() {
-        return structuredClone(observedSecret);
+      async readNamespacedSecret({ name }) {
+        if (!secrets.has(name)) {
+          throw Object.assign(new Error("not found"), { statusCode: 404 });
+        }
+        return structuredClone(secrets.get(name));
       },
       async deleteNamespacedSecret(request) {
-        deleted.push(["secret", request]);
+        deleted.push(request);
       },
     },
   });
-  await driver.retireWorkspaceNode(revision, { name: namespace, plane: "execution" });
-  assert.deepEqual(deleted, [
-    [
-      "secret",
-      {
-        name: secret.metadata.name,
-        namespace,
-        body: { preconditions: { uid: "node-enrollment-uid" } },
-      },
-    ],
-  ]);
+  assert.equal(driver.retireWorkspaceNode, undefined);
+  await driver.deleteWorkspaceNodes(revision.agentId, ownership, {
+    name: namespace,
+    plane: "execution",
+  });
+  assert.deepEqual(
+    deleted,
+    [...secrets.values()].map((secret) => ({
+      name: secret.metadata.name,
+      namespace,
+      body: { preconditions: { uid: secret.metadata.uid } },
+    })),
+  );
   deleted.length = 0;
-  const other = { ...revision, id: "another-revision" };
-  observedSecret = {
-    ...secret,
-    metadata: {
-      ...secret.metadata,
-      ...driver.manifest(
-        "v1",
-        "Secret",
-        secret.metadata.name,
-        driver.pluginRuntimeOwnership(other),
-        { name: namespace, plane: "execution" },
-      ).metadata,
-    },
-  };
+  const foreign = { ...ownership, agentId: "another-agent" };
+  for (const [name, secret] of secrets) {
+    secrets.set(name, {
+      ...secret,
+      metadata: {
+        ...secret.metadata,
+        ...driver.manifest("v1", "Secret", name, foreign, { name: namespace, plane: "execution" })
+          .metadata,
+      },
+    });
+  }
   await assert.rejects(
-    driver.retireWorkspaceNode(revision, { name: namespace, plane: "execution" }),
-    /ownership|another|revision|Refusing/i,
+    driver.deleteWorkspaceNodes(revision.agentId, ownership, {
+      name: namespace,
+      plane: "execution",
+    }),
+    /Refusing unowned/,
   );
   assert.deepEqual(deleted, []);
+  // Naming admits only the Harness kinds Agent deletion sweeps.
+  assert.throws(
+    () => driver.workspaceNodeName({ ...revision, harness: { id: "other" } }),
+    /limited to Codex and OpenClaw/,
+  );
+});
+
+test("retiring an upgraded revision removes its legacy node Secret and keeps the Agent node", async () => {
+  const driver = new KubernetesComputeDriver(
+    routedOptions({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+    { nodeEnrollment: {} },
+  );
+  const revision = routedRevision(driver);
+  const namespace = { name: kubernetesNamespaceName(revision.namespaceId), plane: "execution" };
+  // Installations upgraded from revision-scoped enrollment still hold one
+  // Secret per revision; the first replacement enrolls a new Agent device.
+  const legacyName = `workspace-node-${digest(revision.agentId)}-${digest(revision.id)}`;
+  const secret = (name, ownership, uid) => {
+    const value = {
+      ...driver.manifest("v1", "Secret", name, ownership, namespace),
+      type: "Opaque",
+    };
+    value.metadata.uid = uid;
+    return value;
+  };
+  const secrets = new Map([
+    [legacyName, secret(legacyName, driver.pluginRuntimeOwnership(revision), "legacy-uid")],
+    [
+      driver.workspaceNodeName(revision),
+      secret(driver.workspaceNodeName(revision), driver.workspaceNodeOwnership(revision), "agent"),
+    ],
+  ]);
+  const deleted = [];
+  driver.apiClients = Promise.resolve({
+    core: {
+      async readNamespacedSecret({ name }) {
+        if (!secrets.has(name)) {
+          throw Object.assign(new Error("not found"), { statusCode: 404 });
+        }
+        return structuredClone(secrets.get(name));
+      },
+      async deleteNamespacedSecret(request) {
+        deleted.push([request.name, request.body.preconditions.uid]);
+        secrets.delete(request.name);
+      },
+    },
+  });
+  driver.resolveNamespace = async () => ({ name: namespace, external: false });
+  driver.getNamespace = async () => ({ metadata: {} });
+  driver.verifyNamespaceOwnership = () => {};
+  driver.verifyGatewayNamespace = () => {};
+  driver.shutdownRevisionRuntime = async () => {};
+  driver.removeRetiredGateway = async () => {};
+  await driver.retireRevision(revision);
+  assert.deepEqual(deleted, [[legacyName, "legacy-uid"]]);
+  assert.equal(secrets.has(driver.workspaceNodeName(revision)), true);
+  // A replayed retirement finds nothing left to delete.
+  await driver.retireRevision(revision);
+  assert.deepEqual(deleted, [[legacyName, "legacy-uid"]]);
+});
+
+test("preparation renews an expired workspace node setup and keeps the enrolled device", async () => {
+  const setups = [];
+  const driver = new KubernetesComputeDriver(
+    routedOptions({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+    {
+      nodeEnrollment: {
+        async createSetup() {
+          setups.push("setup");
+          return {
+            setupId: `setup-${setups.length + 1}`,
+            setupCode: `code-${setups.length + 1}`,
+            expiresAtMs: Date.now() + 600_000,
+          };
+        },
+      },
+    },
+  );
+  const revision = routedRevision(driver);
+  const namespace = { name: kubernetesNamespaceName(revision.namespaceId), plane: "execution" };
+  const name = driver.workspaceNodeName(revision);
+  const encode = (value) => Buffer.from(value, "utf8").toString("base64");
+  const decode = (data) =>
+    Object.fromEntries(
+      Object.entries(data).map(([key, value]) => [key, Buffer.from(value, "base64").toString()]),
+    );
+  const deviceId = "a".repeat(64);
+  // Enrolled on an earlier revision; the upstream native `connect --ephemeral`
+  // entrypoint refuses a setup code past its embedded expiry.
+  let secret = {
+    ...driver.manifest("v1", "Secret", name, driver.workspaceNodeOwnership(revision), namespace),
+    type: "Opaque",
+    data: {
+      setupId: encode("setup-1"),
+      setupCode: encode("code-1"),
+      expiresAtMs: encode("1"),
+      deviceId: encode(deviceId),
+    },
+  };
+  secret.metadata.uid = "enrolled-uid";
+  secret.metadata.resourceVersion = "7";
+  const writes = [];
+  driver.reconcile = async () => {};
+  driver.gatewayReady = async () => true;
+  driver.apiClients = Promise.resolve({
+    core: {
+      async readNamespacedSecret() {
+        return structuredClone(secret);
+      },
+      async replaceNamespacedSecret(request) {
+        writes.push(["replace", request.name, request.body.metadata.resourceVersion]);
+        secret = structuredClone(request.body);
+      },
+      async deleteNamespacedSecret(request) {
+        writes.push(["delete", request.name]);
+      },
+      async createNamespacedSecret(request) {
+        writes.push(["create", request.body.metadata.name]);
+      },
+    },
+  });
+  const replacement = { ...revision, id: "revision-routed-2", revision: 2 };
+  assert.deepEqual(await driver.prepareWorkspaceNode(replacement, namespace), { name });
+  assert.deepEqual(writes, [["replace", name, "7"]]);
+  assert.equal(setups.length, 1);
+  const renewed = decode(secret.data);
+  assert.equal(renewed.deviceId, deviceId);
+  assert.equal(renewed.setupId, "setup-2");
+  assert.equal(renewed.setupCode, "code-2");
+  assert.ok(Number(renewed.expiresAtMs) > Date.now());
+  assert.equal(secret.metadata.uid, "enrolled-uid");
+  // A current setup is reused unchanged.
+  writes.length = 0;
+  assert.deepEqual(await driver.prepareWorkspaceNode(replacement, namespace), { name });
+  assert.deepEqual(writes, []);
+  assert.equal(setups.length, 1);
+});
+
+test("preparation records a device redeemed on an expired setup before renewing it", async () => {
+  for (const redeemed of [true, false]) {
+    const setups = [];
+    const observed = [];
+    const deviceId = "b".repeat(64);
+    const driver = new KubernetesComputeDriver(
+      routedOptions({
+        runtime: {
+          transportSecretPrefix: "transport",
+          gatewayStorageClassName: "local-path",
+        },
+      }),
+      {
+        nodeEnrollment: {
+          async createSetup() {
+            setups.push("setup");
+            return { setupId: "setup-b", setupCode: "code-b", expiresAtMs: Date.now() + 600_000 };
+          },
+          async observeSetup(_url, setupId) {
+            observed.push(setupId);
+            return redeemed ? { deviceId, connected: false } : undefined;
+          },
+        },
+      },
+    );
+    const revision = routedRevision(driver);
+    const namespace = { name: kubernetesNamespaceName(revision.namespaceId), plane: "execution" };
+    const name = driver.workspaceNodeName(revision);
+    const encode = (value) => Buffer.from(value, "utf8").toString("base64");
+    // Setup A expired before readiness recorded the node that redeemed it.
+    let secret = {
+      ...driver.manifest("v1", "Secret", name, driver.workspaceNodeOwnership(revision), namespace),
+      type: "Opaque",
+      data: { setupId: encode("setup-a"), setupCode: encode("code-a"), expiresAtMs: encode("1") },
+    };
+    secret.metadata.resourceVersion = "3";
+    const writes = [];
+    driver.reconcile = async () => {};
+    driver.gatewayReady = async () => true;
+    driver.apiClients = Promise.resolve({
+      core: {
+        async readNamespacedSecret() {
+          return structuredClone(secret);
+        },
+        async replaceNamespacedSecret(request) {
+          writes.push(request.body.metadata.resourceVersion);
+          secret = structuredClone(request.body);
+        },
+      },
+    });
+    assert.deepEqual(await driver.prepareWorkspaceNode(revision, namespace), { name });
+    assert.deepEqual(observed, ["setup-a"]);
+    assert.deepEqual(writes, ["3"]);
+    assert.equal(setups.length, 1);
+    const data = Object.fromEntries(
+      Object.entries(secret.data).map(([key, value]) => [
+        key,
+        Buffer.from(value, "base64").toString(),
+      ]),
+    );
+    assert.equal(data.setupId, "setup-b");
+    assert.equal(data.deviceId, redeemed ? deviceId : undefined);
+  }
 });
 
 test("dedicated runtime rejects missing workspace transport before cluster access", async () => {
@@ -511,7 +788,7 @@ test("activation refuses a missing or foreign workspace node before changing the
       "v1",
       "Secret",
       driver.workspaceNodeName(revision),
-      driver.pluginRuntimeOwnership({ ...revision, id: "previous-revision" }),
+      { namespaceId: revision.namespaceId, agentId: "another-agent" },
       { name: namespace, plane: "execution" },
     ),
     data: { deviceId: Buffer.from("previous-device").toString("base64") },
@@ -734,7 +1011,12 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
       name,
       name === gatewayName ? kubernetesGatewayNamespaceName(tenant.id) : namespace,
     );
-    object.status = { observedGeneration: object.metadata.generation, readyReplicas: 1 };
+    object.status = {
+      observedGeneration: object.metadata.generation,
+      replicas: 1,
+      updatedReplicas: 1,
+      readyReplicas: 1,
+    };
     save(object);
   };
   assert.equal((await prepare()).ready, false);
@@ -939,7 +1221,12 @@ test("dedicated replacement starts a candidate Gateway when the predecessor cann
   predecessor.metadata.annotations["openclaw.dev/agent-revision-id"] = oldRevision.id;
   predecessor.metadata.generation = 1;
   predecessor.metadata.uid = `${gatewayName}-uid`;
-  predecessor.status = { observedGeneration: 1, readyReplicas: 1 };
+  predecessor.status = {
+    observedGeneration: 1,
+    replicas: 1,
+    updatedReplicas: 1,
+    readyReplicas: 1,
+  };
   save(predecessor);
 
   let candidateGatewayStarted = false;
@@ -1022,7 +1309,12 @@ test("dedicated replacement starts a candidate Gateway when the predecessor cann
   const markReady = (name) => {
     const target = name === gatewayName ? gatewayNamespace : namespace;
     const object = read("Deployment", name, target);
-    object.status = { observedGeneration: object.metadata.generation, readyReplicas: 1 };
+    object.status = {
+      observedGeneration: object.metadata.generation,
+      replicas: 1,
+      updatedReplicas: 1,
+      readyReplicas: 1,
+    };
     save(object);
   };
 
@@ -1695,6 +1987,23 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
     driver.getGatewayEndpoint(revision),
     `wss://${gatewayRouting.hostname}/namespaces/${tenant.id}/agents/${revision.agentId}`,
   );
+  const alternateEndpointDriver = createKubernetesComputeDriver(
+    routedOptions({ gatewayRouting: { ...gatewayRouting, endpointPort: 18443 } }),
+  );
+  const alternateEndpointRevision = routedRevision(alternateEndpointDriver);
+  assert.equal(
+    alternateEndpointDriver.getGatewayEndpoint(alternateEndpointRevision),
+    `wss://${gatewayRouting.hostname}:18443/namespaces/${tenant.id}/agents/${alternateEndpointRevision.agentId}`,
+  );
+  assert.deepEqual(
+    alternateEndpointDriver.gatewayRoute(
+      alternateEndpointRevision,
+      ownership,
+      { name: namespace, plane: "execution" },
+      service,
+    ).spec.hostnames,
+    [gatewayRouting.hostname],
+  );
 
   const route = driver.gatewayRoute(
     revision,
@@ -1770,8 +2079,8 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
     route.spec.rules[0].filters[1],
   ]);
 
-  // Node enrollment uses an exact device-authenticated endpoint, not the
-  // operator UI prefix route or its injected administrative identity.
+  // Node enrollment and worker admission authenticate inside OpenClaw, while
+  // worker bundles use their own one-time bearer token instead of the administrative API key.
   const nodeRoute = driver.gatewayRoute(
     revision,
     ownership,
@@ -1779,7 +2088,7 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
     service,
     "node",
   );
-  assert.equal(nodeRoute.spec.rules.length, 1);
+  assert.equal(nodeRoute.spec.rules.length, 4);
   assert.deepEqual(nodeRoute.spec.rules[0].matches, [
     { path: { type: "Exact", value: `/namespaces/${tenant.id}/agents/${revision.agentId}/node` } },
   ]);
@@ -1799,6 +2108,52 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
     "tailscale-user-login",
   ]) {
     assert.ok(nodeHeaders.remove.includes(header), `node route must strip ${header}`);
+  }
+  assert.deepEqual(nodeRoute.spec.rules[1], {
+    matches: [
+      {
+        path: {
+          type: "Exact",
+          value: `/namespaces/${tenant.id}/agents/${revision.agentId}/node/__openclaw__/worker`,
+        },
+      },
+    ],
+    filters: [
+      {
+        type: "URLRewrite",
+        urlRewrite: {
+          path: { type: "ReplaceFullPath", replaceFullPath: "/__openclaw__/worker" },
+        },
+      },
+      nodeRoute.spec.rules[0].filters[1],
+    ],
+    backendRefs: [{ group: "", kind: "Service", name, port: 8080 }],
+  });
+  for (const [rule, transferPath] of nodeRoute.spec.rules
+    .slice(2)
+    .map((rule, index) => [rule, ["worker-bundle/v1", "worker-transfer/v1"][index]])) {
+    assert.deepEqual(rule.matches, [
+      {
+        path: {
+          type: "PathPrefix",
+          value: `/namespaces/${tenant.id}/agents/${revision.agentId}/node/__openclaw__/${transferPath}/`,
+        },
+      },
+    ]);
+    assert.deepEqual(rule.filters[0], {
+      type: "URLRewrite",
+      urlRewrite: {
+        path: {
+          type: "ReplacePrefixMatch",
+          replacePrefixMatch: `/__openclaw__/${transferPath}/`,
+        },
+      },
+    });
+    const transferHeaders = rule.filters[1].requestHeaderModifier;
+    assert.equal(transferHeaders.remove.includes("authorization"), false);
+    for (const header of ["cookie", "x-occ-identity", "x-api-key", "x-openclaw-scopes"]) {
+      assert.ok(transferHeaders.remove.includes(header), `transfer route must strip ${header}`);
+    }
   }
 
   const ingress = driver
@@ -2351,6 +2706,17 @@ test("agent provisioning validation reuses native trusted-proxy admission before
 });
 
 test("gateway routing startup validation and namespace membership fail closed", async () => {
+  for (const endpointPort of [0, -1, 65536, 443.5, "443"]) {
+    assert.throws(
+      () =>
+        createKubernetesComputeDriver(
+          routedOptions({
+            gatewayRouting: { ...gatewayRouting, endpointPort },
+          }),
+        ),
+      /Gateway routing endpoint port/,
+    );
+  }
   for (const envoyHttpsTargetPort of [0, -1, 65536, 443.5, "10443"]) {
     assert.throws(
       () =>
@@ -2603,6 +2969,29 @@ test("the canonical Kubernetes runtime validates channel proxy configuration", (
     assert.throws(
       () => createKubernetesComputeDriver(options({ runtime: { ...runtime, channels } })),
       /Managed channel proxy/i,
+    );
+  }
+});
+
+test("the canonical Kubernetes runtime validates native OpenClaw session capacity", () => {
+  const runtime = {
+    transportSecretPrefix: "transport",
+    gatewayStorageClassName: "local-path",
+  };
+  for (const nativeOpenClawSessionCapacity of [1, 8, 1024]) {
+    assert.doesNotThrow(() =>
+      createKubernetesComputeDriver(
+        options({ runtime: { ...runtime, nativeOpenClawSessionCapacity } }),
+      ),
+    );
+  }
+  for (const nativeOpenClawSessionCapacity of [0, 1.5, 1025, Number.NaN]) {
+    assert.throws(
+      () =>
+        createKubernetesComputeDriver(
+          options({ runtime: { ...runtime, nativeOpenClawSessionCapacity } }),
+        ),
+      /session capacity must be an integer between 1 and 1024/i,
     );
   }
 });
@@ -2902,7 +3291,12 @@ test("direct service account token is confined to the model container and exact 
 });
 
 test("credential-source authentication renders no model Secret and requires the paired gateway", () => {
-  const sandboxDriver = { id: "sandbox-openshell", capability: "sandbox", facets: ["networking"] };
+  const sandboxDriver = {
+    id: "sandbox-openshell",
+    capability: "sandbox",
+    facets: ["networking", "filesystem", "process"],
+    provisionHarness() {},
+  };
   const credentialGatewayDriver = { id: "credential-gateway", capability: "credential_gateway" };
   const driver = new KubernetesComputeDriver(options(), { sandboxDriver, credentialGatewayDriver });
   const namespace = { name: kubernetesNamespaceName(tenant.id), plane: "execution" };
@@ -2960,6 +3354,38 @@ test("credential-source authentication renders no model Secret and requires the 
     { name: "CODEX_LOGIN_MODE", value: "api_key" },
   );
 
+  const nativeRevision = {
+    ...revision,
+    harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+    configuration: createHarnessConfiguration("openclaw", "gpt-4o-mini"),
+  };
+  driver.validateHarnessAuth(
+    nativeRevision.harness,
+    snapshot,
+    nativeRevision.configuration,
+    {},
+    sourceType,
+  );
+  const nativePrepared = driver.harnessAuthForRevision(
+    nativeRevision,
+    { harnessAuth: { ...snapshot, source } },
+    namespace,
+  );
+  assert.equal(nativePrepared.credentialSource, source);
+  assert.equal(nativePrepared.loginMode, "api_key");
+  assert.equal(
+    nativePrepared.environment.some((entry) => entry.valueFrom?.secretKeyRef !== undefined),
+    false,
+  );
+  assert.equal(
+    nativePrepared.environment.some(({ name }) => name === "CODEX_LOGIN_MODE"),
+    false,
+  );
+  assert.deepEqual(
+    nativePrepared.environment.find(({ name }) => name === "OPENCLAW_HARNESS_PROVIDER"),
+    { name: "OPENCLAW_HARNESS_PROVIDER", value: "openai" },
+  );
+
   // A resolved source must match the frozen snapshot exactly and still be ready.
   for (const changed of [
     { ...source, state: "deleting" },
@@ -3014,6 +3440,283 @@ test("credential-source authentication renders no model Secret and requires the 
       ),
     /incompatible.*topology/i,
   );
+});
+
+test("dedicated OpenClaw renders an enrolled Harness without exposing model credentials to its gateway", async () => {
+  const driverOptions = options({
+    runtime: {
+      transportSecretPrefix: "transport",
+      gatewayStorageClassName: "local-path",
+      nativeOpenClawSessionCapacity: 12,
+    },
+  });
+  const sandboxDriver = {
+    id: "sandbox-native-worker",
+    implementation: "test/native-worker",
+    capability: "sandbox",
+    facets: ["networking", "filesystem", "process"],
+    async provisionHarness() {},
+    async cleanup() {},
+  };
+  const driver = new KubernetesComputeDriver(driverOptions, { sandboxDriver });
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const namespaceAddress = { name: namespace, plane: "execution" };
+  const agentId = "agent-native-worker";
+  const configuration = admitLoggingConfiguration(
+    createHarnessConfiguration("openclaw", "gpt-5"),
+    "info",
+  );
+  const revision = {
+    id: "revision-native-worker",
+    namespaceId: tenant.id,
+    agentId,
+    revision: 1,
+    configurationId: "cfg-native-worker",
+    configurationKind: "agent",
+    configurationGeneration: 1,
+    configuration,
+    harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+    harnessAuth: apiKeyAuth,
+    compute: { id: driver.id, implementation: driver.implementation },
+    servicePrincipalId: "service-principal-native-worker",
+    createdAt: tenant.createdAt,
+  };
+  assert.throws(
+    () =>
+      createKubernetesComputeDriver(driverOptions).validateHarnessAuth(
+        revision.harness,
+        revision.harnessAuth,
+        revision.configuration,
+      ),
+    /requires a provisioning SandboxDriver with networking, filesystem, and process containment/,
+  );
+  assert.doesNotThrow(() =>
+    driver.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration),
+  );
+  assert.throws(
+    () =>
+      driver.validateHarnessAuth(revision.harness, revision.harnessAuth, {
+        ...revision.configuration,
+        cloudWorkers: { requiredProfile: "user-selected" },
+      }),
+    /required profile.*owned by the selected Compute Driver/i,
+  );
+  const ownership = { namespaceId: tenant.id, agentId };
+  const nativeInference = {
+    models: [
+      {
+        provider: "openai",
+        id: "gpt-5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 128000,
+        maxTokens: 8192,
+        reasoning: true,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        apiKeyEnv: "OPENAI_API_KEY",
+      },
+    ],
+    workspaces: [
+      {
+        id: "main",
+        path: "/home/node/.openclaw-node/node-host",
+        scope: "subdirectories",
+        models: ["openai/gpt-5"],
+      },
+    ],
+  };
+  const deviceId = "a".repeat(64);
+  const gatewayDeployment = driver.deployment(
+    "gateway-native-worker",
+    ownership,
+    namespaceAddress,
+    "gateway:local",
+    "gateway-native-worker",
+    "gateway",
+    {},
+    "info",
+    driver.gatewayConfiguration(revision, deviceId, namespaceAddress),
+    false,
+    undefined,
+    undefined,
+    [],
+    [],
+    undefined,
+    [],
+  );
+  const workerDeployment = driver.deployment(
+    "agent-native-worker",
+    { ...ownership, revisionId: revision.id },
+    namespaceAddress,
+    "gateway:local",
+    "agent-native-worker",
+    "agent",
+    {},
+    "info",
+    undefined,
+    false,
+    undefined,
+    driver.harnessAuthForRevision(revision, authContext(revision, namespace), namespaceAddress),
+    [],
+    [],
+    undefined,
+    [],
+    undefined,
+    undefined,
+    { configuration: JSON.stringify(nativeInference) },
+  );
+  driver.addNativeWorker(workerDeployment, "workspace-node-native-worker", undefined, revision);
+  assertExecStringsWithinBudget([gatewayDeployment, workerDeployment]);
+  const gateway = gatewayDeployment.spec.template.spec.containers[0];
+  const worker = workerDeployment.spec.template.spec.containers[0];
+  assert.ok(gateway);
+  assert.ok(worker);
+  const workerProgram = containerProgram(worker);
+  assert.equal(
+    gateway.env.some(({ name }) => name === "OPENAI_API_KEY"),
+    false,
+  );
+  assert.equal(
+    worker.env.some(({ name }) => name === "OPENAI_API_KEY"),
+    true,
+  );
+  assert.equal(workerProgram.includes('"runtime-server"'), false);
+  assert.equal(workerProgram.includes('"connect"'), true);
+  assert.equal(workerProgram.includes('"--ephemeral"'), true);
+  assert.equal(workerProgram.includes('"--target-file"'), true);
+  assert.equal(workerProgram.includes('"--pair-if-needed"'), false);
+  assert.equal(workerProgram.includes('"--session-host"'), false);
+  assert.equal(
+    workerProgram.includes("writeFileSync(connectTargetPath, setupCode, { mode: 0o600 })"),
+    true,
+  );
+  assert.equal(
+    worker.env.find(({ name }) => name === "TMPDIR")?.value,
+    "/tmp/openclaw-native-worker",
+  );
+  assert.equal(
+    worker.env.find(({ name }) => name === "NODE_COMPILE_CACHE")?.value,
+    "/home/node/.openclaw-node/.cache/node-compile",
+  );
+  assert.equal(workerProgram.includes("chmodSync(temporary, 0o700)"), true);
+  assert.equal(workerProgram.includes("initializeRuntimeAssets();"), true);
+  assert.equal(
+    workerProgram.includes("const { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync }"),
+    true,
+  );
+  assert.equal(workerProgram.includes("OPENCLAW_BUNDLED_SKILLS_DIR"), true);
+  assert.equal(workerProgram.includes('publishImageTree("/app/custodian-skills"'), true);
+  assert.equal(
+    workerProgram.includes('agents: { defaults: { workspace: "/home/node/workspace" } }'),
+    true,
+  );
+  assert.equal(
+    worker.env.find(({ name }) => name === "OPENCLAW_NATIVE_WORKER_CAPACITY")?.value,
+    "12",
+    "the dedicated native node must receive its configured session capacity.",
+  );
+  assert.equal(
+    gateway.env.find(({ name }) => name === "OPENCLAW_NATIVE_WORKER_PROFILE")?.value,
+    "dedicated-native",
+  );
+  assert.equal(
+    gateway.env.find(({ name }) => name === "OPENCLAW_WORKSPACE_NODE_ID")?.value,
+    deviceId,
+  );
+  assert.equal(
+    worker.env.find(({ name }) => name === "OPENCLAW_NODE_SETUP_CODE")?.valueFrom.secretKeyRef.name,
+    "workspace-node-native-worker",
+  );
+  assert.equal(
+    worker.volumeMounts.some(
+      ({ name, mountPath }) =>
+        name === "openclaw-node-state" && mountPath === "/home/node/.openclaw-node",
+    ),
+    true,
+  );
+  assert.deepEqual(
+    JSON.parse(worker.env.find(({ name }) => name === "OPENCLAW_NATIVE_INFERENCE_CONFIG").value),
+    nativeInference,
+  );
+  assert.equal(worker.readinessProbe.timeoutSeconds, 3);
+
+  const nodeRequire = createRequire(import.meta.url);
+  const files = new Map([["/etc/openclaw/openclaw.json", JSON.stringify(configuration)]]);
+  let started = false;
+  // Execute the generated Gateway startup program: every session must use the
+  // enrolled worker without requiring a user-selected Cloud Worker destination.
+  runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, {
+    Buffer,
+    JSON,
+    URL,
+    console,
+    process: {
+      env: {
+        HOME: "/home/node",
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "8080",
+        OPENCLAW_NATIVE_WORKER_PROFILE: "dedicated-native",
+        OPENCLAW_STATE_DIR: "/home/node/.openclaw",
+        OPENCLAW_WORKSPACE_NODE_ID: deviceId,
+      },
+      on() {},
+      exit() {},
+    },
+    setTimeout() {
+      return { unref() {} };
+    },
+    setInterval() {
+      return { unref() {} };
+    },
+    require(specifier) {
+      if (specifier === "node:fs") {
+        return {
+          cpSync() {},
+          existsSync() {
+            return false;
+          },
+          lstatSync() {
+            throw new Error("Unexpected lstat");
+          },
+          mkdirSync() {},
+          readFileSync(path) {
+            const value = files.get(path);
+            if (value === undefined) {
+              throw new Error(`Unexpected read: ${path}`);
+            }
+            return value;
+          },
+          readdirSync() {
+            return [];
+          },
+          rmSync() {},
+          writeFileSync(path, value) {
+            files.set(path, value);
+          },
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawn() {
+            started = true;
+            return { kill() {}, on() {} };
+          },
+          spawnSync() {
+            throw new Error("Unexpected child process");
+          },
+        };
+      }
+      return nodeRequire(specifier);
+    },
+  });
+  await Promise.resolve();
+  assert.equal(started, true);
+  const effectiveConfiguration = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+  assert.equal(effectiveConfiguration.cloudWorkers.requiredProfile, "dedicated-native");
+  assert.deepEqual(effectiveConfiguration.cloudWorkers.profiles["dedicated-native"], {
+    provider: "device",
+    settings: { device: deviceId, inference: "worker" },
+  });
 });
 
 test("account-token authentication grants only the exact Codex revision outbound HTTPS", () => {
@@ -4088,6 +4791,8 @@ async function exerciseEmbeddedReplacement({ providerId, model, environmentName,
         if (readyDeployments.has(name)) {
           observed.status = {
             observedGeneration: observed.metadata.generation,
+            replicas: 1,
+            updatedReplicas: 1,
             readyReplicas: 1,
           };
         }
@@ -4403,6 +5108,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         const childSignals = [];
         const exits = [];
         const timers = [];
+        let probeTemplate;
         let started = false;
         let held = false;
         let statusHandler;
@@ -4414,18 +5120,19 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
           URL,
           console: { error: (value) => errors.push(value) },
           process: {
-            env: {
-              ...Object.fromEntries(
-                prepared.environment.map((entry) => [
-                  entry.name,
-                  entry.value ?? "fixture-model-key",
-                ]),
-              ),
-              OPENCLAW_AGENT_REVISION_ID: "revision-embedded-probe",
-              OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
-              OPENCLAW_RUNTIME_STATUS_PORT: "18791",
-              OPENCLAW_POD_UID: "pod-embedded-probe",
-            },
+            env: Object.fromEntries([
+              ...prepared.environment.map((entry) => [
+                entry.name,
+                entry.value ?? "fixture-model-key",
+              ]),
+              ["TMPDIR", "/approved-temporary"],
+              ["NODE_EXTRA_CA_CERTS", "/run/openshell/ca.crt"],
+              ["SSL_CERT_FILE", "/run/openshell/ca-bundle.crt"],
+              ["OPENCLAW_AGENT_REVISION_ID", "revision-embedded-probe"],
+              ["OPENCLAW_RUNTIME_STATUS_CONTAINER", "gateway"],
+              ["OPENCLAW_RUNTIME_STATUS_PORT", "18791"],
+              ["OPENCLAW_POD_UID", "pod-embedded-probe"],
+            ]),
             on(signal, callback) {
               signals.set(signal, callback);
             },
@@ -4452,7 +5159,8 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
             if (specifier === "node:fs") {
               return {
                 mkdirSync() {},
-                mkdtempSync() {
+                mkdtempSync(template) {
+                  probeTemplate = template;
                   return "/isolated-probe";
                 },
                 writeFileSync(path, value) {
@@ -4502,6 +5210,10 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         });
         await Promise.resolve();
         assert.equal(calls.length, 1);
+        assert.equal(probeTemplate, "/approved-temporary/openclaw-auth-probe-");
+        assert.equal(calls[0].environment.TMPDIR, "/isolated-probe");
+        assert.equal(calls[0].environment.NODE_EXTRA_CA_CERTS, "/run/openshell/ca.crt");
+        assert.equal(calls[0].environment.SSL_CERT_FILE, "/run/openshell/ca-bundle.crt");
         assert.equal(calls[0].args[calls[0].args.indexOf("--probe-provider") + 1], provider);
         assert.equal(calls[0].environment[credentialName], "fixture-model-key");
         assert.equal(
@@ -5183,7 +5895,11 @@ function providerReadinessFixture({ provisionHarness, lifecycleDrivers = [] } = 
           name: namespace,
           plane: "execution",
         }),
-        data: { deviceId: Buffer.from("provider-node").toString("base64") },
+        data: {
+          deviceId: Buffer.from("provider-node").toString("base64"),
+          // A current setup code, as preparation keeps renewing it.
+          expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
+        },
       };
     },
     async listNamespace() {
@@ -5516,7 +6232,12 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
     driver.pluginRuntimeSnapshot(revision),
   );
   gateway.metadata.generation = 1;
-  gateway.status = { observedGeneration: 1, readyReplicas: 1 };
+  gateway.status = {
+    observedGeneration: 1,
+    replicas: 1,
+    updatedReplicas: 1,
+    readyReplicas: 1,
+  };
   save(gateway);
   const clients = {
     core,
@@ -5768,7 +6489,6 @@ test("revision lifecycle rejects another driver or missing identity before clust
   }
 
   for (const harness of [
-    { id: "openclaw", version: "1.0.0", mode: "dedicated" },
     { id: "codex", version: "1.0.0", mode: "embedded" },
     { id: "codex", version: "1.0.0" },
     { id: "codex", version: "1.0.0", mode: "remote" },
@@ -5777,7 +6497,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
     await assert.rejects(driver.prepareRevision({ ...revision, harness }), /Harness|topology/i);
   }
 
-  const production = createKubernetesComputeDriver(
+  const production = new KubernetesComputeDriver(
     options({
       runtime: {
         transportSecretPrefix: "transport",
@@ -5790,6 +6510,62 @@ test("revision lifecycle rejects another driver or missing identity before clust
         expirationSeconds: 900,
       },
     }),
+    {
+      sandboxDriver: {
+        id: "sandbox-native-worker",
+        implementation: "test/native-worker",
+        capability: "sandbox",
+        facets: ["networking", "filesystem", "process"],
+        async provisionHarness() {},
+        async cleanup() {},
+      },
+    },
+  );
+  const dedicatedNativeConfiguration = createHarnessConfiguration("openclaw", "gpt-5");
+  assert.doesNotThrow(() =>
+    production.validateHarnessAuth(
+      { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+      apiKeyAuth,
+      dedicatedNativeConfiguration,
+    ),
+  );
+  assert.throws(
+    () =>
+      production.validateHarnessAuth(
+        { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+        apiKeyAuth,
+        {
+          ...dedicatedNativeConfiguration,
+          models: {
+            providers: {
+              openai: {
+                ...dedicatedNativeConfiguration.models.providers.openai,
+                models: [{ id: "gpt-5", contextWindow: 128000, maxTokens: 8192 }],
+              },
+            },
+          },
+        },
+      ),
+    /cost metadata/,
+  );
+  assert.throws(
+    () =>
+      production.validateHarnessAuth(
+        { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+        apiKeyAuth,
+        {
+          ...dedicatedNativeConfiguration,
+          models: {
+            providers: {
+              openai: {
+                ...dedicatedNativeConfiguration.models.providers.openai,
+                baseUrl: "https://models.example.test/v1",
+              },
+            },
+          },
+        },
+      ),
+    /approved OpenAI API endpoint/,
   );
   const serviceAccountId = "sa_00000000-0000-4000-8000-000000000001";
   const serviceAccount = {
@@ -6162,14 +6938,24 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
       {
         name: "runtime-state",
         mountPath: "/home/node/.openclaw/agents/main/agent/codex-home",
-        subPath: "gateway-codex-home",
+        subPath: "home/gateway-codex-home",
       },
     );
     assert.deepEqual(pod.initContainers[0].volumeMounts, [
-      { name: "runtime-state", mountPath: "/home/node" },
+      { name: "runtime-state", mountPath: "/runtime-state" },
       { name: "runtime-temporary", mountPath: "/runtime-temporary" },
       { name: privateVolume.name, mountPath: "/gateway-state" },
     ]);
+    assert.deepEqual(
+      pod.containers[0].volumeMounts.find(({ mountPath }) => mountPath === "/home/node"),
+      { name: "runtime-state", mountPath: "/home/node", subPath: "home" },
+    );
+    assert.deepEqual(
+      pod.containers[0].volumeMounts.find(({ mountPath }) => mountPath === "/tmp"),
+      { name: "runtime-temporary", mountPath: "/tmp", subPath: "tmp" },
+    );
+    assert.equal(pod.initContainers[0].args[0].includes("/runtime-state/home"), true);
+    assert.equal(pod.initContainers[0].args[0].includes("/runtime-temporary/tmp"), true);
     assert.equal(pod.initContainers[0].env, undefined);
     assert.equal(pod.securityContext.runAsUser, 1000);
     assert.equal(pod.securityContext.fsGroup, 1000);
@@ -6217,9 +7003,38 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
       readOnly: false,
     },
   ]);
-  // Pod replacement keeps node credentials; a new revision receives a different
+  const initialState = harness.spec.template.spec.initContainers[0];
+  assert.deepEqual(initialState.volumeMounts, [
+    { name: "runtime-state", mountPath: "/runtime-state" },
+    { name: "runtime-temporary", mountPath: "/runtime-temporary" },
+    { name: "openclaw-workspace", mountPath: "/harness-workspace-state" },
+  ]);
+  assert.deepEqual(
+    harness.spec.template.spec.containers[0].volumeMounts.find(
+      ({ mountPath }) => mountPath === "/home/node",
+    ),
+    { name: "runtime-state", mountPath: "/home/node", subPath: "home" },
+  );
+  assert.deepEqual(
+    harness.spec.template.spec.containers[0].volumeMounts.find(
+      ({ mountPath }) => mountPath === "/tmp",
+    ),
+    { name: "runtime-temporary", mountPath: "/tmp", subPath: "tmp" },
+  );
+  assert.equal(initialState.args[0].includes("/runtime-state/home"), true);
+  assert.equal(initialState.args[0].includes("/runtime-temporary/tmp"), true);
+  assert.match(initialState.args[0], /chmodSync\(path, 0o700\)/);
+  for (const directory of ["workspace", "generated-images"]) {
+    assert.equal(initialState.args[0].includes(`/harness-workspace-state/${directory}`), true);
+  }
+  // Pod and AgentRevision replacement keep node credentials in one Agent
   // directory on the same Harness claim, outside task files and Gateway state.
-  const revision = { agentId: ownership.agentId, id: "revision-node-state", configuration: {} };
+  const revision = {
+    agentId: ownership.agentId,
+    id: "revision-node-state",
+    harness: { id: "openclaw", mode: "dedicated" },
+    configuration: {},
+  };
   const withNode = (candidate) => {
     const workload = structuredClone(harness);
     driver.addWorkspaceNode(workload, driver.workspaceNodeName(candidate), undefined, candidate);
@@ -6229,14 +7044,28 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
     return driver.sandboxWorkspaceMounts(pod.volumes, pod.containers[0].volumeMounts);
   };
   const mounts = withNode(revision);
+  const initializedHarness = structuredClone(harness);
+  driver.addWorkspaceNode(
+    initializedHarness,
+    driver.workspaceNodeName(revision),
+    undefined,
+    revision,
+  );
+  const initialization = initializedHarness.spec.template.spec.initContainers[0].args[0];
+  assert.match(initialization, /chmodSync\(path, 0o700\)/);
+  assert.equal(
+    initialization.includes(`/workspace-node-state/${driver.workspaceNodeName(revision)}`),
+    true,
+  );
   const node = mounts.find(({ mountPath }) => mountPath === "/home/node/.openclaw-node");
   assert.equal(new Set(mounts.map(({ claimName }) => claimName)).size, 1);
   assert.equal(node.readOnly, false);
   assert.equal(node.subPath.includes("/"), false);
   assert.deepEqual(withNode(revision), mounts);
-  const replacement = withNode({ ...revision, id: "replacement-node-state" });
-  assert.notEqual(replacement.at(-1).subPath, node.subPath);
-  assert.deepEqual(replacement.slice(0, -1), mounts.slice(0, -1));
+  assert.deepEqual(withNode({ ...revision, id: "replacement-node-state" }), mounts);
+  const otherHarness = withNode({ ...revision, harness: { id: "codex", mode: "dedicated" } });
+  assert.notEqual(otherHarness.at(-1).subPath, node.subPath);
+  assert.deepEqual(otherHarness.slice(0, -1), mounts.slice(0, -1));
 });
 
 test("runtime node selector schedules gateways and their private-state initialization together", () => {
@@ -7946,7 +8775,12 @@ function workspaceSetupFixture(embedded, runtime = true) {
       }
       const observed = structuredClone(object);
       if (kind === "Deployment" && state.ready) {
-        observed.status = { observedGeneration: 1, readyReplicas: 1 };
+        observed.status = {
+          observedGeneration: 1,
+          replicas: 1,
+          updatedReplicas: 1,
+          readyReplicas: 1,
+        };
       }
       return observed;
     };
