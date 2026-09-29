@@ -190,7 +190,7 @@ ownership and UID, then remove that revision's endpoint before its policy. See t
 `gateway/node-enrollment-client.ts:createGatewayNodeEnrollment` after Gateway
 readiness. An Agent-owned Secret per Harness kind keeps the setup code and
 device ID; preparation renews expired setup codes.
-A Codex Harness Deployment reads the code from an optional Secret volume, so
+A Codex Harness reads the code from an optional Secret volume, so
 enrollment restarts neither workload ([Harness storage](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage)).
 Other Harnesses are replaced, restarting their Gateway.
 
@@ -203,13 +203,13 @@ Other Harnesses are replaced, restarting their Gateway.
   Codex and the node under `tini`. It passes admitted bootstrap options, preserves
   existing edits, and stops on setup failure. Codex starts at once with the
   managed PATH; the node waits for a complete code. Neither gets OCC's key.
-- Activation reads the exact revision's device ID and sets
-  `file-transfer.config.workspaces.main` in runtime configuration before Gateway
-  starts. Candidate preparation preserves the serving binding; losing it fails
-  rather than restoring local reads. The revision ConfigMap remains immutable.
+- With the status proxy, a Codex Gateway hot-loads `file-transfer` from an
+  Agent-owned ConfigMap (replacing the Codex plugin runtime); activation awaits
+  OpenClaw's report or fails with its cause. Otherwise the ID is set at Gateway
+  start. Losing it fails.
 - Default reads cover the enrolled Agent's Harness workspace and managed skill
   roots. Symlinks are not followed; explicit policies remain authoritative. This
-  enables native previews, browsing, bootstrap, and generated outputs.
+  serves previews, browsing, bootstrap and outputs.
 - Writes remain restricted to owner documents, memory, skills, and staged inbound
   files. `file.create` preserves existing files. Reads above 16 MiB retain caller
   and node limits; command admission does not replace path authorization.
