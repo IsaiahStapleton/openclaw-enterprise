@@ -47,7 +47,7 @@ The console uses a light appearance and OCC-served fonts.
 
 When available, a retained view stays mounted and inert during eligible full-page
 return validation. Matching data reactivates it; changed data rebuilds it.
-Agent-detail refocus revalidates access without rebuilding the view, preserving
+Agent-detail refocus revalidates access without rebuilding, preserving
 mounted editors, form input, open Slack searches, and the enabled header selector.
 Refresh rebuilds. Retained views preserve controls and panels. Scoped to account, session, route, and
 Namespace, they clear on sign-out, session changes, exit, or Backend denial;
