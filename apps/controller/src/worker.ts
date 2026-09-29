@@ -356,6 +356,8 @@ function uniqueSecretRefs(bindings: SecretBindings): SecretReference[] {
   return [...refs.values()];
 }
 
+const MAX_STOPPED_PREDECESSOR_RECORDS = 4_096;
+
 export class ControllerWorker {
   private readonly metrics: OccMetrics | undefined;
   private passOutcome: WorkOutcome = "error";
@@ -393,6 +395,17 @@ export class ControllerWorker {
   private stopping = false;
   private lastHealthAt = 0;
   private pendingHealth: Promise<void> | undefined;
+  /**
+   * Predecessors this process stopped for an exclusive successor, by revision ID.
+   * The dispatch guard supersedes a predecessor's own work once an exclusive
+   * successor exists, so only a late effect from a lost claim can recreate it.
+   * Such an effect lands within one lease, so each record is re-stopped once
+   * after a lease has elapsed; later preparation passes skip it.
+   */
+  private readonly stoppedPredecessors = new Map<
+    string,
+    { readonly stoppedAt: number; readonly confirmed: boolean }
+  >();
 
   constructor(options: ControllerWorkerOptions) {
     this.metrics = options.metrics;
@@ -739,6 +752,9 @@ export class ControllerWorker {
     if (typeof stage !== "function") {
       throw new Error(`The selected production Compute Driver requires ${operation}.`);
     }
+    if (operation === "activateRevision") {
+      this.stoppedPredecessors.delete(revision.id);
+    }
     await stage.call(this.compute, revision, context);
   }
 
@@ -887,17 +903,62 @@ export class ControllerWorker {
     revision: Readonly<AgentRevision>,
     context: ComputeRevisionContext,
   ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
+    // Preparing a revision can recreate its runtime, so it is no longer known stopped.
+    this.stoppedPredecessors.delete(revision.id);
+    let earlier: readonly Readonly<AgentRevision>[] = [];
     if (this.compute.requiresStoppedPredecessors?.(revision) === true) {
-      const earlier = await this.state.read(async (view) =>
+      earlier = await this.state.read(async (view) =>
         (await view.revisions.listRevisions(revision.namespaceId, revision.agentId)).filter(
           (candidate) => candidate.revision < revision.revision,
         ),
       );
+      await this.stopPredecessors(claim, earlier);
+    }
+    try {
+      return await this.prepareAfterPredecessors(claim, revision, context);
+    } catch (error) {
+      // A failed pass may stem from a predecessor that came back; sweep it again.
       for (const previous of earlier) {
-        await this.closeRevisionCredentials(claim, previous);
-        await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(previous));
+        this.stoppedPredecessors.delete(previous.id);
+      }
+      throw error;
+    }
+  }
+
+  private async stopPredecessors(
+    claim: ClaimedWork,
+    earlier: readonly Readonly<AgentRevision>[],
+  ): Promise<void> {
+    for (const previous of earlier) {
+      const record = this.stoppedPredecessors.get(previous.id);
+      if (
+        record !== undefined &&
+        (record.confirmed || Date.now() - record.stoppedAt < this.leaseDurationMs)
+      ) {
+        continue;
+      }
+      await this.closeRevisionCredentials(claim, previous);
+      await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(previous));
+      this.stoppedPredecessors.delete(previous.id);
+      this.stoppedPredecessors.set(previous.id, {
+        stoppedAt: Date.now(),
+        confirmed: record !== undefined,
+      });
+      if (this.stoppedPredecessors.size > MAX_STOPPED_PREDECESSOR_RECORDS) {
+        // Forgetting a record only costs one repeated idempotent stop.
+        const oldest = this.stoppedPredecessors.keys().next().value;
+        if (oldest !== undefined) {
+          this.stoppedPredecessors.delete(oldest);
+        }
       }
     }
+  }
+
+  private async prepareAfterPredecessors(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+    context: ComputeRevisionContext,
+  ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
     let prepared = context;
     if (revision.repositoryCredentials !== undefined) {
       const repositoryCredentials = await this.repositoryCredentials.prepare(claim, revision);
