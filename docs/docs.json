@@ -392,7 +392,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "hidden": ["guides/repository-credentials/standalone-service"]
           },
           {
             "tab": "Operate",
@@ -548,7 +549,9 @@
             "hidden": [
               "guides/deploy/service-keys",
               "guides/deploy/local-operations",
-              "flows/installation-profile-rendering"
+              "flows/installation-profile-rendering",
+              "guides/deploy/published-images",
+              "guides/deploy/production-tui"
             ]
           },
           {
@@ -810,7 +813,7 @@
                   },
                   {
                     "page": "documentation-inventory",
-                    "label": "Inventory"
+                    "label": "Historical Inventory"
                   }
                 ]
               }
