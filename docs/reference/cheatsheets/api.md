@@ -31,6 +31,7 @@
 - [`completeGitHubSignIn`](../api.md#get-apiauthprovidersgithubcallback): Complete an enrolled GitHub sign-in.
 - [`getAuthProviders`](../api.md#get-apiauthproviders): List configured browser sign-in methods.
 - [`getAuthRecovery`](../api.md#get-apiauthrecovery): Inspect the recovery account designation.
+- [`confirmGitHubSignIn`](../api.md#post-apiauthprovidersgithubresult): Confirm which session a GitHub sign-in created.
 - [`replaceAuthRecovery`](../api.md#post-apiauthrecovery): Move the recovery designation to another administrator.
 - [`startGitHubSignIn`](../api.md#post-apiauthprovidersgithubstart): Start GitHub sign-in for an enrolled account.
 

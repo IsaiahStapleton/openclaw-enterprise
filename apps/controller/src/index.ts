@@ -3250,15 +3250,18 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           response: responses({
             type: "object",
             additionalProperties: false,
-            required: ["github"],
-            properties: { github: { type: "boolean" } },
+            required: ["github", "sessionBinding"],
+            properties: { github: { type: "boolean" }, sessionBinding: { type: "boolean" } },
           }),
         },
       },
       async (request, reply) => {
         reply.header("cache-control", "no-store");
         return {
-          data: { github: options.auth.githubEnabled === true },
+          data: {
+            github: options.auth.githubEnabled === true,
+            sessionBinding: options.auth.githubEnabled === true,
+          },
           meta: { requestId: request.id },
         };
       },
@@ -3270,15 +3273,21 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: "startGitHubSignIn",
           summary: "Start GitHub sign-in for an enrolled account",
           description:
-            "Requires the configured browser Origin. Creates a one-use browser-bound login attempt; does not create an account or grant access.",
+            "Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
           tags: ["Authentication"],
           security: [],
-          response: responses({
-            type: "object",
-            additionalProperties: false,
-            required: ["url"],
-            properties: { url: { type: "string", format: "uri" } },
-          }),
+          response: {
+            ...responses({
+              type: "object",
+              additionalProperties: false,
+              required: ["url", "attemptId"],
+              properties: {
+                url: { type: "string", format: "uri" },
+                attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" },
+              },
+            }),
+            403: { description: "Forbidden", ...error },
+          },
         },
       },
       async (request, reply) => options.auth.githubStart(request, reply),
@@ -3297,6 +3306,35 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         },
       },
       async (request, reply) => options.auth.githubCallback(request, reply),
+    );
+    routes.post(
+      "/api/auth/providers/github/result",
+      {
+        schema: {
+          operationId: "confirmGitHubSignIn",
+          summary: "Confirm which session a GitHub sign-in created",
+          description:
+            "Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.",
+          tags: ["Authentication"],
+          security: [{ sessionCookie: [] }],
+          body: {
+            type: "object",
+            additionalProperties: false,
+            required: ["attemptId"],
+            properties: { attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
+          },
+          response: {
+            ...responses({
+              type: "object",
+              additionalProperties: false,
+              required: ["sessionKey"],
+              properties: { sessionKey: { type: "string" } },
+            }),
+            403: { description: "Forbidden", ...error },
+          },
+        },
+      },
+      async (request, reply) => options.auth.githubResult(request, reply),
     );
 
     const accountParams = {
@@ -3385,6 +3423,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               },
             }),
             403: { description: "Forbidden", ...error },
+            404: { description: "Not Found", ...error },
           },
         },
         onRequest: async (request) => admit(request, accountReadOperation),
@@ -3492,6 +3531,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 properties: { userId: { type: "string" } },
               }),
               403: { description: "Forbidden", ...error },
+              404: { description: "Not Found", ...error },
               409: { description: "Conflict", ...error },
             },
           },
@@ -3767,7 +3807,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             type: "object",
             additionalProperties: false,
             required: ["authenticated"],
-            properties: { authenticated: { type: "boolean", const: true } },
+            properties: {
+              authenticated: { type: "boolean", const: true },
+              sessionKey: { type: "string" },
+            },
           }),
         },
       },

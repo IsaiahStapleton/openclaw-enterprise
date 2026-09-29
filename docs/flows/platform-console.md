@@ -135,14 +135,16 @@ A changed user or session key clears retained views and drafts before further
 private reads. Missing sessions open login; failed reads offer Retry.
 `showLogin` reads `GET /api/auth/providers`; only `github: true` adds **Continue
 with GitHub**, and discovery failure keeps password login. Pending login disables
-both; generations reject late redirects. Without a session, `authError=github`
-shows a generic error, then history replacement removes it. The [authentication flow](local-password-authentication.md#3-construct-session-authentication)
-owns start, callback, and session commit.
+both; generations reject late redirects. With `sessionBinding`, `loadPage`
+exchanges the button's stored `attemptId` once for its key. Tabs then send
+their pinned `x-occ-session-key`, so a replaced cookie yields login.
+`authError=github` shows a generic, one-time error. The
+[authentication flow](local-password-authentication.md#3-construct-session-authentication)
+owns the server side.
 
-`apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` checks browser
-Origin before sign-in/out, including SDK calls that bypass Better Auth middleware.
-Headerless CLI requests remain supported. Better Auth owns session cookies and
-password verification; the browser stores no credentials or tokens.
+`apps/controller/src/auth/index.ts:requireTrustedBrowserOrigin` checks Origin
+before sign-in/out, even for SDK calls bypassing Better Auth middleware; headerless
+CLI requests remain supported. The browser stores no credentials.
 
 After authentication, `loadPage` reads `GET /namespaces`, preserving explicit URL
 selection or choosing the first ready/readable Namespace. Unreadable IDs stay
