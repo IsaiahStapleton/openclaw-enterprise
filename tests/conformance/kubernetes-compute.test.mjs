@@ -477,6 +477,7 @@ test("activation refuses a missing or foreign workspace node before changing the
 test("dedicated startup initializes Harness plugins before enrolling its workspace node", async () => {
   let setupCalls = 0;
   let connected = false;
+  let enrollmentAvailable = true;
   const driver = new KubernetesComputeDriver(
     routedOptions({
       runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
@@ -488,6 +489,9 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
           return { setupId: "setup-1", setupCode: "setup-code", expiresAtMs: Date.now() + 60000 };
         },
         async observeSetup() {
+          if (!enrollmentAvailable) {
+            throw new Error("Gateway is restarting after the Harness replacement");
+          }
           return connected ? { deviceId: "node-1", connected: true } : undefined;
         },
         async isConnected() {
@@ -743,6 +747,19 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     ),
   );
   markReady(agentName);
+  // Adding the workspace node replaces the Harness. Its Gateway restarts when
+  // the peer changes, so enrollment must wait for Gateway readiness as well.
+  const restartingGateway = read(
+    "Deployment",
+    gatewayName,
+    kubernetesGatewayNamespaceName(tenant.id),
+  );
+  restartingGateway.status.readyReplicas = 0;
+  save(restartingGateway);
+  enrollmentAvailable = false;
+  assert.equal((await prepare()).ready, false, "Gateway restart keeps deployment pending");
+  enrollmentAvailable = true;
+  markReady(gatewayName);
   assert.equal((await prepare()).ready, false, "running workloads alone are not node readiness");
   connected = true;
   assert.equal((await prepare()).ready, true);
@@ -1480,6 +1497,85 @@ test("Namespace deletion removes only its owned Gateway target after data-plane 
       assert.deepEqual(calls, foreign ? [] : ["revoke", "delete-gateway"]);
     }
   }
+});
+
+test("sandbox routing keeps generated HTML off the administrative origin and backend", () => {
+  const driver = createKubernetesComputeDriver(
+    routedOptions({
+      runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
+      gatewayRouting: {
+        ...gatewayRouting,
+        sandbox: { domain: "previews.example.test", publicPort: 9443 },
+      },
+    }),
+  );
+  const revision = routedRevision(driver);
+  const document = driver.gatewaySandboxConfiguration(revision, revision.configuration);
+  const origin = new URL(document.mcp.apps.sandboxOrigin);
+  assert.equal(origin.protocol, "https:");
+  assert.equal(origin.port, "9443");
+  assert(origin.hostname.endsWith(".previews.example.test"));
+  assert.notEqual(origin.hostname, gatewayRouting.hostname);
+  assert.deepEqual(document.gateway, revision.configuration.gateway);
+  const embeddedConfiguration = {
+    ...revision.configuration,
+    mcp: { apps: { sandboxOrigin: "https://embedded-preview.example.test" } },
+  };
+  assert.deepEqual(
+    driver.gatewaySandboxConfiguration(
+      { ...revision, harness: { ...revision.harness, mode: "embedded" } },
+      embeddedConfiguration,
+    ),
+    embeddedConfiguration,
+    "dedicated preview routing must not replace an Embedded Agent's native configuration",
+  );
+  assert.equal(
+    driver.gatewaySandboxConfiguration({ ...revision, id: "replacement" }, revision.configuration)
+      .mcp.apps.sandboxOrigin,
+    origin.origin,
+  );
+  assert.notEqual(
+    driver.gatewaySandboxConfiguration(
+      { ...revision, agentId: "another-agent" },
+      revision.configuration,
+    ).mcp.apps.sandboxOrigin,
+    origin.origin,
+  );
+  assert.throws(
+    () =>
+      driver.gatewaySandboxConfiguration(revision, {
+        ...revision.configuration,
+        mcp: { apps: { sandboxOrigin: "https://trusted-admin.example.test" } },
+      }),
+    /Compute-owned sandbox route/,
+  );
+  const ownership = { namespaceId: tenant.id, agentId: revision.agentId };
+  const namespace = { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" };
+  const service = driver.service("gateway-test", ownership, namespace, {});
+  const route = driver.gatewayRoute(revision, ownership, namespace, service, "sandbox");
+  assert.deepEqual(route.spec.hostnames, [origin.hostname]);
+  assert.equal(route.spec.parentRefs[0].sectionName, "sandbox");
+  const rule = route.spec.rules[0];
+  assert.deepEqual(
+    rule.matches.map((match) => match.method),
+    ["GET", "HEAD"],
+  );
+  assert.equal(rule.backendRefs[0].port, document.mcp.apps.sandboxPort);
+  assert.notEqual(
+    rule.backendRefs[0].port,
+    driver.gatewayRoute(revision, ownership, namespace, service).spec.rules[0].backendRefs[0].port,
+  );
+  const headers = rule.filters[0].requestHeaderModifier;
+  for (const name of ["cookie", "authorization", "x-api-key", "x-occ-identity"]) {
+    assert(headers.remove.includes(name));
+    assert(!headers.set.some((header) => header.name === name));
+  }
+  assert(service.spec.ports.some((port) => port.port === rule.backendRefs[0].port));
+  const disabled = createKubernetesComputeDriver(routedOptions());
+  assert.equal(
+    disabled.gatewayRoute(revision, ownership, namespace, service, "sandbox"),
+    undefined,
+  );
 });
 
 test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", async () => {
@@ -2397,8 +2493,32 @@ test("the canonical Kubernetes runtime validates channel proxy configuration", (
       createKubernetesComputeDriver(options({ runtime: { ...runtime, channels } })),
     );
   }
+  const managedProxy = {
+    hostname: "openclaw-enterprise-slack-proxy.openclaw-system.svc",
+    namespace: "openclaw-system",
+    podLabels: {
+      "app.kubernetes.io/name": "openclaw-enterprise",
+      "app.kubernetes.io/instance": "oce",
+      "app.kubernetes.io/component": "slack-proxy",
+    },
+    port: 3128,
+  };
+  assert.doesNotThrow(() =>
+    createKubernetesComputeDriver(
+      options({
+        runtime: {
+          ...runtime,
+          channels: {
+            proxyUrl: "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128",
+            managedProxy,
+          },
+        },
+      }),
+    ),
+  );
   for (const proxyUrl of [
     "http://proxy.internal:3128",
+    "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128",
     "https://192.0.2.15",
     "https://operator:secret@10.42.0.15:3128",
     "socks5://10.42.0.15:3128",
@@ -2409,6 +2529,25 @@ test("the canonical Kubernetes runtime validates channel proxy configuration", (
     assert.throws(
       () => createKubernetesComputeDriver(options({ runtime: { ...runtime, channels } })),
       /HTTP\(S\) IP endpoint/i,
+    );
+  }
+  for (const channels of [
+    {
+      proxyUrl: "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128",
+      managedProxy: { ...managedProxy, hostname: "other.openclaw-system.svc" },
+    },
+    {
+      proxyUrl: "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3129",
+      managedProxy,
+    },
+    {
+      proxyUrl: "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128",
+      managedProxy: { ...managedProxy, podLabels: {} },
+    },
+  ]) {
+    assert.throws(
+      () => createKubernetesComputeDriver(options({ runtime: { ...runtime, channels } })),
+      /Managed channel proxy/i,
     );
   }
 });
@@ -3078,6 +3217,82 @@ test("native channel providers require Secret bindings and project them only to 
       );
     }
   }
+
+  const managedProxy = {
+    hostname: "openclaw-enterprise-slack-proxy.openclaw-system.svc",
+    namespace: "openclaw-system",
+    podLabels: {
+      "app.kubernetes.io/name": "openclaw-enterprise",
+      "app.kubernetes.io/instance": "oce",
+      "app.kubernetes.io/component": "slack-proxy",
+    },
+    port: 3128,
+  };
+  const managedDriver = createKubernetesComputeDriver(
+    options({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+        channels: {
+          proxyUrl: "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128",
+          managedProxy,
+        },
+      },
+    }),
+  );
+  const managedRevision = {
+    ...revision,
+    configuration: { agents: { defaults: { model: "codex/gpt-5" } }, channels: { slack: {} } },
+    secretBindings,
+    secretDriverId: "secret-kubernetes",
+  };
+  const managedEnabled = managedDriver.enabledChannels(managedRevision);
+  const managedGateway = managedDriver.deployment(
+    `gateway-${suffix}`,
+    { namespaceId: tenant.id, agentId },
+    { name: namespace, plane: "execution" },
+    "openclaw-enterprise/gateway-fixture:local",
+    `gateway-${suffix}`,
+    "gateway",
+    {},
+    "info",
+    managedDriver.gatewayConfiguration(
+      routedRevision(managedDriver, { agentId: { namespaceId: tenant.id, agentId }.agentId }),
+      undefined,
+      { name: namespace, plane: "execution" },
+    ),
+    false,
+    undefined,
+    undefined,
+    managedEnabled,
+    secretEnvironment.filter(({ name }) => name.startsWith("SLACK_")),
+  );
+  assert.deepEqual(
+    managedGateway.spec.template.spec.containers[0].env.filter(
+      ({ name }) => name === "HTTPS_PROXY",
+    ),
+    [
+      {
+        name: "HTTPS_PROXY",
+        value: "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128",
+      },
+    ],
+  );
+  const managedPolicy = managedDriver.channelNetworkPolicy(managedRevision, managedEnabled, {
+    name: namespace,
+    plane: "execution",
+  });
+  assert.deepEqual(managedPolicy.spec.egress, [
+    {
+      to: [
+        {
+          namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "openclaw-system" } },
+          podSelector: { matchLabels: managedProxy.podLabels },
+        },
+      ],
+      ports: [{ protocol: "TCP", port: 3128 }],
+    },
+  ]);
 
   // Removing channel runtime must revoke the exact existing grant without needing its old proxy.
   const activeRevision = {
@@ -5206,6 +5421,12 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
       name: kubernetesNamespaceName(tenant.id),
       plane: "execution",
     }),
+    false,
+    undefined,
+    undefined,
+    [],
+    [],
+    driver.pluginRuntimeSnapshot(revision),
   );
   gateway.metadata.generation = 1;
   gateway.status = { observedGeneration: 1, readyReplicas: 1 };
@@ -6427,6 +6648,11 @@ for (const cutover of ["already deployed", "during Deployment deletion", "during
         },
         async deleteNamespacedDeployment({ body }) {
           remove("Deployment", body);
+        },
+      },
+      networking: {
+        async readNamespacedNetworkPolicy() {
+          return read("NetworkPolicy");
         },
       },
       objects: {

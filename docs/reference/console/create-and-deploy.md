@@ -66,8 +66,8 @@ Presets and edited Configuration JSON retain their settings.
    [initial contents](../agents.md#initial-contents-at-creation) for limits.
 8. Select **Create Agent**. Supported Dedicated runtimes submit inline Configuration,
    Secret references, Agent inputs, repositories, and workspace files for provisioning.
-   Console follows the job through resource creation, credential provisioning, and
-   first-deployment activation, then opens that revision's Workspace files.
+   After provisioning, Console opens Agent details while deployment continues.
+   Follow startup and failures with **Deployment activity → Refresh deployment**.
    Ordinary creation saves Configuration first and opens a draft on **Create new version**,
    without a workload. After deployment, use the
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no

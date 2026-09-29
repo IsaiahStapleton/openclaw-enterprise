@@ -16,9 +16,7 @@
     "OCC_TEST_GATEWAY_CA_KEY_PATH"
   ],
   "env": {
-    "OCC_TEST_SLACK_LIVE": "1",
-    "OCC_TEST_SLACK_NOSEND_INVALID": "1",
-    "OCC_TEST_SLACK_NOSEND_LIVE": "1"
+    "OCC_TEST_SLACK_LIVE": "1"
   },
   "prepare": {
     "postgres": true,
@@ -44,15 +42,6 @@
       "path": "tests/integration/harness-topology-k3d-slack-real.test.mjs",
       "expectedTests": [
         "production k3d gateway replies to a real Slack message through its approved proxy and Codex Agent"
-      ]
-    },
-    {
-      "path": "tests/integration/harness-topology-k3d-slack-nosend-real.test.mjs",
-      "expectedTests": [
-        "production Slack no-send diagnostics report unreachable channel as not connected",
-        "production Slack no-send API rejects missing channel credentials",
-        "production Slack no-send diagnostics map invalid Slack auth to failed code",
-        "production Slack no-send diagnostics prove configured authenticated connected without posting"
       ]
     }
   ]

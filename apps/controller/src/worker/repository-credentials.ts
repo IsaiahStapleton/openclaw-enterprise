@@ -22,6 +22,7 @@ import {
 type Queue = Pick<PostgresWorkQueue, keyof PostgresWorkQueue>;
 type Attempt = Readonly<RepositorySessionAttempt>;
 type Revision = Readonly<AgentRevision>;
+type CleanupContext = Attempt["cleanupContext"];
 
 export class RepositoryCredentialAuthorityError extends Error {
   readonly code: string;
@@ -266,7 +267,11 @@ export class RepositoryCredentialLifecycle {
     ]);
   }
 
-  async closeRevision(claim: ClaimedWork, revision: Revision): Promise<boolean> {
+  async closeRevision(
+    claim: ClaimedWork,
+    revision: Revision,
+    options: { readonly awaitCleanup?: boolean } = {},
+  ): Promise<boolean> {
     await this.dependencies.state.transactWithQueue(async (unit, queue) => {
       await this.heartbeat(queue, claim);
       const namespace = await unit.namespaces.lockNamespace(revision.namespaceId, {
@@ -293,6 +298,9 @@ export class RepositoryCredentialLifecycle {
       // Registration validates exact claim/owner scope; rejection rolls back phase changes.
       await queue.enqueueRepositoryCleanup(claim, owner(revision));
     }, this.dependencies.queueOptions);
+    if (options.awaitCleanup === false) {
+      return false;
+    }
     return this.cleanup(claim, revision);
   }
 
@@ -333,9 +341,31 @@ export class RepositoryCredentialLifecycle {
     return complete;
   }
 
+  async cleanupRetained(
+    claim: ClaimedWork,
+    attempts: readonly Readonly<RepositorySessionAttempt>[],
+  ): Promise<boolean> {
+    let complete = !attempts.some((attempt) => attempt.phase === "invalidated");
+    for (const attempt of attempts.filter((candidate) => candidate.phase === "closing")) {
+      try {
+        const closed = await this.closeAttemptWithContext(claim, attempt, attempt.cleanupContext);
+        complete = closed.settled && complete;
+      } catch (error) {
+        if (error instanceof WorkClaimLostError) {
+          throw error;
+        }
+        complete = false;
+      }
+    }
+    return complete;
+  }
+
   private driver(revision: Revision): RepoDriver {
+    return this.driverFor(revision.repositoryCredentials?.driver);
+  }
+
+  private driverFor(selected: CleanupContext["driver"] | undefined): RepoDriver {
     const driver = this.dependencies.driver;
-    const selected = revision.repositoryCredentials?.driver;
     if (
       driver === undefined ||
       selected === undefined ||
@@ -392,6 +422,12 @@ export class RepositoryCredentialLifecycle {
     revision: Revision,
     binding: AdmittedRepositoryBinding,
   ): Promise<RepositoryCredentialRuntimeBinding> {
+    const driver = this.driver(revision);
+    if (driver.checkAdmissionReady !== undefined) {
+      await this.dependencies.effect(claim, (signal) =>
+        driver.checkAdmissionReady!(AbortSignal.any([signal, AbortSignal.timeout(2000)])),
+      );
+    }
     const attempt = await this.authorizedTransaction(claim, revision, async (unit) => {
       const attempts = await unit.repositorySessions.listRevisionAttempts(owner(revision));
       assertRepositorySessionCanOpen(attempts, binding.repositoryRef);
@@ -410,6 +446,9 @@ export class RepositoryCredentialLifecycle {
         durationSeconds,
         deadlineWallMs,
         createdAt: new Date().toISOString(),
+        ...(this.driver(revision).durableBrokerReceipts === true
+          ? { brokerProtocol: 1 as const }
+          : {}),
       });
     });
     await this.authorize(claim, revision);
@@ -510,7 +549,28 @@ export class RepositoryCredentialLifecycle {
     if (binding === undefined) {
       throw new RepositoryCredentialAuthorityError("INVALID_REPOSITORY_ATTEMPT_OWNER");
     }
-    const driver = this.driver(revision);
+    return this.closeAttemptWithContext(
+      claim,
+      attempt,
+      {
+        driver: revision.repositoryCredentials!.driver,
+        binding,
+      },
+      observedStatus,
+    );
+  }
+
+  private async closeAttemptWithContext(
+    claim: ClaimedWork,
+    attempt: Attempt,
+    context: CleanupContext,
+    observedStatus?: RepositoryCredentialSessionStatus,
+  ) {
+    if (context.binding.repositoryRef !== attempt.repositoryRef) {
+      throw new RepositoryCredentialAuthorityError("INVALID_REPOSITORY_ATTEMPT_OWNER");
+    }
+    const binding = context.binding;
+    const driver = this.driverFor(context.driver);
     let closing = attempt;
     let status = observedStatus;
     if (closing.sessionId === undefined) {

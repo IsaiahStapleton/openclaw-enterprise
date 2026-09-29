@@ -104,6 +104,12 @@ export interface InstallationRuntimeDrivers {
   readonly credentialGatewayDriver?: CredentialGatewayDriver;
   readonly pluginDriver?: PluginDriver;
   readonly repoDriver?: RepoDriver;
+  readonly repositoryReceipt?: Readonly<{
+    controlSocket: string;
+    driverId: string;
+    implementation: string;
+    backendId: string;
+  }>;
   readonly createIAMDriver: (state: NativeIAMStateStore) => IAMDriver;
 }
 

@@ -226,6 +226,10 @@
     },
     {
       "path": "tests/integration/postgres-repository-sessions.test.mjs"
+    },
+    {
+      "path": "tests/integration/postgres-repository-broker-receipts.test.mjs",
+      "expectedTests": ["confirmed broker disposal survives service restart in PostgreSQL"]
     }
   ]
 }
