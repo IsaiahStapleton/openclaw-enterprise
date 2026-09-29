@@ -1814,7 +1814,22 @@ test(
       ),
     );
     assert.equal(repository.calls.filter(({ operation }) => operation === "open").length, 1);
+    // Hold the outage through a completed cleanup pass. Otherwise recovery can
+    // race the first close and never exercise the durable retry schedule.
+    await waitFor("outage cleanup to defer at the Driver interval", async () => {
+      const deferred = await fixture.observerPool.query(
+        `SELECT state FROM occ.controller_work
+         WHERE idempotency_key LIKE $1 AND state = 'queued'
+           AND available_at - updated_at >= $2::double precision * interval '1 millisecond'`,
+        [
+          `agent_revision:${candidate.id}:repository_cleanup:%`,
+          repository.driver.maintenanceIntervalMs - 1_000,
+        ],
+      );
+      return deferred.rowCount === 1 ? true : undefined;
+    });
     unavailable = false;
+    await advanceCleanupRetries(fixture, candidate);
     await waitFor(
       "the persisted shutdown obligation to settle after service recovery",
       async () => {
