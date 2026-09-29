@@ -1544,7 +1544,7 @@ async function prepareK3dRuntimeImages(
       codexVersion:
         env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
         process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.156.0",
+        "0.158.0",
     });
     env.OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE = seccomp.profileName;
     cluster.codexSeccompProfile = seccomp.profileName;
@@ -1579,7 +1579,7 @@ async function prepareImagesPackagingCodexSeccompProfile(statePath, state, env) 
       codexVersion:
         env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
         process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ??
-        "0.156.0",
+        "0.158.0",
     }),
   );
   if (!seccomp.dockerProfilePath || !isAbsolute(seccomp.dockerProfilePath)) {
