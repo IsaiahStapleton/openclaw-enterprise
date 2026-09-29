@@ -4767,20 +4767,55 @@ test(
     const owner = await fixture.agent("slow-runtime");
     const candidate = await fixture.revision(owner, 1);
     let observations = 0;
+    const events = [];
 
-    await fixture.start({
-      ...fixture.compute,
-      async prepareRevision(revision) {
-        const observation = await fixture.compute.prepareRevision(revision);
-        observations += 1;
-        // Image pulls and app-server startup remain ordinary pending observations, not failures.
-        return observations <= 7 ? { ...observation, ready: false } : observation;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          const observation = await fixture.compute.prepareRevision(revision);
+          observations += 1;
+          // Image pulls and app-server startup remain ordinary pending observations, not failures.
+          return observations <= 7 ? { ...observation, ready: false } : observation;
+        },
       },
-    });
+      (event) => events.push(event),
+    );
 
     const completed = await fixture.work(candidate, "succeeded");
     assert.equal(observations, 8);
     assert.equal(completed.attempt_count, 1);
+
+    // Each pass reports its deployment phase timing; the successful pass carries
+    // the totals across all eight passes of this one work item.
+    const passes = await waitFor("the successful deployment pass to be reported", () => {
+      const reported = events.filter(
+        (event) => event.event === "worker.completed" && event.workId === candidate.idempotencyKey,
+      );
+      return reported.at(-1)?.outcome === "success" ? reported : undefined;
+    });
+    assert.deepEqual(
+      passes.map(({ outcome, code, deployPasses }) => ({ outcome, code, deployPasses })),
+      [
+        ...Array.from({ length: 7 }, (_, index) => ({
+          outcome: "pending",
+          code: "REVISION_INCOMPLETE",
+          deployPasses: index + 1,
+        })),
+        { outcome: "success", code: "REVISION_ACTIVATED", deployPasses: 8 },
+      ],
+    );
+    for (const pass of passes.slice(0, 7)) {
+      assert.equal(pass.activationMs, undefined, "an unready pass has no activation phase");
+    }
+    const success = passes.at(-1);
+    // Seven jittered readiness retries separate the first unready and the ready observation.
+    assert.ok(success.readinessWaitMs > 0);
+    assert.ok(success.readinessWaitMs >= passes[6].readinessWaitMs);
+    assert.ok(success.elapsedMs >= success.readinessWaitMs);
+    assert.ok(success.prepareMs >= 0 && success.prepareMs <= success.elapsedMs);
+    assert.ok(success.activationMs >= 0 && success.activationMs <= success.durationMs);
+    assert.ok(success.durationMs <= success.elapsedMs);
 
     // Every deferred observation is durable and attributable while the Agent activates exactly once.
     const pending = await fixture.observerPool.query(
