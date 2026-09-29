@@ -588,6 +588,20 @@ test("compute consumes Codex no-plugin selections from the revision", () => {
   assert.equal(docker.codexConfigurationToml, data[PLUGIN_RUNTIME_CODEX_CONFIG]);
 });
 
+test("Codex runtime skips the plugin API when no plugins are selected", async () => {
+  // A no-plugin Agent must reach readiness without the Codex plugin API, which a Sandbox
+  // workload may not be able to reach. Salvaged from #146 by @sallyom.
+  const runtime = {
+    manifest: pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() })),
+  };
+  const { requests, sockets } = await runCodexRuntimeHelper(runtime, (method) => {
+    throw new Error(`unexpected request ${method}`);
+  });
+
+  assert.deepEqual(requests, []);
+  assert.deepEqual(sockets, []);
+});
+
 test("compute serializes selected Codex plugins for startup-time resolution", () => {
   const state = codexLinearPluginState({
     toolDefaults: { approval: "provider_default", reviewer: "auto" },
