@@ -1867,6 +1867,56 @@ export const scenarios = {
     description:
       "Edit native JSON on the current draft. Save Configuration persists values; deployment remains a separate action.",
   },
+  gatewayPasswordAccess: {
+    group: "Pages/Agent detail",
+    name: "Enable Gateway password access",
+    path: draft,
+    deployed: true,
+    description: "Configure the generated Gateway password without typing native JSON.",
+    steps: [
+      "Select Enable Gateway password access. The draft receives a password reference; no password value is displayed.",
+      "Cancel to discard the edit, or Save Configuration to persist it.",
+      "Confirm the saved-access message, then Deploy new version to apply the reference.",
+    ],
+    gap: "Simulated UI proof; does not verify credential generation, delivery, or a real Gateway login.",
+  },
+  gatewayPasswordEnabled: {
+    group: "Pages/Agent detail",
+    name: "Gateway password access configured",
+    path: draft,
+    gatewayPassword: true,
+    description:
+      "The saved Configuration uses the generated password; deployment is still required to apply edits.",
+  },
+  gatewayPasswordSaveDenied: {
+    group: "Pages/Agent detail",
+    name: "Gateway password save denied",
+    path: draft,
+    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    rules: [
+      {
+        method: "PATCH",
+        suffix: "/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        status: 403,
+      },
+    ],
+    description: "A denied save retains the draft and does not change the saved Configuration.",
+  },
+  gatewayPasswordSaving: {
+    group: "Pages/Agent detail",
+    name: "Gateway password save in progress",
+    path: draft,
+    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    rules: [
+      {
+        method: "PATCH",
+        suffix: "/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        hold: true,
+      },
+    ],
+    description:
+      "A pending save blocks further Configuration edits and deployment; a timed-out write requires draft readback.",
+  },
   pluginsDraft: {
     group: "Pages/Agent detail",
     name: "Edit plugins in new version",

@@ -261,13 +261,16 @@ The default stories leave **Current observations** unrequested. Compare
 diagnostics through a bodyless POST; the fixture returns timestamped checks or
 an error without changing the persisted deployment result.
 
-**Create new version** opens saved settings. Edit and save native JSON or Slack,
-then select **Deploy new version** to admit a new immutable snapshot. Browsing an
-older version does not deploy it. Credential edits also need deployment;
-workspace-file writes apply immediately. Native JSON does not edit Agent-owned
-Backend or execution mode. Slack channel `users` can include `["*"]` for
-everyone; DM settings remain separate. See
+**Create new version** opens saved settings. Save edits, then **Deploy new version**
+to admit an immutable snapshot. Browsing does not deploy. Credentials need deployment;
+workspace writes apply immediately. Native JSON excludes Agent-owned Backend and
+execution mode. Slack channel `users: ["*"]` allows everyone; DMs remain separate. See
 [Agent revisions](../guides/topics/agent-revisions.md).
+
+**Enable Gateway password access** stages a reference. Cancel discards it; Save
+Configuration, then Deploy new version applies it. Compare **Gateway password access configured**, **Gateway
+password save denied**, and **Gateway password save in progress**. These simulated
+Agent detail stories do not prove credential delivery or login.
 
 The DevDay Admin UI segment starts from a deployed `oceclaw` Agent whose Slack
 fixture represents `#openclaw-feedback`. Its native Admin UI target is a
@@ -298,9 +301,8 @@ model responses require runtime verification outside Storybook. The console disp
 
 ## Maintain coverage
 
-The isolated tool in `scripts/console-storybook/` has its own manifest, lockfile,
-and dependency installation. It uses the repository's seven-day dependency
-release-age policy. Root workspace dependencies are unchanged.
+`scripts/console-storybook/` installs from its own manifest and lockfile under the
+repository's seven-day release-age policy, independently of root dependencies.
 
 - `prepare-assets.mjs` copies the current console assets and the shared contract
   modules served by the controller into ignored `dist/assets/`. Run the build
@@ -316,10 +318,9 @@ release-age policy. Root workspace dependencies are unchanged.
 - `*.stories.mjs` exports named stories by group; `story.mjs` adds instructions,
   UI-gap notices, the preview, and Reset story.
 
-When changing console pages, shared components, or lifecycle controls, update the
-corresponding scenarios and flow instructions in the same PR. Add an export to
-the owning story file for a new scenario. Keep visible failure messages owned by
-the console; configure API responses instead of writing replacement UI markup.
+Update scenarios and instructions alongside console changes. Export new scenarios
+from their owning story file. Configure API responses; the console owns failure
+messages and UI markup.
 
 ## Debug image walkthrough
 
