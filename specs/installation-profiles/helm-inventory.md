@@ -6,6 +6,12 @@ Defaults below are current chart defaults, not proposed profile choices.
 All listed features have source implementations; successful rendering proves
 manifest generation only. No live cluster was inspected or changed in this task.
 
+> Historical baseline: this inventory records the pre-implementation discovery
+> phase at `e06ff962`. It does not describe the current installation profile
+> renderer, managed Slack proxy wiring, or post-implementation qualification.
+> For current operator guidance, see [Render installation profiles](../../docs/guides/deploy/installation-profiles.md)
+> and [Installation Profile Rendering Flow](../../docs/flows/installation-profile-rendering.md).
+
 ## Main chart
 
 The chart's [values](../../deploy/helm/openclaw-enterprise/values.yaml) are the

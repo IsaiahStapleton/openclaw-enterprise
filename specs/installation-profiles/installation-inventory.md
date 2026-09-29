@@ -6,6 +6,12 @@ and [Helm inventory](helm-inventory.md). Baseline:
 “Implemented” below means source exists. Historical reports and inspected tests
 are explicitly distinguished from executed verification; this task ran no runtime tests.
 
+> Historical baseline: this inventory records the pre-implementation discovery
+> phase at `e06ff962`. It does not describe the current installation profile
+> renderer, managed Slack proxy wiring, or post-implementation qualification.
+> For current operator guidance, see [Render installation profiles](../../docs/guides/deploy/installation-profiles.md)
+> and [Installation Profile Rendering Flow](../../docs/flows/installation-profile-rendering.md).
+
 ## Startup configuration
 
 The closed [startup contract](../../apps/controller/src/composition/installation-config.ts)
