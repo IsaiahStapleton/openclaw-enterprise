@@ -810,6 +810,67 @@ test("a Gateway that starts after its node paired applies the binding before Ope
   assert.deepEqual(kills, []);
 });
 
+test("a Gateway starting with its node bound measures the apply budget from OpenClaw's spawn", async () => {
+  const intervals = [];
+  // The wrapper's first clock read is its startup origin; login, the model probe
+  // and plugin install then take a minute before OpenClaw spawns.
+  let now = 0;
+  let reads = 0;
+  const clock = class extends Date {
+    static now() {
+      return reads++ === 0 ? 0 : now;
+    }
+  };
+  now = 60_000;
+  let openClaw;
+  const { sandbox } = await runOpenClawRuntimeHelper(undefined, [], {
+    workspaceNodeId: "enrolled-node",
+    intervals,
+    Date: clock,
+    gatewayCall: () => openClaw,
+    setTimeout: () => ({ unref() {} }),
+    console: { error() {} },
+  });
+  const tick = () => intervals.find(({ ms }) => ms === 1000).callback();
+  // OpenClaw is still coming up: not a failure yet.
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: undefined, failure: undefined });
+  now += 31_000;
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), {
+    nodeId: undefined,
+    failure: "GATEWAY_UNAVAILABLE",
+  });
+  openClaw = pluginList("active", 1);
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: "enrolled-node", failure: undefined });
+});
+
+test("a Gateway given its node in the environment configures it at start and arms no poll", async () => {
+  // Native worker profiles, and Gateways whose controller cannot read runtime
+  // status, receive OPENCLAW_WORKSPACE_NODE_ID instead of a binding file.
+  const intervals = [];
+  const kills = [];
+  const { files, calls, sandbox } = await runOpenClawRuntimeHelper(undefined, [], {
+    env: {
+      APP_SERVER_URL: "ws://harness.example.test:18790",
+      OPENCLAW_WORKSPACE_NODE_ID: "environment-node",
+    },
+    intervals,
+    kills,
+  });
+  const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+  assert.equal(
+    effective.plugins.entries["file-transfer"].config.workspaces.main.nodeId,
+    "environment-node",
+  );
+  assert.equal(sandbox.process.env.OPENCLAW_WORKSPACE_NODE_PATH, undefined);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(intervals, [], "no binding poll without a binding path");
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: undefined, failure: undefined });
+  assert.deepEqual(kills, []);
+});
+
 test("Gateway launch binds the enrolled node without expanding owner writes or changing its snapshot", async () => {
   const baseConfig = {
     gateway: { nodes: { commands: { allow: ["existing.command"] } } },

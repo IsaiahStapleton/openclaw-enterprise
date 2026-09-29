@@ -2095,6 +2095,9 @@ const child = spawn(
   ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
   { stdio: "inherit" },
 );
+// Apply budgets start when OpenClaw does, not at wrapper start: login, the model
+// probe and plugin install must not count against them.
+const childSpawnedAt = Date.now();
 forwardTermination(child);
 if (workspaceNodeBindingPath !== undefined) {
   // The wrapper writing the config is not the ack: OpenClaw must report the
@@ -2102,7 +2105,7 @@ if (workspaceNodeBindingPath !== undefined) {
   const WORKSPACE_NODE_APPLY_TIMEOUT_MS = 30_000;
   let written = startWorkspaceNodeId === undefined
     ? undefined
-    : { deviceId: startWorkspaceNodeId, at: startupPhaseOrigin, activeBefore: false };
+    : { deviceId: startWorkspaceNodeId, at: childSpawnedAt, activeBefore: false };
   let firstSeenAt;
   let stoppingForChangedWorkspaceNode = false;
   let pollInFlight = false;
