@@ -106,7 +106,8 @@ State discards the connection without another query. OCC reports dependency
 failure; a caller must not infer rollback or replay the mutation from that
 result. Later authorization requests read the current policy through the IAM
 Driver. Namespace locking serializes grant creation with Namespace deletion;
-exact resource targets retain their existing deletion locks. Identity foreign
+exact resource targets retain their existing deletion locks, and deleting a
+target resource deletes the bindings on it in the same transaction. Identity foreign
 keys protect persisted bindings without expanding application-role privileges.
 Both adapters apply one subject rule on every AccessBinding write: a human
 without a Namespace, a non-Agent ServicePrincipal of the exact Namespace, or the
