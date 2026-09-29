@@ -221,7 +221,7 @@ function clearDrafts() {
 
 function showLogin(message = "", returnPath = null) {
   clearDrafts();
-  resetReads();
+  const loginView = resetReads();
   clearPrivate();
   const url = new URL("/console/login", location.origin);
   const destination = safeReturn(returnPath);
@@ -257,6 +257,41 @@ function showLogin(message = "", returnPath = null) {
     feedback,
     submit,
   );
+  const github = button("Continue with GitHub", async () => {
+    if (pending) {
+      return;
+    }
+    pending = true;
+    submit.disabled = true;
+    github.disabled = true;
+    feedback.textContent = "";
+    try {
+      const result = await request("/api/auth/providers/github/start", { method: "POST" });
+      if (!lifetime.isCurrent(loginView)) {
+        return;
+      }
+      const authorization = new URL(result.url);
+      if (
+        authorization.origin !== "https://github.com" ||
+        authorization.pathname !== "/login/oauth/authorize"
+      ) {
+        throw new Error("Invalid authorization URL");
+      }
+      location.assign(authorization.href);
+    } catch (error) {
+      if (!lifetime.isCurrent(loginView)) {
+        return;
+      }
+      feedback.textContent =
+        error.status === 429
+          ? "Too many attempts. Please try again later."
+          : "GitHub sign-in is unavailable. Try again or use your password.";
+      pending = false;
+      submit.disabled = false;
+      github.disabled = false;
+    }
+  });
+  const providers = element("div", { className: "auth-providers" });
   let pending = false;
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -265,6 +300,7 @@ function showLogin(message = "", returnPath = null) {
     }
     pending = true;
     submit.disabled = true;
+    github.disabled = true;
     feedback.textContent = "";
     const active = lifetime.capture();
     try {
@@ -292,6 +328,7 @@ function showLogin(message = "", returnPath = null) {
       if (lifetime.isCurrent(active)) {
         pending = false;
         submit.disabled = false;
+        github.disabled = false;
       }
     }
   });
@@ -308,8 +345,18 @@ function showLogin(message = "", returnPath = null) {
       element("h1", {}, "Welcome back"),
       element("p", { className: "muted" }, "Sign in to your Installation."),
       form,
+      providers,
     ),
   );
+  void request("/api/auth/providers")
+    .then((available) => {
+      if (lifetime.isCurrent(loginView) && available?.github === true) {
+        providers.append(github);
+      }
+    })
+    .catch(() => {
+      // Password sign-in remains available when provider discovery fails.
+    });
 }
 
 async function loadPage({ fromNavigation = false, reuseView = fromNavigation } = {}) {
@@ -367,15 +414,19 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     session = resolvedSession;
     if (session === null) {
       const destination =
-        current.feature === "login"
-          ? current.url.searchParams.get("return")
-          : pageUrl(current.target, current.namespace);
+        current.url.searchParams.get("authError") === "github"
+          ? "/console/agents"
+          : current.feature === "login"
+            ? current.url.searchParams.get("return")
+            : pageUrl(current.target, current.namespace);
       showLogin(
-        current.feature !== "login" &&
-          current.url.pathname !== "/console/" &&
-          current.url.pathname !== "/console"
-          ? "Your session has expired."
-          : "",
+        current.url.searchParams.get("authError") === "github"
+          ? "Could not sign in with GitHub. Try again or use your password."
+          : current.feature !== "login" &&
+              current.url.pathname !== "/console/" &&
+              current.url.pathname !== "/console"
+            ? "Your session has expired."
+            : "",
         destination,
       );
       return;

@@ -114,7 +114,10 @@ export function createOccMetrics(
           help: "Seconds from work admission to successful Agent deployment or stop completion.",
           labelNames: ["operation"],
           registers: [registry],
-          buckets: [0.1, 0.5, 1, 5, 15, 30, 60, 120, 300, 900, 1800],
+          // Deployments span seconds to the 900-second convergence deadline.
+          buckets: [
+            0.1, 0.5, 1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 450, 600, 900, 1800,
+          ],
         })
       : undefined;
   // These two bounded label sets provide a baseline before the first operation.

@@ -7,9 +7,16 @@ import {
 import {
   createPostgresPool,
   OpenClawController,
+  PostgresHumanAuthentication,
   PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { createPostgresControllerAuth } from "../auth/index.ts";
+import {
+  betterAuthIssuer,
+  createPostgresControllerAuth,
+  type ClientAddressConfiguration,
+  type GitHubLoginConfiguration,
+  type PreparedAuthAccount,
+} from "../auth/index.ts";
 import { createFastifyApp } from "../index.ts";
 import { SlackChannelDriver } from "../drivers/channel/slack.ts";
 import type {
@@ -37,6 +44,8 @@ export interface ProductionConfig {
   readonly databaseUrl: string;
   readonly authSecret: string;
   readonly authBaseURL: string;
+  readonly github?: GitHubLoginConfiguration;
+  readonly clientAddress?: ClientAddressConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly logger?: OccLogger;
@@ -73,6 +82,10 @@ export async function composeProduction(config: ProductionConfig) {
   }
 
   const driverId = installation.drivers.iam.id;
+  if (config.github !== undefined && config.nativeAdmin?.enabled === true) {
+    throw new Error("GitHub sign-in does not support native administration.");
+  }
+
   const pool = await createPostgresPool(config.databaseUrl, {
     ...(config.poolMax === undefined ? {} : { max: config.poolMax }),
   });
@@ -83,6 +96,10 @@ export async function composeProduction(config: ProductionConfig) {
     if (persistedInstallation === undefined) {
       throw new Error("The singleton Installation must be bootstrapped before production startup.");
     }
+
+    const iamState = await state.loadNativeIAMState(persistedInstallation.id);
+    validatePersistedNativeIAMState(iamState);
+    const iamDriver = createIAMDriver(state);
     const auth = await createPostgresControllerAuth({
       mode: config.mode,
       installationId: persistedInstallation.id,
@@ -92,15 +109,32 @@ export async function composeProduction(config: ProductionConfig) {
         ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
         : {}),
       pool,
+      state,
+      iamDriver,
+      ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
     });
-
-    const iamState = await state.loadNativeIAMState(persistedInstallation.id);
-    validatePersistedNativeIAMState(iamState);
-    const iamDriver = createIAMDriver(state);
-    const provisionAuthAccount = async (seed: AuthPrincipalSeed, auditEvent: AuditEvent) => {
+    if (auth.activationSkipped !== undefined && config.logger !== undefined) {
+      emitOccLogEvent(config.logger, {
+        event: "authentication.activation-warning",
+        reason: "Accounts without a Principal or exactly one password were not enrolled.",
+        skippedUserIds: auth.activationSkipped,
+      });
+    }
+    const humanAuthentication = new PostgresHumanAuthentication(
+      state,
+      persistedInstallation.id,
+      betterAuthIssuer(persistedInstallation.id),
+    );
+    const provisionAuthAccount = async (
+      seed: AuthPrincipalSeed,
+      auditEvent: AuditEvent,
+      prepared: PreparedAuthAccount,
+    ) => {
       const current = await state.loadNativeIAMState(persistedInstallation.id);
       validateAuthAccountPrincipalSeed(seed, current, persistedInstallation.id);
-      await state.appendNativeIAMPrincipal(seed, auditEvent);
+      // The account, its Principal and bindings, and its enrolment commit together.
+      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent);
     };
 
     const principal = iamState.identities.find((identity) => identity.kind === "principal");
@@ -235,6 +269,7 @@ export async function composeProduction(config: ProductionConfig) {
         installationId: persistedInstallation.id,
       },
       maxBodyBytes: 64 * 1024,
+      ...(config.clientAddress === undefined ? {} : { trustedProxies: config.clientAddress }),
       ...(workspaceFilesAccess === undefined ? {} : { workspaceFilesAccess }),
     });
     app.get("/healthz", async () => ({ status: "ok" }));

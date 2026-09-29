@@ -27,8 +27,8 @@ python3 -m http.server 6006 --bind 127.0.0.1 \
 ```
 
 Serve at the origin root for absolute `/console/` URLs. Build fingerprints version
-fixture pages and module imports to prevent stale cached UI. Use **Reset story**
-to restart. CI uploads a static artifact without publishing the documentation site.
+fixture pages and module imports against stale cached UI. CI uploads a static
+artifact without publishing the documentation site.
 
 ## Appearance review
 
@@ -60,7 +60,7 @@ Stories reach error states through real controls after loading fixture data.
 
 | Group                   | Coverage                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sign in                 | Signed out, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                                                                            |
+| Sign in                 | Password and GitHub sign-in, discovery failure, GitHub errors, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                         |
 | Agents                  | Populated and empty collections, no search matches, inaccessible Namespace, no readable Namespaces, permission denial, read failure, loading.                                                                                                                                                                                                                              |
 | Backends                | Configured, empty, and discovery failure.                                                                                                                                                                                                                                                                                                                                  |
 | Namespaces              | Ready and provisioning, empty, permission denial.                                                                                                                                                                                                                                                                                                                          |

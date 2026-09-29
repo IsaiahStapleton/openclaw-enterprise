@@ -42,7 +42,7 @@ Each operation lists its supported status codes.
 
 | Resource | Operations |
 | --- | --- |
-| [Authentication](#authentication) | 6 operations |
+| [Authentication](#authentication) | 15 operations |
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 4 operations |
 | [Namespaces](#namespaces) | 4 operations |
@@ -65,6 +65,15 @@ Each operation lists its supported status codes.
 | Operation | Summary |
 | --- | --- |
 | [`POST /api/auth/accounts`](#post-apiauthaccounts) | Create an administrator-controlled local auth account |
+| [`GET /api/auth/accounts/{userId}`](#get-apiauthaccountsuserid) | Inspect current human account state |
+| [`POST /api/auth/accounts/{userId}/disable`](#post-apiauthaccountsuseriddisable) | Disable a human account |
+| [`POST /api/auth/accounts/{userId}/enable`](#post-apiauthaccountsuseridenable) | Re-enable a disabled human account |
+| [`POST /api/auth/accounts/{userId}/methods/{methodId}/detach`](#post-apiauthaccountsuseridmethodsmethodiddetach) | Detach an external sign-in identity from an account |
+| [`POST /api/auth/accounts/{userId}/providers/github`](#post-apiauthaccountsuseridprovidersgithub) | Attach an exact GitHub identity to an existing account |
+| [`POST /api/auth/accounts/{userId}/revoke`](#post-apiauthaccountsuseridrevoke) | Revoke all sessions for a human account |
+| [`GET /api/auth/providers`](#get-apiauthproviders) | List configured browser sign-in methods |
+| [`GET /api/auth/providers/github/callback`](#get-apiauthprovidersgithubcallback) | Complete an enrolled GitHub sign-in |
+| [`POST /api/auth/providers/github/start`](#post-apiauthprovidersgithubstart) | Start GitHub sign-in for an enrolled account |
 | [`POST /api/auth/service-keys`](#post-apiauthservicekeys) | Issue a service API key |
 | [`DELETE /api/auth/service-keys/{keyId}`](#delete-apiauthservicekeyskeyid) | Revoke a service API key |
 | [`GET /api/auth/session`](#get-apiauthsession) | Inspect authentication without revealing session tokens |
@@ -118,6 +127,368 @@ Create an administrator-controlled local auth account
 | `data.id` | `string` | Yes | — |
 | `data.name` | `string` | Yes | — |
 | `data.principalId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `GET /api/auth/accounts/{userId}`
+
+<span id="get-apiauthaccountsuserid"></span>
+
+Inspect current human account state
+
+**Operation ID:** `getAuthAccount`
+
+**Permissions:** Requires a current human Native IAM Installation administrator and trusted Origin. Returns guarded present state, not a receipt for any prior operation.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.disabled` | `boolean` | Yes | — |
+| `data.methods` | `array<object>` | Yes | — |
+| `data.methods[].methodId` | `string` | Yes | — |
+| `data.methods[].providerId` | `string` | Yes | — |
+| `data.methods[].subject` | `string` | Yes | — |
+| `data.principalId` | `string` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `data.version` | `integer` | Yes | minimum: 1 |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/disable`
+
+<span id="post-apiauthaccountsuseriddisable"></span>
+
+Disable a human account
+
+**Operation ID:** `disableAuthAccount`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/enable`
+
+<span id="post-apiauthaccountsuseridenable"></span>
+
+Re-enable a disabled human account
+
+**Operation ID:** `enableAuthAccount`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/methods/{methodId}/detach`
+
+<span id="post-apiauthaccountsuseridmethodsmethodiddetach"></span>
+
+Detach an external sign-in identity from an account
+
+**Operation ID:** `detachAuthMethod`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+| `methodId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/providers/github`
+
+<span id="post-apiauthaccountsuseridprovidersgithub"></span>
+
+Attach an exact GitHub identity to an existing account
+
+**Operation ID:** `attachGitHubIdentity`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+| `subject` | `string` | Yes | pattern: `^[1-9][0-9]{0,19}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/accounts/{userId}/revoke`
+
+<span id="post-apiauthaccountsuseridrevoke"></span>
+
+Revoke all sessions for a human account
+
+**Operation ID:** `revokeAuthAccountSessions`
+
+**Permissions:** Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `GET /api/auth/providers`
+
+<span id="get-apiauthproviders"></span>
+
+List configured browser sign-in methods
+
+**Operation ID:** `getAuthProviders`
+
+**Permissions:** No IAM permission required.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.github` | `boolean` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `GET /api/auth/providers/github/callback`
+
+<span id="get-apiauthprovidersgithubcallback"></span>
+
+Complete an enrolled GitHub sign-in
+
+**Operation ID:** `completeGitHubSignIn`
+
+**Permissions:** Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `302` | Redirect to Console |
+
+#### `POST /api/auth/providers/github/start`
+
+<span id="post-apiauthprovidersgithubstart"></span>
+
+Start GitHub sign-in for an enrolled account
+
+**Operation ID:** `startGitHubSignIn`
+
+**Permissions:** Requires the configured browser Origin. Creates a one-use browser-bound login attempt; does not create an account or grant access.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.url` | `string (uri)` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 

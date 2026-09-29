@@ -198,6 +198,10 @@ p {
   width: 100%;
   margin-top: 28px;
 }
+.auth-providers button {
+  width: 100%;
+  margin-top: 16px;
+}
 .error {
   color: var(--danger);
   margin-top: 18px;

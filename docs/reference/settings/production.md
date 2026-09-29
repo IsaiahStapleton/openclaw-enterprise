@@ -109,6 +109,45 @@ settings; initial-key delivery uses the bootstrap settings below.
 Auth-secret rotation takes effect after
 replacing the mounted Secret and restarting the process.
 
+### GitHub sign-in and trusted proxies
+
+These optional variables apply to the API only. The chart never passes them to
+the worker or initialization Job.
+
+| Variable                           | Helm value                                 | Behavior                                                                                                                             |
+| ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `OCC_AUTH_GITHUB_CLIENT_ID`        | `auth.github` Secret key `clientIdKey`     | GitHub App client ID. Set the client ID, client secret, and recovery user ID together or not at all.                                 |
+| `OCC_AUTH_GITHUB_CLIENT_SECRET`    | `auth.github` Secret key `clientSecretKey` | GitHub App client secret, read from the dedicated `auth.github.secretName` Secret.                                                   |
+| `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | `auth.recoveryUserId`                      | Existing local password administrator's user ID; designates the recovery account on first activation.                                |
+| `OCC_AUTH_TRUSTED_PROXY_CIDRS`     | `api.trustedProxy.cidrs`                   | Comma-separated IPv4 or IPv6 CIDRs, never `/0`. Requests whose socket peer is inside them may carry forwarded headers.               |
+| `OCC_AUTH_TRUSTED_PROXY_PRESET`    | `api.trustedProxy.preset`                  | `ingress-nginx` (default), `aws` or `generic`. Named presets read `x-forwarded-for`. Set with the CIDRs.                             |
+| `OCC_AUTH_CLIENT_IP_HEADER`        | `api.trustedProxy.clientAddressHeader`     | Lowercase header name, up to 64 characters, `generic` only. Sign-in limits key on the client address it carries from a trusted peer. |
+
+The chart's API Deployment always uses the `Recreate` strategy: an upgrade stops
+the old API Pod before starting the new one, so two controllers never serve
+together. Activation still requires closed ingress and stopped identity writers.
+
+With `auth.github.enabled`, the chart adds an API-only egress policy on TCP 443
+for `github.com` and `api.github.com`. Empty `auth.github.egressCidrs` allows
+`0.0.0.0/0`. To narrow it, list the `web` and `api` IPv4 ranges from
+`https://api.github.com/meta`, and update them when GitHub changes them.
+
+`api.trustedProxy` is off by default: the API rejects `Forwarded`,
+`X-Forwarded-*`, and `X-Real-IP` with `403` and keys sign-in limits on the socket
+peer. Presets:
+
+- `ingress-nginx`: `cidrs` is the ingress controller Pod CIDR; the header
+  is `x-forwarded-for`. Keep ingress-nginx `use-forwarded-headers` off.
+- `aws`: an Application Load Balancer targeting API Pods; `cidrs` are its
+  subnets and the header is `x-forwarded-for`. A Network Load Balancer
+  preserves the client source and needs no preset unless it fronts ingress-nginx.
+- `generic`: `cidrs` and `clientAddressHeader`, such as `x-real-ip`, are required.
+
+Trust only proxies that overwrite or append the header, and admit them through
+`api.clients`. Rendering fails on incomplete GitHub values, a shared Secret,
+`agentNativeAdmin.enabled` with GitHub, `/0` proxy CIDRs, another header with a
+named preset, or credential, routing and internal headers such as `cookie`.
+
 ### Production Installation bootstrap environment
 
 Both environments run `node scripts/bootstrap-installation.mjs` after migration.
