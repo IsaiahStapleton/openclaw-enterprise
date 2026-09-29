@@ -1205,7 +1205,14 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
-  assert.deepEqual(nonAuthWriteRequests(requests), [], "navigation must not save the local draft");
+  // Plugin catalog discovery is a read sent as POST. A mounted draft with the rendered codex_pat
+  // Secret prefetches it after a 300 ms debounce, so it may or may not have been sent yet.
+  const pluginCatalogPath = `/namespaces/${namespace.id}/agents/plugins`;
+  assert.deepEqual(
+    nonAuthWriteRequests(requests).filter((request) => request.path !== pluginCatalogPath),
+    [],
+    "navigation must not save the local draft",
+  );
   // Canceling Start over keeps the ordinary draft and its ability to save.
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "Start over" }).click();
