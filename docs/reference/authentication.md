@@ -112,7 +112,7 @@ revokes nor clears the cookie. Without the header, requests are unchanged. Conso
 pins each tab's key this way.
 
 Sign-in takes `{"email": "...", "password": "..."}`. The session credential
-arrives only through `Set-Cookie`; protected OCC API calls use it.
+arrives only through `Set-Cookie`; protected API calls use it.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
@@ -134,7 +134,7 @@ mutable Installation policy are unsupported. Keep bootstrap, seeding, external
 policy writers, and recovery-affecting changes stopped.
 Native IAM's policy read remains separate from State's actor guard. Loopback
 development does not qualify deployed HTTPS.
-[Google sign-in](../guides/deploy/google-sign-in.md) uses this same profile and its
+[Google sign-in](../guides/deploy/google-sign-in.md) uses this profile and its
 controls.
 
 HTTPS sessions use `__Host-openclaw_occ.session_token`, `Secure`, `HttpOnly`,
@@ -205,8 +205,8 @@ Enabling this profile applies the same admission rules to password and GitHub
 sessions: an eight-hour absolute lifetime without refresh, current account and
 method checks, and required audit before a cookie is released or, on logout,
 cleared. Older sessions without account/method binding are
-rejected; users sign in again. Activation is one-way: removing all provider
-configuration fails startup, and the database refuses sessions from older
+rejected; users sign in again. Activation is one-way: removing every provider
+fails startup, and the database refuses sessions from older
 binaries. Returning to password-only sign-in needs [stopped maintenance](../guides/deploy/auth-maintenance.md#deactivate-github-sign-in).
 
 The recovery user needs one local password, its Installation Principal, and
