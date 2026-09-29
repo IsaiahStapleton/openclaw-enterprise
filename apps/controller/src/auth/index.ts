@@ -1157,7 +1157,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       () => {
         // Better Auth server API calls skip origin middleware without a Request context.
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
-        const body = ensureEmailPassword(authBody(request));
+        const input = authBody(request);
+        const body = ensureEmailPassword(input);
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/password", body);
         }
@@ -1167,7 +1168,9 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           ...(options.clientAddress === undefined
             ? {}
             : { clientAddress: clientAddressOf(request) }),
-          email: body.email.trim().toLowerCase(),
+          // Read from the validated input, not the credential pair, so the admission key
+          // is plainly derived from the email alone.
+          email: String(input.email).trim().toLowerCase(),
         };
         return passwordAdmission!.admit(attempt, () =>
           api.signInEmail({
