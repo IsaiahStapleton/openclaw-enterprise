@@ -1008,7 +1008,7 @@ test(
                 },
               ),
               // State classifies the lock timeout (55P03) as retryable unavailability.
-              { name: "DependencyUnavailableError" },
+              { name: "DependencyUnavailableError", message: /lock timeout/ },
             );
             assert.equal(called, false);
             assert.deepEqual(await effects(contender, input), { namespaces: 0, work: 0, audit: 0 });
@@ -1175,7 +1175,7 @@ test(
                       });
                     },
                   ),
-                  { name: "DependencyUnavailableError" },
+                  { name: "DependencyUnavailableError", message: /lock timeout/ },
                 );
                 assert.equal(protectedWorkReached, false);
                 assert.equal(

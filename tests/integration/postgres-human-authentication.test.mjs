@@ -629,6 +629,7 @@ test(
         // A lock timeout (55P03) is retryable contention, not an internal error.
         await assert.rejects(changeAccount(person.id, "revoke", bounded), {
           name: "DependencyUnavailableError",
+          message: /lock timeout/,
         });
       } finally {
         release.resolve();
