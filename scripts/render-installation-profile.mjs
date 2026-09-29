@@ -122,9 +122,15 @@ function yamlScalar(value) {
     if (value.length === 0) {
       return '""';
     }
+    // Helm reads values with YAML 1.1 rules, where words such as no/on/y are
+    // booleans and forms such as 1e3, 0x1f, 1:20, .inf and dates are numbers
+    // or timestamps. Emit a plain scalar only when it cannot resolve to one of
+    // those or start with an indicator (@, -, ., :); quote everything else.
     if (
       /^[A-Za-z0-9_./:@-]+$/.test(value) &&
-      !/^(?:true|false|null|~|-?\d+(?:\.\d+)?)$/i.test(value)
+      /^[A-Za-z_/]|^[0-9].*\//.test(value) &&
+      !value.endsWith(":") &&
+      !/^(?:y|n|yes|no|true|false|on|off|null)$/i.test(value)
     ) {
       return value;
     }
@@ -163,9 +169,9 @@ function toYaml(value, indent = 0) {
       .map(([key, entry]) => {
         if (typeof entry === "object" && entry !== null) {
           const rendered = toYaml(entry, indent + 2);
-          return `${pad}${key}:${rendered === "{}" || rendered === "[]" ? ` ${rendered}` : `\n${rendered}`}`;
+          return `${pad}${yamlScalar(key)}:${rendered === "{}" || rendered === "[]" ? ` ${rendered}` : `\n${rendered}`}`;
         }
-        return `${pad}${key}: ${yamlScalar(entry)}`;
+        return `${pad}${yamlScalar(key)}: ${yamlScalar(entry)}`;
       })
       .join("\n");
   }

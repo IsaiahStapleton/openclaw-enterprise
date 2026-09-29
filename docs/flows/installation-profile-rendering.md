@@ -1,7 +1,7 @@
 ---
 created: 2026-09-28
 updated: 2026-09-29
-last_updated_session: authoring-run/9c2c8f31-7cb0-4359-a7d7-a6f5c3be882a
+last_updated_session: r2-fix-7
 ---
 
 # Installation Profile Rendering Flow
@@ -148,7 +148,10 @@ checksum like any other startup configuration.
 On success, the renderer serializes a deterministic `installation.yaml`, hashes
 those exact bytes with SHA-256, and sets `controlPlane.installationChecksum` in
 `values.yaml` to that digest. It then writes `values.yaml`, `installation.yaml`,
-and `preflight.json`. On validation failure, it writes only `preflight.json`
+and `preflight.json`. Helm reads values with YAML 1.1 rules, so the writer
+quotes any string key or value that could resolve to a boolean, null, number, or
+timestamp (for example a `no`, `on`, `1e3`, or `0x1f` label value) or that starts
+with a YAML indicator such as `@`. On validation failure, it writes only `preflight.json`
 with `ok:false`, lists only that report in `outputs`, and exits nonzero.
 Input-loading failures exit without a preflight report.
 
