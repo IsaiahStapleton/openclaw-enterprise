@@ -24,6 +24,7 @@ export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
     ],
     ...(options.files ?? []),
   ]);
+  let temporaryDirectory = 0;
   const sandbox = {
     Buffer,
     files,
@@ -46,8 +47,23 @@ export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
             return { on() {} };
           },
           spawnSync(command, args, spawnOptions) {
-            options.beforeSpawn?.(command, args, sandbox);
+            options.beforeSpawn?.(command, args, sandbox, spawnOptions);
             calls.push({ command, args, options: spawnOptions });
+            if (
+              command === "node" &&
+              args[0] === "/app/openclaw.mjs" &&
+              args[1] === "config" &&
+              args[2] === "validate" &&
+              args[3] === "--json"
+            ) {
+              return (
+                options.configValidationResponse ?? {
+                  status: 0,
+                  stdout: JSON.stringify({ valid: true }),
+                  stderr: "",
+                }
+              );
+            }
             return responses.shift() ?? { status: 0, stdout: "", stderr: "" };
           },
         };
@@ -58,6 +74,14 @@ export function runOpenClawRuntimeHelper(runtime, responses, options = {}) {
             return files.has(path);
           },
           mkdirSync() {},
+          mkdtempSync(prefix) {
+            return `${prefix}${++temporaryDirectory}`;
+          },
+          rmSync(path) {
+            for (const file of files.keys()) {
+              if (file === path || file.startsWith(`${path}/`)) files.delete(file);
+            }
+          },
           readFileSync(path) {
             if (!files.has(path)) {
               throw new Error(`Missing mocked file: ${path}`);

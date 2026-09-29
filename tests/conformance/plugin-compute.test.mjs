@@ -492,7 +492,7 @@ test("compute renders plugin-free Codex revisions with native default-deny plugi
   assert.match(data[PLUGIN_RUNTIME_CODEX_CONFIG], /^\[apps\._default\]\nenabled = false/m);
 });
 
-test("plugin-free revisions apply explicit Slack approvers and keep unrelated approvals", () => {
+test("plugin-free revisions apply explicit Slack approvers for configured Slack and keep unrelated approvals", () => {
   const rawSlackApprovers = [
     { channel: "slack", id: "U456" },
     { channel: "slack", id: "W789" },
@@ -517,14 +517,15 @@ test("plugin-free revisions apply explicit Slack approvers and keep unrelated ap
     });
     const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, [], {
       baseConfig: {
+        channels: { slack: { enabled: true } },
         approvals: {
-          exec: { security: "full" },
+          exec: { enabled: true, mode: "session" },
         },
       },
     });
     const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
     assert.deepEqual(config.approvals, {
-      exec: { security: "full" },
+      exec: { enabled: true, mode: "session" },
       plugin: { slack: { approvers: expectedApprovers } },
     });
   }
@@ -537,11 +538,14 @@ test("plugin-free Codex Gateway applies explicit Agent approvers at launch", asy
       APP_SERVER_URL: "ws://harness.example.test:18790",
       OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
     },
-    baseConfig: { approvals: { exec: { security: "full" } } },
+    baseConfig: {
+      channels: { slack: { enabled: true } },
+      approvals: { exec: { enabled: true, mode: "session" } },
+    },
   });
   const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.deepEqual(config.approvals, {
-    exec: { security: "full" },
+    exec: { enabled: true, mode: "session" },
     plugin: { slack: { approvers: [] } },
   });
 });
@@ -561,7 +565,9 @@ test("plugin-free Codex runtime carries broker policy and Slack approvers togeth
     pluginApprovers: [],
     repositoryBrokerNetworkPolicy,
   });
-  const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, []);
+  const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, [], {
+    baseConfig: { channels: { slack: { enabled: true } } },
+  });
   const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.deepEqual(config.approvals.plugin.slack.approvers, []);
   assert.equal(
