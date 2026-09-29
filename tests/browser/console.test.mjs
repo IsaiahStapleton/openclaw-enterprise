@@ -6,6 +6,11 @@ import test from "node:test";
 
 import { chromium } from "playwright";
 
+import {
+  describePendingBrowserRequests,
+  noteBrowserEvent,
+  watchBrowserContext,
+} from "../helpers/browser-failure-diagnostics.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 
 const routeHoldTimeoutMs = 30_000;
@@ -37,9 +42,11 @@ async function newPage(t, fixture) {
   const artifacts = await artifactDirectory(t);
   const browser = await launchBrowser();
   let context;
+  let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
+      await diagnostics?.capture();
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
@@ -55,15 +62,18 @@ async function newPage(t, fixture) {
     }
   });
   context = await browser.newContext();
+  diagnostics = await watchBrowserContext(t, context);
   return { page: await context.newPage(), artifacts };
 }
 
 async function newMobilePage(t, fixture) {
   const browser = await launchBrowser();
   let context;
+  let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
+      await diagnostics?.capture();
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
@@ -83,6 +93,7 @@ async function newMobilePage(t, fixture) {
     isMobile: true,
     viewport: { width: 390, height: 844 },
   });
+  diagnostics = await watchBrowserContext(t, context);
   return { page: await context.newPage() };
 }
 
@@ -112,13 +123,17 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function waitForRoutePhase(promise, description, release, signal) {
+async function waitForRoutePhase(promise, description, release, signal, describeState) {
   let timeout;
   let onAbort;
   const deadline = new Promise((_, reject) => {
     function fail(reason) {
+      // Read the hold's state before release() changes it.
+      const state = describeState?.();
       release();
-      const error = new Error(`${description} did not finish within ${routeHoldTimeoutMs}ms`);
+      const error = new Error(
+        `${description} did not finish within ${routeHoldTimeoutMs}ms${state ? ` (${state})` : ""}`,
+      );
       if (reason !== undefined) {
         error.cause = reason;
       }
@@ -150,23 +165,36 @@ async function holdRoute(t, page, pattern, continueRoute) {
   const completed = deferred();
   let released = false;
   let releaseWatchdog;
+  let intercepted = 0;
 
   function release() {
     if (released) {
       return;
     }
     released = true;
+    noteBrowserEvent(page, `held route ${pattern} released`);
     clearTimeout(releaseWatchdog);
     releaseGate.resolve();
   }
 
+  function describeState() {
+    try {
+      return `intercepted ${intercepted}, released ${released}, page ${page.url()}, pending requests: ${describePendingBrowserRequests(page)}`;
+    } catch (error) {
+      return `state unavailable: ${error.message}`;
+    }
+  }
+
   t.signal?.addEventListener("abort", release, { once: true });
   await page.route(pattern, async (route) => {
+    intercepted += 1;
     let response;
     try {
       response = await route.fetch();
-    } catch {
+      noteBrowserEvent(page, `held route ${pattern} upstream status ${response.status()}`);
+    } catch (error) {
       response = undefined;
+      noteBrowserEvent(page, `held route ${pattern} upstream fetch failed: ${error.message}`);
     }
     captured.resolve();
     if (!released && releaseWatchdog === undefined) {
@@ -176,8 +204,10 @@ async function holdRoute(t, page, pattern, continueRoute) {
     await releaseGate.promise;
     try {
       await continueRoute(route, response);
-    } catch {
+      noteBrowserEvent(page, `held route ${pattern} continued`);
+    } catch (error) {
       /* The page may already have aborted the obsolete read. */
+      noteBrowserEvent(page, `held route ${pattern} continue failed: ${error.message}`);
     } finally {
       completed.resolve();
     }
@@ -186,9 +216,21 @@ async function holdRoute(t, page, pattern, continueRoute) {
   return {
     release,
     waitForRelease: () =>
-      waitForRoutePhase(captured.promise, `route ${pattern} capture`, release, t.signal),
+      waitForRoutePhase(
+        captured.promise,
+        `route ${pattern} capture`,
+        release,
+        t.signal,
+        describeState,
+      ),
     waitForCompletion: () =>
-      waitForRoutePhase(completed.promise, `route ${pattern} completion`, release, t.signal),
+      waitForRoutePhase(
+        completed.promise,
+        `route ${pattern} completion`,
+        release,
+        t.signal,
+        describeState,
+      ),
   };
 }
 
