@@ -567,6 +567,68 @@ test("preparation renews an expired workspace node setup and keeps the enrolled 
   assert.equal(setups.length, 1);
 });
 
+test("preparation records a device redeemed on an expired setup before renewing it", async () => {
+  for (const redeemed of [true, false]) {
+    const setups = [];
+    const observed = [];
+    const deviceId = "b".repeat(64);
+    const driver = new KubernetesComputeDriver(
+      routedOptions({
+        runtime: {
+          transportSecretPrefix: "transport",
+          gatewayStorageClassName: "local-path",
+        },
+      }),
+      {
+        nodeEnrollment: {
+          async createSetup() {
+            setups.push("setup");
+            return { setupId: "setup-b", setupCode: "code-b", expiresAtMs: Date.now() + 600_000 };
+          },
+          async observeSetup(_url, setupId) {
+            observed.push(setupId);
+            return redeemed ? { deviceId, connected: false } : undefined;
+          },
+        },
+      },
+    );
+    const revision = routedRevision(driver);
+    const namespace = { name: kubernetesNamespaceName(revision.namespaceId), plane: "execution" };
+    const name = driver.workspaceNodeName(revision);
+    const encode = (value) => Buffer.from(value, "utf8").toString("base64");
+    // Setup A expired before readiness recorded the node that redeemed it.
+    let secret = {
+      ...driver.manifest("v1", "Secret", name, driver.workspaceNodeOwnership(revision), namespace),
+      type: "Opaque",
+      data: { setupId: encode("setup-a"), setupCode: encode("code-a"), expiresAtMs: encode("1") },
+    };
+    secret.metadata.resourceVersion = "3";
+    const writes = [];
+    driver.reconcile = async () => {};
+    driver.gatewayReady = async () => true;
+    driver.apiClients = Promise.resolve({
+      core: {
+        async readNamespacedSecret() {
+          return structuredClone(secret);
+        },
+        async replaceNamespacedSecret(request) {
+          writes.push(request.body.metadata.resourceVersion);
+          secret = structuredClone(request.body);
+        },
+      },
+    });
+    assert.deepEqual(await driver.prepareWorkspaceNode(revision, namespace), { name });
+    assert.deepEqual(observed, ["setup-a"]);
+    assert.deepEqual(writes, ["3"]);
+    assert.equal(setups.length, 1);
+    const data = Object.fromEntries(
+      Object.entries(secret.data).map(([key, value]) => [key, Buffer.from(value, "base64").toString()]),
+    );
+    assert.equal(data.setupId, "setup-b");
+    assert.equal(data.deviceId, redeemed ? deviceId : undefined);
+  }
+});
+
 test("dedicated runtime rejects missing workspace transport before cluster access", async () => {
   const runtime = { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" };
   for (const [configuration, selection] of [

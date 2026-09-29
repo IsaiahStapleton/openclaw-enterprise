@@ -6017,7 +6017,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
-    if (this.nodeEnrollment === undefined || this.options.runtime === undefined) {
+    // Revision-scoped Secrets existed only for routed dedicated Harnesses.
+    if (
+      this.nodeEnrollment === undefined ||
+      this.options.runtime === undefined ||
+      this.options.gatewayRouting === undefined ||
+      revision.harness.mode !== "dedicated"
+    ) {
       return;
     }
     await this.deleteOwnedNamespacedResource(
@@ -6083,11 +6089,25 @@ export class KubernetesComputeDriver implements ComputeDriver {
       ) {
         return undefined;
       }
+      // An expired setup may already have been redeemed before readiness
+      // recorded its device. Re-minting would drop that completion, so record
+      // the device from the old setup first.
+      const decode = (value: string | undefined) =>
+        Buffer.from(value ?? "", "base64").toString("utf8");
+      const observed =
+        existing !== undefined && !decode(existing.data?.deviceId)
+          ? await enrollment.observeSetup(
+              url,
+              required(decode(existing.data?.setupId), "Workspace node setup ID"),
+              this.operationSignal(),
+            )
+          : undefined;
       const setup = await enrollment.createSetup(url, `${url}/node`, this.operationSignal());
       const setupData = {
         setupId: setup.setupId,
         setupCode: setup.setupCode,
         expiresAtMs: String(setup.expiresAtMs),
+        ...(observed === undefined ? {} : { deviceId: observed.deviceId }),
       };
       const clients = await this.clients(namespace.plane);
       if (existing === undefined) {
@@ -6109,7 +6129,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
         // The identity outlives revisions, but the native connect entrypoint
         // refuses an expired setup code. Replace only the setup: a recorded
         // deviceId stays, and the node reconnects with its persisted device
-        // token, so the new bootstrap token only lets the code decode.
+        // token, so the new bootstrap token only lets the code decode. A device
+        // observed on the expired setup above is recorded in the same write.
         required(existing.metadata.resourceVersion, "Workspace node Secret resource version");
         await this.request(
           () =>
