@@ -503,6 +503,8 @@ async function fixture(mode = "embedded", nodeEnrollment, options = {}) {
       data: {
         deviceId: Buffer.from(`node-${selected.id}`).toString("base64"),
         setupCode: Buffer.from("completed-setup").toString("base64"),
+        // A current setup code, as preparation keeps renewing it.
+        expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
       },
     });
   };

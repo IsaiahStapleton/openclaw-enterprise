@@ -2015,7 +2015,11 @@ function enrolledNodeSecret(driver, candidate, namespace) {
       driver.pluginRuntimeOwnership(candidate),
       { name: namespace, plane: "execution" },
     ),
-    data: { deviceId: Buffer.from("fixture-node").toString("base64") },
+    data: {
+      deviceId: Buffer.from("fixture-node").toString("base64"),
+      // A current setup code, as preparation keeps renewing it.
+      expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
+    },
   };
 }
 

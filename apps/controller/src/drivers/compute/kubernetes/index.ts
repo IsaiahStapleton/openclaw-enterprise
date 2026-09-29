@@ -6038,18 +6038,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       namespaceOwnership,
       namespace,
     );
-    let existing = await this.getOwned("Secret", name, namespace, ownership);
-    if (
+    const existing = await this.getOwned("Secret", name, namespace, ownership);
+    const expired =
       existing !== undefined &&
-      !existing.data?.deviceId &&
-      Number(Buffer.from(existing.data?.expiresAtMs ?? "", "base64").toString("utf8")) <= Date.now()
-    ) {
-      // An identity outlives revisions, so replace a setup that expired unredeemed.
-      // The predecessor that received it is already stopped.
-      await this.deleteOwnedNamespacedResource("Secret", name, ownership, namespace);
-      existing = undefined;
-    }
-    if (existing === undefined) {
+      Number(Buffer.from(existing.data?.expiresAtMs ?? "", "base64").toString("utf8")) <=
+        Date.now();
+    if (existing === undefined || expired) {
       const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
       const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
       // Plugin initialization can precede the first Gateway. Start the Harness
@@ -6064,25 +6058,57 @@ export class KubernetesComputeDriver implements ComputeDriver {
         return undefined;
       }
       const setup = await enrollment.createSetup(url, `${url}/node`, this.operationSignal());
+      const setupData = {
+        setupId: setup.setupId,
+        setupCode: setup.setupCode,
+        expiresAtMs: String(setup.expiresAtMs),
+      };
       const clients = await this.clients(namespace.plane);
-      // Persist before launching. An uncertain create is not replayed here; the
-      // next reconciliation reads the exact Agent-owned Secret first.
-      await this.request(
-        () =>
-          clients.core.createNamespacedSecret({
-            namespace: namespace.name,
-            body: {
-              ...this.manifest("v1", "Secret", name, ownership, namespace),
-              type: "Opaque",
-              stringData: {
-                setupId: setup.setupId,
-                setupCode: setup.setupCode,
-                expiresAtMs: String(setup.expiresAtMs),
+      if (existing === undefined) {
+        // Persist before launching. An uncertain create is not replayed here; the
+        // next reconciliation reads the exact Agent-owned Secret first.
+        await this.request(
+          () =>
+            clients.core.createNamespacedSecret({
+              namespace: namespace.name,
+              body: {
+                ...this.manifest("v1", "Secret", name, ownership, namespace),
+                type: "Opaque",
+                stringData: setupData,
               },
-            },
-          }),
-        { mutating: true },
-      );
+            }),
+          { mutating: true },
+        );
+      } else {
+        // The identity outlives revisions, but the native connect entrypoint
+        // refuses an expired setup code. Replace only the setup: a recorded
+        // deviceId stays, and the node reconnects with its persisted device
+        // token, so the new bootstrap token only lets the code decode.
+        required(existing.metadata.resourceVersion, "Workspace node Secret resource version");
+        await this.request(
+          () =>
+            clients.core.replaceNamespacedSecret({
+              name,
+              namespace: namespace.name,
+              body: {
+                apiVersion: "v1",
+                kind: "Secret",
+                metadata: existing.metadata,
+                type: "Opaque",
+                data: {
+                  ...existing.data,
+                  ...Object.fromEntries(
+                    Object.entries(setupData).map(([key, value]) => [
+                      key,
+                      Buffer.from(value, "utf8").toString("base64"),
+                    ]),
+                  ),
+                },
+              },
+            }),
+          { mutating: true },
+        );
+      }
     }
     const ca = await this.readNodeCa?.();
     return { name, ...(ca === undefined ? {} : { ca }) };
@@ -6226,11 +6252,13 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     const setupId = required(read("setupId"), "Workspace node setup ID");
     const observation = await enrollment.observeSetup(url, setupId, this.operationSignal());
     if (observation === undefined) {
-      // TODO(workspace-node-enrollment): renew an unredeemed expired setup and
-      // reconcile a completion missed beyond native status retention before
-      // enabling this path in published runtime images.
+      // No completion is visible: the setup was never redeemed, or its
+      // completion aged out of native status retention. Preparation renews an
+      // expired setup; readiness does not.
+      // TODO(workspace-node-enrollment): reconcile a completion missed beyond
+      // native status retention before enabling this path in published images.
       if (Number(read("expiresAtMs")) <= Date.now()) {
-        throw new Error("Workspace node setup expired before its identity was recorded.");
+        throw new Error("Workspace node setup expired without an observed enrollment.");
       }
       return false;
     }

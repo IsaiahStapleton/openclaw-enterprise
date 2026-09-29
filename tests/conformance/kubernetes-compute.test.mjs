@@ -421,7 +421,7 @@ test("workspace node identity is Agent-scoped and only Agent deletion removes it
   assert.deepEqual(deleted, []);
 });
 
-test("an expired unredeemed workspace node setup is replaced; an enrolled identity is kept", async () => {
+test("preparation renews an expired workspace node setup and keeps the enrolled device", async () => {
   const setups = [];
   const driver = new KubernetesComputeDriver(
     routedOptions({
@@ -434,7 +434,11 @@ test("an expired unredeemed workspace node setup is replaced; an enrolled identi
       nodeEnrollment: {
         async createSetup() {
           setups.push("setup");
-          return { setupId: "setup-2", setupCode: "code-2", expiresAtMs: Date.now() + 60_000 };
+          return {
+            setupId: `setup-${setups.length + 1}`,
+            setupCode: `code-${setups.length + 1}`,
+            expiresAtMs: Date.now() + 600_000,
+          };
         },
       },
     },
@@ -443,46 +447,57 @@ test("an expired unredeemed workspace node setup is replaced; an enrolled identi
   const namespace = { name: kubernetesNamespaceName(revision.namespaceId), plane: "execution" };
   const name = driver.workspaceNodeName(revision);
   const encode = (value) => Buffer.from(value, "utf8").toString("base64");
+  const decode = (data) =>
+    Object.fromEntries(
+      Object.entries(data).map(([key, value]) => [key, Buffer.from(value, "base64").toString()]),
+    );
+  const deviceId = "a".repeat(64);
+  // Enrolled on an earlier revision; the upstream native `connect --ephemeral`
+  // entrypoint refuses a setup code past its embedded expiry.
   let secret = {
     ...driver.manifest("v1", "Secret", name, driver.workspaceNodeOwnership(revision), namespace),
     type: "Opaque",
-    data: { setupId: encode("setup-1"), setupCode: encode("code-1"), expiresAtMs: encode("1") },
+    data: {
+      setupId: encode("setup-1"),
+      setupCode: encode("code-1"),
+      expiresAtMs: encode("1"),
+      deviceId: encode(deviceId),
+    },
   };
-  secret.metadata.uid = "expired-uid";
+  secret.metadata.uid = "enrolled-uid";
+  secret.metadata.resourceVersion = "7";
   const writes = [];
   driver.reconcile = async () => {};
   driver.gatewayReady = async () => true;
   driver.apiClients = Promise.resolve({
     core: {
       async readNamespacedSecret() {
-        if (secret === undefined) {
-          throw Object.assign(new Error("not found"), { statusCode: 404 });
-        }
         return structuredClone(secret);
       },
+      async replaceNamespacedSecret(request) {
+        writes.push(["replace", request.name, request.body.metadata.resourceVersion]);
+        secret = structuredClone(request.body);
+      },
       async deleteNamespacedSecret(request) {
-        writes.push(["delete", request.name, request.body.preconditions.uid]);
-        secret = undefined;
+        writes.push(["delete", request.name]);
       },
       async createNamespacedSecret(request) {
-        writes.push(["create", request.body.metadata.name, request.body.stringData.setupId]);
+        writes.push(["create", request.body.metadata.name]);
       },
     },
   });
-  assert.deepEqual(await driver.prepareWorkspaceNode(revision, namespace), { name });
-  assert.deepEqual(writes, [
-    ["delete", name, "expired-uid"],
-    ["create", name, "setup-2"],
-  ]);
-  assert.equal(setups.length, 1);
-  writes.length = 0;
-  secret = {
-    ...driver.manifest("v1", "Secret", name, driver.workspaceNodeOwnership(revision), namespace),
-    type: "Opaque",
-    data: { deviceId: encode("a".repeat(64)), expiresAtMs: encode("1") },
-  };
-  secret.metadata.uid = "enrolled-uid";
   const replacement = { ...revision, id: "revision-routed-2", revision: 2 };
+  assert.deepEqual(await driver.prepareWorkspaceNode(replacement, namespace), { name });
+  assert.deepEqual(writes, [["replace", name, "7"]]);
+  assert.equal(setups.length, 1);
+  const renewed = decode(secret.data);
+  assert.equal(renewed.deviceId, deviceId);
+  assert.equal(renewed.setupId, "setup-2");
+  assert.equal(renewed.setupCode, "code-2");
+  assert.ok(Number(renewed.expiresAtMs) > Date.now());
+  assert.equal(secret.metadata.uid, "enrolled-uid");
+  // A current setup is reused unchanged.
+  writes.length = 0;
   assert.deepEqual(await driver.prepareWorkspaceNode(replacement, namespace), { name });
   assert.deepEqual(writes, []);
   assert.equal(setups.length, 1);
@@ -5667,7 +5682,11 @@ function providerReadinessFixture({ provisionHarness, lifecycleDrivers = [] } = 
           name: namespace,
           plane: "execution",
         }),
-        data: { deviceId: Buffer.from("provider-node").toString("base64") },
+        data: {
+          deviceId: Buffer.from("provider-node").toString("base64"),
+          // A current setup code, as preparation keeps renewing it.
+          expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
+        },
       };
     },
     async listNamespace() {

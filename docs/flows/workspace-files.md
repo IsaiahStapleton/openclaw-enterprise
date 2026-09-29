@@ -188,7 +188,8 @@ ownership and UID, then remove that revision's endpoint before its policy. See t
 
 `prepareWorkspaceNode` calls
 `gateway/node-enrollment-client.ts:createGatewayNodeEnrollment` after Gateway
-readiness. A revision-owned Secret retains the setup code and device ID.
+readiness. An Agent-owned Secret per Harness kind keeps the setup code and
+device ID; preparation renews expired setup codes.
 Reconciliation attaches the node through a `Recreate` Harness deployment.
 Replacing the Harness restarts its Gateway; `prepareRevision` keeps deployment
 pending until that Gateway is ready, then queries enrollment.
@@ -196,9 +197,8 @@ pending until that Gateway is ready, then queries enrollment.
 - Readiness requires `file.fetch`, `file.stat`, `file.write`, `file.create`,
   `dir.list`, `workspace.memory`, and `workspace.skills`. Gateway admits these
   commands before pairing, preserving explicit denies.
-- The Harness PVC stores Agent-scoped identity at `/home/node/.openclaw-node`.
-  The nonroot private-state initializer creates it at `0700`; replacement
-  revisions reuse it. Agent deletion removes the enrollment Secret and identity.
+- The Harness PVC keeps Agent-scoped identity at `/home/node/.openclaw-node`
+  (`0700`, nonroot initializer) across revisions until Agent deletion.
 - `AGENT_WITH_NODE_ENTRYPOINT` runs native `setup --baseline` before supervising
   Codex and the node under `tini`. It passes admitted bootstrap options, preserves
   existing edits, and stops on setup failure. Only the node receives its setup
