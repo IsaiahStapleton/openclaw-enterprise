@@ -72,6 +72,12 @@ export interface InstallationReadRepository {
 
 export interface InstallationRepository extends InstallationReadRepository {
   createInstallation(installation: Installation): Promise<Readonly<Installation>>;
+  /**
+   * Holds a human Principal's account until COMMIT so a disable cannot commit first.
+   * False when the account is disabled; true when it is enabled or the Principal has
+   * no human account (its IAM bindings alone decide).
+   */
+  holdPrincipalAccount(principalId: string): Promise<boolean>;
 }
 
 export interface NamespaceReadRepository {
@@ -988,6 +994,8 @@ function repositories(
       snapshot.installation = saved;
       return immutableCopy(saved);
     },
+    // In-memory State has no human accounts, and its units are serialized.
+    holdPrincipalAccount: async () => true,
   };
 
   const namespaces: NamespaceRepository = {

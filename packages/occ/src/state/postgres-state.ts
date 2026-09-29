@@ -1607,6 +1607,25 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         return immutableCopy(installation);
       },
+      holdPrincipalAccount: async (principalId) => {
+        const installation = await this.currentInstallation(context);
+        if (installation === undefined) {
+          throw new DependencyUnavailableError(
+            "The platform Installation has not been initialized.",
+          );
+        }
+        // FOR SHARE conflicts with the account UPDATE that disables it.
+        const [account] = rows(
+          (
+            await client.query(
+              `SELECT disabled FROM occ.human_authentication_accounts
+               WHERE principal_id = $1 AND installation_id = $2 FOR SHARE`,
+              [principalId, installation.id],
+            )
+          ).rows,
+        );
+        return account === undefined || account.disabled === false;
+      },
     };
 
     const namespaces: NamespaceRepository = {
