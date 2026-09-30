@@ -195,7 +195,7 @@ for panels, correlation, and authorization limits.
 - [Security controls](../reference/security.md)
 - [Observability guide](../guides/observability.md)
 - [Deployment guide](../guides/deploy.md)
-- [Common OpenTelemetry logging spec](../../specs/20-common-otel-logging.md)
+- [Common OpenTelemetry logging spec](../../specs/plans/20-common-otel-logging/index.md)
 
 ## Manual Notes
 
