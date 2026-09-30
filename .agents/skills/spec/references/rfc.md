@@ -25,7 +25,10 @@ revision of that document, subject to historical preservation.
 ## Draft or revise
 
 For a new document, allocate an RFC ID by the specification process, then use
-`docs/contributing/rfc-template.md` at `specs/rfcs/<number>-<topic>.md`.
+the scaffold below the divider in `docs/contributing/rfc-template.md` at
+`specs/rfcs/<number>-<topic>.md`. This contributor template is the shared source
+for both manual authoring and this skill; do not maintain a second copy in the
+skill assets.
 Start with decision status **Proposed**. Recheck that the path and number are not
 already assigned before writing. Existing ambiguous historical numbers require
 a full filename or path, not a guessed match.

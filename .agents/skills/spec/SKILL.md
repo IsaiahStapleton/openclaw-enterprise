@@ -13,7 +13,8 @@ Use the user's requested mode. If a request only asks to evaluate an idea or
 process, discuss it without creating or moving documents.
 
 - `rfc <description>`: propose an architectural decision. Read
-  [the RFC workflow](./references/rfc.md).
+  [the RFC workflow](./references/rfc.md) and use the shared
+  [RFC template](../../../docs/contributing/rfc-template.md).
 - `plan [RFC-ID or path] <description>`: plan implementation of an RFC or
   independent feature. Read [the plan workflow](./references/plan.md); its
   scaffold is [the plan template](./assets/plan-template.md).

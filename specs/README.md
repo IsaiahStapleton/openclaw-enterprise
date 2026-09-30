@@ -14,6 +14,9 @@ the RFC number; independent plans live in `plans/tasks/` with their own sequence
 New documents use single files by default. Store status and verification limits
 in their owning document, rather than repeating them in this index.
 
+Start a new proposal from the [RFC template](../docs/contributing/rfc-template.md)
+or use `$spec rfc <description>`.
+
 Existing filenames and recorded statuses are preserved, including duplicate
 numeric prefixes and date-based names. Use full filenames for those historical
 IDs. Mixed design-and-delivery documents remain intact. Historical audit and
