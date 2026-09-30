@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
+import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { WORKSPACE_DEFAULTS } from "../../packages/contracts/src/workspace-defaults.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
@@ -28,6 +29,7 @@ import {
   secretOptionLabel,
   secretPostRequests,
   selectSecret,
+  waitForCondition,
 } from "./console-agents-browser-helpers.mjs";
 import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
 import {
@@ -2027,13 +2029,13 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     "Native admin Agent",
     nativeValues("unsupported-ui"),
   );
-  const { page } = await newPage(t, fixture, {
+  let { page } = await newPage(t, fixture, {
     args: [
       ...fixture.browserArgs,
       `--host-resolver-rules=MAP ${consoleHost} 127.0.0.1,MAP *.${nativeDomain} 127.0.0.1`,
     ],
   });
-  const requests = apiRequests(page, fixture.origin);
+  let requests = apiRequests(page, fixture.origin);
   const draftDetail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
 
   // A fresh shared-cookie login clears legacy host-only cookies from the Console.
@@ -2114,6 +2116,14 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
   await expectNativeAdminHidden(page);
   fixture.policy.restrictions.length = 0;
+  // The audited denial is settled for this tab; a new tab in the same session asks afresh.
+  const deniedTabWrites = nonAuthWriteRequests(requests);
+  const browserContext = page.context();
+  await page.close();
+  page = await browserContext.newPage();
+  requests = apiRequests(page, fixture.origin);
+  await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
+  await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
 
   const stopped = await fixture.request(
     "POST",
@@ -2212,7 +2222,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   assert.match(nativeRequestCookie, /(?:__Secure-)?openclaw_occ_shared\.session_token=/);
   assert.doesNotMatch(nativeRequestCookie, /legacy-host-only/);
 
-  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  assert.deepEqual([...deniedTabWrites, ...nonAuthWriteRequests(requests)], []);
 });
 
 for (const [dmPolicy, groupPolicy, enterpriseOrgInstall] of [
@@ -2977,6 +2987,65 @@ test("Agent sharing reconciles a truncated committed response without replaying 
   await page.getByText("Your session has expired").waitFor();
   await page.getByRole("button", { name: "Login", exact: true }).waitFor();
   assert.equal(await panel.count(), 0);
+});
+
+test("a read-only viewer is denied saved settings and native admin once per tab, not per view", async (t) => {
+  const auditSink = new InMemoryAuditSink();
+  const fixture = await createConsoleAppFixture(t, { auditSink });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Read-only detail");
+  const agent = await fixture.createAgent(namespace.id, "Viewed Agent", nativeValues("viewed"));
+  const viewer = await fixture.createAccountWithPolicy("agent-viewer", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-console-agent-viewer",
+      namespaceId: namespace.id,
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "agent" },
+      ],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-console-agent-viewer",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-console-agent-viewer",
+    });
+  });
+  const denials = (action) =>
+    auditSink
+      .list()
+      .filter((event) => event.kind === "authorization_denial" && event.action === action).length;
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`, viewer.credentials);
+  const unavailable = page.getByRole("heading", { name: "Configuration unavailable" });
+  await unavailable.waitFor();
+  const configurationPath = `/namespaces/${namespace.id}/configurations/${agent.configurationId}`;
+  const nativeAdminPath = `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`;
+  const reads = (path) => requests.filter((request) => request.path === path).length;
+  await waitForCondition(() => reads(nativeAdminPath) === 1, "native admin status read");
+  assert.equal(reads(configurationPath), 1);
+
+  // Each denied read is an audited authorization denial; reloading the view does not repeat it.
+  for (let view = 0; view < 2; view += 1) {
+    await page.reload();
+    await unavailable.waitFor();
+  }
+  await page.waitForTimeout(300);
+  assert.equal(reads(configurationPath), 1);
+  assert.equal(reads(nativeAdminPath), 1);
+  assert.equal(denials("openclaw.configurations.read"), 1);
+  assert.equal(denials("openclaw.agents.native_admin.read"), 1);
+  await page.getByText("Retry checks your access again", { exact: false }).waitFor();
+  assert.equal(await page.locator(".native-admin-access:not([hidden])").count(), 0);
+
+  // Retry asks again, so a real denial after a grant change is never hidden.
+  await page.getByRole("button", { name: "Retry" }).click();
+  await unavailable.waitFor();
+  await waitForCondition(() => reads(configurationPath) === 2, "saved settings reread");
+  assert.equal(denials("openclaw.configurations.read"), 2);
 });
 
 test("Agent sharing rejects emails locally and names an unknown Principal ID", async (t) => {

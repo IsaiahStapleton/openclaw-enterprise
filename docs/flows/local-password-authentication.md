@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-09-30
-last_updated_session: authoring-run/b84d8248-fb41-44b3-8ed5-30d7fd777926
+last_updated_session: authoring-run/b38fdf7a-4e45-40ac-a7d7-7da3aa8e0070
 ---
 
 # Bootstrap and human authentication flow
@@ -152,7 +152,8 @@ state, preserving reset-race invalidation; successful sign-in may then reissue i
 In the password-only profile with PostgreSQL State, `passwordSignInAudit` attempts
 `authentication.login`: success names the Principal and `userId`; denial uses
 `INVALID_CREDENTIALS` without an account. A failed success audit returns `503`
-without a session cookie; session creation or cleanup may remain unconfirmed.
+without a session cookie. The controller attempts session deletion; creation or
+cleanup may remain unconfirmed.
 A failed denial audit (`DenialAuditUnavailable`) counts as a credential failure
 against tracked entries, ordinarily returning `503`; the slow lane may return
 `429`. Untracked or exhausted lanes are paced without necessarily adding a
@@ -332,7 +333,11 @@ Account creation issues no session and infers no grants.
 
 ## Changelog
 
+- 2026-09-30 20:57: Receive landed PR751 while preserving bounded device proofs and both documentation histories. (authoring-run/b38fdf7a-4e45-40ac-a7d7-7da3aa8e0070 - 0e59bf4479aabfa0d00c6940c55be760fa19a200)
+
 - 2026-09-30 20:28: Receive bounded device proofs and clarify audit-failure accounting and cookie delivery. (authoring-run/b84d8248-fb41-44b3-8ed5-30d7fd777926 - 2702a01c6c2136cf9fb5b6808d3972379158f2ff)
+
+- 2026-09-30 20:12: Qualify audit-failure session cleanup and tracked-budget accounting. (authoring-run/d58e793e-df0f-40de-8f08-5d0ee989927a - d7b2e4c0697ace45cf2d4b3ab630ce3976334a16)
 
 - 2026-09-30 17:01: Bound fresh device proofs without reopening spent allowances. (authoring-run/bc25e670-bfac-4568-9e6d-d0104391ed45 - 6b43652ca0792ca1a4be0f8bc628f62c1f72fe17)
 
