@@ -118,7 +118,10 @@ reference and Driver identity. For a ChatGPT account, it verifies the issued
 access-token reference and private Backend, member Driver, and workspace
 ownership. `runtime` needs no source grant, lookup, or delivery metadata. The
 selected Compute validates the combination: SSH accepts only embedded OpenClaw
-with `runtime`; Kubernetes continues to require managed authentication.
+with `runtime`; Kubernetes continues to require managed authentication. It
+admits OAuth only when `experimental.codexDeviceLogin` is set, and only for
+Compute-owned dedicated Codex without a Sandbox Driver, so an unsupported
+binding fails before predecessors stop.
 
 A runtime revision records only `{ "method": "runtime" }`. Host credential
 changes can affect that revision after restart without redeployment; see the
@@ -235,7 +238,9 @@ A bootstrap-only Deployment runs
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT`
 and writes native auth plus a generation receipt to the private disk. Repeating
 that generation preserves the current bundle. An explicitly selected new source
-can replace it after predecessor termination.
+can replace it after predecessor termination: the script empties `codex-home`,
+writes through exclusive temporaries, and re-reads both files before readiness.
+A later non-OAuth revision's private-state init container removes `codex-home`.
 
 Compute observes bootstrap readiness, replaces the original Secret value with a
 consumed marker, then removes the seed Secret and waits for bootstrap Pods to
@@ -283,6 +288,8 @@ The source seal prevents ordinary Secret updates from resetting custody.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 04:00: Record OAuth opt-in, admission topology check, clean reseed, and codex-home removal on method change. (aligner-524 - 591f553f6)
 
 - 2026-09-29 03:12: Preserve persistent OAuth startup alongside bounded model-probe timeout recovery in the merge integration. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 64610f19dfec8996acab483c7bb4916be36a31a1)
 

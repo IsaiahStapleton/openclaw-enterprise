@@ -96,6 +96,9 @@ Compute-owned dedicated Codex, no selected Sandbox or Credential Gateway, and
 fresh private credential storage. The normal deployment prerequisites still
 apply: configured runtime images, provisionable storage, provider connectivity,
 and access to the selected model. Readiness requires a successful native model probe.
+An operator must first set `experimental.codexDeviceLogin: true` in the
+[Kubernetes Compute Driver options](../../reference/drivers/kubernetes-compute/codex-oauth-storage.md#enable-device-login);
+without it, signing in reports that device authorization is unavailable.
 
 Choose **ChatGPT OAuth (Experimental)** with dedicated Codex when creating an Agent. Open the
 provided verification link, enter the displayed code, and complete sign-in.
@@ -104,12 +107,17 @@ OCE stores the resulting native bundle in its Secret backend; the browser receiv
 only a source reference. Use that login to search and select plugins, then create
 and deploy the Agent. Starting login requires Agent-create and Secret-create
 permission in the Namespace; polling and use also require exact Secret `operate`.
+Only the user who started a login can poll, cancel, or use it through these
+operations. The staged login is still an ordinary Secret: anyone with `operate`
+on it can bind or project it like any other Secret until the first deployment
+consumes it.
 
 The first deployment copies the bundle to the Agent's private persistent disk,
 confirms the copy, and erases OCE's credential copy before starting Codex. Codex
 then owns refresh. Later revisions preserve the selected source and reuse the
-current bundle on that disk. Do not edit or restore the consumed Secret's value.
-Its retained metadata identifies the owning Agent and storage.
+current bundle on that disk. The Secret Driver refuses ordinary updates to a
+source once handoff starts; delete it through the Secret API when no Agent uses
+it. Its retained metadata identifies the owning Agent and storage.
 
 For plugin changes on an existing Agent, connect again in the plugin editor.
 This login is scoped to that Agent and requires Agent `read`/`update` plus Secret
@@ -120,24 +128,23 @@ only discards OCE's local copy; OCE does not revoke the upstream session.
 A pending login expires after the provider's device deadline, at most 15 minutes.
 A completed login is available in OCE for 24 hours before handoff; OCE does not
 refresh it. If discovery rejects an expired access token, start a fresh login.
-Expiry blocks use but does not erase stored credential bytes. Discard abandoned
+The first poll, cancel, or discovery request after expiry erases the stored
+credential bytes. A login nobody touches again keeps them, so discard abandoned
 logins, then delete their unreferenced Secrets through the normal Secret API.
 An interrupted token exchange requires a fresh login; a controller crash during
 polling can leave the old login pending until expiry.
 
-Wait for **Discard staged login** to finish before choosing **Create Agent** or
-**Save authentication source**. Those controls currently remain available during
-cancellation; submitting immediately can save a cancelled source that fails
-at deployment. Coordinating these controls is deferred beyond the first-deploy MVP.
+To rotate the login, or if private storage or its credential file is lost, use
+the Agent credential editor to connect again, save the new source, and deploy.
+The replacement empties the Agent's Codex home, including previous sessions and
+history, before installing the new bundle after the previous workload stops. An
+unchanged or consumed source can never reseed a bundle. Provider revocation also
+requires reconnecting. Ordinary revision changes do not need another runtime
+login. Deploying a revision with another authentication method removes the
+Codex home; switching back needs a new login.
 
-If private storage or its credential file is lost, use the Agent credential
-editor to connect again, save the new source, and deploy. An explicit replacement
-source installs a new bundle after the previous workload stops. An unchanged
-source can never reseed a missing bundle. Provider revocation also requires
-reconnecting. Ordinary revision changes do not need another runtime login.
-
-Durable token brokerage is separate work in progress. Reconnect hardening,
-automatic cleanup, and replacement recovery are follow-up work; they are not
+Durable token brokerage is separate work in progress. Automatic cleanup and
+replacement recovery are follow-up work; they are not
 first-deploy acceptance requirements. See the
 [known runtime limitations](../../reference/drivers/kubernetes-compute/codex-oauth-storage.md#oauth-launch-limits)
 and [verification gaps](../../reference/drivers/kubernetes-compute/codex-oauth-storage.md#device-login-verification).

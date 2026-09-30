@@ -55,7 +55,9 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
 - [Experimental personal Codex login](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)
   requires Namespace `agent:create`, or exact `agent:read` and `agent:update` for
   an existing Agent. Start also requires `secret:create`; polling, cancellation,
-  and discovery require exact `secret:operate` and the initiating actor.
+  and discovery require exact `secret:operate` and the initiating actor. The
+  staged login is an ordinary Secret, so other `secret:operate` holders can bind
+  or project it outside these operations.
 
 - [Channel directory lookup](../api.md#post-namespacesnamespaceidchanneldirectorylookup)
   requires `agent:create` in the Namespace, or `agent:update` or

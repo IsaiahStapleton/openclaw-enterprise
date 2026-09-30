@@ -4,12 +4,39 @@ This page covers the private `codex-home` subpath of the dedicated Harness claim
 described in [Harness storage](storage-and-credentials.md#harness-storage) for
 the [Kubernetes Compute Driver](../kubernetes-compute.md).
 
+## Enable device login
+
+Device login is off by default. To offer it, add this to the Kubernetes Compute
+Driver options, next to `runtime` in the
+[configuration example](../kubernetes-compute.md):
+
+```yaml
+experimental:
+  codexDeviceLogin: true
+```
+
+Without the option, the six device-authorization operations return `501`, and
+admission rejects any Agent revision whose `harnessAuth.method` is `oauth`.
+Removing the option later also blocks new revisions of existing OAuth Agents.
+The Console still lists the method and reports the `501` when a user signs in.
+
 ## Private credential directory
 
 OAuth's private `codex-home` directory is excluded from workspace serving and
-Sandbox mounts. It retains the complete native `auth.json`, including rotated
-refresh tokens and account metadata. Only the bootstrap workload and dedicated
-Codex workload mount it; the separate Gateway receives no model credential.
+Sandbox mounts. Only the seed writer and the dedicated Codex workload mount it,
+and the Codex workload mounts it as its whole `~/.codex`: the native `auth.json`
+with rotated refresh tokens, plus Codex sessions, history, logs, and generated
+configuration, all persist across revisions. The Gateway receives no model
+credential.
+
+The bundle moves one way and exists in these places:
+
+| Stage        | Object                                           | Who can read it                                                                                                                               | Erased when                                                                                       |
+| ------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Staged login | Session Secret in the control plane              | Holders of `secret:operate` on that Secret, including through `secretBindings` projection                                                     | Cancelled, touched after expiry, or consumed by the first deployment                              |
+| Handoff      | Immutable seed Secret in the execution namespace | Kubernetes principals allowed to `get` Secrets there                                                                                          | The seed writer is ready, or the revision stops                                                   |
+| Handoff      | Seed writer pod                                  | No network, because its template has no `openclaw.dev/network-profile` label and the namespace default-deny applies; no service-account token | Deleted with the seed Secret                                                                      |
+| Runtime      | `codex-home/auth.json` on the Agent claim        | The dedicated Codex workload, which refreshes it                                                                                              | A non-OAuth revision starts, or the claim is deleted (subject to the StorageClass reclaim policy) |
 
 **Launch scope:** persistent runtime-owned credentials deliberately replace the
 planned token broker for P0. Brokerage is separate work in progress. After the
@@ -25,16 +52,13 @@ deployment with fresh private credential storage. The following limitations are
 recorded for follow-up:
 
 - OAuth requires Compute-owned dedicated Codex without a selected Sandbox Driver.
-  The current admission check can accept the unsupported Sandbox combination;
-  preparation rejects it after stopping predecessor workloads. Admission-time
-  rejection is deferred. Do not select this combination.
-- Reconnect bootstrap does not yet reject filesystem links or create exclusive
-  temporary files. A process with write access to the private auth directory can
-  redirect a replacement bundle into the served workspace. Bootstrap readiness
-  can still succeed, consume the source, and leave native startup failing.
-  Exclusive writes and final-file validation are deferred reconnect hardening;
-  this is separate from the choice to persist tokens on disk. Recovery on
-  untrusted reused storage is outside the first-deploy MVP.
+  Admission rejects other topologies before any running workload stops.
+- Binding a new login to an Agent with existing storage empties `codex-home`
+  before seeding, so previous sessions and history are removed. The seed writer
+  creates files exclusively, never follows links, and reports ready only after
+  it re-reads a valid bundle and receipt.
+- A revision that does not use OAuth removes `codex-home`. Returning to OAuth
+  needs a new login.
 - Broker-backed custody, automatic recovery, and shared refresh remain deferred.
   Existing revision reuse does not provide rollback of credential-file changes.
   The [replacement and recovery behavior](storage-and-credentials.md#harness-storage)
