@@ -2,6 +2,7 @@ import type { FastifyError, FastifyReply } from "fastify";
 import { PresetValidationError } from "@openclaw-enterprise/contracts";
 import {
   AgentDeletingError,
+  AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   ChannelDirectoryError,
   ChannelCredentialError,
@@ -292,6 +293,10 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof ScopeViolationError) {
     return failure(404, "NOT_FOUND", "The requested platform resource was not found.");
+  }
+  if (error instanceof AgentPrincipalAuthorizationError) {
+    // Only the Agent's own principal is named; caller denials stay generic below.
+    return failure(403, "FORBIDDEN", error.message);
   }
   if (isAuthorizationDenied(error)) {
     return failure(403, "FORBIDDEN", "The exact platform operation was not authorized.");
