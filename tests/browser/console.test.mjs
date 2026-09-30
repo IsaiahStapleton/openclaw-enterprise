@@ -417,6 +417,10 @@ test("console shows the external observability link only to Installation adminis
   await page.getByRole("list", { name: "Namespaces" }).getByText("Observability access").waitFor();
   await link.waitFor();
   assert.equal(probes, 1);
+  await page.reload();
+  await link.waitFor();
+  assert.equal(await link.getAttribute("href"), url);
+  assert.equal(probes, 1);
 
   await openShellMenu(page);
   await page.getByRole("menuitem", { name: "Logout" }).click();
@@ -431,6 +435,11 @@ test("console shows the external observability link only to Installation adminis
   );
   await page.getByRole("link", { name: "Agents" }).click();
   await namespacesRead;
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  assert.equal(probes, 2);
+  // A reload in the same tab reuses the settled answer for this session owner.
+  await page.reload();
   await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
   assert.equal(probes, 2);
