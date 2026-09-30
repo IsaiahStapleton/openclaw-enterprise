@@ -125,6 +125,8 @@ export interface InstallationCapabilities {
   readonly agentProvisioning?: ComputeAgentProvisioningCapabilities;
   readonly pluginPolicies?: PluginPolicyCapabilities & { readonly driver: PluginDriverIdentity };
   readonly pluginDiscovery?: { readonly credential: "required" | "none" };
+  /** Present only when dedicated native OpenClaw can be admitted. */
+  readonly nativeWorkers?: { readonly support: "pinned-runtime" | "custom-image" };
 }
 
 /** Experimental authenticated client shared by related Installation Drivers. */

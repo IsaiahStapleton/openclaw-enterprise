@@ -214,6 +214,16 @@ const InstallationCapabilitiesSchema = Type.Object(
       Type.Object({ credential: PluginDiscoveryCredentialSchema }, { additionalProperties: false }),
     ),
     pluginPolicies: Type.Optional(PluginPolicyCapabilitiesSchema),
+    nativeWorkers: Type.Optional(
+      Type.Object(
+        { support: Type.Union([Type.Literal("pinned-runtime"), Type.Literal("custom-image")]) },
+        {
+          additionalProperties: false,
+          description:
+            "Present only when dedicated native OpenClaw can be admitted, and says where its native worker support comes from.",
+        },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

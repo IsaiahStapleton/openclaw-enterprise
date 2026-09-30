@@ -11,6 +11,7 @@ import {
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
+  NativeWorkerSupportError,
   PluginPolicyValidationError,
   PostgresCommitOutcomeUnknownError,
   ResourceConflictError,
@@ -244,6 +245,9 @@ export function requestFailure(error: unknown): RequestFailure {
           "The plugin service is unavailable. Retry discovery.",
         );
     }
+  }
+  if (error instanceof NativeWorkerSupportError) {
+    return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof PluginPolicyValidationError) {
     return failure(400, "INVALID_REQUEST", error.message);

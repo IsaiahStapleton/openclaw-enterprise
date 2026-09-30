@@ -4401,6 +4401,20 @@
                               "required": ["executionModes"],
                               "type": "object"
                             },
+                            "nativeWorkers": {
+                              "additionalProperties": false,
+                              "description": "Present only when dedicated native OpenClaw can be admitted, and says where its native worker support comes from.",
+                              "properties": {
+                                "support": {
+                                  "anyOf": [
+                                    { "const": "pinned-runtime", "type": "string" },
+                                    { "const": "custom-image", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["support"],
+                              "type": "object"
+                            },
                             "pluginDiscovery": {
                               "additionalProperties": false,
                               "properties": {
@@ -4630,6 +4644,20 @@
                                 }
                               },
                               "required": ["executionModes"],
+                              "type": "object"
+                            },
+                            "nativeWorkers": {
+                              "additionalProperties": false,
+                              "description": "Present only when dedicated native OpenClaw can be admitted, and says where its native worker support comes from.",
+                              "properties": {
+                                "support": {
+                                  "anyOf": [
+                                    { "const": "pinned-runtime", "type": "string" },
+                                    { "const": "custom-image", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["support"],
                               "type": "object"
                             },
                             "pluginDiscovery": {

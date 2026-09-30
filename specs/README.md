@@ -15,7 +15,8 @@ This directory records individual proposals, implementation plans, milestones,
 and delivery decisions. The documents describe work at a point in time. Their
 existing filenames and historical content remain intact in [`.archive/`](.archive/).
 A title containing “Feature Spec” does not make the document the current feature
-specification.
+specification. Historical records keep their original terminology; current
+documentation uses OCE for OpenClaw Enterprise and OCC for OpenClaw Control Plane.
 
 For supported behavior at this repository version, use the
 [living feature reference](../docs/reference/README.md). The
