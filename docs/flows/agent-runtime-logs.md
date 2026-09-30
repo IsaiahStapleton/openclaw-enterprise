@@ -18,7 +18,9 @@ download is a local file on the reader's device.
 
 - Trigger: `GET /namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime`
   and `GET .../runtime/logs` (optionally `download=true`) from the console Logs
-  tab, `occ agent runtime|logs` (`internal/occcli/cli.go`) or the API.
+  tab, `occ agent runtime|logs` (`internal/occcli/cli.go`) or the API. The CLI
+  defaults to the active revision, else the latest revision
+  (`agentRevision`, `latestRevisionID`).
 - Source: `apps/controller/src/index.ts:createFastifyApp`,
   `packages/occ/src/index.ts:OpenClawController.describeAgentRuntime` and
   `readAgentRuntimeLogs`, `packages/occ/src/runtime-logs/`, and
@@ -164,3 +166,4 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 - 2026-09-30 11:40: Add downloads, console filters and the `occ agent runtime|logs` callers. (build-2/agent-logs-slice-2)
 - 2026-09-30 13:00: Add the OpenShell sandbox source. (build-logs-3/agent-logs-slice-3)
 - 2026-09-30 15:30: Overlapping sandbox resume with counted de-duplication; NOT_FOUND is a 503. (fix-3/agent-logs-slice-3)
+- 2026-09-30 18:30: Without an active revision the CLI reads the latest revision; a failed deployment links to its version's Logs tab. (fix/dogfood3-5)

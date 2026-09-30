@@ -14,6 +14,8 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 
 1. Open the Agent and select a deployed version. The editable draft is not a
    version and has no runtime; a version without a running Pod shows no Pod.
+   When the latest deployment failed, **Deployment activity** links straight to
+   that version's Logs tab.
 2. Select **Logs**. The runtime strip refreshes every 10 seconds. Each Pod card
    lists its recent warning Events, prefixed with the container they concern.
 3. Choose a **Source**: **Gateway** (the OpenClaw Gateway container) or
@@ -74,7 +76,9 @@ occ agent logs agt_... --source agent --previous -o json
 occ agent logs agt_... --source sandbox --follow
 ```
 
-Both use the active revision unless you pass `--revision`. Gaps and withheld
+Both use the active revision unless you pass `--revision`. An Agent with no
+active revision, such as one whose first deployment failed, uses the latest
+revision and says so on stderr. Gaps and withheld
 counts are printed to stderr as notices; `-o json` prints NDJSON records. The
 command waits out `429` responses and exits nonzero on `501` and `503`. See the
 [CLI reference](../../reference/cli.md#runtime-status-and-logs).
