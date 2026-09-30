@@ -138,17 +138,16 @@ under the auth secret (`apps/controller/src/auth/session-binding.ts`), alongside
 public user identity. Console compares it to invalidate retained views and drafts
 after a new session, including for the same user. Sign-out revokes the session,
 and public signup is disabled. In both profiles
-`auth/admission.ts:passwordFailureAdmission` counts password failures; fast success
-clears the selected identity's failures, not the address's. `onLimited` reports
+`auth/admission.ts:passwordFailureAdmission` counts failures; fast success clears
+the selected identity, not the address. `onLimited` reports
 `authentication.sign-in-limited` once per lane/window. `auth/known-device.ts`
-checks the email-bound MAC before a fresh password-state read. Controller-owned
-`keyedAdmission` bounds these reads (see [known devices](../reference/authentication.md#known-devices)).
-A verified binding selects the device lane. Failed or refused reads retain signed
-keys as additional email/address-lane constraints, never exemptions; they cannot
-reopen spent device allowances. A completed read rejecting the binding uses the
-shared lane. Reserved passwords remain checkable through the existing slow lane.
-Before checking credentials, an admitted password-only request captures issuance
-state, preserving reset-race invalidation; successful sign-in may then reissue it.
+checks the email-bound MAC before controller-bounded password-state reads
+(see [known devices](../reference/authentication.md#known-devices)).
+Verified bindings select the device lane. Failed/refused reads retain signed keys
+as additional email/address constraints, never exemptions or renewed allowances.
+Completed reads rejecting bindings use the shared lane. Reserved passwords remain
+checkable through slow pacing. Password-only admission captures issuance state
+before credentials, preserving reset-race invalidation; success may reissue it.
 In the password-only profile with PostgreSQL State, `passwordSignInAudit` attempts
 `authentication.login`: success names the Principal and `userId`; denial uses
 `INVALID_CREDENTIALS` without an account. A failed success audit returns `503`
