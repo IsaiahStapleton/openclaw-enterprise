@@ -70,7 +70,10 @@ import type {
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
 import { DependencyUnavailableError, ResourceConflictError } from "@openclaw-enterprise/occ";
-import { createKubernetesClientConfiguration } from "../../kubernetes/client.ts";
+import {
+  createKubernetesClientConfiguration,
+  KubernetesApiUnavailableError,
+} from "../../kubernetes/client.ts";
 import {
   WORKSPACE_SETUP_RUNTIME,
   workspaceSetupMainAgent,
@@ -190,6 +193,8 @@ interface KubernetesApiClients {
   readonly discovery: DiscoveryV1Api;
   readonly networking: NetworkingV1Api;
   readonly objects: KubernetesObjectApi;
+  /** The selected API server URL, named when the server is unreachable. */
+  readonly server?: string;
 }
 
 export const MINIMUM_KUBERNETES_VERSION = "1.35.0";
@@ -394,6 +399,44 @@ interface PrivateStatusReadback {
 
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
+
+class KubernetesRequestTimeout extends Error {}
+
+// Socket-level failures: the request never reached a Kubernetes API server.
+// TLS trust and HTTP status failures keep their original error.
+const UNREACHABLE_SOCKET_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+function unreachableSocketFailure(error: unknown, depth = 0): boolean {
+  if (error instanceof KubernetesRequestTimeout) {
+    return true;
+  }
+  const record = asRecord(error);
+  if (record === undefined || depth > 4) {
+    return false;
+  }
+  if (typeof record.code === "string" && UNREACHABLE_SOCKET_CODES.has(record.code)) {
+    return true;
+  }
+  const nested = Array.isArray(record.errors) ? record.errors : [];
+  return [record.cause, ...nested].some((entry) => unreachableSocketFailure(entry, depth + 1));
+}
+
+function unreachableKubernetesApi(server: string | undefined, error: unknown): unknown {
+  if (server === undefined || !unreachableSocketFailure(error)) {
+    return error;
+  }
+  return new KubernetesApiUnavailableError(server, { cause: error });
+}
 
 const REPOSITORY_BROKER_CA_ENVIRONMENT = [
   "SSL_CERT_FILE",
@@ -1881,10 +1924,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
         : (["control", "execution"] as const);
     for (const plane of planes) {
       const clients = await this.clients(plane);
+      const reachable = <T>(operation: () => Promise<T>) =>
+        this.request(operation).catch((error: unknown) => {
+          throw unreachableKubernetesApi(clients.server, error);
+        });
       const observedVersion = kubernetesVersion(
-        (await this.request(() => clients.version.getCode())).gitVersion,
+        (await reachable(() => clients.version.getCode())).gitVersion,
       );
-      const namespaces = await this.request(() =>
+      const namespaces = await reachable(() =>
         clients.core.listNamespace({
           limit: 1,
           timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
@@ -5440,7 +5487,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async createClients(
     authentication: KubernetesComputeDriverOptions["authentication"],
   ): Promise<KubernetesApiClients> {
-    const { sdk, clientConfiguration } = await createKubernetesClientConfiguration(
+    const { sdk, clientConfiguration, server } = await createKubernetesClientConfiguration(
       authentication,
       (message) => new ConfigurationFailure(message),
     );
@@ -5453,6 +5500,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       discovery: new sdk.DiscoveryV1Api(clientConfiguration),
       networking: new sdk.NetworkingV1Api(clientConfiguration),
       objects: new sdk.KubernetesObjectApi(clientConfiguration),
+      server,
     };
   }
 
@@ -5473,7 +5521,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           throw ownerSignal.reason;
         }
         if (deadline.aborted) {
-          throw new Error("Kubernetes API request timed out.");
+          throw new KubernetesRequestTimeout("Kubernetes API request timed out.");
         }
         const status = numericErrorStatus(error);
         const retryable =
