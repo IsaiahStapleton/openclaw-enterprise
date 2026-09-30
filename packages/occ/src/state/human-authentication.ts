@@ -301,6 +301,29 @@ export class PostgresHumanAuthentication {
     });
   }
 
+  /**
+   * Enabled, enrolled accounts other than the recovery account that have no identity for any
+   * of `providerIds`. With recovery-only password sign-in they cannot sign in until an
+   * administrator attaches one. Ordered by user ID.
+   */
+  async accountsWithoutExternalIdentity(providerIds: readonly string[]): Promise<string[]> {
+    return this.state.transact(async (unit) => {
+      const rows = await this.query(
+        unit,
+        `SELECT h.user_id FROM occ.human_authentication_accounts h
+         WHERE h.installation_id = $1 AND h.disabled = false
+         AND NOT EXISTS (SELECT 1 FROM occ.human_authentication_recovery r
+                         WHERE r.installation_id = $1 AND r.user_id = h.user_id)
+         AND NOT EXISTS (SELECT 1 FROM occ.account m
+                         WHERE m.user_id = h.user_id AND m.identity_only
+                         AND m.provider_id = ANY($2::text[]))
+         ORDER BY h.user_id`,
+        [this.installationId, [...providerIds]],
+      );
+      return rows.map((row) => row.user_id as string);
+    });
+  }
+
   /** The caller must first authorize this exact Principal through the selected IAM Driver. */
   async activateRecovery(
     userId: string,
@@ -1056,6 +1079,29 @@ export class PostgresHumanAuthentication {
             expiresAt: row.expires_at as Date,
             createdAt: row.created_at as Date,
           };
+    });
+  }
+
+  /**
+   * Password-only profile: audits a password sign-in that Better Auth already accepted. The
+   * guarded profile audits in the session's own transaction (issueSession); this profile's
+   * sessions are written by Better Auth, so the caller revokes the session if this fails.
+   */
+  async recordPasswordLogin(userId: string): Promise<void> {
+    await this.state.transact(async (unit) => {
+      const principalId = await this.findPrincipal(unit, userId);
+      await unit.audit.append({
+        id: `aud_${randomUUID()}`,
+        installationId: this.installationId,
+        occurredAt: new Date().toISOString(),
+        kind: "mutation",
+        actorId: principalId ?? "unresolved",
+        actor: principalId === undefined ? { unresolved: true } : { principalId },
+        action: "authentication.login",
+        resource: { kind: "installation", id: this.installationId },
+        outcome: "success",
+        details: { userId },
+      });
     });
   }
 

@@ -29,7 +29,10 @@ startup, it keeps an existing designation, including one moved online through
 `enrol` applies the same rule as the online `POST /api/auth/accounts/:userId/enrol`.
 The tool never reads the controller auth secret. An ended session's console
 `sessionKey` and any pending GitHub login receipt stop working with it, and the
-browser signs in again. The command prints one JSON line and exits with:
+browser signs in again. Purging sessions, disabling an account, or resetting a
+password leaves [known-device cookies](../../reference/authentication.md#known-devices)
+valid for up to 90 days; they never grant a session, but after a suspected
+account compromise also rotate the auth secret to drop every one of them. The command prints one JSON line and exits with:
 
 | Exit | Meaning                                                                                                                                  |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -103,11 +106,12 @@ accounts' passwords instead, so they still cannot sign in. Deactivation also
 removes the database fence on unbound sessions, so the older image and plain
 password sign-in work again.
 
-Then set `auth.github.enabled: false` and remove `auth.recoveryUserId` in the
+Then set `auth.github.enabled: false`, remove `auth.recoveryUserId`, and reset
+`auth.passwordSignIn` to `all` in the
 protected values, and run `helm upgrade`, which also restores the replicas.
 Without Helm, remove `OCC_AUTH_GITHUB_CLIENT_ID`, `OCC_AUTH_GITHUB_CLIENT_SECRET`,
-and `OCC_AUTH_GITHUB_RECOVERY_USER_ID` from the API environment before scaling
-it up. With them still set, startup activates the profile again.
+`OCC_AUTH_GITHUB_RECOVERY_USER_ID`, and `OCC_AUTH_PASSWORD_SIGN_IN` from the API
+environment before scaling it up. With them still set, startup activates the profile again.
 
 Activating again later, at startup or with `activate`, enrolls every account
 that has its Principal and exactly one password, as an enabled account; earlier

@@ -906,3 +906,102 @@ test("Agent credentials block tab changes until Slack Secret grants finish", asy
     [slackAppSecret.id, slackBotSecret.id],
   );
 });
+
+test("Agent deployment guides a rejected model credential and gates unsaved authentication edits", async (t) => {
+  const { fixture, namespace, modelSecret, grantModelAccess } =
+    await createConsoleRepositoryLaunchFixture(t);
+  const configuration = await fixture.createConfiguration(
+    namespace.id,
+    createHarnessConfiguration("codex", "gpt-5.1"),
+  );
+  const created = await fixture.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "Rejected credential",
+      configurationId: configuration.id,
+      executionMode: "dedicated",
+      harnessAuth: { method: "api_key", source: modelSecret.ref },
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const agent = created.data;
+  await grantModelAccess(agent);
+  const path = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  const provisioned = await fixture.request("POST", `${path}/runtime-credentials`, {
+    headers: { origin: fixture.origin },
+    body: {},
+  });
+  assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
+  const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const { page } = await newPage(t, fixture);
+  // The in-memory fixture has no worker records; supply the persisted failure shape.
+  await page.route(`${fixture.origin}${path}/deployments/${revision.id}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          deploymentId: revision.id,
+          namespaceId: namespace.id,
+          agentId: agent.id,
+          status: "failed",
+          error: {
+            code: "RUNTIME_AUTHENTICATION_FAILED",
+            message: "Deployment runtime credentials were rejected.",
+          },
+          warnings: [],
+          progress: null,
+        },
+        meta: { requestId: "req_test_rejected_credential" },
+      }),
+    });
+  });
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "credentials");
+  await login(page, fixture, url.pathname + url.search);
+
+  const activity = page.locator(".deployment-status");
+  await activity
+    .getByText("RUNTIME_AUTHENTICATION_FAILED: Deployment runtime credentials were rejected.")
+    .waitFor();
+  await activity.getByText(/The model provider rejected this version's credential/).waitFor();
+  assert.match(
+    await activity.getByRole("link", { name: "Open Credentials" }).getAttribute("href"),
+    /tab=credentials/,
+  );
+  // Secret values can be updated in place, so the rejected binding warns instead of blocking.
+  await page
+    .getByText(
+      "Ready to deploy. The last deployment's model credential was rejected; update or replace it in Credentials before deploying again.",
+      { exact: true },
+    )
+    .waitFor();
+  const deploy = page.getByRole("button", { name: "Deploy new version" });
+  assert.equal(await deploy.isEnabled(), true);
+
+  // Creating a Secret from the picker stages it without reopening the listbox over Save.
+  const apiKeySecret = page.getByLabel("API key Secret", { exact: true });
+  await apiKeySecret.fill("no matching create target");
+  await page.getByRole("option", { name: "Create new Secret...", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create harness authentication Secret" });
+  await dialog.getByLabel("Name", { exact: true }).fill("Replacement model key");
+  await dialog.getByLabel("Value", { exact: true }).fill("replacement-model-key");
+  await dialog.getByRole("button", { name: "Create Secret", exact: true }).click();
+  await dialog.waitFor({ state: "detached" });
+  await page.getByText("Secret binding staged. Save changes to apply it.").waitFor();
+  assert.equal(await page.locator("#harness-auth-secret-listbox").isHidden(), true);
+  assert.equal(await apiKeySecret.getAttribute("aria-expanded"), "false");
+  await page
+    .getByText("Save or reload the authentication source in Credentials before deploying.", {
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(await deploy.isDisabled(), true);
+
+  const saved = page.waitForResponse(
+    (response) => response.url().endsWith(path) && response.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save authentication source" }).click({ timeout: 2000 });
+  assert.equal((await saved).status(), 200);
+  // The saved binding differs from the rejected version's, so the warning clears.
+  await page.getByText("Ready to deploy.", { exact: true }).waitFor();
+  assert.equal(await deploy.isEnabled(), true);
+});

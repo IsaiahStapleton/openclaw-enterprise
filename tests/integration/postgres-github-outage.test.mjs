@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
@@ -11,6 +10,7 @@ import {
   currentSession,
   defaultInstallSettings,
   githubUpgradeSettings,
+  installationRoles,
   passwordSignIn,
   signedInHeaders,
 } from "../helpers/production-sign-in.mjs";
@@ -28,7 +28,8 @@ const secrets = {
 const memberSubject = 7_000_001;
 
 // GitHub is optional: when it errors or stalls, GitHub sign-in fails closed and password
-// sign-in, including the recovery administrator's reserved lane, keeps working.
+// sign-in keeps working; strangers can slow the recovery administrator's password but never
+// refuse it.
 // The provider fixture replaces only remote HTTP to github.com and api.github.com.
 test(
   "a GitHub outage fails GitHub sign-in closed while password sign-in keeps working",
@@ -36,12 +37,10 @@ test(
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const state = new PostgresPlatformState(pool);
-    const held = new pg.Client({ connectionString: databaseUrl });
     const provider = createServer();
     let mode = "up";
     let app;
     t.after(async () => {
-      await held.end().catch(() => {});
       await app?.close();
       provider.closeAllConnections();
       await new Promise((resolve) => provider.close(resolve));
@@ -86,12 +85,8 @@ test(
       authSecret,
     });
     const admin = { email: adminEmail, password: adminPassword };
-    const installation = await state.loadInstallation();
-    const readerRole = (await state.loadNativeIAMState(installation.id)).roles.find((role) =>
-      role.permissions.some(
-        (permission) => permission.action === "read" && permission.resourceKind === "installation",
-      ),
-    );
+    // Members read the Installation but do not administer it, so a spent email refuses them.
+    const { reader: readerRole } = await installationRoles(state, pool);
 
     // Password onboarding on the default install, then the GitHub upgrade.
     app = await composeProductionSignIn(t, {
@@ -197,63 +192,185 @@ test(
       },
     );
 
-    await t.test("the recovery administrator keeps a reserved lane under a flood", async () => {
+    const wrong = "outage-wrong-password";
+
+    await t.test("successful password sign-ins spend no budget during an outage", async () => {
       mode = "error";
-      // Hold the shared lane's four global slots: password attempts for two ordinary accounts
-      // from four client addresses wait on their user rows, locked by another client.
-      await held.connect();
-      await held.query("BEGIN");
-      await held.query(`SELECT id FROM occ."user" WHERE id = ANY($1) FOR UPDATE`, [
-        [member.id, other.id],
-      ]);
-      const flood = [
-        [member, "198.51.100.1"],
-        [member, "198.51.100.2"],
-        [other, "198.51.100.3"],
-        [other, "198.51.100.4"],
-      ].map(([target, address]) => passwordSignIn(app, origin, target, address));
-      const deadline = performance.now() + 10_000;
-      for (;;) {
-        const waiting = (
-          await pool.query(
-            `SELECT count(*)::int AS count FROM pg_stat_activity
-             WHERE datname = current_database() AND wait_event_type = 'Lock'`,
-          )
-        ).rows[0].count;
-        if (waiting === 4) {
-          break;
-        }
-        assert.ok(performance.now() < deadline, `only ${waiting} flood attempts are admitted`);
-        await delay(20);
+      // Only failed sign-ins count: more successes in one minute than the ten-failure budget
+      // from one address all sign in.
+      for (let index = 0; index < 12; index += 1) {
+        const signedIn = await passwordSignIn(app, origin, other, "198.51.100.1");
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
       }
-      try {
-        const refused = await passwordSignIn(
-          app,
-          origin,
-          { email: "outage-third@example.test", password },
-          "203.0.113.9",
-        );
-        assert.equal(refused.statusCode, 429, "the shared lane is exhausted");
-        const recovery = await passwordSignIn(app, origin, admin, "198.51.100.1");
-        assert.equal(recovery.statusCode, 200, recovery.body);
-        const cookie = cookieHeaderFromSetCookie(recovery.headers["set-cookie"]);
-        assert.equal((await currentSession(app, cookie)).user.id, adminId);
-        assert.equal(
-          (await githubSignIn("203.0.113.10")).headers.location,
-          "/console/?authError=github",
-        );
-      } finally {
-        await held.query("COMMIT");
-      }
-      for (const response of await Promise.all(flood)) {
-        assert.equal(response.statusCode, 200, response.body);
-      }
+      assert.equal(
+        (await githubSignIn("203.0.113.10")).headers.location,
+        "/console/?authError=github",
+      );
     });
+
+    await t.test(
+      "without a trusted proxy, one ingress address is never an Installation-wide budget",
+      async () => {
+        // The fixture sets no trusted proxy, so every browser reaches the API from one
+        // address. Failures there for many emails spend only those emails' budgets.
+        const ingress = "198.51.100.1";
+        for (let index = 0; index < 25; index += 1) {
+          const response = await passwordSignIn(
+            app,
+            origin,
+            { email: `outage-guess-${index}@example.test`, password: wrong },
+            ingress,
+          );
+          assert.equal(response.statusCode, 401, response.body);
+        }
+        const signedIn = await passwordSignIn(app, origin, member, ingress);
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
+        // External start has no per-minute budget to spend, and junk callbacks without the
+        // browser's attempt cookie spend only their own key, never a real browser's.
+        mode = "up";
+        for (let index = 0; index < 35; index += 1) {
+          const start = await app.inject({
+            method: "POST",
+            url: "/api/auth/providers/github/start",
+            remoteAddress: ingress,
+            headers: { origin },
+          });
+          assert.equal(start.statusCode, 200, start.body);
+        }
+        for (let index = 0; index < 35; index += 1) {
+          const junk = await app.inject({
+            url: `/api/auth/providers/github/callback?state=${"j".repeat(43)}&code=junk`,
+            remoteAddress: ingress,
+          });
+          assert.equal(junk.headers.location, "/console/?authError=github");
+        }
+        const callback = await githubSignIn(ingress);
+        assert.equal(callback.headers.location, "/console/", callback.body);
+      },
+    );
 
     await t.test("GitHub sign-in recovers without a restart", async () => {
       mode = "up";
       const callback = await githubSignIn("192.0.2.60");
       assert.equal(callback.headers.location, "/console/", callback.body);
+    });
+
+    // Known-device cookie in the guarded profile: a browser that signed in to an account
+    // before spends its own lane instead of the email's (or the shared recovery lane), so a
+    // stranger who knows the email cannot keep that browser out. The cookie never signs in.
+    const knownDeviceOf = (response) =>
+      [response.headers["set-cookie"] ?? []]
+        .flat()
+        .find((value) => value.startsWith("__Host-occ_known_device="))
+        ?.split(";", 1)[0];
+    const signInWith = (cookie, account, remoteAddress) =>
+      app.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        remoteAddress,
+        headers: { origin, cookie },
+        payload: { email: account.email, password: account.password },
+      });
+    await t.test("a GitHub sign-in marks the browser for password fallback", async () => {
+      mode = "up";
+      const callback = await githubSignIn("192.0.2.61");
+      assert.equal(callback.headers.location, "/console/", callback.body);
+      const setCookie = [callback.headers["set-cookie"]]
+        .flat()
+        .find((value) => value.startsWith("__Host-occ_known_device="));
+      assert.match(setCookie, /HttpOnly/i);
+      assert.match(setCookie, /Secure/i);
+      assert.match(setCookie, /SameSite=Strict/i);
+      assert.match(setCookie, /Path=\//);
+      assert.doesNotMatch(setCookie, /Domain=/i);
+      const refused = await passwordSignIn(
+        app,
+        origin,
+        { ...member, password: wrong },
+        "192.0.2.61",
+      );
+      assert.equal(refused.statusCode, 401);
+      assert.equal(knownDeviceOf(refused), undefined, "a failure marks nothing");
+    });
+
+    await t.test(
+      "a known browser keeps signing in while strangers spend the member's email",
+      async () => {
+        const signedIn = await passwordSignIn(app, origin, member, "192.0.2.62");
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
+        const device = knownDeviceOf(signedIn);
+        assert.ok(device, "a password sign-in marks the browser");
+        // Strangers from many addresses spend the member's email key.
+        let refusedAt;
+        for (let index = 0; index < 12 && refusedAt === undefined; index += 1) {
+          const response = await passwordSignIn(
+            app,
+            origin,
+            { ...member, password: wrong },
+            `203.0.113.${140 + index}`,
+          );
+          if (response.statusCode === 429) {
+            refusedAt = index;
+          } else {
+            assert.equal(response.statusCode, 401, response.body);
+          }
+        }
+        assert.notEqual(refusedAt, undefined, "the email key is spent");
+        assert.equal(
+          (await passwordSignIn(app, origin, member, "192.0.2.63")).statusCode,
+          429,
+          "a new browser is refused",
+        );
+        const known = await signInWith(device, member, "192.0.2.62");
+        assert.equal(known.statusCode, 200, known.body);
+        const cookie = cookieHeaderFromSetCookie(known.headers["set-cookie"]);
+        assert.equal((await currentSession(app, cookie)).user.id, member.id);
+        // The cookie is bound to its account and grants nothing for another email.
+        const foreign = await signInWith(device, { ...other, password: wrong }, "192.0.2.62");
+        assert.equal(foreign.statusCode, 401);
+        // A valid cookie never authenticates a wrong password.
+        const guessed = await signInWith(device, { ...member, password: wrong }, "192.0.2.62");
+        assert.equal(guessed.statusCode, 401);
+      },
+    );
+
+    await t.test("strangers spending the recovery email slow it but never refuse it", async () => {
+      const signedIn = await passwordSignIn(app, origin, admin, "192.0.2.64");
+      assert.equal(signedIn.statusCode, 200, signedIn.body);
+      const device = knownDeviceOf(signedIn);
+      assert.ok(device, "a password sign-in marks the browser");
+      // Anyone who knows the recovery email can spend its budget.
+      let refused;
+      for (let index = 0; index < 12 && refused === undefined; index += 1) {
+        const response = await passwordSignIn(
+          app,
+          origin,
+          { ...admin, password: wrong },
+          `203.0.113.${170 + index}`,
+        );
+        if (response.statusCode === 429) {
+          refused = response;
+        } else {
+          assert.equal(response.statusCode, 401, response.body);
+        }
+      }
+      assert.ok(refused, "the recovery email's budget is spent");
+      assert.ok(Number(refused.headers["retry-after"]) >= 1, "refusals carry Retry-After");
+      // A new browser's correct recovery password is still checked, after the slowed floor.
+      const started = performance.now();
+      const slowed = await passwordSignIn(app, origin, admin, "192.0.2.65");
+      assert.equal(slowed.statusCode, 200, slowed.body);
+      assert.ok(performance.now() - started >= 1_000, "the attempt was slowed");
+      assert.equal(
+        (await currentSession(app, cookieHeaderFromSetCookie(slowed.headers["set-cookie"]))).user
+          .id,
+        adminId,
+      );
+      // The browser that signed in before spends its own lane instead.
+      const known = await signInWith(device, admin, "192.0.2.64");
+      assert.equal(known.statusCode, 200, known.body);
+      const cookie = cookieHeaderFromSetCookie(known.headers["set-cookie"]);
+      assert.equal((await currentSession(app, cookie)).user.id, adminId);
     });
   },
 );

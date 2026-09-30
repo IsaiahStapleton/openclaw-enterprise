@@ -1123,6 +1123,87 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
   await assert.rejects(stat(directory), { code: "ENOENT" });
 });
 
+test("Kubernetes-only dev-up keeps PostgreSQL and its egress policy valid across a cluster restart", async (t) => {
+  const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "kubernetes";
+  fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
+  fixture.env.DEV_UP_EXISTING_CONTROLLER_IMAGE = "1";
+  fixture.env.DEV_UP_EXISTING_RUNTIME_IMAGE = "1";
+
+  const result = runDevUp([], fixture.env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const directory = fixture.env.OCC_DEVELOPMENT_STATE_DIRECTORY;
+  // `k3d cluster stop` and `start` (or a host reboot) delete bare Pods, so a
+  // controller must own PostgreSQL for it to come back with its claim.
+  const postgres = JSON.parse(await readFile(join(directory, "postgres.json"), "utf8"));
+  assert.equal(postgres.kind, "StatefulSet");
+  assert.equal(postgres.spec.replicas, 1);
+  assert.deepEqual(postgres.spec.selector.matchLabels, { app: "postgres" });
+  assert.equal(postgres.spec.template.metadata.labels.app, "postgres");
+  assert.deepEqual(postgres.spec.template.spec.volumes[0], {
+    name: "data",
+    persistentVolumeClaim: { claimName: "postgres-data" },
+  });
+  // The chart admits PostgreSQL and the Kubernetes API only as /32 hosts, and
+  // both addresses change on restart. The launcher adds egress that does not.
+  const values = JSON.parse(await readFile(join(directory, "helm-values.json"), "utf8"));
+  assert.deepEqual(values.database.cidrs, ["10.42.0.20/32"]);
+  assert.deepEqual(values.cluster.cidrs, ["172.30.42.3/32"]);
+  assert.equal(values.cluster.port, 6443);
+  const restartEgress = JSON.parse(await readFile(join(directory, "restart-egress.json"), "utf8"));
+  const policy = (name) => restartEgress.items.find(({ metadata }) => metadata.name === name).spec;
+  const database = policy("openclaw-development-postgres-egress");
+  assert.deepEqual(database.podSelector.matchExpressions[0].values, [
+    "api",
+    "worker",
+    "initialization",
+  ]);
+  assert.deepEqual(database.egress, [
+    {
+      to: [{ podSelector: { matchLabels: { app: "postgres" } } }],
+      ports: [{ protocol: "TCP", port: 5432 }],
+    },
+  ]);
+  const cluster = policy("openclaw-development-kubernetes-egress");
+  assert.deepEqual(cluster.podSelector.matchExpressions[0].values, [
+    "api",
+    "worker",
+    "initialization",
+    "collector",
+  ]);
+  assert.deepEqual(cluster.egress, [
+    { to: [{ ipBlock: { cidr: "172.30.42.0/24" } }], ports: [{ protocol: "TCP", port: 6443 }] },
+  ]);
+  // The generated values must still satisfy the chart's own validation.
+  const rendered = spawnSync(
+    process.env.OCC_HELM_BIN ?? "helm",
+    [
+      "template",
+      "openclaw-enterprise",
+      "deploy/helm/openclaw-enterprise",
+      "--namespace",
+      "oce-system",
+      "-f",
+      join(directory, "helm-values.json"),
+    ],
+    { cwd: new URL("../..", import.meta.url), encoding: "utf8" },
+  );
+  if (rendered.error?.code !== "ENOENT") {
+    assert.equal(rendered.status, 0, rendered.stderr);
+  }
+  const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  assert.ok(
+    commands.some(
+      ({ command, args }) =>
+        command === "kubectl" && args.includes("rollout") && args.includes("statefulset/postgres"),
+    ),
+  );
+
+  const cleaned = runDevDown(fixture.env);
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
 test("Kubernetes dev-up can keep the OCC control plane in Compose with OpenShell", async (t) => {
   const fixture = await kubernetesFixture(t);
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";

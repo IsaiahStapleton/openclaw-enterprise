@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { loadStartupConfigurationSnapshot } from "../../apps/controller/src/composition/installation-config.ts";
+import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 
 const digestA = "a".repeat(64);
 const digestB = "b".repeat(64);
@@ -13,6 +15,9 @@ const digestC = "c".repeat(64);
 const digestD = "d".repeat(64);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const helm = process.env.OCC_HELM_BIN ?? "helm";
+const { loadYaml } = createRequire(new URL("../../apps/controller/package.json", import.meta.url))(
+  "@kubernetes/client-node",
+);
 
 let helmSkip = false;
 try {
@@ -219,6 +224,41 @@ test("renderer supports exactly the openclaw and codex profiles", () => {
   );
   assert.match(codex.preflight.prerequisites.join("\n"), /Slack consumers remain inactive/);
   assert.match(codex.preflight.warnings.join("\n"), /existing codex_pat token/);
+});
+
+// Tenant runtimes may burst to four cores; 100m requests keep the scheduling
+// reservation unchanged. The production example carries the same values.
+const tenantRuntimeResources = {
+  requests: { cpu: "100m", memory: "128Mi" },
+  limits: { cpu: "4", memory: "2Gi" },
+};
+
+test("profiles give tenant runtimes four-core CPU limits over unchanged 100m requests", () => {
+  const example = loadYaml(
+    readFileSync(
+      new URL("../../deploy/examples/production/installation.yaml", import.meta.url),
+      "utf8",
+    ),
+  );
+  for (const [name, installation] of [
+    ["openclaw", loadYaml(render("openclaw", baseInput()).installation)],
+    ["codex", loadYaml(render("codex", codexInput()).installation)],
+    ["production example", example],
+  ]) {
+    const { resources } = installation.drivers.compute.configuration;
+    assert.deepEqual(resources.gateway, tenantRuntimeResources, `${name} Gateway`);
+    assert.deepEqual(resources.agent, tenantRuntimeResources, `${name} Harness`);
+    assert.deepEqual(
+      resources.namespace.containerDefaults,
+      tenantRuntimeResources,
+      `${name} namespace container default`,
+    );
+    assert.deepEqual(resources.namespace.quota, { pods: "10" }, `${name} quota`);
+  }
+  // The example's placeholder proxy CIDR is the only value operators must supply.
+  const compute = structuredClone(example.drivers.compute.configuration);
+  compute.network.gatewayTrustedProxyCidrs = ["192.0.2.10/32"];
+  KubernetesComputeDriver.validateConfiguration(compute);
 });
 
 test("managed ChatGPT service-account wiring is optional and explicit", () => {
@@ -678,11 +718,30 @@ test(
       /github:\n {4}enabled: true\n {4}egressCidrs:\n {6}- 140\.82\.112\.0\/20/,
     );
     assert.match(github.values, /trustedProxy:\n {4}preset: ingress-nginx/);
+    assert.doesNotMatch(github.preflight.warnings.join("\n"), /trustedProxy is not set/);
     assert.doesNotMatch(github.preflight.prerequisites.join("\n"), /native admin domain/);
     const manifests = helmTemplate(github);
     assert.match(manifests, /name: OCC_AUTH_GITHUB_CLIENT_ID/);
     assert.match(manifests, /name: OCC_AUTH_GITHUB_RECOVERY_USER_ID\n\s+value: "recovery-admin_1"/);
     assert.match(manifests, /name: OCC_AUTH_TRUSTED_PROXY_CIDRS\n\s+value: "10\.42\.0\.0\/16"/);
+    // Password sign-in stays open to every account unless recovery-only is chosen.
+    assert.doesNotMatch(github.values, /passwordSignIn/);
+    assert.doesNotMatch(manifests, /OCC_AUTH_PASSWORD_SIGN_IN/);
+    assert.doesNotMatch(github.preflight.prerequisites.join("\n"), /identity attached/);
+    const recoveryOnly = render(
+      "openclaw",
+      externalSignInInput({ trustedProxy, passwordSignIn: "recovery-only" }),
+    );
+    assert.equal(recoveryOnly.summary.ok, true);
+    assert.match(recoveryOnly.values, /passwordSignIn: recovery-only/);
+    assert.match(
+      recoveryOnly.preflight.prerequisites.join("\n"),
+      /GitHub or Google identity attached to every ordinary account/,
+    );
+    assert.match(
+      helmTemplate(recoveryOnly),
+      /name: OCC_AUTH_PASSWORD_SIGN_IN\n\s+value: recovery-only/,
+    );
 
     const google = render(
       "codex",
@@ -711,6 +770,22 @@ test(
   },
 );
 
+test("preflight warns, without failing, when no trusted proxy is set", () => {
+  const github = render("openclaw", externalSignInInput());
+  assert.equal(github.summary.ok, true);
+  assert.match(
+    github.preflight.warnings.join("\n"),
+    /controlPlane\.trustedProxy is not set: .*GitHub or Google sign-in starts have no per-client limit/,
+  );
+  assert.doesNotMatch(github.values, /trustedProxy:/);
+  const password = render("openclaw", baseInput());
+  assert.equal(password.summary.ok, true);
+  assert.match(
+    password.preflight.warnings.join("\n"),
+    /controlPlane\.trustedProxy is not set: failed password sign-ins are limited per email only/,
+  );
+});
+
 test("preflight rejects external sign-in and trusted proxy inputs Helm would reject", () => {
   assertPreflightFailure(
     "openclaw",
@@ -721,6 +796,16 @@ test("preflight rejects external sign-in and trusted proxy inputs Helm would rej
     "openclaw",
     baseInput({ controlPlane: { ...baseInput().controlPlane, recoveryUserId: "admin" } }),
     /controlPlane.recoveryUserId requires controlPlane.github or controlPlane.google/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    baseInput({ controlPlane: { ...baseInput().controlPlane, passwordSignIn: "recovery-only" } }),
+    /controlPlane.passwordSignIn requires controlPlane.github or controlPlane.google/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ passwordSignIn: "none" }),
+    /controlPlane.passwordSignIn must be all or recovery-only/,
   );
   assertPreflightFailure(
     "openclaw",

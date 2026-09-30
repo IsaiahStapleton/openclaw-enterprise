@@ -25,6 +25,7 @@ import {
   CredentialSourceParams,
   CreateServiceAccountBody,
   CreateServiceAccountCredentialBody,
+  AgentRuntimeLogsQuery,
   DeploymentParams,
   EmptyQuery,
   IAMAccessBindingParams,
@@ -52,6 +53,8 @@ import {
   PresetListResponse,
   AgentDeploymentStatusResponse,
   AgentDeploymentDiagnosticsResponse,
+  AgentRuntimeResponse,
+  AgentRuntimeLogsResponse,
   AgentProvisioningResponse,
   AgentProvisioningStatusResponse,
   AgentRuntimeCredentialResponse,
@@ -116,6 +119,13 @@ const createErrors = {
 const mutationErrors = {
   ...readErrors,
   409: ErrorResponseRef,
+} as const;
+
+const runtimeReadErrors = {
+  ...readErrors,
+  429: ErrorResponseRef,
+  501: ErrorResponseRef,
+  504: ErrorResponseRef,
 } as const;
 
 export const occApiRoutes = [
@@ -1307,6 +1317,52 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: DeploymentParams,
       response: { 200: AgentDeploymentDiagnosticsResponse, ...mutationErrors },
+    },
+  },
+  {
+    operationId: "getAgentDeploymentRuntime",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime",
+    action: "openclaw.agent_deployments.runtime.read",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent_deployment_runtime",
+    summary: "Read Pod status, restarts, Events and log sources for one exact Agent revision",
+    tags: ["Agent deployments"],
+    schema: {
+      querystring: EmptyQuery,
+      params: DeploymentParams,
+      response: { 200: AgentRuntimeResponse, ...runtimeReadErrors },
+    },
+  },
+  {
+    operationId: "getAgentDeploymentRuntimeLogs",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime/logs",
+    action: "openclaw.agents.runtime_logs.view",
+    iamAction: "administer",
+    resourceKind: "agent",
+    authorizationTarget: "agent_deployment_runtime_logs",
+    summary: "Read one bounded, redacted page of container output for one exact Agent revision",
+    tags: ["Agent deployments"],
+    schema: {
+      querystring: AgentRuntimeLogsQuery,
+      params: DeploymentParams,
+      response: {
+        200: {
+          description: "One page of records, or a text/plain attachment when `download=true`",
+          content: {
+            "application/json": { schema: AgentRuntimeLogsResponse },
+            "text/plain": {
+              schema: Type.String({
+                description:
+                  "The same sanitized records as the JSON page, one per line, for `download=true`.",
+              }),
+            },
+          },
+        },
+        ...runtimeReadErrors,
+      },
     },
   },
 ] as const;

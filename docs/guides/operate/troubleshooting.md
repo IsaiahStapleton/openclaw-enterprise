@@ -62,6 +62,16 @@ After fixing the cause, repeat `occ installation get` and confirm the Namespace
 reports `ready` before creating an Agent there. A healthy control plane does
 not prove an Agent has deployed or can run a model.
 
+## An Agent's Gateway or Harness Pod stays unready
+
+Run `kubectl describe pod <pod-name>` in the Agent's tenant namespace. Each
+`Readiness probe failed:` event names the step that is not ready, such as
+`plugin runtime phase is starting` or `Gateway /readyz unavailable: ECONNREFUSED`.
+When the startup wrapper holds a failed check, the event adds it, for example
+`; startup check model-probe failed with AUTHENTICATION_FAILED`. See
+[Harness authentication](../../reference/harness-execution.md#harness-authentication)
+for the probe codes.
+
 ## Authentication fails after installation
 
 Use the intended credential: `occ installation get` uses the protected service

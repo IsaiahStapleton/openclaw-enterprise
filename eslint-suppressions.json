@@ -16,7 +16,7 @@
   },
   "apps/controller/src/drivers/compute/kubernetes/index.ts": {
     "preserve-caught-error": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/controller/src/drivers/compute/ssh/index.ts": {
@@ -30,11 +30,6 @@
     },
     "no-unused-vars": {
       "count": 2
-    }
-  },
-  "apps/controller/src/drivers/sandbox/openshell-gateway-client.ts": {
-    "prefer-const": {
-      "count": 1
     }
   },
   "apps/controller/src/drivers/secret/kubernetes/index.ts": {

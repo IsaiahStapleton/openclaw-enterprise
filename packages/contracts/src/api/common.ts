@@ -134,6 +134,43 @@ export const DeploymentParams = Type.Object(
   { additionalProperties: false },
 );
 
+/** Query strings are not coerced; numeric and boolean values are exact decimal text. */
+export const AgentRuntimeLogsQuery = Type.Object(
+  {
+    source: Type.Union([Type.Literal("gateway"), Type.Literal("agent"), Type.Literal("sandbox")]),
+    pod: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 253, pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" }),
+    ),
+    previous: Type.Optional(Type.Union([Type.Literal("true"), Type.Literal("false")])),
+    tailLines: Type.Optional(
+      Type.String({
+        pattern: "^(?:[1-9][0-9]{0,2}|1000)$",
+        description: "Lines from the end of the stream, 1 to 1000; default 200.",
+      }),
+    ),
+    sinceSeconds: Type.Optional(
+      Type.String({
+        pattern: "^(?:[1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$",
+        description: "Only lines newer than this many seconds, 1 to 86400.",
+      }),
+    ),
+    cursor: Type.Optional(
+      Type.String({
+        maxLength: 2048,
+        pattern: "^v1\\.[A-Za-z0-9_-]{1,1900}\\.[A-Za-z0-9_-]{43}$",
+        description: "Opaque cursor returned by the previous page of the same view.",
+      }),
+    ),
+    download: Type.Optional(
+      Type.Union([Type.Literal("true"), Type.Literal("false")], {
+        description:
+          "`true` returns the last 1000 lines as a text/plain attachment and is audited per download; it cannot be combined with `cursor`.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const WORKSPACE_FILE_NAMES = Object.freeze([
   "AGENTS.md",
   "SOUL.md",
@@ -689,6 +726,15 @@ export const ERROR_CODES = Object.freeze([
   "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED",
   "CHANNEL_CREDENTIAL_UNAVAILABLE",
   "CHANNEL_CREDENTIAL_BINDING_REQUIRED",
+  "RUNTIME_LOGS_CURSOR_INVALID",
+  "RUNTIME_LOGS_POD_INVALID",
+  "RUNTIME_LOGS_SOURCE_UNAVAILABLE",
+  "RUNTIME_LOGS_RATE_LIMITED",
+  "RUNTIME_LOGS_CLUSTER_RBAC",
+  "RUNTIME_LOGS_SANDBOX_NOT_FOUND",
+  "RUNTIME_LOGS_UNAVAILABLE",
+  "RUNTIME_LOGS_AUDIT_UNAVAILABLE",
+  "RUNTIME_LOGS_TIMEOUT",
 ] as const);
 
 export const ErrorDetail = Type.Object(
@@ -752,6 +798,15 @@ export const ErrorResponse = Type.Object(
           Type.Literal("CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED"),
           Type.Literal("CHANNEL_CREDENTIAL_UNAVAILABLE"),
           Type.Literal("CHANNEL_CREDENTIAL_BINDING_REQUIRED"),
+          Type.Literal("RUNTIME_LOGS_CURSOR_INVALID"),
+          Type.Literal("RUNTIME_LOGS_POD_INVALID"),
+          Type.Literal("RUNTIME_LOGS_SOURCE_UNAVAILABLE"),
+          Type.Literal("RUNTIME_LOGS_RATE_LIMITED"),
+          Type.Literal("RUNTIME_LOGS_CLUSTER_RBAC"),
+          Type.Literal("RUNTIME_LOGS_SANDBOX_NOT_FOUND"),
+          Type.Literal("RUNTIME_LOGS_UNAVAILABLE"),
+          Type.Literal("RUNTIME_LOGS_AUDIT_UNAVAILABLE"),
+          Type.Literal("RUNTIME_LOGS_TIMEOUT"),
         ]),
         message: Type.String({ minLength: 1, maxLength: 256 }),
         details: Type.Optional(Type.Array(ErrorDetail, { maxItems: 32 })),
@@ -790,6 +845,7 @@ export type IAMAccessBindingParams = Type.Static<typeof IAMAccessBindingParams>;
 export type AgentParams = Type.Static<typeof AgentParams>;
 export type RevisionParams = Type.Static<typeof RevisionParams>;
 export type DeploymentParams = Type.Static<typeof DeploymentParams>;
+export type AgentRuntimeLogsQuery = Type.Static<typeof AgentRuntimeLogsQuery>;
 export type WorkspaceFileName = Type.Static<typeof WorkspaceFileName>;
 export type AgentRuntimeCredentialsBody = Type.Static<typeof AgentRuntimeCredentialsBody>;
 export type WorkspaceFileParams = Type.Static<typeof WorkspaceFileParams>;

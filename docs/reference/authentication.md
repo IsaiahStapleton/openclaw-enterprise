@@ -83,7 +83,8 @@ File existence alone is not proof of successful initialization.
 
 Cookie-authenticated controller API mutations must include an
 `Origin` matching the origin of `OCC_AUTH_BASE_URL`. This includes sign-out. A missing,
-malformed, or different origin is rejected with `403`. If `Sec-Fetch-Site` is
+malformed, or different origin is rejected with `403`, and the error message says
+that a trusted browser origin is required. If `Sec-Fetch-Site` is
 present, it must be `same-origin`. Safe reads do not require an Origin.
 
 Sign-in rejects an explicitly untrusted or malformed Origin and also rejects
@@ -110,12 +111,54 @@ pins each tab's key this way.
 Sign-in takes `{"email": "...", "password": "..."}`. The session arrives only
 through `Set-Cookie`.
 
-Without an external provider, after 10 failed sign-ins per minute per email, or 20
+In both profiles, after 10 failed sign-ins per minute per email, or 20
 per client address with [`api.trustedProxy`](settings/production.md#github-sign-in-and-trusted-proxies),
 attempts wait 1–8 s and return `429` with `Retry-After`, whether or not the email
-exists; an Installation administrator's correct password still signs in. Without
+exists; an Installation administrator's correct password still signs in, and so does
+the recovery account's with an external provider. Successful sign-ins spend nothing. Without
 one, browsers share the ingress address and startup logs
-`authentication.sign-in-limit-warning`.
+`authentication.sign-in-limit-warning`. A successful sign-in within the budget
+clears that email's failures, not the address's; an administrator's success in
+the slowed lane does not, so pacing lasts until the minute rolls over. The first
+slowed attempt per lane each minute logs `authentication.sign-in-limited` at WARN
+with its `lane` (`email`, `device`, `address`, or `untracked` when the budget table is
+full). `email`, `device`, and `address` events also carry `keyHash`, a truncated HMAC under
+the auth secret; `untracked` events have no key and no hash. The email and
+address are never logged. The bundled Collector
+exports the event and lane, not the hash.
+
+Every password sign-in whose password is checked is audited as
+`authentication.login`: success names the account's Principal and `userId`; a
+wrong password or unknown email is `denied` with `INVALID_CREDENTIALS` and no
+account. Audit writes fail closed: a success whose audit cannot be written
+returns `503` and keeps no session. In the password-only profile, a wrong
+password whose denial cannot be written returns `503` (`429` in the slow lane)
+but still spends the sign-in budget; with an external sign-in provider it
+returns `503` and does not spend it. A `429` is unaudited
+only when admission refuses it before the password is checked;
+`authentication.sign-in-limited` reports those. An administrator's attempt in the
+slow lane is still checked, so a wrong password there returns `429` and is also
+audited as `denied`.
+
+### Known devices
+
+Every successful sign-in, password or external, sets `__Host-occ_known_device`
+(`occ_known_device` over plain HTTP): HttpOnly, `SameSite=Strict`, `Path=/`, no
+`Domain`, 90 days. It holds up to three entries, one per recent account, each an
+HMAC under the auth secret over a hash of the account's email, the issue time and
+a random nonce, so every sign-in gets its own entry; it never carries the email. A later password attempt for an email with a valid
+entry spends that browser's own budget, the size of the email's, instead of the
+email's, and does not wait for the email's slowed slots. Strangers who spend an
+email's budget therefore cannot refuse or crowd out a browser that signed in to
+that account before, including an administrator's or the recovery account's.
+
+The cookie never authenticates: a wrong password with it is `401` and spends the
+browser's lane, and the address lane and global caps still apply. Tampered,
+expired, foreign-account, or duplicated cookies are ignored, returning the
+attempt to the shared lane. Rotating the auth secret invalidates every entry; the
+next successful sign-in issues a new one. Disabling an account or resetting its
+password does not, so after a suspected compromise rotate the secret as well. A
+new browser gets no exemption.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
@@ -133,6 +176,10 @@ An Installation can let enrolled existing accounts sign in with GitHub or Google
 [External sign-in and account controls](authentication/external-sign-in.md)
 defines the single-controller profile, provider flow, session binding, the
 recovery user, the administrator account API, and sign-in limits.
+
+## Session and recovery controls
+
+See [session and recovery controls](authentication/external-sign-in.md#session-and-recovery-controls).
 
 ## Native admin shared sessions
 
@@ -171,13 +218,17 @@ Namespace-scoped); without one the account has no grants. It cannot create Roles
 or infer grants. Audit records `principalId` and `roleId` or `grant: "none"`.
 Creation issues no session.
 
+The only Installation Role is the built-in Installation administrator
+(`role_admin_<uuid>`). The API cannot create other Installation Roles, and the
+Namespace policy API does not list this one. Omit `roleId` for everyone except
+another Installation administrator, then grant Namespace access with the
+returned `principalId`; see [Add a person](../guides/topics/iam.md#add-a-person).
 A representative provisioning body is:
 
 ```json
 {
   "email": "operator@example.invalid",
-  "password": "<generated-random-password>",
-  "roleId": "role-existing-operator"
+  "password": "<generated-random-password>"
 }
 ```
 

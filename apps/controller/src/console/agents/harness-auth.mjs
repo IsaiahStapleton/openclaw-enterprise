@@ -86,6 +86,7 @@ export function createHarnessAuthFields(
     onSecretSelected(secret) {
       selectedSecretSource = secret.ref;
       changedSecret = secret;
+      options.onChange?.();
     },
     createSecretName: () => {
       const agentName =
