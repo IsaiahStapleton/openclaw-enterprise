@@ -29,10 +29,10 @@ startup, it keeps an existing designation, including one moved online through
 `enrol` applies the same rule as the online `POST /api/auth/accounts/:userId/enrol`.
 The tool never reads the controller auth secret. An ended session's console
 `sessionKey` and any pending GitHub login receipt stop working with it, and the
-browser signs in again. Purging sessions, disabling an account, or resetting a
-password leaves [known-device cookies](../../reference/authentication.md#known-devices)
-valid for up to 90 days; they never grant a session, but after a suspected
-account compromise also rotate the auth secret to drop every one of them. The command prints one JSON line and exits with:
+browser signs in again. Resetting a password revokes the account's
+[known-device cookies](../../reference/authentication.md#known-devices), and a
+disabled account's cookies exempt nothing while it stays disabled; purging
+sessions leaves them valid. They never grant a session. The command prints one JSON line and exits with:
 
 | Exit | Meaning                                                                                                                                  |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |

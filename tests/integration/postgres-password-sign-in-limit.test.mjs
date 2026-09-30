@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
+import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
 import {
   bootstrapProductionInstallation,
   composeProductionSignIn,
@@ -335,6 +336,7 @@ test(
     const knownMember = await createAccount("limit-known@example.test", roles.reader.id);
     const knownOther = await createAccount("limit-known-other@example.test", roles.reader.id);
     const knownAdmin = await createAccount("limit-known-admin@example.test", roles.admin.id);
+    const knownReset = await createAccount("limit-known-reset@example.test", roles.reader.id);
     let memberDevice;
 
     await t.test("the known-device cookie is set only after a successful sign-in", async () => {
@@ -347,7 +349,7 @@ test(
       assert.ok(setCookie, "a successful sign-in marks the browser");
       assert.match(
         setCookie,
-        /^__Host-occ_known_device=v1\.[^;]+; Max-Age=7776000; Path=\/; HttpOnly; Secure; SameSite=Strict$/,
+        /^__Host-occ_known_device=v2\.[^;]+; Max-Age=7776000; Path=\/; HttpOnly; Secure; SameSite=Strict$/,
       );
       assert.equal(setCookie.includes("limit-known"), false, "the cookie does not carry the email");
       memberDevice = setCookie.split(";", 1)[0];
@@ -393,10 +395,45 @@ test(
         // That device's lane is now spent too: a stolen cookie buys only its own budget.
         assert.equal((await plainSignInWith(memberDevice, knownMember)).statusCode, 429);
         // A cookie signed under another secret, or forged, is ignored: the shared lane applies.
-        const forged = `${knownDeviceName}=v1.AAAAAAAA.${Math.floor(Date.now() / 1000)}.${"A".repeat(16)}.${"A".repeat(43)}`;
+        const forged = `${knownDeviceName}=v2.AAAAAAAA.${Math.floor(Date.now() / 1000)}.${"A".repeat(16)}.${"A".repeat(43)}.${"A".repeat(43)}`;
         assert.equal((await plainSignInWith(forged, knownMember)).statusCode, 429);
       },
     );
+
+    await t.test("a password reset revokes known-device exemptions issued before it", async () => {
+      const before = await plainSignIn(knownReset);
+      assert.equal(before.statusCode, 200, before.body);
+      const staleDevice = knownDeviceOf(before).split(";", 1)[0];
+      // An operator resets the password; the database bumps the method's authentication
+      // version, which the entry is bound to.
+      const newPassword = "limit-known-reset-new-password";
+      const { rows } = await pool.query(
+        `UPDATE occ.account m SET password = $1 FROM occ."user" u
+           WHERE m.user_id = u.id AND u.email = $2 AND m.provider_id = 'credential'
+           RETURNING m.authentication_version`,
+        [await hashLocalPassword(newPassword), knownReset.email],
+      );
+      assert.equal(rows.length, 1);
+      assert.ok(rows[0].authentication_version > 1);
+      const reset = { ...knownReset, password: newPassword };
+      const after = await plainSignIn(reset);
+      assert.equal(after.statusCode, 200, after.body);
+      const currentDevice = knownDeviceOf(after).split(";", 1)[0];
+      for (let index = 0; index < 10; index += 1) {
+        const response = await plainSignIn({ ...reset, password: wrongPassword });
+        assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+      }
+      // The stale entry is ignored and answered exactly like a new browser.
+      const stale = await plainSignInWith(staleDevice, reset);
+      const fresh = await plainSignIn(reset);
+      assert.equal(stale.statusCode, 429, stale.body);
+      assert.equal(fresh.statusCode, 429, fresh.body);
+      assert.equal(stale.headers["retry-after"] !== undefined, true);
+      assert.equal(knownDeviceOf(stale), undefined);
+      // The entry issued after the reset keeps its own lane.
+      const known = await plainSignInWith(currentDevice, reset);
+      assert.equal(known.statusCode, 200, known.body);
+    });
 
     await t.test(
       "an administrator's known browser does not queue behind strangers' slowed attempts",
