@@ -1,5 +1,9 @@
 # Implementation specifications
 
+[Generic OIDC sign-in for existing accounts](43-oidc-sign-in.md) — Proposed;
+one operator-configured issuer with pinned URLs and administrator-attached subjects,
+no provisioning or claim mapping.
+
 [Independent image and chart publication](41-independent-image-chart-publication.md) — Implementing;
 default image-only publication with a separate opt-in chart job.
 
