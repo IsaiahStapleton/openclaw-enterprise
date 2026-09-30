@@ -397,6 +397,11 @@ test("device login is bound to its initiating actor, Namespace, and exact Agent 
     body: { oauthLogin: login.source, q: "knowledge" },
   });
   assert.equal(unsupportedDiscovery.status, 501);
+  // Another Harness is a permanent refusal, not a retryable provider outage.
+  const otherHarness = await fixture.request("POST", fixture.path, {
+    body: { harnessId: "openclaw" },
+  });
+  assert.equal(otherHarness.status, 501);
   assert.equal(fixture.requests.length, before);
 
   const savedLogin = await fixture.start(agentPath);

@@ -3590,6 +3590,10 @@ export class OpenClawController {
   ) {
     await this.authorizeDeviceAuthorizationScope(principalId, namespaceId, agentId);
     await this.authorize(principalId, "create", { kind: "secret", id: namespaceId, namespaceId });
+    if (harnessId !== "codex") {
+      // Permanent: retrying cannot help, so this is not reported as a provider outage.
+      throw new NotImplementedError("Device login is available only for the Codex Harness.");
+    }
     const compute = this.selectedDriver("compute");
     const secrets = this.secretDriver();
     if (
