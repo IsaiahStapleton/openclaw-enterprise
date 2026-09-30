@@ -504,3 +504,201 @@ test(
     assert.equal(reads, 31, "thirty proof reads plus the first admitted issuance-state read");
   },
 );
+
+// These controls exercise createControllerAuth's own proof limiter. Stale, genuinely
+// signed entries still require an account read but cannot select a device exemption.
+// Spending the shared lane first isolates proof reads from issuance-state reads and
+// password hashing; the downstream admission is real, with only its pacing shortened.
+async function globalProofHandler(lookup) {
+  const require = createRequire(
+    new URL("../../apps/controller/src/auth/index.ts", import.meta.url),
+  );
+  const Fastify = require("fastify");
+  const { createControllerAuth } = await import("../../apps/controller/src/auth/index.ts");
+  const { passwordFailureAdmission } = await import("../../apps/controller/src/auth/admission.ts");
+  const origin = "http://127.0.0.1";
+  const address = `global-proof-${randomUUID()}@example.test`;
+  const key = `global-proof-secret-${randomUUID()}-${randomUUID()}`;
+  const admission = passwordFailureAdmission({
+    perAddress: 20,
+    perEmail: 1,
+    slow: {
+      floorMs: 1,
+      maxFloorMs: 1,
+      concurrentPerEmail: 2,
+      waitingPerEmail: 32,
+      occupancy: 1024,
+      evaluating: 16,
+    },
+    isReserved: async () => false,
+    countsAsFailure: () => true,
+  });
+  const auth = createControllerAuth({
+    mode: "development",
+    installationId: `ins_${randomUUID()}`,
+    baseURL: origin,
+    secret: key,
+    secureCookies: false,
+    memoryDatabase: { user: [], account: [], session: [], verification: [], apikey: [] },
+    knownDeviceState: lookup,
+    passwordAdmission: admission,
+  });
+  const app = Fastify();
+  app.post("/api/auth/sign-in/email", auth.signInEmail);
+  const pending = [];
+  const request = (cookie) => {
+    const result = Promise.resolve(
+      app.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        headers: {
+          host: "127.0.0.1",
+          origin,
+          ...(cookie === undefined ? {} : { cookie: `occ_known_device=${cookie}` }),
+        },
+        payload: { email: address, password: "global-proof-wrong-password" },
+      }),
+    ).then(
+      (response) => ({ kind: "response", response }),
+      (error) => ({ kind: "request-error", error }),
+    );
+    pending.push(result);
+    return result;
+  };
+  const close = async () => {
+    try {
+      await Promise.all(pending);
+    } finally {
+      await app.close();
+    }
+  };
+  try {
+    await auth.createAccount({
+      email: address,
+      password: `password-${randomUUID()}`,
+      name: "Global proof member",
+    });
+    const seeded = await request();
+    if (seeded.kind === "request-error") {
+      throw seeded.error;
+    }
+    assert.equal(seeded.response.statusCode, 401, seeded.response.body);
+    return {
+      request,
+      // Every call creates a new signed nonce/key. The old binding models a password
+      // change; the real handler must read current state before discovering it is stale.
+      cookie: () => issueKnownDevice(key, address, "old-password-state", Date.now()),
+      close,
+    };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+function assertProofRefusal(result) {
+  if (result.kind === "request-error") {
+    throw result.error;
+  }
+  assert.equal(result.kind, "response");
+  assert.equal(result.response.statusCode, 429, result.response.body);
+  assert.equal(result.response.headers["set-cookie"], undefined, "refusal issues no cookie");
+}
+
+test(
+  "the sign-in handler enforces 600 proof reads across distinct signed entries",
+  { timeout: 20_000 },
+  async (t) => {
+    // Freeze the real limiter's existing clock dependency: machine speed cannot roll its
+    // minute while 601 distinct entries are checked. Timers remain real and bounded.
+    const fixedNow = performance.now();
+    const clock = t.mock.method(performance, "now", () => fixedNow);
+    let fixture;
+    let reads = 0;
+    try {
+      fixture = await globalProofHandler(async () => {
+        reads += 1;
+        return "current-password-state";
+      });
+      reads = 0; // Exclude the seeded request's separate issuance-state read.
+      const cookies = Array.from({ length: 601 }, () => fixture.cookie());
+      assert.equal(new Set(cookies).size, 601, "per-entry caps cannot mask the global rate cap");
+      for (let index = 0; index < 600; index += 1) {
+        assertProofRefusal(await fixture.request(cookies[index]));
+        assert.equal(reads, index + 1, "each admitted distinct entry reads current state once");
+      }
+      assertProofRefusal(await fixture.request(cookies[600]));
+      assert.equal(reads, 600, "the controller-wide rate cap refuses before read 601");
+    } finally {
+      try {
+        await fixture?.close();
+      } finally {
+        clock.mock.restore();
+      }
+    }
+  },
+);
+
+test(
+  "the sign-in handler enforces 16 active reads across distinct signed entries",
+  { timeout: 15_000 },
+  async () => {
+    const release = Promise.withResolvers();
+    const sixteenReads = Promise.withResolvers();
+    const seventeenthRead = Promise.withResolvers();
+    let holding = false;
+    let reads = 0;
+    let fixture;
+    let timer;
+    const requests = [];
+    try {
+      fixture = await globalProofHandler(async () => {
+        if (holding) {
+          reads += 1;
+          if (reads === 16) {
+            sixteenReads.resolve({ kind: "sixteen-reads" });
+          } else if (reads > 16) {
+            seventeenthRead.resolve({ kind: "seventeenth-read" });
+          }
+          await release.promise;
+        }
+        return "current-password-state";
+      });
+      const cookies = Array.from({ length: 17 }, () => fixture.cookie());
+      assert.equal(new Set(cookies).size, 17, "each held request uses a different signed entry");
+      const deadline = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ kind: "deadline" }), 8_000);
+      });
+      holding = true;
+      requests.push(...cookies.slice(0, 16).map((cookie) => fixture.request(cookie)));
+      const started = await Promise.race([sixteenReads.promise, ...requests, deadline]);
+      if (started.kind === "request-error") {
+        throw started.error;
+      }
+      assert.equal(started.kind, "sixteen-reads", "all 16 distinct readers must be held");
+      const overflow = fixture.request(cookies[16]);
+      requests.push(overflow);
+      const refused = await Promise.race([seventeenthRead.promise, overflow, deadline]);
+      if (refused.kind === "request-error") {
+        throw refused.error;
+      }
+      assert.equal(
+        refused.kind,
+        "response",
+        "the controller-wide active cap must refuse before a seventeenth read",
+      );
+      assertProofRefusal(refused);
+      assert.equal(reads, 16);
+    } finally {
+      clearTimeout(timer);
+      release.resolve();
+      // Join every response even when the explicit extra-reader negative oracle fails.
+      await Promise.all(requests);
+      await fixture?.close();
+    }
+    for (const response of await Promise.all(requests)) {
+      assertProofRefusal(response);
+    }
+    assert.equal(reads, 16, "settling held work must not start a refused read");
+  },
+);
