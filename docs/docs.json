@@ -617,7 +617,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "hidden": ["reference/postgres-auth-binding"]
           },
           {
             "tab": "Contribute",
@@ -902,8 +903,7 @@
               "flows/repository-credential-configuration",
               "testing/repository-credentials",
               "testing/repository-credentials-platform",
-              "flows/agent-presets",
-              "reference/postgres-auth-binding"
+              "flows/agent-presets"
             ]
           }
         ]
