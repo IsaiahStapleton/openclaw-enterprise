@@ -21,6 +21,61 @@ function run(script, args, env) {
   });
 }
 
+test("image lanes use separate cache scopes without exposing credentials or competing writers", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ci-image-cache-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const docker = join(directory, "docker");
+  const commandsPath = join(directory, "commands.json");
+  // Stop at the real preparer's external build boundary. Hosted CI separately
+  // proves BuildKit cache transport; this verifies invocation and failure ownership.
+  await writeFile(
+    docker,
+    `#!${process.execPath}\n` +
+      'const fs = require("node:fs");\n' +
+      "const args = process.argv.slice(2);\n" +
+      'if (args[0] === "version") { console.log("29.4.0"); process.exit(0); }\n' +
+      "fs.writeFileSync(process.env.COMMANDS_PATH, JSON.stringify(args));\n" +
+      "process.exit(42);\n",
+    { mode: 0o700 },
+  );
+  for (const [lane, role, writer] of [
+    ["images-packaging", "controller", true],
+    ["images-model-probes", "runtime", false],
+  ]) {
+    const statePath = join(directory, `${lane}.json`);
+    const result = run(prepare, ["--lane", lane, "--state", statePath], {
+      GITHUB_ACTIONS: "true",
+      GITHUB_RUN_ID: "12345",
+      GITHUB_RUN_ATTEMPT: "2",
+      OCC_CI_IMAGE_CACHE: "1",
+      ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
+      ACTIONS_RESULTS_URL: "https://cache.example.test/",
+      OCC_HELM_BIN: "/usr/bin/true",
+      OCC_YQ_BIN: "/usr/bin/true",
+      OCC_DOCKER_BIN: docker,
+      COMMANDS_PATH: commandsPath,
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /42/, result.stderr);
+    const args = JSON.parse(await readFile(commandsPath, "utf8"));
+    assert.deepEqual(args.slice(0, 3), ["buildx", "build", "--load"]);
+    assert.equal(
+      args[args.indexOf("--cache-from") + 1],
+      `type=gha,version=2,scope=oce-ci-${role}-${process.platform}-${process.arch}-v1,timeout=60s`,
+    );
+    assert.equal(args.includes("--cache-to"), writer);
+    if (writer) {
+      assert.match(args[args.indexOf("--cache-to") + 1], /mode=max,ignore-error=true,timeout=60s$/);
+    }
+    const state = await readFile(statePath, "utf8");
+    assert.equal(JSON.parse(state).resources[0].status, "planned");
+    assert.doesNotMatch(
+      JSON.stringify(args) + state + result.stdout + result.stderr,
+      /synthetic-cache-credential/,
+    );
+  }
+});
+
 test("failed image preparation and cleanup retain a sanitized attempt-bound tag", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "ci-image-reconciliation-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -32,8 +87,8 @@ test("failed image preparation and cleanup retain a sanitized attempt-bound tag"
     GITHUB_RUN_ID: "12345",
     GITHUB_RUN_ATTEMPT: "2",
     GITHUB_JOB: "images",
-    OCC_HELM_BIN: "/bin/true",
-    OCC_YQ_BIN: "/bin/true",
+    OCC_HELM_BIN: "/usr/bin/true",
+    OCC_YQ_BIN: "/usr/bin/true",
     OCC_DOCKER_BIN: docker,
   };
   // The real preparer records ownership before the deliberately failed build.
@@ -42,7 +97,7 @@ test("failed image preparation and cleanup retain a sanitized attempt-bound tag"
   assert.equal(preparation.error, undefined);
   const state = JSON.parse(await readFile(statePath, "utf8"));
   assert.deepEqual(state.ciRun, { id: "12345", attempt: "2" });
-  assert.equal(state.resources.length, 1);
+  assert.equal(state.resources.length, 1, preparation.stderr);
   const [image] = state.resources;
   const label = createHash("sha256")
     .update(JSON.stringify(["12345", "2", state.prefix]))
