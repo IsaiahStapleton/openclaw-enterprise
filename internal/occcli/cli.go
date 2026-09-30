@@ -183,7 +183,7 @@ func (app *application) namespaceCommand() *cobra.Command {
 	get := &cobra.Command{
 		Use:   "get ID",
 		Short: "Show a Namespace",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(namespaceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			client, err := app.client()
 			if err != nil {
@@ -200,7 +200,7 @@ func (app *application) namespaceCommand() *cobra.Command {
 	deleteCommand := &cobra.Command{
 		Use:   "delete ID",
 		Short: "Begin deleting an empty Namespace",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(namespaceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			client, err := app.client()
 			if err != nil {
@@ -452,7 +452,7 @@ func (app *application) configurationCommand() *cobra.Command {
 	get := &cobra.Command{
 		Use:   "get ID",
 		Short: "Show a Configuration",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(configurationIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -474,7 +474,7 @@ func (app *application) configurationCommand() *cobra.Command {
 	update := &cobra.Command{
 		Use:   "update ID",
 		Short: "Update a Configuration from a JSON document",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(configurationIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -501,7 +501,7 @@ func (app *application) configurationCommand() *cobra.Command {
 	deleteCommand := &cobra.Command{
 		Use:   "delete ID",
 		Short: "Delete an unreferenced Configuration",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(configurationIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -547,7 +547,7 @@ func (app *application) secretCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return app.printSecret(secret)
+			return app.printSecret(secret, false)
 		},
 	}
 	create.Flags().StringVar(&createFile, "file", "", "JSON document path")
@@ -556,7 +556,7 @@ func (app *application) secretCommand() *cobra.Command {
 	get := &cobra.Command{
 		Use:   "get ID",
 		Short: "Show Secret metadata",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(secretIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -570,7 +570,7 @@ func (app *application) secretCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return app.printSecret(secret)
+			return app.printSecret(secret, false)
 		},
 	}
 
@@ -578,7 +578,7 @@ func (app *application) secretCommand() *cobra.Command {
 	update := &cobra.Command{
 		Use:   "update ID",
 		Short: "Update a Secret from a JSON document",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(secretIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -596,7 +596,7 @@ func (app *application) secretCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return app.printSecret(secret)
+			return app.printSecret(secret, false)
 		},
 	}
 	update.Flags().StringVar(&updateFile, "file", "", "JSON document path")
@@ -605,7 +605,7 @@ func (app *application) secretCommand() *cobra.Command {
 	deleteCommand := &cobra.Command{
 		Use:   "delete ID",
 		Short: "Delete an unbound Secret",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(secretIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -622,7 +622,28 @@ func (app *application) secretCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, get, update, deleteCommand)
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List Secret metadata",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			secrets, err := client.ListSecrets(namespace)
+			if err != nil {
+				return err
+			}
+			return app.printSecret(secrets, true)
+		},
+	}
+
+	command.AddCommand(create, list, get, update, deleteCommand)
 	return command
 }
 
@@ -684,7 +705,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 	get := &cobra.Command{
 		Use:   "get ID",
 		Short: "Show a credential source and its live gateway status",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -705,7 +726,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 	deleteCommand := &cobra.Command{
 		Use:   "delete ID",
 		Short: "Delete an unreferenced credential source and its gateway copy",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -781,7 +802,7 @@ func (app *application) agentCommand() *cobra.Command {
 	get := &cobra.Command{
 		Use:   "get ID",
 		Short: "Show an Agent",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -803,7 +824,7 @@ func (app *application) agentCommand() *cobra.Command {
 	update := &cobra.Command{
 		Use:   "update ID",
 		Short: "Update an Agent from a JSON document",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -830,7 +851,7 @@ func (app *application) agentCommand() *cobra.Command {
 	deploy := &cobra.Command{
 		Use:   "deploy ID",
 		Short: "Deploy an Agent and create an immutable revision",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -852,10 +873,10 @@ func (app *application) agentCommand() *cobra.Command {
 			})
 		},
 	}
-	deploymentStatus := &cobra.Command{
-		Use:   "deployment-status AGENT_ID DEPLOYMENT_ID",
-		Short: "Show durable status for one Agent deployment",
-		Args:  cobra.ExactArgs(2),
+	revisions := &cobra.Command{
+		Use:   "revisions AGENT_ID",
+		Short: "List an Agent's immutable revisions (deployment IDs)",
+		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -865,7 +886,39 @@ func (app *application) agentCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			deployment, err := client.GetAgentDeployment(namespace, args[0], args[1])
+			result, err := client.ListAgentRevisions(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printAgentRevision(result, true)
+		},
+	}
+	deploymentStatus := &cobra.Command{
+		Use:   "deployment-status AGENT_ID [DEPLOYMENT_ID]",
+		Short: "Show durable status for one Agent deployment, by default the latest revision",
+		Args:  idArgs(agentIDArg, optionalID(revisionIDArg)),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			var deploymentID string
+			if len(args) == 2 {
+				deploymentID = args[1]
+			} else {
+				result, err := client.ListAgentRevisions(namespace, args[0])
+				if err != nil {
+					return err
+				}
+				if deploymentID, err = latestRevisionID(args[0], result); err != nil {
+					return err
+				}
+			}
+			deployment, err := client.GetAgentDeployment(namespace, args[0], deploymentID)
 			if err != nil {
 				return err
 			}
@@ -880,7 +933,7 @@ func (app *application) agentCommand() *cobra.Command {
 	stop := &cobra.Command{
 		Use:   "stop ID",
 		Short: "Stop an Agent while retaining its revision history and persistent state",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -900,7 +953,7 @@ func (app *application) agentCommand() *cobra.Command {
 	deleteAgent := &cobra.Command{
 		Use:   "delete ID",
 		Short: "Begin asynchronous Agent deletion",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -918,7 +971,7 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, update, deploy, deploymentStatus, stop, deleteAgent, app.agentRuntimeCredentialsCommand())
+	command.AddCommand(create, list, get, update, deploy, revisions, deploymentStatus, stop, deleteAgent, app.agentRuntimeCredentialsCommand())
 	return command
 }
 
@@ -928,7 +981,7 @@ func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
 	get := &cobra.Command{
 		Use:   "get AGENT_ID",
 		Short: "Show runtime credential metadata",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -949,7 +1002,7 @@ func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
 	provision := &cobra.Command{
 		Use:   "provision AGENT_ID",
 		Short: "Provision initial runtime credentials with an empty request body",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -1015,6 +1068,9 @@ func (app *application) client() (*occclient.Client, error) {
 func (app *application) requiredNamespace() (string, error) {
 	if app.namespace == "" {
 		return "", fmt.Errorf("set OCC_NAMESPACE or pass --namespace")
+	}
+	if err := namespaceIDArg.check(app.namespace); err != nil {
+		return "", fmt.Errorf("OCC_NAMESPACE or --namespace: %w", err)
 	}
 	return app.namespace, nil
 }

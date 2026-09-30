@@ -35,52 +35,56 @@ and `FILE` with a JSON file path. `--file` reads a local file, not stdin; YAML
 input is not supported. The server validates document fields against the
 [HTTP API contract](api.md).
 
-| Command                                        | What it does                                                                                                                                                     |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `occ installation get`                         | Reads the singleton Installation.                                                                                                                                |
-| `occ installation deployment-inventory`        | Reads the complete Agent deployment inventory for a coordinated fleet operation.                                                                                 |
-| `occ namespace list`                           | Lists authorized Namespaces.                                                                                                                                     |
-| `occ namespace get ID`                         | Reads one Namespace and its status.                                                                                                                              |
-| `occ namespace create NAME`                    | Creates a Namespace. `--existing-namespace K8S_NAME` requests adoption of an operator-prepared Kubernetes namespace and also requires Installation `administer`. |
-| `occ namespace delete ID`                      | Begins deleting an empty Namespace. Use `namespace get` to inspect the resulting state.                                                                          |
-| `occ configuration create --file FILE`         | Creates a Configuration. The body contains `kind` and `values`.                                                                                                  |
-| `occ configuration get ID`                     | Reads a Configuration.                                                                                                                                           |
-| `occ configuration update ID --file FILE`      | Updates a Configuration; the body must replace `values`. Omit the create-only `kind`.                                                                            |
-| `occ configuration delete ID`                  | Deletes an unreferenced Configuration.                                                                                                                           |
-| `occ secret create --file FILE`                | Stores a Namespace Secret from a protected JSON document.                                                                                                        |
-| `occ secret get ID`                            | Reads Secret metadata, never its value.                                                                                                                          |
-| `occ secret update ID --file FILE`             | Replaces the Secret value; consumers require explicit redeployment.                                                                                              |
-| `occ secret delete ID`                         | Deletes an unreferenced Namespace Secret.                                                                                                                        |
-| `occ credential-source create --file FILE`     | Registers a Secret with the selected Credential Gateway. See [credential sources](credential-sources.md#register-a-source).                                      |
-| `occ credential-source list`                   | Lists credential sources without live gateway status.                                                                                                            |
-| `occ credential-source get ID`                 | Reads a credential source and its live gateway status, never its value.                                                                                          |
-| `occ credential-source delete ID`              | Deletes an unreferenced credential source and the gateway's copy.                                                                                                |
-| `occ iam role list`                            | Lists Namespace Roles.                                                                                                                                           |
-| `occ iam role get ID`                          | Reads a Namespace Role.                                                                                                                                          |
-| `occ iam role create --file FILE`              | Creates a Namespace Role with explicit permissions.                                                                                                              |
-| `occ iam role delete ID`                       | Deletes an unreferenced Namespace Role.                                                                                                                          |
-| `occ iam access-binding list`                  | Lists Namespace AccessBindings.                                                                                                                                  |
-| `occ iam access-binding get ID`                | Reads a Namespace AccessBinding.                                                                                                                                 |
-| `occ iam access-binding create --file FILE`    | Grants a Role to a principal for an exact resource.                                                                                                              |
-| `occ iam access-binding delete ID`             | Deletes a Namespace AccessBinding.                                                                                                                               |
-| `occ agent delete ID`                          | Begins asynchronous Agent deletion, including its owned runtime state.                                                                                           |
-| `occ agent list`                               | Lists authorized Agents in the selected Namespace.                                                                                                               |
-| `occ agent get ID`                             | Reads an Agent's desired state and active revision.                                                                                                              |
-| `occ agent create --file FILE`                 | Creates an Agent draft.                                                                                                                                          |
-| `occ agent update ID --file FILE`              | Updates editable Agent fields; the body must include `configurationId`.                                                                                          |
-| `occ agent deploy ID`                          | Requests deployment and creates an immutable revision.                                                                                                           |
-| `occ agent deployment-status ID DEPLOYMENT_ID` | Reads the durable status of one exact Agent deployment.                                                                                                          |
-| `occ agent runtime-credentials get ID`         | Reads whether generated runtime credentials are configured for the Agent.                                                                                        |
-| `occ agent runtime-credentials provision ID`   | Creates the initial generated runtime credential bundle (empty request body).                                                                                    |
-| `occ agent stop ID`                            | Requests a stop while retaining revisions and persistent state.                                                                                                  |
+| Command                                          | What it does                                                                                                                                                     |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `occ installation get`                           | Reads the singleton Installation.                                                                                                                                |
+| `occ installation deployment-inventory`          | Reads the complete Agent deployment inventory for a coordinated fleet operation.                                                                                 |
+| `occ namespace list`                             | Lists authorized Namespaces. `ADOPTED NAMESPACE` is set only for adopted Kubernetes namespaces.                                                                  |
+| `occ namespace get ID`                           | Reads one Namespace and its status.                                                                                                                              |
+| `occ namespace create NAME`                      | Creates a Namespace. `--existing-namespace K8S_NAME` requests adoption of an operator-prepared Kubernetes namespace and also requires Installation `administer`. |
+| `occ namespace delete ID`                        | Begins deleting an empty Namespace. Use `namespace get` to inspect the resulting state.                                                                          |
+| `occ configuration create --file FILE`           | Creates a Configuration. The body contains `kind` and `values`.                                                                                                  |
+| `occ configuration get ID`                       | Reads a Configuration.                                                                                                                                           |
+| `occ configuration update ID --file FILE`        | Updates a Configuration; the body must replace `values`. Omit the create-only `kind`.                                                                            |
+| `occ configuration delete ID`                    | Deletes an unreferenced Configuration.                                                                                                                           |
+| `occ secret create --file FILE`                  | Stores a Namespace Secret from a protected JSON document.                                                                                                        |
+| `occ secret list`                                | Lists Namespace Secret metadata, never values.                                                                                                                   |
+| `occ secret get ID`                              | Reads Secret metadata, never its value.                                                                                                                          |
+| `occ secret update ID --file FILE`               | Replaces the Secret value; consumers require explicit redeployment.                                                                                              |
+| `occ secret delete ID`                           | Deletes an unreferenced Namespace Secret.                                                                                                                        |
+| `occ credential-source create --file FILE`       | Registers a Secret with the selected Credential Gateway. See [credential sources](credential-sources.md#register-a-source).                                      |
+| `occ credential-source list`                     | Lists credential sources without live gateway status.                                                                                                            |
+| `occ credential-source get ID`                   | Reads a credential source and its live gateway status, never its value.                                                                                          |
+| `occ credential-source delete ID`                | Deletes an unreferenced credential source and the gateway's copy.                                                                                                |
+| `occ iam role list`                              | Lists Namespace Roles.                                                                                                                                           |
+| `occ iam role get ID`                            | Reads a Namespace Role.                                                                                                                                          |
+| `occ iam role create --file FILE`                | Creates a Namespace Role with explicit permissions.                                                                                                              |
+| `occ iam role delete ID`                         | Deletes an unreferenced Namespace Role.                                                                                                                          |
+| `occ iam access-binding list`                    | Lists Namespace AccessBindings.                                                                                                                                  |
+| `occ iam access-binding get ID`                  | Reads a Namespace AccessBinding.                                                                                                                                 |
+| `occ iam access-binding create --file FILE`      | Grants a Role to a principal for an exact resource.                                                                                                              |
+| `occ iam access-binding delete ID`               | Deletes a Namespace AccessBinding.                                                                                                                               |
+| `occ agent delete ID`                            | Begins asynchronous Agent deletion, including its owned runtime state.                                                                                           |
+| `occ agent list`                                 | Lists authorized Agents in the selected Namespace.                                                                                                               |
+| `occ agent get ID`                               | Reads an Agent's desired state and active revision.                                                                                                              |
+| `occ agent create --file FILE`                   | Creates an Agent draft.                                                                                                                                          |
+| `occ agent update ID --file FILE`                | Updates editable Agent fields; the body must include `configurationId`.                                                                                          |
+| `occ agent deploy ID`                            | Requests deployment and creates an immutable revision.                                                                                                           |
+| `occ agent revisions ID`                         | Lists the Agent's immutable revisions; each revision ID is a deployment ID.                                                                                      |
+| `occ agent deployment-status ID [DEPLOYMENT_ID]` | Reads the durable status and error of one Agent deployment; without `DEPLOYMENT_ID`, of the latest revision.                                                     |
+| `occ agent runtime-credentials get ID`           | Reads whether generated runtime credentials are configured for the Agent.                                                                                        |
+| `occ agent runtime-credentials provision ID`     | Creates the initial generated runtime credential bundle (empty request body).                                                                                    |
+| `occ agent stop ID`                              | Requests a stop while retaining revisions and persistent state.                                                                                                  |
 
-Use the [HTTP API](api.md) to inspect revision history or to work with
-ServiceAccounts and configured Backends; the CLI has no commands for these.
-Neither the CLI nor the HTTP API offers Configuration
-listing. An accepted deploy returns a revision; `agent get`
-shows desired state and the selected revision, not runtime health. Use the
-[deployment status command](#resource-commands) and verify the model
-separately.
+Use the [HTTP API](api.md) to work with ServiceAccounts and configured
+Backends; the CLI has no commands for these. Neither the CLI nor the HTTP API
+offers Configuration listing. An accepted deploy returns a revision; `agent get`
+shows desired state, `LIFECYCLE` (`active` or `deleting`), and the selected
+revision, not runtime health. Run `occ agent deployment-status ID` for the
+latest deployment's status and error, and verify the model separately.
+
+Commands take IDs, not names. The CLI rejects a value without the expected
+prefix, such as `ns_` or `agt_`, and names the list command that shows the ID.
 
 The `installation get`, `installation deployment-inventory`, and `namespace
 list` commands require an Installation-scoped service key. With a
