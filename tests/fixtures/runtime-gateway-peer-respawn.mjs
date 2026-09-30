@@ -23,6 +23,7 @@ const runtimeStatusUrl = `http://127.0.0.1:${process.env.OPENCLAW_RUNTIME_STATUS
 const configPath = "/home/node/.openclaw/openclaw.json";
 const linear = "codex-plugin:linear@openai-curated-remote";
 const workspaceNodeId = process.env.OCC_TEST_WORKSPACE_NODE_ID;
+const outageExit = process.env.OCC_TEST_GATEWAY_SCENARIO === "peer-outage-exit";
 
 let peer = {
   revisionId,
@@ -37,6 +38,10 @@ let peer = {
 // That host is [::1] here, beside the Gateway's own IPv4 status listener.
 const server = createServer((request, response) => {
   assert.equal(request.url, "/openclaw/plugin-runtime/status");
+  if (peer === undefined) {
+    response.writeHead(503).end();
+    return;
+  }
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify(peer));
 });
@@ -118,6 +123,26 @@ try {
   const [before] = await gatewayProcess();
   assert.equal(before.token, appServerToken("harness-startup-1"));
   assert.equal(linearEnabled(JSON.parse(await readFile(configPath, "utf8"))), false);
+  if (outageExit) {
+    // The wrapper must still notice its child exit while peer status is unavailable.
+    peer = undefined;
+    await waitFor("the Gateway to wait for peer status", 30_000, async () => {
+      const response = await fetch(`http://127.0.0.1:${statusPort}/openclaw/plugin-runtime/status`);
+      const status = await response.json();
+      return status.phase === "starting" && !(await ready());
+    });
+    const [running] = await gatewayProcess();
+    assert.equal(running.pid, before.pid);
+    await new Promise((resolve, reject) => {
+      process.stdout.write(
+        `${JSON.stringify({ phase: "peer-unready", pid: before.pid })}\n`,
+        (error) => (error ? reject(error) : resolve()),
+      );
+    });
+    process.kill(before.pid, "SIGKILL");
+    await setTimeout(15_000);
+    throw new Error("Gateway wrapper remained running after its child exited.");
+  }
   await waitFor("the first workspace node ack", 60_000, workspaceNodeAck);
   const assetsBefore = (await stat("/home/node/openclaw-runtime-assets/bundled-skills")).mtimeMs;
 

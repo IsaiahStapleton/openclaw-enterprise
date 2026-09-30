@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import test from "node:test";
 import {
   createRepositoryPlatformFixture,
@@ -10,6 +10,29 @@ function gatewayContainerId(pod) {
   const container = pod.status.containerStatuses.find(({ name }) => name === "gateway");
   assert.match(container.containerID, /^containerd:\/\/[a-f0-9]+$/);
   return container.containerID.slice("containerd://".length);
+}
+
+async function materialDigests(fixture, pod, key) {
+  const result = await fixture.podNode(
+    pod,
+    `
+      const fs = require("node:fs");
+      const { createHmac } = require("node:crypto");
+      const key = Buffer.from(fs.readFileSync(0, "utf8"), "hex");
+      const manifest = JSON.parse(fs.readFileSync("/run/oce/repository-credentials/manifest.json", "utf8"));
+      const names = ["bearer", "client.json", "gitconfig", "gh/hosts.yml", "gh/config.yml", "ca.pem"];
+      const bindings = manifest.bindings.map(({ repositoryRef, directory }) => ({
+        repositoryRef,
+        files: names.map((name) => ({
+          name,
+          digest: createHmac("sha256", key).update(fs.readFileSync(directory + "/" + name)).digest("hex"),
+        })),
+      }));
+      process.stdout.write(JSON.stringify(bindings));
+    `,
+    key,
+  );
+  return JSON.parse(result.stdout);
 }
 
 test(
@@ -788,19 +811,164 @@ test(
     await fixture.tool(recoveredAfterCrash.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
     assert.equal([...first.github.pulls.values()].filter(({ native }) => native).length, 1);
     assert.equal(await first.git.ref("refs/heads/native-feature"), commit);
+    const longSessionBinding = recoveredAfterCrash.material.bindings.find(
+      ({ repositoryRef }) => repositoryRef === "repo-a",
+    );
+    assert.ok(longSessionBinding);
+    const longSessionAttempt = (await fixture.attempts(recoveredAfterCrash.revision)).find(
+      ({ session_id }) => session_id === longSessionBinding.sessionId,
+    );
+    assert.ok(longSessionAttempt);
+    const admittedDeadline = recoveredAfterCrash.revision.repositoryCredentials.deadlineWallMs;
+    assert.equal(
+      admittedDeadline,
+      Date.parse(recoveredAfterCrash.revision.createdAt) + 24 * 60 * 60 * 1000,
+    );
+    assert.equal(Number(longSessionAttempt.deadline_wall_ms), admittedDeadline);
+    assert.ok(Number(longSessionAttempt.duration_seconds) > 13 * 60 * 60 + 1);
+    assert.ok(Number(longSessionAttempt.duration_seconds) <= 24 * 60 * 60);
+    assert.ok(longSessionBinding.deadlineWallMs <= admittedDeadline);
+    assert.ok(
+      longSessionBinding.deadlineWallMs > credentials.clock.wallNow() + 13 * 60 * 60 * 1000 + 1000,
+    );
+    const beforeLongSessionStatus = await credentials.status(longSessionBinding.sessionId);
+    assert.equal(beforeLongSessionStatus.state, "OPEN");
+    assert.equal(beforeLongSessionStatus.deadlineWallMs, longSessionBinding.deadlineWallMs);
+    const beforeLongSessionPod = await fixture.readyPod(agent, recoveredAfterCrash.revision);
+    assert.equal(beforeLongSessionPod.metadata.uid, recoveredAfterCrash.pod.metadata.uid);
+    assert.equal(
+      gatewayContainerId(beforeLongSessionPod),
+      gatewayContainerId(recoveredAfterCrash.pod),
+    );
+    const beforeLongSessionMaterial = await fixture.material(beforeLongSessionPod);
+    const digestKey = randomBytes(32).toString("hex");
+    const beforeMaterialDigests = await materialDigests(fixture, beforeLongSessionPod, digestKey);
+    const priorTokenIndex = first.github.authenticationAttempts.at(-1).tokenIndex;
+    const priorToken = first.github.tokenState().find(({ index }) => index === priorTokenIndex);
+    const priorIssuance = first.github.issuesOfTokens.find(
+      ({ index }) => index === priorTokenIndex,
+    );
+    assert.ok(priorToken);
+    assert.ok(priorIssuance);
     const beforeRenewal = first.github.issuesOfTokens.length;
     // Controlled provider/service time proves hour-thirteen renewal without a
     // wall-clock wait. Perform it after repairs so new admission timestamps use
     // the same real clock as the worker throughout the lifecycle assertions.
-    await credentials.clock.advance(13 * 60 * 60 * 1000);
-    await fixture.tool(recoveredAfterCrash.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
+    await credentials.clock.advance(13 * 60 * 60 * 1000 + 1000);
+    assert.ok(credentials.clock.wallNow() >= priorToken.expires);
+    assert.ok(credentials.clock.wallNow() < longSessionBinding.deadlineWallMs);
+    const longSessionPod = await fixture.readyPod(agent, recoveredAfterCrash.revision);
+    assert.equal(longSessionPod.metadata.uid, beforeLongSessionPod.metadata.uid);
+    assert.equal(gatewayContainerId(longSessionPod), gatewayContainerId(beforeLongSessionPod));
+    await fixture.tool(longSessionPod, "git", ["-C", firstCheckout, "fetch", "origin"]);
     assert.ok(first.github.issuesOfTokens.length > beforeRenewal);
+    const renewedTokenIndex = first.github.authenticationAttempts.at(-1).tokenIndex;
+    assert.notEqual(renewedTokenIndex, priorTokenIndex);
+    const renewedIssuance = first.github.issuesOfTokens.find(
+      ({ index }) => index === renewedTokenIndex,
+    );
+    assert.ok(renewedIssuance);
+    assert.deepEqual(renewedIssuance.repositoryIds, priorIssuance.repositoryIds);
+    assert.deepEqual(renewedIssuance.permissions, priorIssuance.permissions);
     assert.equal(
-      (await fixture.material(recoveredAfterCrash.pod)).generation,
-      recoveredAfterCrash.material.generation,
+      first.github.tokenState().find(({ index }) => index === priorTokenIndex).attempts,
+      priorToken.attempts,
+    );
+
+    // The remote and GitHub services are fixtures, but Git and gh run in the
+    // original Pod and use its existing repository session after token expiry.
+    await fixture.podNode(
+      longSessionPod,
+      `require('node:fs').writeFileSync(${JSON.stringify(`${firstCheckout}/hour13-proof.txt`)}, ${JSON.stringify("hour thirteen repository proof\n")});`,
+    );
+    await fixture.tool(longSessionPod, "git", ["-C", firstCheckout, "add", "hour13-proof.txt"]);
+    await fixture.tool(longSessionPod, "git", [
+      "-C",
+      firstCheckout,
+      "-c",
+      "user.name=Platform Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "commit",
+      "-m",
+      "Hour thirteen repository proof",
+    ]);
+    const hour13Commit = (
+      await fixture.tool(longSessionPod, "git", ["-C", firstCheckout, "rev-parse", "HEAD"])
+    ).trim();
+    assert.notEqual(hour13Commit, localCommit);
+    await fixture.tool(longSessionPod, "git", [
+      "-C",
+      firstCheckout,
+      "push",
+      "origin",
+      "HEAD:refs/heads/agent/hour13",
+    ]);
+    assert.equal(await first.git.ref("refs/heads/agent/hour13"), hour13Commit);
+    const prTrace = first.github.trace.length;
+    await fixture.tool(
+      longSessionPod,
+      "gh",
+      [
+        "pr",
+        "create",
+        "--repo",
+        `github.com/${first.repository}`,
+        "--head",
+        "agent/hour13",
+        "--base",
+        "main",
+        "--title",
+        "Hour thirteen PR",
+        "--body",
+        "Repository session remains usable after token refresh",
+      ],
+      { cwd: firstCheckout },
+    );
+    const created = [...first.github.pulls.values()].find(
+      ({ title, native }) => title === "Hour thirteen PR" && native,
+    );
+    assert.ok(created);
+    assert.ok(
+      first.github.trace
+        .slice(prTrace)
+        .some(
+          ({ operation, tokenIndex }) =>
+            operation === "createPullRequest" && tokenIndex === renewedTokenIndex,
+        ),
+    );
+    const readBack = JSON.parse(
+      await fixture.tool(
+        longSessionPod,
+        "gh",
+        ["api", `repos/${first.repository}/pulls/${created.number}`],
+        { cwd: firstCheckout },
+      ),
+    );
+    assert.equal(readBack.head.ref, "agent/hour13");
+    assert.equal(readBack.base.ref, "main");
+    assert.equal(await first.git.ref("refs/heads/agent/hour13"), hour13Commit);
+    const afterLongSessionPod = await fixture.readyPod(agent, recoveredAfterCrash.revision);
+    assert.equal(afterLongSessionPod.metadata.uid, beforeLongSessionPod.metadata.uid);
+    assert.equal(gatewayContainerId(afterLongSessionPod), gatewayContainerId(beforeLongSessionPod));
+    assert.deepEqual(await fixture.material(afterLongSessionPod), beforeLongSessionMaterial);
+    assert.deepEqual(
+      await materialDigests(fixture, afterLongSessionPod, digestKey),
+      beforeMaterialDigests,
+    );
+    assert.equal(
+      (await fixture.request("GET", path)).activeRevisionId,
+      recoveredAfterCrash.revision.id,
+    );
+    const afterLongSessionStatus = await credentials.status(longSessionBinding.sessionId);
+    assert.equal(afterLongSessionStatus.state, "OPEN");
+    assert.equal(afterLongSessionStatus.deadlineWallMs, beforeLongSessionStatus.deadlineWallMs);
+    assert.equal(
+      first.github.tokenState().find(({ index }) => index === priorTokenIndex).attempts,
+      priorToken.attempts,
     );
     context.diagnostic(
-      "Worker survival, material repair, graceful restart with durable receipts, SIGKILL uncertainty, an explicit new revision, and controlled hour-thirteen renewal traversed the real platform path.",
+      "Worker survival, material repair, graceful restart with durable receipts, SIGKILL uncertainty, an explicit new revision, and controlled hour-thirteen Git push and PR creation traversed the real platform path.",
     );
 
     await fixture.request("POST", `${path}/stop`, undefined, 202);

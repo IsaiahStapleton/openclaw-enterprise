@@ -13,8 +13,8 @@ For a published OCE version, download the binary matching your machine from
 the [GitHub Releases page](https://github.com/openclaw/openclaw-enterprise/releases).
 The assets are named `occ-v<version>-<os>-<arch>` for macOS (`darwin`) and Linux,
 on `amd64` or `arm64`. Download `SHA256SUMS` from the same release and compare
-the selected binary's SHA-256 before making it executable. Private repository
-downloads require GitHub access. For example, with the GitHub CLI:
+the selected binary's SHA-256 before making it executable. For example, with
+the GitHub CLI:
 
 ```bash
 export OCE_VERSION='v<release-version>'
