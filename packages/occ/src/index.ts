@@ -134,7 +134,6 @@ import {
   type PlatformUnitOfWork,
 } from "./state/platform-state.ts";
 import {
-  CREDENTIAL_WITHDRAWAL_TARGET,
   controllerWorkDeploymentStatus,
   deploymentErrorForWork,
   deploymentProgressForWork,
@@ -1248,11 +1247,9 @@ export class OpenClawController {
     return this.read(async (state) => {
       const deploymentsInProgress = new Set<string>();
       for (const operation of await state.operations.list()) {
-        // Credential withdrawal work targets an active revision without deploying it.
-        if (
-          operation.kind !== "agent_revision" ||
-          operation.target === CREDENTIAL_WITHDRAWAL_TARGET
-        ) {
+        // Credential withdrawal work (CREDENTIAL_WITHDRAWAL_TARGET) targets an active revision
+        // without deploying it; PlatformOperation types the literal.
+        if (operation.kind !== "agent_revision" || operation.target === "credentials_withdrawn") {
           continue;
         }
         const work = await state.operations.findWork(
@@ -4774,7 +4771,7 @@ export class OpenClawController {
         await this.record(state, {
           kind: "agent_revision",
           action: "reconcile",
-          target: CREDENTIAL_WITHDRAWAL_TARGET,
+          target: "credentials_withdrawn",
           namespaceId: agent.namespaceId,
           resourceId: revision.id,
           actorId: principalId,
