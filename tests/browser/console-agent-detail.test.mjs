@@ -2811,10 +2811,15 @@ test("Agent sharing grants existing people exact discovery and native access, th
 
   const recipient = (await newPage(t, fixture, browserOptions)).page;
   await login(recipient, fixture, `${detail.pathname}${detail.search}`, person.credentials);
-  await recipient
-    .getByText("Sharing policy requires Installation administration.", { exact: false })
-    .waitFor();
   await recipient.getByRole("heading", { name: "Configuration unavailable" }).waitFor();
+  // The policy reads are denied, so the sharing card is hidden instead of showing an error.
+  await recipient.locator(".agent-access").waitFor({ state: "hidden" });
+  assert.equal(
+    await recipient
+      .getByText("Sharing policy requires Installation administration.", { exact: false })
+      .count(),
+    0,
+  );
   await recipient.getByRole("link", { name: "Open native admin UI" }).waitFor();
   await recipient.screenshot({
     path: join(artifacts, "agent-sharing-recipient.png"),
