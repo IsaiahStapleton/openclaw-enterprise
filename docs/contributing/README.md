@@ -5,6 +5,9 @@ Drivers, deployment packaging, or documentation. For a first code change, start
 with [Local development](local-development.md) and the [first-change walkthrough](first-change.md).
 To use or administer an installation, start with [Getting Started](../README.md).
 
+To schedule work, follow [Add issues to a sprint](sprints.md) to create tasks or
+assign existing issues to a two-week iteration in the project.
+
 ## Find the code and its design
 
 - [Design](design.md) links the platform architecture, remaining design work,
