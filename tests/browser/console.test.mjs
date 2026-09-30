@@ -417,6 +417,10 @@ test("console shows the external observability link only to Installation adminis
   await page.getByRole("list", { name: "Namespaces" }).getByText("Observability access").waitFor();
   await link.waitFor();
   assert.equal(probes, 1);
+  await page.reload();
+  await link.waitFor();
+  assert.equal(await link.getAttribute("href"), url);
+  assert.equal(probes, 1);
 
   await openShellMenu(page);
   await page.getByRole("menuitem", { name: "Logout" }).click();
@@ -431,6 +435,11 @@ test("console shows the external observability link only to Installation adminis
   );
   await page.getByRole("link", { name: "Agents" }).click();
   await namespacesRead;
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  assert.equal(probes, 2);
+  // A reload in the same tab reuses the settled answer for this session owner.
+  await page.reload();
   await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
   assert.equal(probes, 2);
@@ -854,6 +863,73 @@ test("Google sign-in accepts only a Google authorization URL and confirms throug
 
   await page.goto(`${fixture.origin}/console/?authError=google`);
   await page.getByText("Could not sign in with Google. Try again or use your password.").waitFor();
+});
+
+test("recovery-only password sign-in keeps the form behind Recovery sign-in", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  // This controller admits every password; discovery models OCC_AUTH_PASSWORD_SIGN_IN.
+  await page.route("**/api/auth/providers", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: { github: true, google: false, password: false, sessionBinding: true },
+        meta: { requestId: "browser-recovery-only" },
+      }),
+    }),
+  );
+  await page.route("**/api/auth/providers/github/start", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
+  );
+  await page.goto(`${fixture.origin}/console/?authError=github`);
+  const recovery = page.getByRole("button", { name: "Recovery sign-in" });
+  await recovery.waitFor();
+  // Without a password to fall back on, the provider error points to an administrator.
+  await page
+    .getByText(
+      "Could not sign in with GitHub. Try again, or ask an administrator to attach your GitHub identity to your account.",
+    )
+    .waitFor();
+  assert.equal(await page.getByLabel("Password").isVisible(), false);
+  await page.getByRole("button", { name: "Continue with GitHub" }).click();
+  await page.getByText("GitHub sign-in is unavailable. Please try again later.").waitFor();
+
+  await recovery.click();
+  assert.equal(await recovery.isVisible(), false);
+  await page.getByText("Use the recovery account's email").waitFor();
+  await page.getByLabel("Username").fill(fixture.credentials.email);
+  await page.getByLabel("Password").fill("not-the-recovery-password");
+  await page.getByRole("button", { name: "Login" }).click();
+  await page
+    .getByText(
+      "Could not sign in. Only the recovery account can use a password; other accounts continue with their external sign-in.",
+    )
+    .waitFor();
+  await page.getByLabel("Password").fill(fixture.credentials.password);
+  await page.getByRole("button", { name: "Login" }).click();
+  await page.waitForURL(/\/console\/agents/);
+});
+
+test("password sign-in stays visible unless discovery reports it recovery-only", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  await page.route("**/api/auth/providers", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: { github: true, google: false, sessionBinding: true },
+        meta: { requestId: "browser-password-default" },
+      }),
+    }),
+  );
+  await page.goto(`${fixture.origin}/console/login`);
+  await page.getByRole("button", { name: "Continue with GitHub" }).waitFor();
+  assert.equal(await page.getByLabel("Password").isVisible(), true);
+  assert.equal(await page.getByRole("button", { name: "Recovery sign-in" }).isVisible(), false);
 });
 
 test("known Namespace revocation invalidates a cached global collection with another selection", async (t) => {

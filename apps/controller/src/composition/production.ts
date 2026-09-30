@@ -47,6 +47,8 @@ export interface ProductionConfig {
   readonly authBaseURL: string;
   readonly github?: GitHubLoginConfiguration;
   readonly google?: GoogleSignInConfiguration;
+  /** OCC_AUTH_PASSWORD_SIGN_IN=recovery-only; requires GitHub or Google sign-in. */
+  readonly passwordSignIn?: "recovery-only";
   readonly clientAddress?: ClientAddressConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
@@ -120,6 +122,7 @@ export async function composeProduction(config: ProductionConfig) {
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
       ...(config.google === undefined ? {} : { google: config.google }),
+      ...(config.passwordSignIn === undefined ? {} : { passwordSignIn: config.passwordSignIn }),
       ...(config.logger === undefined
         ? {}
         : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
@@ -142,6 +145,15 @@ export async function composeProduction(config: ProductionConfig) {
         event: "authentication.activation-warning",
         reason: "Accounts without a Principal or exactly one password were not enrolled.",
         ...skippedUserLogFields(auth.activationSkipped),
+      });
+    }
+    if (auth.withoutExternalIdentity !== undefined && config.logger !== undefined) {
+      // Recovery-only password sign-in: these accounts cannot sign in until an
+      // administrator attaches a GitHub or Google identity.
+      emitOccLogEvent(config.logger, {
+        event: "authentication.password-sign-in-warning",
+        code: "EXTERNAL_IDENTITY_MISSING",
+        ...skippedUserLogFields(auth.withoutExternalIdentity),
       });
     }
     const humanAuthentication = new PostgresHumanAuthentication(

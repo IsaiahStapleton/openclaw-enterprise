@@ -9,6 +9,7 @@ const TAIL_LINES = 200;
 const deniedLogViews = new Set();
 
 const SOURCE_LABELS = { gateway: "Gateway", agent: "Agent (Harness)" };
+const LEVELS = ["error", "warn", "info", "debug", "unknown"];
 const GAP_LABELS = {
   stream_replaced: "Container restarted",
   window_exceeded: "Lines skipped",
@@ -141,14 +142,31 @@ function recordRow(record) {
     record.subsystem ? element("span", { className: "log-subsystem" }, record.subsystem) : null,
     element("span", { className: "log-message" }, record.message),
   );
+  let row;
   if (!record.fields || Object.keys(record.fields).length === 0) {
-    return element("div", { className: "log-row" }, summary);
+    row = element("div", { className: "log-row" }, summary);
+  } else {
+    const fields = element("dl", { className: "log-fields" });
+    for (const [name, value] of Object.entries(record.fields)) {
+      fields.append(element("dt", {}, name), element("dd", {}, String(value)));
+    }
+    row = element("details", { className: "log-row" }, element("summary", {}, summary), fields);
   }
-  const fields = element("dl", { className: "log-fields" });
-  for (const [name, value] of Object.entries(record.fields)) {
-    fields.append(element("dt", {}, name), element("dd", {}, String(value)));
-  }
-  return element("details", { className: "log-row" }, element("summary", {}, summary), fields);
+  // Filters match only lines; gap and withheld rows always stay visible.
+  row.dataset.level = record.level;
+  row.dataset.search = [
+    record.kind,
+    record.subsystem ?? "",
+    record.message,
+    ...Object.entries(record.fields ?? {}).map(([name, value]) => `${name}=${value}`),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return row;
+}
+
+function downloadFileName(agentId, revisionId, source, pod) {
+  return `${[agentId, revisionId, source, pod].join("-").replace(/[^A-Za-z0-9_.-]/g, "_")}.log`;
 }
 
 /** Logs tab: runtime status strip, source picker, bounded log pane and follow. */
@@ -177,6 +195,32 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   const refreshButton = button("Refresh logs", () => void readLogs({ restart: true }), {
     disabled: true,
   });
+  const downloadButton = button("Download", () => void download(), { disabled: true });
+  const hiddenLevels = new Set();
+  const levelChips = LEVELS.map((level) =>
+    button(
+      level,
+      (event) => {
+        const chip = event.currentTarget;
+        if (hiddenLevels.has(level)) {
+          hiddenLevels.delete(level);
+        } else {
+          hiddenLevels.add(level);
+        }
+        chip.setAttribute("aria-pressed", String(!hiddenLevels.has(level)));
+        applyFilters();
+      },
+      { className: `log-chip log-level-${level}`, "aria-pressed": "true" },
+    ),
+  );
+  const filterInput = element("input", {
+    type: "search",
+    id: "runtime-log-filter",
+    placeholder: "Filter loaded lines",
+    autocomplete: "off",
+  });
+  filterInput.addEventListener("input", () => applyFilters());
+  const filterStatus = element("p", { className: "hint", role: "status" });
   const retention = element("p", { className: "hint" });
   const logStatus = element("p", { className: "muted", role: "status" });
   const logError = element("p", { className: "error", role: "alert", hidden: true });
@@ -264,6 +308,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     const readable = !logsDenied && Boolean(pod);
     sourceSelect.disabled = logsDenied || description.sources.length === 0;
     refreshButton.disabled = !readable;
+    downloadButton.disabled = !readable;
     followButton.disabled = !readable || previous.checked;
   }
 
@@ -302,18 +347,94 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     statusTimer = setTimeout(() => void loadStatus(), STATUS_POLL_MS);
   }
 
+  function rowVisible(row) {
+    if (row.dataset.level === undefined) {
+      return true;
+    }
+    const text = filterInput.value.trim().toLowerCase();
+    return (
+      !hiddenLevels.has(row.dataset.level) && (text === "" || row.dataset.search.includes(text))
+    );
+  }
+
+  // Client-side only: filters narrow the rows already loaded, never the server read.
+  function applyFilters() {
+    let lines = 0;
+    let shown = 0;
+    for (const row of pane.children) {
+      row.hidden = !rowVisible(row);
+      if (row.dataset.level !== undefined) {
+        lines += 1;
+        shown += row.hidden ? 0 : 1;
+      }
+    }
+    const filtering = hiddenLevels.size > 0 || filterInput.value.trim() !== "";
+    filterStatus.textContent = filtering
+      ? `Showing ${shown} of ${lines} loaded lines. Filters search only the lines loaded in this view, not the whole container log.`
+      : "Filters search only the lines loaded in this view, not the whole container log.";
+  }
+
   function appendRecords(records) {
     const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 24;
     for (const record of records) {
-      pane.append(recordRow(record));
+      const row = recordRow(record);
+      row.hidden = !rowVisible(row);
+      pane.append(row);
       rows += 1;
     }
     while (rows > MAX_ROWS && pane.firstChild) {
       pane.firstChild.remove();
       rows -= 1;
     }
+    applyFilters();
     if (atBottom) {
       pane.scrollTop = pane.scrollHeight;
+    }
+  }
+
+  // A download is its own audited read of the last 1000 lines through the session.
+  async function download() {
+    const source = selectedSource();
+    const pod = selectedPod();
+    if (!current() || logsDenied || !source || !pod) {
+      return;
+    }
+    const query = new URLSearchParams({ source: source.id, pod: pod.name, download: "true" });
+    if (previous.checked) {
+      query.set("previous", "true");
+    }
+    downloadButton.disabled = true;
+    try {
+      const text = await context.request(`${base}/logs?${query}`, { responseType: "text" });
+      if (!current()) {
+        return;
+      }
+      if (typeof text !== "string") {
+        // Never save a JSON envelope (or "[object Object]") as the log file.
+        throw new Error("The log download did not return text.");
+      }
+      showLogError(null);
+      const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      const link = element("a", {
+        href: url,
+        download: downloadFileName(agent.id, revisionId, source.id, pod.name),
+        hidden: true,
+      });
+      section.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      if (!current()) {
+        return;
+      }
+      if (error.status === 401) {
+        context.onExpired();
+        return;
+      }
+      showLogError(withRequestId(runtimeErrorText(error, "logs"), error));
+    } finally {
+      downloadButton.disabled = logsDenied || !selectedPod();
     }
   }
 
@@ -464,7 +585,17 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       element("label", { className: "checkbox" }, previous, " Previous instance"),
       followButton,
       refreshButton,
+      downloadButton,
     ),
+    element(
+      "div",
+      { className: "log-toolbar", role: "group", "aria-label": "Log filters" },
+      element("span", { className: "muted" }, "Levels"),
+      ...levelChips,
+      element("label", { for: "runtime-log-filter" }, "Filter"),
+      filterInput,
+    ),
+    filterStatus,
     retention,
     logStatus,
     logError,
@@ -473,6 +604,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   if (logsDenied) {
     showLogError(runtimeErrorText({ status: 403 }, "logs"));
   }
+  applyFilters();
   void loadStatus();
   return section;
 }

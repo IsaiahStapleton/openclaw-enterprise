@@ -351,6 +351,7 @@ test(
     assert.deepEqual((await app.inject({ url: "/api/auth/providers" })).json().data, {
       github: true,
       google: false,
+      password: true,
       sessionBinding: true,
     });
     const googleAttach = await app.inject({
@@ -810,7 +811,12 @@ test(
     assert.equal((await confirmedResult.json()).data.sessionKey, browserSession.sessionKey);
     assert.equal((await pinnedRead).headers()["x-occ-session-key"], browserSession.sessionKey);
     assert.deepEqual(
-      await page.evaluate(() => ({ ...sessionStorage })),
+      // The tab keeps only its settled Installation-access probe answer.
+      await page.evaluate(() => {
+        const stored = { ...sessionStorage };
+        delete stored["occ.console.installationAccess"];
+        return stored;
+      }),
       {},
       "the one-use attemptId leaves tab storage after the exchange",
     );

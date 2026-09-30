@@ -55,11 +55,19 @@ export interface AdmissionVerifier {
 export class AdmissionFailure extends Error {
   readonly status: 401 | 403;
   readonly code: "UNAUTHENTICATED" | "FORBIDDEN";
+  // A reason that is safe to explain to the caller; other admission failures stay generic.
+  readonly reason: "untrusted_origin" | undefined;
 
-  constructor(status: 401 | 403, code: "UNAUTHENTICATED" | "FORBIDDEN", message: string) {
+  constructor(
+    status: 401 | 403,
+    code: "UNAUTHENTICATED" | "FORBIDDEN",
+    message: string,
+    reason?: "untrusted_origin",
+  ) {
     super(message);
     this.name = "AdmissionFailure";
     this.status = status;
     this.code = code;
+    this.reason = reason;
   }
 }

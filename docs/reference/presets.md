@@ -39,6 +39,8 @@ read/update/delete permissions. Matching names are preserved without comparing
 or overwriting their templates. Startup can restore a deleted or renamed
 default while enabled; bundle updates do not replace existing copies. Removing the files and disabling
 `includeDefaults` stops seeding and leaves saved Presets and Agents unchanged.
+Namespace deletion removes copies that still match the current default by name
+and template; edited copies block it with `409 NAMESPACE_NOT_EMPTY`.
 Restart the API after changing the YAML, keeping the worker configuration in sync.
 
 Startup selects a persisted Principal authorized to administer the Installation

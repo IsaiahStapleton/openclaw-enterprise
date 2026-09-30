@@ -124,6 +124,38 @@ function validationDetails(error: FastifyError): readonly ErrorDetail[] {
   });
 }
 
+const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.freeze({
+  REQUIRED: "is required",
+  UNKNOWN_FIELD: "is not an accepted field",
+  INVALID_TYPE: "has the wrong type",
+  INVALID_FORMAT: "has an invalid format",
+  INVALID_VALUE: "has an unsupported value",
+  TOO_LONG: "is too long",
+  TOO_DEEP: "is nested too deeply",
+});
+
+// Names the first few offending fields so clients that print only the message, such as
+// occ, still show which field to fix. The full list stays in `details`.
+function contractMessage(error: FastifyError, details: readonly ErrorDetail[]): string {
+  if (details.length === 0) {
+    return "The request does not match the operation contract.";
+  }
+  const context =
+    typeof error.validationContext === "string" && error.validationContext.length > 0
+      ? `${error.validationContext} `
+      : "";
+  const problems = [
+    ...new Set(
+      details.map((detail) => `${context}${detail.path || "/"} ${DETAIL_PROBLEMS[detail.code]}`),
+    ),
+  ];
+  const shown = problems.slice(0, 3).join("; ");
+  const more = problems.length > 3 ? `; and ${problems.length - 3} more` : "";
+  const message = `The request does not match the operation contract: ${shown}${more}.`;
+  // The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
+  return message.length <= 256 ? message : `${message.slice(0, 255)}…`;
+}
+
 function errorName(error: unknown): string | undefined {
   return error instanceof Error ? error.name : undefined;
 }
@@ -318,7 +350,9 @@ export function requestFailure(error: unknown): RequestFailure {
     );
   }
   if (error instanceof NamespaceNotEmptyError) {
-    return failure(409, "NAMESPACE_NOT_EMPTY", "The requested Namespace is not empty.");
+    const contents =
+      error.contents.length === 0 ? "" : ` It still contains: ${error.contents.join(", ")}.`;
+    return failure(409, "NAMESPACE_NOT_EMPTY", `The requested Namespace is not empty.${contents}`);
   }
   if (error instanceof AgentDeletingError) {
     return failure(409, "AGENT_DELETING", "The requested Agent is being deleted.");
@@ -392,7 +426,7 @@ export function requestFailure(error: unknown): RequestFailure {
       return failure(
         400,
         "INVALID_REQUEST",
-        "The request does not match the operation contract.",
+        contractMessage(candidate, details),
         details.length > 0 ? details : undefined,
       );
     }
@@ -401,11 +435,14 @@ export function requestFailure(error: unknown): RequestFailure {
         candidate.statusCode === 403 || (candidate as { status?: number }).status === 403
           ? 403
           : 401;
+      const reason = (candidate as { reason?: unknown }).reason;
       return failure(
         status,
         status === 403 ? "FORBIDDEN" : "UNAUTHENTICATED",
         status === 403
-          ? "The request did not satisfy the configured admission boundary."
+          ? reason === "untrusted_origin"
+            ? "A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header."
+            : "The request did not satisfy the configured admission boundary."
           : "The caller did not provide valid admission evidence.",
       );
     }

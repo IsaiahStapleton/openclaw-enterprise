@@ -44,6 +44,7 @@ export const DiagnosticsSuccess = story("diagnosticsSuccess");
 export const DiagnosticsUnknown = story("diagnosticsUnknown");
 export const DiagnosticsUnavailable = story("diagnosticsUnavailable");
 export const RuntimeLogs = story("runtimeLogs");
+export const RuntimeLogsFilteredDownload = story("runtimeLogsFilteredDownload");
 export const RuntimeLogsDenied = story("runtimeLogsDenied");
 export const RuntimeLogsClusterRbac = story("runtimeLogsClusterRbac");
 export const AgentMissing = { ...story("agentMissing"), name: "Agent unavailable" };

@@ -558,6 +558,7 @@ List configured browser sign-in methods
 | `data` | `object` | Yes | — |
 | `data.github` | `boolean` | Yes | — |
 | `data.google` | `boolean` | Yes | — |
+| `data.password` | `boolean` | Yes | False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password. |
 | `data.sessionBinding` | `boolean` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
@@ -3283,6 +3284,7 @@ Read one bounded, redacted page of container output for one exact Agent revision
 | `tailLines` | query | `string` | No | pattern: `^(?:[1-9][0-9]{0,2}\|1000)$` |
 | `sinceSeconds` | query | `string` | No | pattern: `^(?:[1-9][0-9]{0,3}\|[1-7][0-9]{4}\|8[0-5][0-9]{3}\|86[0-3][0-9]{2}\|86400)$` |
 | `cursor` | query | `string` | No | max length: 2048; pattern: `^v1\.[A-Za-z0-9_-]{1,1900}\.[A-Za-z0-9_-]{43}$` |
+| `download` | query | `"true" or "false"` | No | — |
 | `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `deploymentId` | path | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
@@ -3291,7 +3293,7 @@ Read one bounded, redacted page of container output for one exact Agent revision
 
 | Status | Meaning |
 | --- | --- |
-| `200` | OK |
+| `200` | One page of records, or a text/plain attachment when `download=true` |
 | `400` | Bad Request |
 | `401` | Unauthorized |
 | `403` | Forbidden |
@@ -3317,6 +3319,10 @@ Read one bounded, redacted page of container output for one exact Agent revision
 | `data.withheld` | `integer` | Yes | minimum: 0 |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+**`200` response body:** `text/plain`
+
+Schema: `string`.
 
 <span id="agent-revisions"></span>
 

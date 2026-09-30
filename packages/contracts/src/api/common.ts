@@ -161,6 +161,12 @@ export const AgentRuntimeLogsQuery = Type.Object(
         description: "Opaque cursor returned by the previous page of the same view.",
       }),
     ),
+    download: Type.Optional(
+      Type.Union([Type.Literal("true"), Type.Literal("false")], {
+        description:
+          "`true` returns the last 1000 lines as a text/plain attachment and is audited per download; it cannot be combined with `cursor`.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );

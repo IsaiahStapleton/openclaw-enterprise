@@ -48,6 +48,7 @@ test(
     assert.deepEqual(providers.json().data, {
       github: false,
       google: false,
+      password: true,
       sessionBinding: false,
     });
 

@@ -122,6 +122,12 @@ JSON
 CONFIGURATION_ID="$(./bin/occ configuration create --file configuration.json -o json | jq -r .id)"
 ```
 
+The Configuration keeps `"sandbox": "read-only"`, but each deployed revision
+freezes `"sandbox": "danger-full-access"`. The OpenShell Sandbox Driver
+overrides this value for every dedicated Codex revision so that Codex's own
+sandbox does not run inside OpenShell's; OpenShell is the containment boundary.
+See [OpenShell Sandbox configuration](../../reference/drivers/openshell-sandbox.md#configuration).
+
 Create the Agent with the source as its Harness authentication:
 
 ```bash

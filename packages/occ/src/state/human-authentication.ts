@@ -301,6 +301,29 @@ export class PostgresHumanAuthentication {
     });
   }
 
+  /**
+   * Enabled, enrolled accounts other than the recovery account that have no identity for any
+   * of `providerIds`. With recovery-only password sign-in they cannot sign in until an
+   * administrator attaches one. Ordered by user ID.
+   */
+  async accountsWithoutExternalIdentity(providerIds: readonly string[]): Promise<string[]> {
+    return this.state.transact(async (unit) => {
+      const rows = await this.query(
+        unit,
+        `SELECT h.user_id FROM occ.human_authentication_accounts h
+         WHERE h.installation_id = $1 AND h.disabled = false
+         AND NOT EXISTS (SELECT 1 FROM occ.human_authentication_recovery r
+                         WHERE r.installation_id = $1 AND r.user_id = h.user_id)
+         AND NOT EXISTS (SELECT 1 FROM occ.account m
+                         WHERE m.user_id = h.user_id AND m.identity_only
+                         AND m.provider_id = ANY($2::text[]))
+         ORDER BY h.user_id`,
+        [this.installationId, [...providerIds]],
+      );
+      return rows.map((row) => row.user_id as string);
+    });
+  }
+
   /** The caller must first authorize this exact Principal through the selected IAM Driver. */
   async activateRecovery(
     userId: string,

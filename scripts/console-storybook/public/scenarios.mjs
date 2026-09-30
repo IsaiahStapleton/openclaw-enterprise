@@ -449,6 +449,44 @@ export const scenarios = {
     actions: [click("Continue with GitHub")],
     description: "Admission refusal asks the user to wait without automatically retrying.",
   },
+  recoveryOnlyLogin: {
+    group: "Pages/Sign in",
+    name: "Recovery-only password",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    googleEnabled: true,
+    passwordRecoveryOnly: true,
+    description:
+      "With OCC_AUTH_PASSWORD_SIGN_IN=recovery-only, ordinary accounts continue with GitHub or Google. The password form stays behind Recovery sign-in for the recovery account.",
+  },
+  recoveryOnlyForm: {
+    group: "Pages/Sign in",
+    name: "Recovery sign-in form",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    passwordRecoveryOnly: true,
+    rules: [{ path: "/api/auth/sign-in/email", method: "POST", status: 401 }],
+    actions: [
+      click("Recovery sign-in"),
+      { selector: "#username", value: "member@example.com" },
+      { selector: "#password", value: "demo-only" },
+      click("Login"),
+    ],
+    description:
+      "Recovery sign-in reveals the password form. A refused password explains that only the recovery account can use one.",
+  },
+  recoveryOnlyCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "Recovery-only GitHub callback rejected",
+    path: "/console/?authError=github",
+    signedOut: true,
+    githubEnabled: true,
+    passwordRecoveryOnly: true,
+    description:
+      "Without a password to fall back on, a rejected callback points the user to an administrator.",
+  },
   githubCallbackRejected: {
     group: "Pages/Sign in",
     name: "GitHub callback rejected",
@@ -2627,6 +2665,20 @@ export const scenarios = {
     candidateDeploymentStatus: "succeeded",
     description:
       "The Logs tab shows the Gateway Pod, its OOMKilled restart and BackOff Event, then redacted operational output with a withheld-structured-output row. Previous instance is available after the restart.",
+  },
+  runtimeLogsFilteredDownload: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs filtered and downloaded",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    actions: [
+      click("Download"),
+      { selector: ".log-chip.log-level-info", click: true },
+      { selector: "#runtime-log-filter", value: "slack" },
+    ],
+    description:
+      "Download saves the redacted text tail as a .log file through its own audited read. Hiding info and filtering for slack narrows the loaded window to the redacted reconnect warning; the status line counts the hidden rows.",
   },
   runtimeLogsDenied: {
     group: "Pages/Agent detail",

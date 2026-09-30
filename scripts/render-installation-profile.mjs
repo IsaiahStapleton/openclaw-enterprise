@@ -369,6 +369,7 @@ function clientSelectors(source, diagnostics) {
 
 const recoveryUserIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const trustedProxyPresets = ["ingress-nginx", "aws", "generic"];
+const passwordSignInPolicies = ["all", "recovery-only"];
 
 function isCidr(value) {
   const [address, rawPrefix, extra] = value.split("/");
@@ -430,8 +431,18 @@ function renderExternalSignIn(controlPlane, github, google, authBaseUrl, diagnos
       description: "the existing local password administrator's user ID",
     });
   }
+  const passwordSignIn = optionalString(
+    controlPlane,
+    ["controlPlane", "passwordSignIn"],
+    diagnostics,
+    {
+      validate: (value) => passwordSignInPolicies.includes(value),
+      description: passwordSignInPolicies.join(" or "),
+    },
+  );
   return {
     recoveryUserId,
+    ...(passwordSignIn === undefined ? {} : { passwordSignIn }),
     ...(controlPlane.github === undefined
       ? {}
       : { github: signInProvider(github, "github", diagnostics) }),
@@ -535,6 +546,7 @@ function buildInput(rawInput, diagnostics) {
       "loggingCollector",
       "observabilityUrl",
       "recoveryUserId",
+      "passwordSignIn",
       "github",
       "google",
       "trustedProxy",
@@ -684,6 +696,11 @@ function buildRendered(profile, parsed, diagnostics) {
   if (!externalSignIn && controlPlane.recoveryUserId !== undefined) {
     diagnostics.errors.push(
       "controlPlane.recoveryUserId requires controlPlane.github or controlPlane.google.",
+    );
+  }
+  if (!externalSignIn && controlPlane.passwordSignIn !== undefined) {
+    diagnostics.errors.push(
+      "controlPlane.passwordSignIn requires controlPlane.github or controlPlane.google.",
     );
   }
   // Helm refuses native admin with GitHub or Google sign-in (host-only cookies only).
@@ -1162,6 +1179,11 @@ function buildRendered(profile, parsed, diagnostics) {
     diagnostics.prerequisites.push(
       "External sign-in Secrets created, and controlPlane.recoveryUserId read from a verified password administrator's session, before the first helm upgrade that renders them.",
     );
+    if (signIn.passwordSignIn === "recovery-only") {
+      diagnostics.prerequisites.push(
+        "A GitHub or Google identity attached to every ordinary account before the helm upgrade that renders passwordSignIn: recovery-only; accounts without one cannot sign in until an administrator attaches it.",
+      );
+    }
   }
   if (profile.name === "codex") {
     diagnostics.prerequisites.push(

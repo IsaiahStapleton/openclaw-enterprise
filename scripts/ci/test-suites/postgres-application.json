@@ -175,7 +175,7 @@
     {
       "path": "tests/integration/postgres-agent-runtime-logs.test.mjs",
       "expectedTests": [
-        "runtime log views persist one audit row before the read and fail closed without it"
+        "runtime log views and downloads persist audit rows before the read and fail closed without them"
       ]
     },
     {

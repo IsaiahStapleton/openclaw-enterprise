@@ -1,7 +1,14 @@
 export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = () => null }) {
   async function request(
     path,
-    { method = "GET", body, signal, expectedStatus, includeMeta = false } = {},
+    {
+      method = "GET",
+      body,
+      signal,
+      expectedStatus,
+      includeMeta = false,
+      responseType = "json",
+    } = {},
   ) {
     const active = lifetime.capture();
     const pinned = sessionKey();
@@ -29,6 +36,14 @@ export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = 
     }
     if (response.status === 204 && response.ok && expectedStatus === 204) {
       return undefined;
+    }
+    // Attachments (runtime log downloads) are text; failures stay JSON error envelopes.
+    if (
+      responseType === "text" &&
+      response.status === 200 &&
+      response.headers.get("content-type")?.startsWith("text/plain")
+    ) {
+      return await response.text();
     }
     let payload;
     try {

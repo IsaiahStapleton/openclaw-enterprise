@@ -183,8 +183,11 @@ lifecycle hooks, and runtime payload fields cannot supply `RUST_LOG`,
 credentials, or remote destination settings.
 
 The bundled Collector promotes only fixed operational event classes: reviewed OCC
-event names, gateway subsystem records under `gateway`, and Codex app-server
-stderr records under `codex_app_server`. It parses JSON records up to `32KiB`,
+event names, gateway subsystem records under `gateway`, Codex app-server
+stderr records under `codex_app_server`, and the runtime wrappers' fixed stderr
+diagnostics (`runtime.startup_phase`, `runtime.workspace_node`, and
+`openclaw.model_probe` / `codex.model_probe`) with only a bounded phase name or
+code. It parses JSON records up to `32KiB`,
 maps severity explicitly, keeps allowlisted attributes, and replaces retained
 bodies with the event class, stripping arbitrary content. It drops malformed,
 oversized, unclassified, unspecified-severity, and Codex stdout protocol records.
@@ -218,7 +221,10 @@ to the Collector, and responses carry `Cache-Control: no-store`.
   `read`, the audience that already reaches Gateway logs through the native admin
   UI. Every poll is authorized again; a denial is audited and reaches no Driver.
 - **Audit.** OCC writes `openclaw.agents.runtime_logs.view` before the first log
-  read of a view. If that write fails the request returns `503` with no content.
+  read of a view, and `openclaw.agents.runtime_logs.download` before every
+  download. If that write fails the request returns `503` with no content.
+  A download is the same sanitized page in a text serializer; it needs the
+  same grants and is not stored on the server.
 - **Content.** An allowlist classifier keeps only operational wrapper, Gateway,
   Codex tracing and short plain-text lines. Other structured output, including
   Codex protocol traffic and payload keys such as `prompt` and `content`, is

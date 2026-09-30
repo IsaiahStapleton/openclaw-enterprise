@@ -59,15 +59,38 @@ export {
   type GoogleSignInConfiguration,
 } from "./google.ts";
 
+/**
+ * Who may sign in with a password in the guarded profile: every enrolled account
+ * (`all`, the default) or only the recovery account (`recovery-only`).
+ */
+export type PasswordSignInPolicy = "all" | "recovery-only";
+
 export interface HumanLoginConfiguration {
   readonly github?: GitHubLoginConfiguration;
   readonly google?: GoogleSignInConfiguration;
+  /** Set only for `recovery-only`; absent means every enrolled account keeps its password. */
+  readonly passwordSignIn?: "recovery-only";
+}
+
+/** Parses OCC_AUTH_PASSWORD_SIGN_IN; empty or unset keeps the default, `all`. */
+export function passwordSignInPolicy(
+  environment: Readonly<Record<string, string | undefined>>,
+): PasswordSignInPolicy {
+  const value = environment.OCC_AUTH_PASSWORD_SIGN_IN?.trim() ?? "";
+  if (value === "" || value === "all") {
+    return "all";
+  }
+  if (value === "recovery-only") {
+    return value;
+  }
+  throw new Error("OCC_AUTH_PASSWORD_SIGN_IN must be all or recovery-only.");
 }
 
 /**
  * Parses every external sign-in provider. The recovery user ID (still named
  * OCC_AUTH_GITHUB_RECOVERY_USER_ID) seeds the guarded profile, so it is required exactly
- * when at least one provider is configured.
+ * when at least one provider is configured. Recovery-only password sign-in needs a
+ * provider: without one it would leave only the recovery account able to sign in.
  */
 export function humanLoginConfiguration(
   environment: Readonly<Record<string, string | undefined>>,
@@ -75,11 +98,15 @@ export function humanLoginConfiguration(
   const github = githubLoginConfiguration(environment);
   const google = googleLoginConfiguration(environment);
   const recoveryUserId = environment.OCC_AUTH_GITHUB_RECOVERY_USER_ID;
+  const passwordSignIn = passwordSignInPolicy(environment);
   if (github === undefined && google === undefined) {
     if (recoveryUserId !== undefined) {
       throw new Error(
         "External sign-in requires client ID, client secret and recovery user ID for GitHub or Google.",
       );
+    }
+    if (passwordSignIn !== "all") {
+      throw new Error("OCC_AUTH_PASSWORD_SIGN_IN=recovery-only requires GitHub or Google sign-in.");
     }
     return {};
   }
@@ -92,6 +119,7 @@ export function humanLoginConfiguration(
   return {
     ...(github === undefined ? {} : { github }),
     ...(google === undefined ? {} : { google: { ...google, recoveryUserId: recoveryUserId! } }),
+    ...(passwordSignIn === "all" ? {} : { passwordSignIn }),
   };
 }
 export {
@@ -172,6 +200,8 @@ export interface PostgresControllerAuthOptions extends Omit<
   readonly iamDriver?: IAMDriver;
   readonly github?: GitHubLoginConfiguration;
   readonly google?: GoogleSignInConfiguration;
+  /** Guarded profile only: `recovery-only` admits only the recovery account's password. */
+  readonly passwordSignIn?: "recovery-only";
   /** Receives nonfatal startup conditions as structured log events. */
   readonly onWarning?: (event: { readonly event: string; readonly message: string }) => void;
 }
@@ -211,6 +241,13 @@ export interface ControllerAuth {
   readonly githubProviderId?: string;
   /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
   readonly activationSkipped?: readonly string[];
+  /** Who may sign in with a password: `recovery-only` only in the guarded profile. */
+  readonly passwordSignIn: PasswordSignInPolicy;
+  /**
+   * Recovery-only password sign-in: enabled accounts, other than the recovery account, with
+   * no identity for a configured provider. They cannot sign in until one is attached.
+   */
+  readonly withoutExternalIdentity?: readonly string[];
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
@@ -468,20 +505,29 @@ function ensureEmailPassword(input: Record<string, unknown>): { email: string; p
   return { email, password };
 }
 
+function untrustedOrigin(): AdmissionFailure {
+  return new AdmissionFailure(
+    403,
+    "FORBIDDEN",
+    "The browser origin is not trusted.",
+    "untrusted_origin",
+  );
+}
+
 function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: string): void {
   const origin = request.headers.origin;
   if (Array.isArray(origin)) {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
   if (origin !== undefined) {
     if (origin !== expectedOrigin) {
-      throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+      throw untrustedOrigin();
     }
     return;
   }
 
   if (request.headers["sec-fetch-site"] === "cross-site") {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
 }
 
@@ -518,7 +564,7 @@ function requireSessionMutationOrigin(headers: Headers, expectedOrigin: string):
     headers.get("origin") !== expectedOrigin ||
     (fetchSite !== null && fetchSite !== "same-origin")
   ) {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
 }
 
@@ -1333,6 +1379,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       ),
     githubEnabled: humanLogin?.githubProviderId !== undefined,
     humanProfile: humanLogin === undefined ? "password" : "guarded",
+    passwordSignIn: humanLogin?.passwordSignIn ?? "all",
     githubStart: githubRoutes.start,
     githubCallback: githubRoutes.callback,
     githubResult: githubRoutes.result,
@@ -1458,7 +1505,16 @@ export async function hashLocalPassword(password: string): Promise<string> {
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, state, iamDriver, github, google, onWarning, ...controllerOptions } = options;
+  const {
+    pool,
+    state,
+    iamDriver,
+    github,
+    google,
+    passwordSignIn,
+    onWarning,
+    ...controllerOptions
+  } = options;
   const persistence =
     state === undefined
       ? undefined
@@ -1471,6 +1527,9 @@ export async function createPostgresControllerAuth(
   const recoveryUserId = github?.recoveryUserId ?? google?.recoveryUserId;
   const guarded = recoveryUserId !== undefined;
   const providerLabel = github === undefined ? "Google" : "GitHub";
+  if (!guarded && passwordSignIn !== undefined) {
+    throw new Error("Recovery-only password sign-in requires GitHub or Google sign-in.");
+  }
   if (!guarded && persistence && (await persistence.recoveryDesignation())) {
     throw new Error(
       "An activated human authentication profile requires a configured external sign-in provider.",
@@ -1506,6 +1565,7 @@ export async function createPostgresControllerAuth(
           recoveryUserId,
           ...(github === undefined ? {} : { github }),
           ...(google === undefined ? {} : { google }),
+          ...(passwordSignIn === undefined ? {} : { passwordSignIn }),
         },
         options.baseURL,
       );
@@ -1523,6 +1583,7 @@ export async function createPostgresControllerAuth(
   // Finish static auth initialization before the one-way activation transaction.
   await auth.auth.$context;
   let activationSkipped: readonly string[] = [];
+  let withoutExternalIdentity: readonly string[] = [];
   if (guarded) {
     const activation = await activateRecoveryAccount(
       persistence!,
@@ -1546,10 +1607,18 @@ export async function createPostgresControllerAuth(
     // The recovery account's password lane stays admitted under sign-in floods. It follows the
     // stored designation, never the environment seed, which may name a replaced holder.
     humanLogin!.designateRecovery(designation.email);
+    if (passwordSignIn === "recovery-only") {
+      withoutExternalIdentity = await persistence!.accountsWithoutExternalIdentity(
+        [humanLogin!.githubProviderId, humanLogin!.googleProviderId].filter(
+          (providerId): providerId is string => providerId !== undefined,
+        ),
+      );
+    }
   }
   return {
     ...auth,
     ...(activationSkipped.length === 0 ? {} : { activationSkipped }),
+    ...(withoutExternalIdentity.length === 0 ? {} : { withoutExternalIdentity }),
     ...(humanLogin === undefined
       ? {}
       : {
