@@ -49,6 +49,11 @@ auth:
   # auth.google; it designates the recovery account when the API first starts with
   # external sign-in.
   recoveryUserId: ""
+  # Who may sign in with a password once auth.github or auth.google is enabled: "all"
+  # (every enrolled account) or "recovery-only" (only the recovery account; everyone else
+  # uses GitHub or Google). Attach every ordinary account's external identity first:
+  # accounts without one cannot sign in until an administrator attaches it.
+  passwordSignIn: all
   # Optional GitHub browser sign-in for existing password accounts (API Pod only).
   # Needs an HTTPS baseUrl, auth.recoveryUserId and agentNativeAdmin.enabled: false.
   # Create the dedicated Secret first.
@@ -80,6 +85,12 @@ agentNativeAdmin:
   enabled: false
   domain: ""
   sharedCookieDomain: ""
+
+# Console and API runtime status and container log reads (Agent administer for text).
+# Grants pods/log get and events get,list to the tenant API and Gateway observer roles
+# and sets OCC_AGENT_RUNTIME_LOGS_ENABLED. false removes both and the routes answer 501.
+agentRuntimeLogs:
+  enabled: true
 
 bootstrap:
   adminEmail: ""

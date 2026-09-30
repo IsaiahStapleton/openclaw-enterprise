@@ -15,7 +15,8 @@ const callbackState = "s".repeat(43);
 
 // The actual Better Auth handler and provider transport run here. State is a
 // boundary fixture; these cases make no PostgreSQL or session-commit claims.
-function loginFixture(overrides = {}) {
+// `trustedClientAddress` says whether x-occ-client-ip came through a configured trusted proxy.
+function loginFixture(overrides = {}, { trustedClientAddress = true } = {}) {
   const subjects = [];
   const denialReasons = [];
   const errors = [];
@@ -41,6 +42,7 @@ function loginFixture(overrides = {}) {
       github: { clientId: "fixture-client", clientSecret: "fixture-client-secret" },
     },
     origin,
+    { trustedClientAddress },
   );
   login.designateRecovery("Recovery@example.test");
   const db = { user: [], session: [], account: [], verification: [] };
@@ -78,10 +80,14 @@ function loginFixture(overrides = {}) {
       return denialReasons.length;
     },
     // The controller wrapper sets x-occ-client-ip from the socket peer or a trusted ingress.
-    callback: (query = `state=${callbackState}&code=fixture-code`, ip = "10.0.0.1") =>
+    callback: (
+      query = `state=${callbackState}&code=fixture-code`,
+      ip = "10.0.0.1",
+      cookie = `__Host-occ_login_attempt=${binding}`,
+    ) =>
       auth.handler(
         new Request(`${origin}/api/auth/oce/providers/github/callback?${query}`, {
-          headers: { cookie: `__Host-occ_login_attempt=${binding}`, "x-occ-client-ip": ip },
+          headers: { ...(cookie === null ? {} : { cookie }), "x-occ-client-ip": ip },
         }),
       ),
     start: (ip = "10.0.0.1") =>
@@ -422,95 +428,76 @@ test(
           await expectDenied(await login.callback("state=invalid", "10.0.0.1"));
         }
         assert.equal((await login.callback(undefined, "10.0.0.1")).status, 429);
-        assert.equal((await login.start("10.0.0.1")).status, 429);
+        // Each step keeps its own budget, so a callback flood does not spend start's.
+        assert.equal((await login.start("10.0.0.1")).status, 200);
         assert.equal((await login.start("10.0.0.2")).status, 200);
         await expectDenied(await login.callback("state=invalid", "10.0.0.2"));
         assert.equal(requests.length, before);
-        // Password admission is a separate lane.
+        // Password admission belongs to the controller route, not this endpoint.
         await expectDenied(await login.password(undefined, { ip: "10.0.0.1" }));
       },
     );
 
-    await t.test("password budgets are kept per email and per client address", async () => {
-      const login = loginFixture();
-      const email = "a@example.test";
-      for (let i = 0; i < 10; i += 1) {
-        await expectDenied(await login.password(undefined, { ip: `10.0.1.${i}`, email }));
-      }
-      assert.equal((await login.password(undefined, { ip: "10.0.1.99", email })).status, 429);
-      await expectDenied(
-        await login.password(undefined, { ip: "10.0.1.0", email: "b@example.test" }),
-      );
-      for (let i = 0; i < 9; i += 1) {
-        await expectDenied(
-          await login.password(undefined, { ip: "10.0.2.1", email: `ip-${i}@example.test` }),
-        );
-      }
-      // Case and surrounding space do not create a fresh email budget.
-      await expectDenied(
-        await login.password(undefined, { ip: "10.0.2.1", email: " B@example.test " }),
-      );
-      assert.equal(
-        (await login.password(undefined, { ip: "10.0.2.1", email: "c@example.test" })).status,
-        429,
-      );
-      await expectDenied(
-        await login.password(undefined, { ip: "10.0.2.2", email: "b@example.test" }),
-      );
-      assert.deepEqual(login.denialReasons, []);
-    });
-
     await t.test(
-      "the recovery email keeps a reserved password lane with its own budget",
+      "without a trusted proxy, external steps never share one Installation-wide budget",
       async () => {
-        const held = [];
-        const login = loginFixture({
-          snapshotPassword: () => new Promise((resolve) => held.push(resolve)),
-        });
-        const valid = "valid-length-fixture-password";
-        const pending = Array.from({ length: 4 }, (_, i) =>
-          login.password(valid, { ip: `10.0.3.${i}`, email: `held-${i}@example.test` }),
-        );
-        await until(() => held.length === 4);
-        assert.equal(
-          (await login.password(valid, { ip: "10.0.3.9", email: "fresh@example.test" })).status,
-          429,
-        );
-        pending.push(login.password(valid, { email: "recovery@example.test" }));
-        await until(() => held.length === 5);
-        // The one reserved slot is taken; recovery cannot exceed the global lane plus reserve.
-        assert.equal((await login.password(valid, { email: "recovery@example.test" })).status, 429);
-        for (const resolve of held) {
-          resolve(undefined);
+        // Every browser behind the ingress arrives from one address, so it is not a key.
+        const login = loginFixture({}, { trustedClientAddress: false });
+        const ingress = "10.0.7.1";
+        const before = requests.length;
+        // Start has no browser state; it is bounded by concurrency and State's attempt cap.
+        for (let i = 0; i < 40; i += 1) {
+          assert.equal((await login.start(ingress)).status, 200);
         }
-        await Promise.all((await Promise.all(pending)).map(expectDenied));
-        for (let i = 1; i < 20; i += 1) {
-          await expectDenied(await login.password(undefined, { email: "recovery@example.test" }));
+        // Junk callbacks without the attempt cookie spend only their own key.
+        for (let i = 0; i < 30; i += 1) {
+          await expectDenied(await login.callback("state=invalid", ingress, null));
         }
-        assert.equal(
-          (await login.password(undefined, { email: "RECOVERY@example.test" })).status,
-          429,
+        assert.equal((await login.callback("state=invalid", ingress, null)).status, 429);
+        // A forged attempt cookie spends that cookie's key, not a real browser's.
+        const forged = `__Host-occ_login_attempt=${"f".repeat(43)}`;
+        for (let i = 0; i < 30; i += 1) {
+          await expectDenied(await login.callback("state=invalid", ingress, forged));
+        }
+        assert.equal((await login.callback("state=invalid", ingress, forged)).status, 429);
+        await expectDenied(await login.callback("state=invalid", ingress));
+        // Result keys on the browser's receipt cookie the same way.
+        for (let i = 0; i < 30; i += 1) {
+          await expectDenied(await login.result("a".repeat(43), "", ingress));
+        }
+        assert.equal((await login.result("a".repeat(43), "", ingress)).status, 429);
+        await expectDenied(
+          await login.result("a".repeat(43), "__Host-occ_login_receipt=receipt", ingress),
         );
-        // Recovery attempts spent neither the address budget nor the global lane.
-        await expectDenied(await login.password(undefined, { email: "other@example.test" }));
+        assert.equal(requests.length, before);
       },
     );
 
+    await t.test("the password endpoint leaves admission to the controller route", async () => {
+      // Failure-counting admission runs before /oce/password (auth/index.ts); the endpoint
+      // itself refuses nothing with 429, so it cannot count successes or refuse recovery.
+      const login = loginFixture();
+      for (let i = 0; i < 25; i += 1) {
+        await expectDenied(
+          await login.password(undefined, {
+            email: i % 2 === 0 ? "recovery@example.test" : "a@example.test",
+          }),
+        );
+      }
+      assert.deepEqual(login.denialReasons, []);
+    });
+
     await t.test("the admission table stays bounded and evicts idle keys", async () => {
       const login = loginFixture();
-      const email = "c@example.test";
-      for (let i = 0; i < 10; i += 1) {
-        await expectDenied(await login.password(undefined, { ip: `10.0.4.${i}`, email }));
+      for (let i = 0; i < 30; i += 1) {
+        await expectDenied(await login.callback("state=invalid", "10.0.4.99"));
       }
-      assert.equal((await login.password(undefined, { ip: "10.0.4.99", email })).status, 429);
+      assert.equal((await login.callback("state=invalid", "10.0.4.99")).status, 429);
       for (let i = 0; i < 4096; i += 1) {
-        const response = await login.password(undefined, {
-          ip: `10.1.${i >> 8}.${i & 255}`,
-          email: `cycle-${i}@example.test`,
-        });
+        const response = await login.callback("state=invalid", `10.1.${i >> 8}.${i & 255}`);
         assert.equal(response.status, 401);
       }
-      await expectDenied(await login.password(undefined, { ip: "10.0.4.99", email }));
+      await expectDenied(await login.callback("state=invalid", "10.0.4.99"));
     });
 
     await t.test(
@@ -535,28 +522,6 @@ test(
         await expectDenied(await login.callback(undefined, "10.0.5.99"));
       },
     );
-
-    await t.test("four active password checks cap expensive work independently", async () => {
-      const held = [];
-      const login = loginFixture({
-        snapshotPassword: () => new Promise((resolve) => held.push(resolve)),
-      });
-      const valid = "valid-length-fixture-password";
-      const pending = Array.from({ length: 4 }, (_, i) =>
-        login.password(valid, { ip: `10.0.6.${i}`, email: `active-${i}@example.test` }),
-      );
-      await until(() => held.length === 4);
-      assert.equal(
-        (await login.password(valid, { ip: "10.0.6.99", email: "late@example.test" })).status,
-        429,
-      );
-      assert.equal(held.length, 4);
-      for (const resolve of held) {
-        resolve(undefined);
-      }
-      await Promise.all((await Promise.all(pending)).map(expectDenied));
-      await expectDenied(await login.password());
-    });
 
     for (const expired of [false, true]) {
       await t.test(

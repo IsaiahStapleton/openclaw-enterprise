@@ -15,6 +15,11 @@ let namespaceId = null;
 let observabilityUrl = null;
 // Session owner whose Installation-admin observability read has settled.
 let observabilityOwner = null;
+// Whether that owner administers the Installation: true, false, or null when unknown.
+let installationAdmin = null;
+const installationAccessStorageKey = "occ.console.installationAccess";
+const deniedReadsStorageKey = "occ.console.deniedReads";
+const deniedReadsLimit = 200;
 let loggingOut = false;
 let navigateAgentTab = null;
 let discardCreationOnExit = null;
@@ -41,6 +46,15 @@ const externalProviders = {
 };
 const bindingValue = /^[A-Za-z0-9_-]{43}$/;
 
+// A failed provider sign-in. Where password sign-in is recovery-only, ordinary users
+// have no password to fall back on, so the advice depends on provider discovery.
+function providerFailure(label) {
+  return (password) =>
+    password
+      ? `Could not sign in with ${label}. Try again or use your password.`
+      : `Could not sign in with ${label}. Try again, or ask an administrator to attach your ${label} identity to your account.`;
+}
+
 function pinSessionKey(value) {
   pinnedSessionKey = typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -54,6 +68,107 @@ function rememberExternalAttempt(provider, attemptId) {
     sessionStorage.setItem(externalAttemptStorageKeys[provider], attemptId);
   } catch {
     // Without tab storage the callback still signs in; this tab adopts the session it sees.
+  }
+}
+
+// The observability read is the console's Installation-administration probe. The API audits
+// a 403 as an authorization denial, so this tab keeps the settled answer across reloads for
+// the same session owner instead of probing again on every page load. The owner key is a
+// noncredential session binding, so another sign-in always probes afresh.
+function rememberInstallationAccess(owner, admin, url) {
+  try {
+    sessionStorage.setItem(installationAccessStorageKey, JSON.stringify({ owner, admin, url }));
+  } catch {
+    // Without tab storage the next page load probes again.
+  }
+}
+
+function recalledInstallationAccess(owner) {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(installationAccessStorageKey) ?? "null");
+    if (
+      stored?.owner === owner &&
+      typeof stored.admin === "boolean" &&
+      (stored.url === null || (stored.admin && typeof stored.url === "string"))
+    ) {
+      return { admin: stored.admin, url: stored.url };
+    }
+  } catch {
+    // Unreadable tab storage falls back to a fresh probe.
+  }
+  return null;
+}
+
+function forgetInstallationAccess() {
+  try {
+    sessionStorage.removeItem(installationAccessStorageKey);
+  } catch {
+    // Nothing to clear without tab storage.
+  }
+}
+
+// Agent detail reads that the viewer's grants may not allow (saved settings, native admin
+// status) return 403, which the API audits as an authorization denial. This tab remembers
+// each denied API path for the same session owner so reloads and revisits do not add a
+// denial per view. The first denial is always requested and audited; views offer Retry,
+// which forgets the path and asks again. Paths hold resource IDs only, never credentials.
+function storedDeniedReads(owner) {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(deniedReadsStorageKey) ?? "null");
+    if (
+      stored?.owner === owner &&
+      Array.isArray(stored.paths) &&
+      stored.paths.every((path) => typeof path === "string")
+    ) {
+      return stored.paths;
+    }
+  } catch {
+    // Unreadable tab storage asks again.
+  }
+  return [];
+}
+
+function storeDeniedReads(owner, paths) {
+  try {
+    sessionStorage.setItem(
+      deniedReadsStorageKey,
+      JSON.stringify({ owner, paths: paths.slice(-deniedReadsLimit) }),
+    );
+  } catch {
+    // Without tab storage the next view asks again.
+  }
+}
+
+function deniedReadsFor(owner) {
+  return {
+    has: (path) => Boolean(owner) && storedDeniedReads(owner).includes(path),
+    remember(path) {
+      if (owner) {
+        storeDeniedReads(owner, [
+          ...storedDeniedReads(owner).filter((item) => item !== path),
+          path,
+        ]);
+      }
+    },
+    forget(path) {
+      if (owner) {
+        const paths = storedDeniedReads(owner);
+        if (paths.includes(path)) {
+          storeDeniedReads(
+            owner,
+            paths.filter((item) => item !== path),
+          );
+        }
+      }
+    },
+  };
+}
+
+function forgetDeniedReads() {
+  try {
+    sessionStorage.removeItem(deniedReadsStorageKey);
+  } catch {
+    // Nothing to clear without tab storage.
   }
 }
 
@@ -270,6 +385,7 @@ function clearPrivate() {
   namespaceId = null;
   observabilityUrl = null;
   observabilityOwner = null;
+  installationAdmin = null;
   clearRetainedViews();
 }
 
@@ -280,6 +396,8 @@ function clearDrafts() {
 }
 
 function showLogin(message = "", returnPath = null) {
+  // A message may depend on whether ordinary accounts can use a password.
+  const describe = typeof message === "function" ? message : () => message;
   clearDrafts();
   const loginView = resetReads();
   clearPrivate();
@@ -308,14 +426,21 @@ function showLogin(message = "", returnPath = null) {
     autocomplete: "current-password",
     required: "",
   });
-  const feedback = element("p", { className: "error", role: "alert" }, message);
+  const feedback = element("p", { className: "error", role: "alert" }, describe(true));
+  const usernameHint = element(
+    "span",
+    { id: "username-hint", className: "hint" },
+    "Use your account email",
+  );
+  // Recovery-only password sign-in hides the form until the recovery path is chosen.
+  let recoveryOnly = false;
   const submit = element("button", { type: "submit", className: "primary" }, "Login");
   const form = element(
     "form",
     {},
     element("label", { for: "username" }, "Username"),
     username,
-    element("span", { id: "username-hint", className: "hint" }, "Use your account email"),
+    usernameHint,
     element("label", { for: "password" }, "Password"),
     password,
     feedback,
@@ -354,7 +479,9 @@ function showLogin(message = "", returnPath = null) {
         feedback.textContent =
           error.status === 429
             ? "Too many attempts. Please try again later."
-            : `${label} sign-in is unavailable. Try again or use your password.`;
+            : recoveryOnly
+              ? `${label} sign-in is unavailable. Please try again later.`
+              : `${label} sign-in is unavailable. Try again or use your password.`;
         pending = false;
         setDisabled(false);
       }
@@ -363,6 +490,17 @@ function showLogin(message = "", returnPath = null) {
   };
   const github = providerButton("github");
   const google = providerButton("google");
+  const recovery = button(
+    "Recovery sign-in",
+    () => {
+      recovery.hidden = true;
+      feedback.textContent = "";
+      form.insertBefore(feedback, submit);
+      form.hidden = false;
+      username.focus();
+    },
+    { className: "auth-recovery", hidden: true },
+  );
   function setDisabled(disabled) {
     submit.disabled = disabled;
     github.disabled = disabled;
@@ -400,7 +538,9 @@ function showLogin(message = "", returnPath = null) {
         error.status === 429
           ? "Too many attempts. Please try again later."
           : error.status === 400 || error.status === 401 || error.status === 403
-            ? "Could not sign in. Check your username and password."
+            ? recoveryOnly
+              ? "Could not sign in. Only the recovery account can use a password; other accounts continue with their external sign-in."
+              : "Could not sign in. Check your username and password."
             : "Sign-in is unavailable. Please retry.";
     } finally {
       if (lifetime.isCurrent(active)) {
@@ -423,6 +563,7 @@ function showLogin(message = "", returnPath = null) {
       element("p", { className: "muted" }, "Sign in to your Installation."),
       form,
       providers,
+      recovery,
     ),
   );
   void request("/api/auth/providers")
@@ -434,6 +575,20 @@ function showLogin(message = "", returnPath = null) {
         }
         if (available?.google === true) {
           providers.append(google);
+        }
+        // Only an explicit false hides the form: failed or older discovery keeps it.
+        if (available?.password === false && (available.github || available.google)) {
+          recoveryOnly = true;
+          if (feedback.textContent === describe(true)) {
+            feedback.textContent = describe(false);
+          }
+          usernameHint.textContent = "Use the recovery account's email";
+          // Never pull the form away from someone already using it.
+          if (!pending && username.value === "" && password.value === "") {
+            form.hidden = true;
+            providers.after(feedback);
+            recovery.hidden = false;
+          }
         }
       }
     })
@@ -507,7 +662,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     } catch {
       if (lifetime.isCurrent(active)) {
         showLogin(
-          `Could not sign in with ${externalProviders[externalAttempt.provider].label}. Try again or use your password.`,
+          providerFailure(externalProviders[externalAttempt.provider].label),
           "/console/agents",
         );
       }
@@ -537,7 +692,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
             : pageUrl(current.target, current.namespace);
       showLogin(
         providerError !== null
-          ? `Could not sign in with ${providerError.label}. Try again or use your password.`
+          ? providerFailure(providerError.label)
           : current.feature !== "login" &&
               current.url.pathname !== "/console/" &&
               current.url.pathname !== "/console"
@@ -554,6 +709,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       clearRetainedViews();
       observabilityUrl = null;
       observabilityOwner = null;
+      installationAdmin = null;
       draftUserId = owner;
       if (retained) {
         retained = false;
@@ -571,20 +727,30 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       return;
     }
     // Read the admin-only destination once per session owner. Non-administrators
-    // get 403, which the API audits as a denial, so do not repeat it per navigation.
+    // get 403, which the API audits as a denial, so do not repeat it per navigation
+    // or, within this tab, per page load.
+    const recalled =
+      owner && observabilityOwner !== owner ? recalledInstallationAccess(owner) : null;
     const [readable, observability] = await Promise.all([
       request("/namespaces"),
       owner && observabilityOwner === owner
         ? null
-        : request("/observability").then(
-            (data) => ({ url: typeof data?.url === "string" ? data.url : null, settled: true }),
-            (error) => {
-              if (error.status === 401) {
-                throw error;
-              }
-              return { url: null, settled: error.status === 403 };
-            },
-          ),
+        : recalled
+          ? { ...recalled, settled: true }
+          : request("/observability").then(
+              (data) => ({
+                url: typeof data?.url === "string" ? data.url : null,
+                admin: true,
+                settled: true,
+              }),
+              (error) => {
+                if (error.status === 401) {
+                  throw error;
+                }
+                const denied = error.status === 403;
+                return { url: null, admin: denied ? false : null, settled: denied };
+              },
+            ),
     ]);
     if (!lifetime.isCurrent(active)) {
       return;
@@ -597,7 +763,11 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     accessResolved = true;
     if (observability) {
       observabilityUrl = observability.url;
+      installationAdmin = observability.admin;
       observabilityOwner = observability.settled ? owner : null;
+      if (owner && observability.settled && !recalled) {
+        rememberInstallationAccess(owner, observability.admin, observability.url);
+      }
     }
     namespaceId =
       current.namespace ??
@@ -761,6 +931,8 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     }
     const agentContext = {
       operatorId: session.user.id,
+      installationAdmin,
+      deniedReads: deniedReadsFor(owner),
       drafts: drafts.scope(namespaceId, current.agentId ?? "create"),
       suspendDrafts: () => drafts.suspend(),
       view: shell.view,
@@ -1099,6 +1271,8 @@ async function logout() {
   clearDrafts();
   const active = resetReads();
   clearPrivate();
+  forgetInstallationAccess();
+  forgetDeniedReads();
   publicPanel("Signing out…", "Confirming that your session has ended.");
   let confirmed = false;
   try {

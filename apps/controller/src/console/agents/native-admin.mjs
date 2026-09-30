@@ -18,6 +18,7 @@ function unavailableText(status) {
 }
 
 export function renderNativeAdminAccess(context, path) {
+  const statusPath = `${path}/native-admin`;
   const status = element("p", { className: "hint", role: "status" }, "Checking access…");
   const error = element("p", { className: "error", role: "alert" });
   const launch = element(
@@ -55,12 +56,19 @@ export function renderNativeAdminAccess(context, path) {
     if (!context.isCurrent() || pending) {
       return;
     }
+    // Native admin needs Agent administer; a 403 is audited, so this tab asks once per Agent.
+    if (context.deniedReads?.has(statusPath)) {
+      current = undefined;
+      status.textContent = "";
+      updateControls();
+      return;
+    }
     pending = true;
     error.textContent = "";
     status.textContent = "Checking access…";
     updateControls();
     try {
-      current = await context.request(`${path}/native-admin`);
+      current = await context.request(statusPath);
       if (!context.isCurrent()) {
         return;
       }
@@ -78,6 +86,9 @@ export function renderNativeAdminAccess(context, path) {
       if (cause.status === 401) {
         context.onExpired();
         return;
+      }
+      if (cause.status === 403) {
+        context.deniedReads?.remember(statusPath);
       }
       current = undefined;
       status.textContent = "";

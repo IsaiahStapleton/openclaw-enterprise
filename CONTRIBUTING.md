@@ -108,6 +108,11 @@ proof selection, diff cleanup, and requested independent review.
   Preserve historical implementation specifications and their Manual Notes.
 - Request relevant maintainers' feedback. Resolve substantive findings and
   required checks before merging.
+- Before merging Console UI changes, upload screenshots and a short video of
+  the final UI as native GitHub attachments in the PR's Verification section.
+  Missing or stale media blocks merging even when CI passes. Follow the
+  [Console evidence requirements](AGENTS.md#console-storybook) for capture,
+  review, and reporting.
 - Inspect the entire diff and attachments for credentials, tenant data, private
   hostnames, and personal paths. Use synthetic fixtures and redacted evidence.
 

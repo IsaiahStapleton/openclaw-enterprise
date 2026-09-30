@@ -49,9 +49,9 @@ grant themselves authorization or change platform-resource ownership.
 
 <a id="non-goals"></a>
 
-The platform does not support multiple Installations in one deployment,
-cross-Namespace resource references, or an Agent inheriting its creator's
-identity. Gateways and workloads are runtime components, not an extra execution
+The platform does not support multiple Installations in one deployment or
+cross-Namespace resource references. An Agent inheriting its creator's identity
+is not yet supported. Gateways and workloads are runtime components, not an extra execution
 resource between an Agent and its deployment. Detailed APIs, storage schemas,
 and integration protocols belong to their feature references.
 

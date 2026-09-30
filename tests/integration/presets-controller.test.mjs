@@ -1041,3 +1041,61 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
     defaultNames,
   );
 });
+
+test("Namespace deletion removes unmodified default Presets and names what still blocks it", async (t) => {
+  const { loadInstallationConfiguration } =
+    await import("../../apps/controller/src/composition/installation-config.ts");
+  const { createInstallationDriverConfiguration } =
+    await import("../helpers/installation-driver-configuration.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "occ-default-presets-delete-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "installation.yaml");
+  const configuration = createInstallationDriverConfiguration();
+  configuration.presets = { includeDefaults: true };
+  await writeFile(path, JSON.stringify(configuration));
+  const runtime = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  assert.ok(runtime.defaultPresets.length > 0);
+  const fixture = await createFixture(t, { defaultPresets: runtime.defaultPresets });
+
+  // A Namespace holding only its seeded, unmodified defaults is empty to its operator.
+  const pristine = await fixture.createNamespace("Pristine defaults", { ready: true });
+  const seeded = (await fixture.request("GET", collection(pristine.id))).data;
+  assert.equal(seeded.length, runtime.defaultPresets.length);
+  const deleted = await fixture.request("DELETE", `/namespaces/${pristine.id}`);
+  assert.equal(deleted.status, 202, JSON.stringify(deleted.body));
+  assert.equal(deleted.data.status, "deleting");
+  const remaining = await fixture.controller.transact((state) =>
+    state.presets.listPresets(pristine.id),
+  );
+  assert.deepEqual(remaining, []);
+  const cascaded = fixture.audit.events.filter(
+    (event) =>
+      event.action === "openclaw.presets.delete" &&
+      event.details?.source === "namespace-deletion" &&
+      event.namespaceId === pristine.id,
+  );
+  assert.deepEqual(
+    cascaded.map((event) => event.resource.id).sort(),
+    seeded.map((preset) => preset.id).sort(),
+  );
+
+  // An operator-edited default is real content: keep it and say what blocks deletion.
+  const edited = await fixture.createNamespace("Edited defaults", { ready: true });
+  const [first, ...rest] = (await fixture.request("GET", collection(edited.id))).data;
+  const patched = await fixture.request("PATCH", `${collection(edited.id)}/${first.id}`, {
+    body: { template: { agent: { name: "Operator customization" } } },
+  });
+  assert.equal(patched.status, 200);
+  await fixture.createSecret(edited.id, "blocking-secret", "value");
+  const blocked = await fixture.request("DELETE", `/namespaces/${edited.id}`);
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.error.code, "NAMESPACE_NOT_EMPTY");
+  assert.equal(
+    blocked.body.error.message,
+    "The requested Namespace is not empty. It still contains: Presets, Secrets.",
+  );
+  assert.equal((await fixture.request("GET", collection(edited.id))).data.length, rest.length + 1);
+});

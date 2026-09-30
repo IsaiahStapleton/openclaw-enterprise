@@ -42,6 +42,7 @@ import {
   PostgresPlatformState,
   PostgresWorkQueue,
   OpenClawController,
+  SandboxRevisionUnsupportedError,
   WorkClaimLostError,
   CREDENTIAL_WITHDRAWAL_TARGET,
   isCredentialWithdrawalWork,
@@ -2484,7 +2485,8 @@ export class ControllerWorker {
         throw error;
       }
       result =
-        error instanceof RepositoryCredentialAuthorityError
+        error instanceof RepositoryCredentialAuthorityError ||
+        error instanceof SandboxRevisionUnsupportedError
           ? { outcome: "permanent", code: error.code }
           : { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
     }

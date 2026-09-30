@@ -74,7 +74,13 @@ if (tool === 'helm') {
     secret.metadata.resourceVersion = String(Number(secret.metadata.resourceVersion) + 1);
     state.secret = secret; save(); log('secret-replaced');
     if (take('lost-secret-response')) process.exit(9);
-  } else if (args.includes('get') && args.includes('secret')) out(state.secret);
+  } else if (args.includes('get') && args.includes('secret')) {
+    const name = args[args.indexOf('secret') + 1];
+    if (name !== state.secret.metadata.name && name === state.collectorSecretName) {
+      if (!state.collectorSecret) { console.error('secrets "' + name + '" not found'); process.exit(1); }
+      out(state.collectorSecret);
+    } else out(state.secret);
+  }
   else if (args.includes('get') && args.includes('nodes')) {
     const architecture = process.arch === 'x64' ? 'amd64' : 'arm64';
     if (fs.existsSync(path.join(root, 'change-node'))) { state.nodeReads = (state.nodeReads ?? 0) + 1; save(); }
@@ -144,6 +150,34 @@ if (tool === 'helm') {
 }
 `;
 
+const shippedCollectorConfig = (key) => readFile(join(repository, "deploy/logging", key));
+
+// The bundled Collector's operator-created config Secret, as created from
+// deploy/logging at install time ("current") or by an older revision ("stale").
+async function collectorConfigSecret(name, collector) {
+  if (collector !== "current" && collector !== "stale") {
+    return null;
+  }
+  const data = {};
+  for (const key of ["collector.yaml", "kubernetes.yaml", "exporter.yaml"]) {
+    let content = await shippedCollectorConfig(key);
+    if (collector === "stale" && key !== "exporter.yaml") {
+      content = Buffer.from(
+        content
+          .toString()
+          .replace(
+            /^ *- set\(attributes\["event\.name"\], cache\["record"\]\["event"\]\) where attributes\["event\.name"\] == nil.*\n/m,
+            "",
+          )
+          .replace(/^ *- delete_key\(attributes, "container\.image\.tag"\).*\n/m, ""),
+      );
+      assert.notDeepEqual(content, await shippedCollectorConfig(key));
+    }
+    data[key] = content.toString("base64");
+  }
+  return { metadata: { name, uid: "collector-config-uid", resourceVersion: "1" }, data };
+}
+
 async function fixture(
   t,
   {
@@ -153,6 +187,7 @@ async function fixture(
     repositoryCredentials = false,
     simulatePair = false,
     workerPlacement = "container",
+    collector = null,
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "occ-upgrade-recovery-"));
@@ -182,8 +217,12 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
     await writeFile(path, wrapper);
     await chmod(path, 0o755);
   }
+  const collectorSecretName = "occ-demo-collector-config";
   const values = JSON.stringify({
     images: { controller },
+    ...(collector
+      ? { logging: { collector: { enabled: true, configSecretName: collectorSecretName } } }
+      : {}),
     installation: { secretName: "occ-installation-startup", key: "installation.yaml" },
     ...(repositoryCredentials
       ? {
@@ -254,6 +293,8 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
     simulatePair,
     dispatches: 0,
     initActive: false,
+    collectorSecretName,
+    collectorSecret: await collectorConfigSecret(collectorSecretName, collector),
     secret: {
       metadata: {
         name: "occ-installation-startup",
@@ -819,6 +860,40 @@ test("controller upgrade rejects missing, ambiguous, or invalid worker placement
       // successful controller rollout, even if the Helm request completed.
       await assert.rejects(f.run(), /exactly one worker with the selected controller image/);
       assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+    });
+  }
+});
+
+test("a stale bundled Collector config Secret stops the upgrade before mutation", async (t) => {
+  const f = await fixture(t, { controllerOnly: true, collector: "stale" });
+  await assert.rejects(
+    f.run(),
+    /Collector config Secret occ-demo-collector-config differs from this checkout's deploy\/logging \(collector\.yaml,kubernetes\.yaml\); refresh it/,
+  );
+  assert.deepEqual(await f.events(), []);
+  assert.equal((await f.state()).controller, controller);
+});
+
+test("a missing bundled Collector config Secret stops the upgrade before mutation", async (t) => {
+  const f = await fixture(t, { controllerOnly: true, collector: "missing" });
+  await assert.rejects(
+    f.run(),
+    /cannot read the Collector config Secret occ-demo-collector-config/,
+  );
+  assert.deepEqual(await f.events(), []);
+});
+
+test("a current or explicitly reviewed Collector config Secret lets the upgrade proceed", async (t) => {
+  for (const [collector, extra] of [
+    ["current", []],
+    ["stale", ["--collector-config-reviewed"]],
+  ]) {
+    await t.test(`${collector} ${extra.join(" ")}`.trim(), async (subtest) => {
+      const f = await fixture(subtest, { controllerOnly: true, collector });
+      await f.run(...extra);
+      assert.equal((await f.state()).controller, newController);
+      const drift = (await readFile(join(f.evidence, "collector-config-drift"), "utf8")).trim();
+      assert.equal(drift, collector === "stale" ? "collector.yaml\nkubernetes.yaml" : "");
     });
   }
 });

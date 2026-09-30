@@ -61,7 +61,7 @@ graph TD
 
 `apps/controller/src/console/agents/native-admin.mjs:renderNativeAdminAccess`
 
-The Agent detail page inserts the native admin panel on its tabs, including Configuration and Workspace files. The panel starts hidden while it requests `${path}/native-admin`. The UI hides disabled and denied states, reports stopped, unavailable, or unsupported states, and shows the **Open native admin UI** link only when the API returns `status: "available"` with an Agent URL. The link opens that URL in a new tab with `noopener noreferrer`; opening it makes no additional availability or launch request.
+The Agent detail page inserts the native admin panel on its tabs, including Configuration and Workspace files. The panel starts hidden while it requests `${path}/native-admin`. The UI hides disabled and denied states, reports stopped, unavailable, or unsupported states, and shows the **Open native admin UI** link only when the API returns `status: "available"` with an Agent URL. The link opens that URL in a new tab with `noopener noreferrer`; opening it makes no additional availability or launch request. A `403` is an audited denial, so the console remembers the denied status path in tab `sessionStorage` for the same session owner and hides the panel on later views of that Agent without asking again. Logout, another sign-in, or a new tab asks afresh.
 
 The warning text tells operators that native admin access can change gateway state outside OCE and that durable configuration should remain in OCE.
 
@@ -192,6 +192,8 @@ The init container cannot write through the gateway's later mount path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 19:00: Remembered a denied availability read per tab and session owner so reloads do not add an audited denial per view.
 
 - 2026-09-29 21:35: Corrected native configuration initialization to write through the init volume mount. (89a4ccd7-3974-43c6-b08a-be02269a8d01 - cc96e34f33868555d4a89cb44bc022859d76c815)
 

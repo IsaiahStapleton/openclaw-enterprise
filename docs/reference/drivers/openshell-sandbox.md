@@ -348,6 +348,13 @@ If any of these conditions are unavailable, OpenShell-selected deployments must
 fail closed instead of launching an unsandboxed or incorrectly credentialed
 Harness.
 
+## Sandbox log reads
+
+`readSandboxLogs` calls only `GetSandboxLogs`. The OCC gateway identity needs
+the `sandbox:read` scope and Workspace role `user`. OpenShell `NOT_FOUND`
+becomes `RUNTIME_LOGS_SANDBOX_NOT_FOUND`. See
+[Agent logs](../../guides/topics/agent-logs.md#sandbox-source).
+
 ## Troubleshooting
 
 Common fail-closed errors include:
@@ -362,7 +369,10 @@ Common fail-closed errors include:
 - `OpenShell gateway Service is unavailable.`
 - `OpenShell gateway Pod is not ready.`
 - `OpenShell SandboxDriver supports only dedicated Codex or OpenClaw Harness revisions.`
+  Deployment status reports `SANDBOX_HARNESS_UNSUPPORTED`.
 - `OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
+  Deployment status reports `SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED` after one
+  attempt; redeploying the same revision cannot succeed on stock `v0.1.0`.
 
 ## Related documentation
 

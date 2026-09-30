@@ -449,6 +449,44 @@ export const scenarios = {
     actions: [click("Continue with GitHub")],
     description: "Admission refusal asks the user to wait without automatically retrying.",
   },
+  recoveryOnlyLogin: {
+    group: "Pages/Sign in",
+    name: "Recovery-only password",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    googleEnabled: true,
+    passwordRecoveryOnly: true,
+    description:
+      "With OCC_AUTH_PASSWORD_SIGN_IN=recovery-only, ordinary accounts continue with GitHub or Google. The password form stays behind Recovery sign-in for the recovery account.",
+  },
+  recoveryOnlyForm: {
+    group: "Pages/Sign in",
+    name: "Recovery sign-in form",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    passwordRecoveryOnly: true,
+    rules: [{ path: "/api/auth/sign-in/email", method: "POST", status: 401 }],
+    actions: [
+      click("Recovery sign-in"),
+      { selector: "#username", value: "member@example.com" },
+      { selector: "#password", value: "demo-only" },
+      click("Login"),
+    ],
+    description:
+      "Recovery sign-in reveals the password form. A refused password explains that only the recovery account can use one.",
+  },
+  recoveryOnlyCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "Recovery-only GitHub callback rejected",
+    path: "/console/?authError=github",
+    signedOut: true,
+    githubEnabled: true,
+    passwordRecoveryOnly: true,
+    description:
+      "Without a password to fall back on, a rejected callback points the user to an administrator.",
+  },
   githubCallbackRejected: {
     group: "Pages/Sign in",
     name: "GitHub callback rejected",
@@ -2619,6 +2657,61 @@ export const scenarios = {
     description:
       "A failed on-demand check reports its own error. The viewed v7 deployment record remains succeeded.",
   },
+  runtimeLogs: {
+    group: "Pages/Agent detail",
+    name: "Runtime status and logs for v7",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    description:
+      "The Logs tab shows the Gateway Pod, its OOMKilled restart and BackOff Event, then redacted operational output with a withheld-structured-output row. Previous instance is available after the restart.",
+  },
+  runtimeLogsFilteredDownload: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs filtered and downloaded",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    actions: [
+      click("Download"),
+      { selector: ".log-chip.log-level-info", click: true },
+      { selector: "#runtime-log-filter", value: "slack" },
+    ],
+    description:
+      "Download saves the redacted text tail as a .log file through its own audited read. Hiding info and filtering for slack narrows the loaded window to the redacted reconnect warning; the status line counts the hidden rows.",
+  },
+  runtimeLogsDenied: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs without administer",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deployments/rev_00000000-0000-4000-8000-000000000007/runtime/logs",
+        status: 403,
+        code: "FORBIDDEN",
+      },
+    ],
+    description:
+      "An Agent operator sees Pod status and Events but no log text. The page names the missing grants and does not request the log view again.",
+  },
+  runtimeLogsClusterRbac: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs blocked by cluster RBAC",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deployments/rev_00000000-0000-4000-8000-000000000007/runtime/logs",
+        status: 503,
+        code: "RUNTIME_LOGS_CLUSTER_RBAC",
+      },
+    ],
+    description:
+      "The cluster denied pods/log. The page asks the platform operator to enable agentRuntimeLogs in the Helm chart.",
+  },
   agentMissing: {
     group: "Pages/Agent detail",
     name: "Agent unavailable",
@@ -3607,7 +3700,7 @@ export const scenarios = {
     steps: [
       "Choose Research assistant, fill Name, then Use Preset.",
       "Review the Configuration, masked pre-existing model Secret reference, and four seeded workspace files; click Create Agent.",
-      "Wait for provisioning to finish; the Console opens Agent details with the queued deployment. Refresh deployment to finish simulated activation, then open Workspace files.",
+      "Wait for provisioning to finish; the Console opens Agent details with the queued deployment. Wait a few seconds or use Refresh deployment to finish simulated activation, then open Workspace files.",
       "Use Versions to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
     ],
     gap: "The fixture supplies a ready Namespace, Preset, and model Secret. Set those up outside the console. Verify actual serving health and a model response outside this walkthrough.",
@@ -3735,7 +3828,7 @@ export const scenarios = {
       "Open Configure plugins. The simulated curated catalog is available for every Preset and Secret choice in this Storybook flow; add Linear, set Linear default reviewer to Automatic review, and set Create issue approval to Ask for approval.",
       "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access.",
       "Open Edit Slack. Confirm the six prefilled channels: oce-feedback (C0C49E7CS4A), oce-team (C0C43A2QA11), oce-feedback-test (C0C569NN9ME), oce-team-test (C0C4A0JH2BG), oce-community (C0C5KF0JLSC), and oce-community-test (C0C5KF0DWLQ); mentions are not required. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
-      "Create Agent and wait for provisioning to open Agent details. Inspect Deployment activity and use Refresh deployment to finish simulated activation.",
+      "Create Agent and wait for provisioning to open Agent details. Inspect Deployment activity; it finishes simulated activation after a few seconds, or use Refresh deployment.",
       "Use ← Agents and open oceclaw in the same fixture to continue segment 2. The next-segment link starts an independent resettable fixture.",
     ],
     gap: "This Storybook flow proves only the UI sequence and fixture state. It does not store a real credential, deploy a workload, prove GitHub authorization, or prove Slack delivery.",

@@ -77,6 +77,9 @@ processors:
     log_statements:
       - context: resource
         statements:
+          # k8sattributes reports "latest" for a digest-only Pod image. The repo
+          # digest is the identity, and a real "latest" tag is mutable, so drop it.
+          - delete_key(attributes, "container.image.tag") where attributes["container.image.tag"] == "latest" and attributes["container.image.repo_digests"] != nil
           - keep_keys(attributes, ["k8s.pod.name", "k8s.pod.uid", "k8s.namespace.name", "k8s.node.name", "container.image.name", "container.image.tag", "container.image.repo_digests"])
 
 service:

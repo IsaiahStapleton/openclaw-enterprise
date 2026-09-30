@@ -14,6 +14,9 @@
 {{- if and $recoveryUserId (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" $recoveryUserId)) -}}{{- fail "auth.recoveryUserId must be the existing local password administrator's user ID" -}}{{- end -}}
 {{- $google := .Values.auth.google -}}
 {{- if and $recoveryUserId (not (or (and $github $github.enabled) (and $google $google.enabled))) -}}{{- fail "auth.recoveryUserId requires auth.github.enabled or auth.google.enabled" -}}{{- end -}}
+{{- $passwordSignIn := toString (default "all" .Values.auth.passwordSignIn) -}}
+{{- if not (has $passwordSignIn (list "all" "recovery-only")) -}}{{- fail "auth.passwordSignIn must be all or recovery-only" -}}{{- end -}}
+{{- if and (eq $passwordSignIn "recovery-only") (not (or (and $github $github.enabled) (and $google $google.enabled))) -}}{{- fail "auth.passwordSignIn: recovery-only requires auth.github.enabled or auth.google.enabled" -}}{{- end -}}
 {{- if and $github $github.enabled -}}
 {{- if not $recoveryUserId -}}{{- fail "auth.github.enabled requires auth.recoveryUserId: install without GitHub first, then upgrade with the administrator's user ID" -}}{{- end -}}
 {{- if or (not $github.secretName) (not $github.clientIdKey) (not $github.clientSecretKey) -}}{{- fail "auth.github requires a dedicated operator-created Secret name, client ID key, and client secret key" -}}{{- end -}}
@@ -382,4 +385,27 @@ capabilities:
 
 {{- define "openclaw.gatewayRouting.envoyNetworkPolicyName" -}}
 {{- printf "%s-%s-envoy-dataplane" (.Release.Name | trunc 34 | trimSuffix "-") (include "openclaw.gatewayRouting.routeNamespaceLabel" .) -}}
+{{- end -}}
+
+{{/*
+Install and upgrade notice for api.trustedProxy. It warns rather than fails: installs whose
+API sees each client's own address (for example, behind a source-preserving NLB) are valid.
+*/}}
+{{- define "openclaw.trustedProxy.notice" -}}
+{{- $proxy := default dict .Values.api.trustedProxy -}}
+{{- $github := default dict .Values.auth.github -}}
+{{- $google := default dict .Values.auth.google -}}
+{{- if not $proxy.preset -}}
+{{- if or $github.enabled $google.enabled -}}
+WARNING: api.trustedProxy is not set. With GitHub or Google sign-in, failed
+password sign-ins are then limited per email only, and GitHub or Google sign-in
+starts have no per-client limit, because every browser behind a proxy shares its
+address. Set api.trustedProxy unless the API sees each client's own address, as
+behind a Network Load Balancer that preserves source addresses.
+{{- else -}}
+NOTE: api.trustedProxy is not set, so failed password sign-ins are limited per
+email only. Set api.trustedProxy when a proxy fronts the API to add the
+per-client-address limit.
+{{- end -}}
+{{- end -}}
 {{- end -}}

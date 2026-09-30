@@ -78,7 +78,9 @@ never substitutes defaults. Exact-resource permissions still apply.
 **Current version** uses `activeRevisionId`; **View version vN** opens read-only
 details without activating it. **Deployment activity** shows the newest readable
 version's persisted `queued`, `running`, `succeeded`, or `failed` status, not live
-health. Viewed versions show their own results. **Refresh deployment** rereads
+health. Viewed versions show their own results. Pending activity is reread every
+`DEPLOYMENT_POLL_MS` (`apps/controller/src/console/agents/detail.mjs`) until a
+result or read error; a new result also rereads selection. **Refresh deployment** rereads
 activity and selection. **Current observations** requests timestamped
 `succeeded`, `failed`, or `unknown` diagnostics without changing deployment status.
 Its bodyless POST requires Agent `read`/`operate` and exact AgentRevision `read`.
@@ -293,8 +295,9 @@ worker shutdown and preservation of revisions, credentials, and state.
 **Delete Agent** requests confirmation before sending a bodyless `DELETE` to the
 exact Agent URL. The controller requires Agent `delete`; a `403` stays visible on
 the detail page. An accepted request starts asynchronous cleanup and leaves the
-detail page in a deleting state, with **Refresh deletion status** for an exact
-Agent read. Only a not-found read after
+detail page in a deleting state. The page rereads the exact Agent every few
+seconds until it is gone; **Refresh deletion status** reads it on demand, and
+a read error stops the polling. Only a not-found read after
 an accepted or uncertain request, or when an already-deleting Agent is opened,
 returns to the Agents list in the selected Namespace. An uncertain deletion
 blocks writes until a successful read; the browser never retries it.

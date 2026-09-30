@@ -134,7 +134,9 @@ Debug runtime disclosures follow the same validation and retain expanded state.
 A changed user or session key clears retained views and drafts before further
 private reads. Missing sessions open login; failed reads offer Retry.
 `showLogin` reads `GET /api/auth/providers`; true `github`/`google` flags add their **Continue
-with** buttons, and discovery failure keeps password login. Pending login disables
+with** buttons, and discovery failure keeps password login. `password: false`
+(recovery-only) hides the form behind **Recovery sign-in** and changes the
+provider-error advice from "use your password" to asking an administrator. Pending login disables
 all; generations reject late redirects. With `sessionBinding`, `loadPage`
 exchanges the button's stored `attemptId` once for its key. Tabs then send
 their pinned `x-occ-session-key`, so a replaced cookie yields login.
@@ -240,7 +242,10 @@ navigation with `console.mjs:loadPage`. For the same Agent, Namespace, and
 revision, tab clicks/history replace only tab content; shell, native-admin panel,
 and revision controls stay mounted. Configuration and revision reads are shared;
 direct Workspace URLs start neither. Refresh, revision changes, and successful
-channel/authentication edits reload fully.
+channel/authentication edits reload fully. A `403` on the configuration or revision
+read is an audited denial, so `console.mjs:deniedReadsFor` remembers that path in tab
+`sessionStorage` for the session owner; later views show **Configuration unavailable**
+without asking again, and **Retry** forgets the path and rereads. Logout clears it.
 
 Completed tabs retain their DOM and draft capture callbacks within the detail view.
 Returning restores loaded controls and expanded disclosures. Pending or failed
@@ -323,6 +328,7 @@ refresh and inspection.
 
 ## Changelog
 
+- 2026-09-30 19:00: Remember denied Agent detail snapshot reads per tab so reloads do not add an audited denial per view.
 - 2026-09-29 20:00: Trace repository descriptions and inherited access. (public-pr/374)
 
 - 2026-09-29 07:19: Guard recovery until session and Namespace reads finish. (authoring-run/1ca6a40a-a247-465f-9a83-182dbcb6ff4e - 90326e6fab11f84fc11b8990b6c8e197a2752c60)

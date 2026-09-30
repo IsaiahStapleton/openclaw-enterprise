@@ -957,7 +957,7 @@ export const iamRestrictions = occSchema.table(
   (table) => [
     check(
       "iam_restrictions_action_valid",
-      sql`${table.action} IN ('create', 'read', 'update', 'delete', 'deploy', 'operate', 'administer')`,
+      sql`${table.action} IN ('create', 'read', 'update', 'delete', 'deploy', 'operate', 'administer', 'read_logs')`,
     ),
     check(
       "iam_restrictions_resource_kind_valid",
