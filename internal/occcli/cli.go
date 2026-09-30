@@ -229,9 +229,10 @@ func (app *application) iamRoleCommand() *cobra.Command {
 
 	var createFile string
 	create := &cobra.Command{
-		Use:   "create",
-		Short: "Create a Namespace IAM Role from a JSON document",
-		Args:  cobra.NoArgs,
+		Use:     "create",
+		Short:   "Create a Namespace IAM Role from a JSON document",
+		Example: iamRoleCreateExample,
+		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -326,9 +327,10 @@ func (app *application) iamAccessBindingCommand() *cobra.Command {
 
 	var createFile string
 	create := &cobra.Command{
-		Use:   "create",
-		Short: "Create a Namespace IAM AccessBinding from a JSON document",
-		Args:  cobra.NoArgs,
+		Use:     "create",
+		Short:   "Create a Namespace IAM AccessBinding from a JSON document",
+		Example: iamAccessBindingCreateExample,
+		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -423,9 +425,10 @@ func (app *application) configurationCommand() *cobra.Command {
 
 	var createFile string
 	create := &cobra.Command{
-		Use:   "create",
-		Short: "Create a Configuration from a JSON document",
-		Args:  cobra.NoArgs,
+		Use:     "create",
+		Short:   "Create a Configuration from a JSON document",
+		Example: configurationCreateExample,
+		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -527,9 +530,10 @@ func (app *application) secretCommand() *cobra.Command {
 
 	var createFile string
 	create := &cobra.Command{
-		Use:   "create",
-		Short: "Create a Secret from a JSON document",
-		Args:  cobra.NoArgs,
+		Use:     "create",
+		Short:   "Create a Secret from a JSON document",
+		Example: secretCreateExample,
+		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -731,9 +735,10 @@ func (app *application) agentCommand() *cobra.Command {
 
 	var createFile string
 	create := &cobra.Command{
-		Use:   "create",
-		Short: "Create an Agent from a JSON document",
-		Args:  cobra.NoArgs,
+		Use:     "create",
+		Short:   "Create an Agent from a JSON document",
+		Example: agentCreateExample,
+		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
