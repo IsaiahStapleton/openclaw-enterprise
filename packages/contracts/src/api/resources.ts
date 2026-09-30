@@ -655,6 +655,12 @@ export const CredentialWithdrawalSchema = Type.Object(
       description:
         "`revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve.",
     }),
+    requestedBy: Type.String({
+      minLength: 1,
+      maxLength: 256,
+      description:
+        "Principal whose `agent:operate` permission the worker re-checks before revoking.",
+    }),
     requestedAt: Type.String({ format: "date-time" }),
     completedAt: Type.Optional(Type.String({ format: "date-time" })),
     reason: Type.Optional(

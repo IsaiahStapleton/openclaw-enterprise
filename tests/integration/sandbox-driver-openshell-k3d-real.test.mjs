@@ -2511,6 +2511,7 @@ async function assertCredentialSourceUpdateAndLiveWithdrawal(topology) {
   const requested = await request("POST", `${withdrawalPath}/withdraw`);
   assert.equal(requested.status, 202, JSON.stringify(requested.error));
   assert.equal(requested.data.revisionId, revision.id);
+  assert.equal(typeof requested.data.requestedBy, "string");
   const revoked = await waitFor(
     "the worker to confirm credential revocation",
     async () => {
@@ -2521,6 +2522,8 @@ async function assertCredentialSourceUpdateAndLiveWithdrawal(topology) {
     180_000,
   );
   assert.ok(revoked.completedAt);
+  assert.equal(revoked.requestedBy, requested.data.requestedBy);
+  assert.equal(revoked.reason, "CREDENTIALS_WITHDRAWN");
   const unchanged = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
   assert.equal(unchanged.data.activeRevisionId, revision.id, "withdrawal must not redeploy");
 

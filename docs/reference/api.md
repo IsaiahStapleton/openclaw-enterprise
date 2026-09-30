@@ -2305,6 +2305,7 @@ Revoke one credential source from an Agent's active revision
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.reason` | `string` | No | pattern: `^[A-Z0-9_]{1,64}$`; Reason code of the worker's most recent attempt, for example `CREDENTIAL_WITHDRAWAL_PENDING` while the gateway has not confirmed revocation. |
 | `data.requestedAt` | `string (date-time)` | Yes | — |
+| `data.requestedBy` | `string` | Yes | min length: 1; max length: 256; Principal whose `agent:operate` permission the worker re-checks before revoking. |
 | `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.state` | `"pending" or "revoked"` | Yes | `revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve. |
 | `meta` | `object` | Yes | — |
@@ -2356,6 +2357,7 @@ Get the withdrawal state of a credential source for an Agent's active revision
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.reason` | `string` | No | pattern: `^[A-Z0-9_]{1,64}$`; Reason code of the worker's most recent attempt, for example `CREDENTIAL_WITHDRAWAL_PENDING` while the gateway has not confirmed revocation. |
 | `data.requestedAt` | `string (date-time)` | Yes | — |
+| `data.requestedBy` | `string` | Yes | min length: 1; max length: 256; Principal whose `agent:operate` permission the worker re-checks before revoking. |
 | `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.state` | `"pending" or "revoked"` | Yes | `revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve. |
 | `meta` | `object` | Yes | — |

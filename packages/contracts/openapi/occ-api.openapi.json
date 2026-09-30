@@ -9157,6 +9157,12 @@
                           "type": "string"
                         },
                         "requestedAt": { "format": "date-time", "type": "string" },
+                        "requestedBy": {
+                          "description": "Principal whose `agent:operate` permission the worker re-checks before revoking.",
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
                         "revisionId": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -9175,6 +9181,7 @@
                         "revisionId",
                         "credentialSourceId",
                         "state",
+                        "requestedBy",
                         "requestedAt"
                       ],
                       "type": "object"
@@ -9311,6 +9318,12 @@
                           "type": "string"
                         },
                         "requestedAt": { "format": "date-time", "type": "string" },
+                        "requestedBy": {
+                          "description": "Principal whose `agent:operate` permission the worker re-checks before revoking.",
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
                         "revisionId": {
                           "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
@@ -9329,6 +9342,7 @@
                         "revisionId",
                         "credentialSourceId",
                         "state",
+                        "requestedBy",
                         "requestedAt"
                       ],
                       "type": "object"

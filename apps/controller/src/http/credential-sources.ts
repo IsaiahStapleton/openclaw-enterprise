@@ -31,6 +31,7 @@ function clientCredentialWithdrawal(
     revisionId: withdrawal.revisionId,
     credentialSourceId: withdrawal.credentialSourceId,
     state: withdrawal.state,
+    requestedBy: withdrawal.requestedBy,
     requestedAt: withdrawal.requestedAt,
     ...(withdrawal.completedAt === undefined ? {} : { completedAt: withdrawal.completedAt }),
     ...(withdrawal.lastReason === undefined ? {} : { reason: withdrawal.lastReason }),
