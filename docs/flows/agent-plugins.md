@@ -250,6 +250,11 @@ completed deployment attempt rather than ongoing runtime health.
 
 ## Debugging and Verification
 
+The bounded OpenClaw model probe selects one cumulative CPU-wait counter before
+running: PSI when available, otherwise throttled time. It reads the same counter
+afterward. Missing, nonfinite, or reset samples leave CPU wait unavailable; they
+do not establish CPU starvation or change the probe deadline.
+
 - Compare `Agent.plugins` with the active revision snapshot and deployment status.
   A successful Agent write alone is not runtime installation evidence.
 - Invalid or unsupported policy leaves Agent desired state unchanged. Catalog

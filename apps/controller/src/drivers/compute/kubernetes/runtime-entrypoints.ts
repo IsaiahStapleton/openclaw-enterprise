@@ -1756,10 +1756,10 @@ function probeOpenClawAuthenticationFailureCode() {
   const cgroup = (name) => { try { return fs.readFileSync("/sys/fs/cgroup/" + name, "utf8"); } catch { return ""; } };
   const [quota, period] = cgroup("cpu.max").split(" ");
   const capMs = Math.min(600000, 20000 + Math.ceil(45000 / Math.min(1, quota / period || 1)));
-  const waited = () => (/^some .*total=(\d+)/m.exec(cgroup("cpu.pressure")) ?? /throttled_usec (\d+)/.exec(cgroup("cpu.stat")))?.[1] / 1000;
-  const startedAt = Date.now(), before = waited();
+  const read = (name) => (name === "cpu.pressure" ? /^some .*total=(\d+)/m : /throttled_usec (\d+)/).exec(cgroup(name))?.[1] / 1000;
+  const startedAt = Date.now(), pressure = read("cpu.pressure"), metric = Number.isFinite(pressure) ? "cpu.pressure" : "cpu.stat", before = metric === "cpu.pressure" ? pressure : read(metric);
   let code = runOpenClawAuthenticationProbe(fs, capMs);
-  const elapsedMs = Date.now() - startedAt, cpuWaitMs = Math.round(waited() - before);
+  const elapsedMs = Date.now() - startedAt, after = read(metric), cpuWaitMs = Math.round(Number.isFinite(after) && after >= before ? after - before : NaN);
   if (code === "CAP") code = cpuWaitMs > elapsedMs / 4 ? "MODEL_PROBE_CPU_STARVED" : "MODEL_PROBE_TIMEOUT";
   console.error(JSON.stringify({ event: "openclaw.model_probe", elapsedMs, capMs, cpuWaitMs, code: code ?? "READY" }));
   return code;
