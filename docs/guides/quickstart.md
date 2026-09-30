@@ -28,6 +28,14 @@ Run the commands below from the repository root on Linux or macOS. You need:
   `OCC_DEVELOPMENT_BROWSER_PORT`, or `OCC_DEVELOPMENT_KUBERNETES_API_PORT`;
   see [development settings](../reference/settings/development.md#required-development-controller-environment).
 
+On some Linux hosts, especially Ubuntu with Docker 29, the k3d node cannot
+resolve container registries. Startup then waits on the cert-manager rollout
+while its pods stay in `ContainerCreating`, and a pod event reports that the
+registry DNS lookup failed. Follow
+[Resolve node DNS failures](deploy/local-kubernetes-development.md#resolve-node-dns-failures)
+and start again with a reachable resolver. That recovery changes only the
+owned node's resolver.
+
 You do not need a model credential to install the platform. Have an OpenAI API
 key available when you continue to [deploy your first Agent](first-agent.md).
 
