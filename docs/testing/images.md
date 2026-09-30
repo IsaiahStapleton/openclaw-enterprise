@@ -29,11 +29,11 @@ the images. Docker pulls the variant matching the host; run these checks on a
 native host for each target architecture. Run from the repository root with the
 [local test prerequisites](local.md).
 
-On each check host, authenticate Docker to the selected private registry with
-pull access to both repositories. The temporary Skopeo auth file used for
+Public GHCR images pull anonymously. On each check host, authenticate Docker only
+when the selected registry is private. The temporary Skopeo auth file used for
 [private image delivery](../guides/deploy/private-registry-images.md) does not
 authenticate Docker. For ECR, set `AWS_REGION` and `ECR_REGISTRY` to the target
-Region and registry. Run this block on its own and stop if it fails:
+Region and registry, then run this block on its own and stop if it fails:
 
 ```bash
 if [[ -n "${AWS_REGION:-}" && -n "${ECR_REGISTRY:-}" ]]; then
@@ -49,10 +49,10 @@ fi
 ```
 
 ECR credentials expire; authenticate again if needed. For GHCR, follow
-[Use published images](../guides/deploy/production-installation.md#use-published-images).
-For another private registry, follow its Docker login procedure. Protect Docker
-credentials according to your registry policy. This login does not grant nodes
-pull access.
+[Use published images](../guides/deploy/production-installation.md#use-published-images)
+without a login. For another private registry, follow its Docker login procedure.
+Protect Docker credentials according to your registry policy. This login does
+not grant nodes pull access.
 
 For a current release or custom pair selected for installation, set the check-only
 variables from the immutable `CONTROLLER_IMAGE` and `RUNTIME_IMAGE` exports:
@@ -90,9 +90,9 @@ OCC_TEST_RUNTIME_IMAGE="$OCC_IMAGE_CHECK_RUNTIME" \
 Before installation, all three suites must pass without skips for the exact
 current pair selected in `CONTROLLER_IMAGE` and `RUNTIME_IMAGE`. Rebuilding or
 changing a digest requires new checks. The historical pair does not meet current
-installation requirements. If GHCR denies a pull, check package access and token
-scope; successful `git clone` alone does not establish `read:packages` access.
-These checks verify the selected images, not unbuilt changes in the working tree.
+installation requirements. If GHCR denies a pull, check package visibility and
+network access to GHCR. These checks verify the selected images, not unbuilt
+changes in the working tree.
 
 ### Build images from the checkout
 
