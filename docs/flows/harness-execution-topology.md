@@ -127,11 +127,11 @@ destination translation. Active Gateway Services carry the Namespace, Agent, and
 gateway workload-role labels, satisfying gateway policy selectors without tying
 the stable Gateway route to a revision. `runtime.gatewayNodeSelector`
 independently places the Gateway Pod and private-state initializer on trusted nodes.
-During a dedicated replacement, preparation keeps a healthy predecessor Gateway in place while
-the candidate Harness enrolls its workspace node. If the predecessor Gateway is the same Agent but
-cannot become ready, preparation starts the candidate Gateway after the candidate Harness is
-otherwise ready. That candidate Gateway provides the bootstrap endpoint; the revision remains
-not ready until the workspace node is enrolled and observed.
+Before preparing a dedicated replacement, the worker stops every earlier revision, including its
+Gateway, so a redeploy interrupts service until the replacement is ready. Because the predecessor
+Gateway is stopped or otherwise not ready, preparation starts the candidate Gateway after the
+candidate Harness is otherwise ready. That candidate Gateway provides the bootstrap endpoint; the
+revision remains not ready until the workspace node is enrolled and observed.
 
 Dedicated Codex and dedicated OpenClaw keep separate Agent-owned Gateway and
 Harness ServiceAccounts. Compute owns the Gateway Pod; the selected SandboxDriver
@@ -301,6 +301,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 ## Changelog
 
 - 2026-09-30 10:30: Repair a never-served unready embedded Gateway during redeploy with pending workspace setup. (fix-dogfood-1)
+
+- 2026-09-30 09:54: Correct dedicated replacement: the worker stops the predecessor Gateway before preparation, so redeploys interrupt service. (authoring-run/a37a9c9b-9e94-4bd2-88c5-dfa5c5f94d12 - 90899dc55ab7)
 
 - 2026-09-28 02:55: Trace dedicated native OpenClaw on paired node hosts with full-facet Sandbox provisioning. (oce-pr-440-sync - e2b739f51f89)
 

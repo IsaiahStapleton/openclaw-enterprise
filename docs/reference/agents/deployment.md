@@ -115,8 +115,10 @@ Codex workload with its separate ServiceAccount, or one embedded combined
 gateway/Harness. Without a SandboxDriver, Compute owns the Codex Deployment;
 with one selected, that Driver provisions the dedicated Harness workload.
 Both embedded and dedicated modes are supported in production, subject to the
-selected Drivers' mode constraints. A replacement must preserve
-its predecessor's Service selector until activation succeeds. Without an
+selected Drivers' mode constraints. Unless Compute requests
+[exclusive replacement](../drivers/compute.md#production-revision-stages), as
+Kubernetes does for dedicated Agents, a replacement must preserve its
+predecessor's Service selector until activation succeeds. Without an
 eligible worker, revision work remains queued.
 
 When creation included [initial workspace files](../agents.md#initial-contents-at-creation),
